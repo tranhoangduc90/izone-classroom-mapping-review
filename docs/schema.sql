@@ -1,13 +1,27 @@
--- Bản phác thảo PostgreSQL cho dữ liệu tích hợp.
--- Chỉ lưu khóa kỹ thuật và snapshot tối thiểu; không đặt credential trong repo.
+-- Cấu trúc PostgreSQL đang dùng cho dữ liệu mapping.
+-- Repo chỉ lưu cấu trúc; không chứa credential hoặc dữ liệu học viên thật.
 
-CREATE TABLE class_mapping (
+CREATE SCHEMA IF NOT EXISTS mapping;
+
+CREATE TABLE mapping.sync_run (
+  id BIGSERIAL PRIMARY KEY,
+  source TEXT NOT NULL,
+  class_names TEXT[] NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  row_count INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+
+CREATE TABLE mapping.classroom_course_mapping (
   id BIGSERIAL PRIMARY KEY,
   erp_course_class_id BIGINT NOT NULL UNIQUE,
-  classroom_course_id TEXT NOT NULL UNIQUE,
-  erp_class_name_snapshot TEXT,
+  erp_class_name_snapshot TEXT NOT NULL,
+  classroom_course_id TEXT UNIQUE,
   classroom_course_name_snapshot TEXT,
-  status TEXT NOT NULL DEFAULT 'approved'
+  classroom_section_snapshot TEXT,
+  status TEXT NOT NULL DEFAULT 'pending_review'
     CHECK (status IN ('pending_review', 'approved', 'inactive', 'conflict')),
   approved_by TEXT,
   approved_at TIMESTAMPTZ,
@@ -15,10 +29,26 @@ CREATE TABLE class_mapping (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE student_identity_mapping (
+CREATE TABLE mapping.classroom_roster_snapshot (
   id BIGSERIAL PRIMARY KEY,
-  erp_student_contact_id BIGINT NOT NULL,
-  google_user_id TEXT NOT NULL,
+  classroom_course_id TEXT NOT NULL,
+  classroom_user_id TEXT NOT NULL,
+  classroom_name_snapshot TEXT,
+  classroom_email_snapshot TEXT,
+  roster_state TEXT NOT NULL DEFAULT 'active'
+    CHECK (roster_state IN ('active', 'removed', 'unknown')),
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_run_id BIGINT REFERENCES mapping.sync_run(id),
+  UNIQUE (classroom_course_id, classroom_user_id)
+);
+
+CREATE INDEX idx_roster_course
+  ON mapping.classroom_roster_snapshot (classroom_course_id);
+
+CREATE TABLE mapping.student_identity_mapping (
+  id BIGSERIAL PRIMARY KEY,
+  erp_student_contact_id BIGINT NOT NULL UNIQUE,
+  google_user_id TEXT NOT NULL UNIQUE,
   google_email_snapshot TEXT,
   erp_name_snapshot TEXT,
   google_name_snapshot TEXT,
@@ -30,38 +60,42 @@ CREATE TABLE student_identity_mapping (
   approved_at TIMESTAMPTZ,
   last_seen_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_active_erp_student UNIQUE (erp_student_contact_id),
-  CONSTRAINT uq_active_google_user UNIQUE (google_user_id)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE mapping_review_queue (
+CREATE TABLE mapping.student_mapping_review (
   id BIGSERIAL PRIMARY KEY,
   erp_course_class_id BIGINT NOT NULL,
   erp_student_contact_id BIGINT NOT NULL,
-  google_course_id TEXT,
-  google_user_id TEXT NOT NULL,
-  erp_name_snapshot TEXT,
-  google_name_snapshot TEXT,
-  google_email_snapshot TEXT,
-  ai_score NUMERIC(5, 4) CHECK (ai_score >= 0 AND ai_score <= 1),
+  erp_student_code TEXT,
+  erp_student_name_snapshot TEXT NOT NULL,
+  erp_student_email_snapshot TEXT,
+  classroom_course_id TEXT,
+  classroom_user_id TEXT,
+  classroom_name_snapshot TEXT,
+  classroom_email_snapshot TEXT,
+  ai_score NUMERIC(5, 4) CHECK (ai_score IS NULL OR ai_score BETWEEN 0 AND 1),
   ai_reason TEXT,
+  match_method TEXT NOT NULL DEFAULT 'pending'
+    CHECK (match_method IN ('email', 'google_id', 'ai_suggested', 'teacher_confirmed', 'manual', 'pending')),
   status TEXT NOT NULL DEFAULT 'pending_review'
     CHECK (status IN ('pending_review', 'approved', 'rejected', 'superseded')),
   reviewer_email TEXT,
   reviewer_note TEXT,
   decided_at TIMESTAMPTZ,
-  source_run_id TEXT,
+  source_run_id BIGINT REFERENCES mapping.sync_run(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT student_mapping_review_class_student_key
+    UNIQUE (erp_course_class_id, erp_student_contact_id)
 );
 
-CREATE INDEX idx_review_queue_class_status
-  ON mapping_review_queue (erp_course_class_id, status);
+CREATE INDEX idx_review_class_status
+  ON mapping.student_mapping_review (erp_course_class_id, status);
 
-CREATE TABLE mapping_decision_event (
+CREATE TABLE mapping.mapping_decision_event (
   id BIGSERIAL PRIMARY KEY,
-  review_id BIGINT NOT NULL REFERENCES mapping_review_queue(id),
+  review_id BIGINT NOT NULL REFERENCES mapping.student_mapping_review(id),
   decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject', 'choose_another')),
   selected_google_user_id TEXT,
   reviewer_email TEXT NOT NULL,
@@ -69,14 +103,14 @@ CREATE TABLE mapping_decision_event (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Các workflow khác nên đọc qua view này để chỉ lấy mapping đã được duyệt.
-CREATE VIEW approved_student_classroom_mapping AS
+CREATE VIEW mapping.approved_student_classroom_mapping AS
 SELECT
-  sim.erp_student_contact_id,
-  sim.google_user_id,
-  sim.google_email_snapshot,
-  sim.erp_name_snapshot,
-  sim.google_name_snapshot,
-  sim.approved_at
-FROM student_identity_mapping sim
-WHERE sim.status = 'approved';
+  erp_student_contact_id,
+  google_user_id,
+  google_email_snapshot,
+  erp_name_snapshot,
+  google_name_snapshot,
+  approved_by,
+  approved_at
+FROM mapping.student_identity_mapping
+WHERE status = 'approved';

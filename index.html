@@ -25,6 +25,23 @@
         Đây là bản xem thử dùng dữ liệu giả. Các nút duyệt chỉ thay đổi giao diện, chưa ghi vào cơ sở dữ liệu.
       </section>
 
+      <section class="access-panel panel" id="accessPanel" aria-label="Kết nối dữ liệu duyệt">
+        <div>
+          <p class="eyebrow">Quyền truy cập</p>
+          <h2>Kết nối hàng chờ của lớp</h2>
+          <p>Mã truy cập chỉ được giữ trong tab đang mở, không lưu vào GitHub hay trình duyệt lâu dài.</p>
+        </div>
+        <label>
+          Tên người duyệt
+          <input id="reviewerName" autocomplete="name" placeholder="Ví dụ: Nguyễn Văn A">
+        </label>
+        <label>
+          Mã truy cập
+          <input id="accessCode" type="password" autocomplete="current-password" placeholder="Nhập mã do quản trị viên cấp">
+        </label>
+        <button class="button button-primary" id="connectButton" type="button">Kết nối</button>
+      </section>
+
       <section class="toolbar panel" aria-label="Bộ lọc">
         <label>
           Lớp
@@ -51,7 +68,7 @@
           <strong id="pendingCount">0</strong>
         </article>
         <article class="summary-card">
-          <span class="summary-label">AI đề xuất chắc chắn</span>
+          <span class="summary-label">Gợi ý tự động rõ ràng</span>
           <strong id="highConfidenceCount">0</strong>
         </article>
         <article class="summary-card">
@@ -94,6 +111,10 @@
         <p class="eyebrow">Xác nhận quyết định</p>
         <h2 id="dialogTitle">Duyệt ghép học viên</h2>
         <p id="dialogSummary" class="dialog-summary"></p>
+        <label id="alternateAccountField" hidden>
+          Chọn tài khoản Google Classroom đúng
+          <select id="alternateAccountSelect"></select>
+        </label>
         <label>
           Ghi chú cho lần duyệt này (không bắt buộc)
           <textarea id="decisionNote" rows="3" placeholder="Ví dụ: Đã xác nhận với học viên tại lớp."></textarea>

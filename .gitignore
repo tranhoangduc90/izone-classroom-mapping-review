@@ -3,3 +3,4 @@ Thumbs.db
 .env
 *.local.js
 node_modules/
+_backups/
