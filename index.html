@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Màn hình giảng viên duyệt ghép học viên ERP với tài khoản Google Classroom">
+    <title>Duyệt ghép học viên</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">IZONE · Google Classroom</p>
+        <h1>Duyệt ghép học viên</h1>
+        <p class="subtitle">Giảng viên xác nhận đề xuất ghép từ hệ thống ERP với tài khoản Google Classroom.</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="mode-badge" id="modeBadge">Bản xem thử</span>
+        <button class="button button-secondary" id="refreshButton" type="button">Làm mới</button>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="notice" id="notice" role="status">
+        Đây là bản xem thử dùng dữ liệu giả. Các nút duyệt chỉ thay đổi giao diện, chưa ghi vào cơ sở dữ liệu.
+      </section>
+
+      <section class="toolbar panel" aria-label="Bộ lọc">
+        <label>
+          Lớp
+          <select id="classFilter"></select>
+        </label>
+        <label>
+          Trạng thái
+          <select id="statusFilter">
+            <option value="pending_review">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Từ chối</option>
+            <option value="all">Tất cả</option>
+          </select>
+        </label>
+        <label class="search-field">
+          Tìm kiếm
+          <input id="searchInput" type="search" placeholder="Tên, mã học viên hoặc email">
+        </label>
+      </section>
+
+      <section class="summary-grid" aria-label="Tổng quan">
+        <article class="summary-card">
+          <span class="summary-label">Đang chờ duyệt</span>
+          <strong id="pendingCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span class="summary-label">AI đề xuất chắc chắn</span>
+          <strong id="highConfidenceCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span class="summary-label">Đã duyệt trong phiên này</span>
+          <strong id="approvedCount">0</strong>
+        </article>
+      </section>
+
+      <section class="panel review-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Danh sách cần xử lý</p>
+            <h2>Đề xuất ghép tài khoản</h2>
+          </div>
+          <span class="result-count" id="resultCount">0 kết quả</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Học viên trong ERP</th>
+                <th>Tài khoản Classroom được đề xuất</th>
+                <th>Độ tin cậy</th>
+                <th>Trạng thái</th>
+                <th class="actions-heading">Duyệt</th>
+              </tr>
+            </thead>
+            <tbody id="reviewTableBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="emptyState" hidden>
+          Không có đề xuất nào phù hợp với bộ lọc hiện tại.
+        </div>
+      </section>
+    </main>
+
+    <dialog id="decisionDialog" class="decision-dialog">
+      <form method="dialog" id="decisionForm">
+        <button class="dialog-close" value="cancel" aria-label="Đóng">×</button>
+        <p class="eyebrow">Xác nhận quyết định</p>
+        <h2 id="dialogTitle">Duyệt ghép học viên</h2>
+        <p id="dialogSummary" class="dialog-summary"></p>
+        <label>
+          Ghi chú cho lần duyệt này (không bắt buộc)
+          <textarea id="decisionNote" rows="3" placeholder="Ví dụ: Đã xác nhận với học viên tại lớp."></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-secondary" value="cancel">Hủy</button>
+          <button class="button button-primary" id="confirmDecisionButton" value="default">Xác nhận</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
