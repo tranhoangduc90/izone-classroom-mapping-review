@@ -79,6 +79,8 @@ API phải kiểm tra người duyệt trước khi ghi. Không coi việc ẩn 
 4. Các trường hợp còn lại vào `mapping.student_mapping_review` với trạng thái `pending_review`; giảng viên duyệt trên GitHub Pages và backend mới ghi mapping chính thức.
 5. Các workflow khác chỉ đọc mapping đã `approved`, không tự lấy lại tên để ghép lần nữa.
 
+Sau khi duyệt, giảng viên có thể dùng `Sửa mapping` để chuyển sang một tài khoản khác trong roster hiện tại. `Mở lại duyệt` đưa phiếu về `pending_review` và tạm ngừng mapping chính thức. Tên/email hiển thị của cùng một Google ID được làm mới từ roster mỗi ngày, nên học viên chỉ đổi tên tài khoản thì không cần mapping lại.
+
 ## Quét thay đổi lớp
 
-Mỗi ngày, workflow đọc toàn bộ lớp còn nằm trong view Lark được cấu hình, đối chiếu với trạng thái đăng ký ERP và roster Classroom, rồi ghi snapshot cùng sự kiện thay đổi vào PostgreSQL. Lớp bị thêm/xóa khỏi view, học viên rời/quay lại Classroom, hoặc trạng thái đăng ký thay đổi đều có lịch sử riêng; lượt chạy đầu chỉ tạo mốc ban đầu, ngoại trừ các trạng thái ERP cần chú ý như `on_hold`, `transferred`, `dropped` hoặc `cancelled`.
+Mỗi ngày, workflow đọc toàn bộ lớp còn nằm trong view Lark được cấu hình, đối chiếu với trạng thái đăng ký ERP và roster Classroom, rồi ghi snapshot cùng sự kiện thay đổi vào PostgreSQL. Hệ thống ghi riêng các trường hợp học viên mới vào lớp, rời hoặc quay lại lớp, đổi tên/email Google, và thay đổi trạng thái đăng ký ERP. Một ca chuyển lớp được thể hiện thành hai sự kiện: rời lớp cũ và vào lớp mới. Lượt quét đầu của một lớp chỉ tạo mốc ban đầu để tránh cảnh báo hàng loạt; từ lượt sau mới phát hiện thành viên mới.

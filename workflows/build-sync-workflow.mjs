@@ -104,6 +104,16 @@ function sortedTokens(value) {
   return normalizeText(value).split(' ').filter(Boolean).sort().join(' ');
 }
 
+function meaningfulNameTokens(value) {
+  return normalizeText(value).split(' ').filter(token => {
+    if (!token || /^\\d+$/.test(token)) return false;
+    // Bỏ số thứ tự và mã lớp thường được học viên chèn vào tên Classroom, ví dụ 09 hoặc 10a3.
+    if (/^\\d{1,2}[a-z]\\d{0,2}$/.test(token)) return false;
+    if (/^[a-z]{1,3}\\d{1,3}$/.test(token)) return false;
+    return token.length > 1;
+  });
+}
+
 function levenshtein(a, b) {
   const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
   for (let i = 1; i <= a.length; i += 1) {
@@ -140,6 +150,37 @@ function scoreCandidate(erp, classroom) {
 
   if (sortedTokens(erp.fullName) && sortedTokens(erp.fullName) === sortedTokens(classroom.fullName)) {
     return { score: 0.96, method: 'ai_suggested', reason: 'Các thành phần họ tên trùng, chỉ khác thứ tự hiển thị.' };
+  }
+
+  const erpTokens = meaningfulNameTokens(erp.fullName);
+  const classroomTokens = meaningfulNameTokens(classroom.fullName);
+  const erpTokenSet = new Set(erpTokens);
+  const classroomIsShortenedName = classroomTokens.length >= 2
+    && classroomTokens.length < erpTokens.length
+    && classroomTokens.every(token => erpTokenSet.has(token));
+
+  if (classroomIsShortenedName) {
+    const keepsSurnameAndGivenName = classroomTokens.includes(erpTokens[0])
+      && classroomTokens.includes(erpTokens[erpTokens.length - 1]);
+    return {
+      score: keepsSurnameAndGivenName ? 0.95 : 0.93,
+      method: 'ai_suggested',
+      reason: keepsSurnameAndGivenName
+        ? 'Tên Classroom là tên rút gọn nhưng vẫn giữ họ và tên chính; cần giảng viên xác nhận.'
+        : 'Tên Classroom dùng một phần họ tên ERP và có thể đảo thứ tự; cần giảng viên xác nhận.'
+    };
+  }
+
+  const erpCompact = erpTokens.join('');
+  const classroomCompact = classroomTokens.join('');
+  if (classroomCompact.length >= 6
+    && erpCompact.length > classroomCompact.length
+    && erpCompact.endsWith(classroomCompact)) {
+    return {
+      score: 0.94,
+      method: 'ai_suggested',
+      reason: 'Tên Classroom viết liền và khớp phần tên chính trong ERP; cần giảng viên xác nhận.'
+    };
   }
 
   const similarity = nameSimilarity(erp.fullName, classroom.fullName);
@@ -539,6 +580,48 @@ classroom_roster_change_events AS (
    AND row ->> 'classroomUserId' = existing.classroom_user_id
   CROSS JOIN new_run
   WHERE existing.roster_state = 'removed'
+  UNION ALL
+  SELECT
+    'classroom_student_added',
+    row ->> 'classroomCourseId',
+    row ->> 'classroomUserId',
+    NULL::text,
+    'active',
+    new_run.id
+  FROM roster_rows
+  CROSS JOIN new_run
+  WHERE NOT EXISTS (
+      SELECT 1
+      FROM mapping.classroom_roster_snapshot AS existing
+      WHERE existing.classroom_course_id = row ->> 'classroomCourseId'
+        AND existing.classroom_user_id = row ->> 'classroomUserId'
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM mapping.classroom_roster_snapshot AS baseline
+      WHERE baseline.classroom_course_id = row ->> 'classroomCourseId'
+    )
+  UNION ALL
+  SELECT
+    'classroom_student_profile_changed',
+    existing.classroom_course_id,
+    existing.classroom_user_id,
+    jsonb_build_object(
+      'name', existing.classroom_name_snapshot,
+      'email', existing.classroom_email_snapshot
+    )::text,
+    jsonb_build_object(
+      'name', NULLIF(row ->> 'fullName', ''),
+      'email', NULLIF(row ->> 'email', '')
+    )::text,
+    new_run.id
+  FROM mapping.classroom_roster_snapshot AS existing
+  JOIN roster_rows
+    ON row ->> 'classroomCourseId' = existing.classroom_course_id
+   AND row ->> 'classroomUserId' = existing.classroom_user_id
+  CROSS JOIN new_run
+  WHERE existing.classroom_name_snapshot IS DISTINCT FROM NULLIF(row ->> 'fullName', '')
+     OR existing.classroom_email_snapshot IS DISTINCT FROM NULLIF(row ->> 'email', '')
   RETURNING id
 ),
 mark_old_roster AS (
@@ -576,6 +659,23 @@ upsert_roster AS (
     sync_run_id = EXCLUDED.sync_run_id
   RETURNING id
 ),
+refresh_identity_snapshots AS (
+  UPDATE mapping.student_identity_mapping AS identity
+  SET
+    google_name_snapshot = NULLIF(roster_rows.row ->> 'fullName', ''),
+    google_email_snapshot = NULLIF(roster_rows.row ->> 'email', ''),
+    last_seen_at = now(),
+    updated_at = CASE
+      WHEN identity.google_name_snapshot IS DISTINCT FROM NULLIF(roster_rows.row ->> 'fullName', '')
+        OR identity.google_email_snapshot IS DISTINCT FROM NULLIF(roster_rows.row ->> 'email', '')
+      THEN now()
+      ELSE identity.updated_at
+    END
+  FROM roster_rows
+  WHERE identity.google_user_id = roster_rows.row ->> 'classroomUserId'
+    AND identity.status = 'approved'
+  RETURNING identity.id
+),
 membership_rows AS (
   SELECT DISTINCT ON (
     (row ->> 'courseClassId')::bigint,
@@ -599,7 +699,12 @@ erp_membership_change_events AS (
   )
   SELECT
     CASE
-      WHEN existing.erp_student_contact_id IS NULL THEN 'erp_registration_flagged'
+      WHEN existing.erp_student_contact_id IS NULL
+        AND NULLIF(row ->> 'registrationStatus', '') IN (
+          'cancelled', 'on_hold', 'transferred', 'dropped', 'not_completed'
+        )
+      THEN 'erp_registration_flagged'
+      WHEN existing.erp_student_contact_id IS NULL THEN 'erp_student_added_to_source'
       WHEN existing.source_state = 'missing' THEN 'erp_student_returned_to_source'
       ELSE 'erp_registration_status_changed'
     END,
@@ -626,8 +731,10 @@ erp_membership_change_events AS (
     )
     OR (
       existing.erp_student_contact_id IS NULL
-      AND NULLIF(row ->> 'registrationStatus', '') IN (
-        'cancelled', 'on_hold', 'transferred', 'dropped', 'not_completed'
+      AND EXISTS (
+        SELECT 1
+        FROM mapping.erp_class_membership_snapshot AS baseline
+        WHERE baseline.erp_course_class_id = (row ->> 'courseClassId')::bigint
       )
     )
   RETURNING id
@@ -913,6 +1020,7 @@ SELECT
   new_run.id AS sync_run_id,
   (SELECT count(*) FROM upsert_courses) AS courses_written,
   (SELECT count(*) FROM upsert_roster) AS roster_rows_written,
+  (SELECT count(*) FROM refresh_identity_snapshots) AS identity_snapshots_refreshed,
   (SELECT count(*) FROM upsert_memberships) AS membership_rows_written,
   (SELECT count(*) FROM upsert_reviews) AS review_rows_written,
   (SELECT count(*) FROM upsert_exact_email_mappings) AS exact_email_mappings_written,

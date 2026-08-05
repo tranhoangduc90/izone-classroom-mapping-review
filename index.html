@@ -53,6 +53,7 @@
             <option value="pending_review" selected>Chờ duyệt</option>
             <option value="approved">Đã duyệt</option>
             <option value="rejected">Từ chối</option>
+            <option value="superseded">Không còn trong lớp</option>
             <option value="all">Tất cả</option>
           </select>
         </label>
@@ -93,7 +94,7 @@
                 <th>Tài khoản Classroom được đề xuất</th>
                 <th>Độ tin cậy</th>
                 <th>Trạng thái</th>
-                <th class="actions-heading">Duyệt</th>
+                <th class="actions-heading">Thao tác</th>
               </tr>
             </thead>
             <tbody id="reviewTableBody"></tbody>
@@ -107,7 +108,7 @@
 
     <dialog id="decisionDialog" class="decision-dialog">
       <form method="dialog" id="decisionForm">
-        <button class="dialog-close" value="cancel" aria-label="Đóng">×</button>
+        <button class="dialog-close" id="closeDecisionButton" type="button" aria-label="Đóng">×</button>
         <p class="eyebrow">Xác nhận quyết định</p>
         <h2 id="dialogTitle">Duyệt ghép học viên</h2>
         <p id="dialogSummary" class="dialog-summary"></p>
@@ -120,8 +121,8 @@
           <textarea id="decisionNote" rows="3" placeholder="Ví dụ: Đã xác nhận với học viên tại lớp."></textarea>
         </label>
         <div class="dialog-actions">
-          <button class="button button-secondary" value="cancel">Hủy</button>
-          <button class="button button-primary" id="confirmDecisionButton" value="default">Xác nhận</button>
+          <button class="button button-secondary" id="cancelDecisionButton" type="button">Hủy</button>
+          <button class="button button-primary" id="confirmDecisionButton" type="submit">Xác nhận</button>
         </div>
       </form>
     </dialog>

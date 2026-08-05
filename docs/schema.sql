@@ -81,8 +81,11 @@ CREATE TABLE mapping.class_change_event (
     'erp_class_source_restored',
     'classroom_class_source_missing',
     'classroom_class_source_restored',
+    'classroom_student_added',
     'classroom_student_removed',
     'classroom_student_returned',
+    'classroom_student_profile_changed',
+    'erp_student_added_to_source',
     'erp_registration_flagged',
     'erp_registration_status_changed',
     'erp_student_missing_from_source',
@@ -156,7 +159,9 @@ CREATE INDEX idx_review_class_status
 CREATE TABLE mapping.mapping_decision_event (
   id BIGSERIAL PRIMARY KEY,
   review_id BIGINT NOT NULL REFERENCES mapping.student_mapping_review(id),
-  decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject', 'choose_another')),
+  decision TEXT NOT NULL CHECK (decision IN (
+    'approve', 'reject', 'choose_another', 'edit_mapping', 'reopen'
+  )),
   selected_google_user_id TEXT,
   reviewer_email TEXT NOT NULL,
   note TEXT,

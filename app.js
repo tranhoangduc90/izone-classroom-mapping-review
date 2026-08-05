@@ -78,7 +78,9 @@ const elements = {
   alternateAccountField: document.querySelector('#alternateAccountField'),
   alternateAccountSelect: document.querySelector('#alternateAccountSelect'),
   decisionNote: document.querySelector('#decisionNote'),
-  confirmDecisionButton: document.querySelector('#confirmDecisionButton')
+  confirmDecisionButton: document.querySelector('#confirmDecisionButton'),
+  cancelDecisionButton: document.querySelector('#cancelDecisionButton'),
+  closeDecisionButton: document.querySelector('#closeDecisionButton')
 };
 
 function escapeHtml(value) {
@@ -175,11 +177,17 @@ function renderRows() {
       ? `<div class="confidence-row"><span>Gợi ý tự động</span><strong class="${tone}">${confidence}%</strong></div>
          <div class="meter" aria-label="Độ tin cậy ${confidence}%"><span class="${tone}" style="width: ${confidence}%"></span></div>`
       : '<div class="confidence-row"><span>Cần chọn thủ công</span><strong class="medium">—</strong></div>';
-    const actionButtons = review.status === 'pending_review'
-      ? `${hasSuggestion ? `<button class="button button-primary button-small" data-decision="approve" data-id="${escapeHtml(review.id)}">Duyệt</button>` : ''}
-         <button class="button button-secondary button-small" data-decision="choose_another" data-id="${escapeHtml(review.id)}">${hasSuggestion ? 'Đổi tài khoản' : 'Chọn tài khoản'}</button>
-         <button class="button button-danger button-small" data-decision="reject" data-id="${escapeHtml(review.id)}">Từ chối</button>`
-      : '<span class="student-meta">Đã xử lý</span>';
+    let actionButtons = '<span class="student-meta">Không có thao tác</span>';
+    if (review.status === 'pending_review') {
+      actionButtons = `${hasSuggestion ? `<button class="button button-primary button-small" data-decision="approve" data-id="${escapeHtml(review.id)}">Duyệt</button>` : ''}
+        <button class="button button-secondary button-small" data-decision="choose_another" data-id="${escapeHtml(review.id)}">${hasSuggestion ? 'Đổi tài khoản' : 'Chọn tài khoản'}</button>
+        <button class="button button-danger button-small" data-decision="reject" data-id="${escapeHtml(review.id)}">Từ chối</button>`;
+    } else if (review.status === 'approved') {
+      actionButtons = `<button class="button button-secondary button-small" data-decision="edit_mapping" data-id="${escapeHtml(review.id)}">Sửa mapping</button>
+        <button class="button button-secondary button-small" data-decision="reopen" data-id="${escapeHtml(review.id)}">Mở lại duyệt</button>`;
+    } else if (review.status === 'rejected') {
+      actionButtons = `<button class="button button-secondary button-small" data-decision="reopen" data-id="${escapeHtml(review.id)}">Mở lại duyệt</button>`;
+    }
 
     return `<tr>
       <td>
@@ -243,15 +251,18 @@ function openDecision(review, decision) {
   }
 
   state.selectedReview = { review, decision };
-  const choosingAnother = decision === 'choose_another';
+  const choosingAnother = ['choose_another', 'edit_mapping'].includes(decision);
   elements.dialogTitle.textContent = {
     approve: 'Duyệt ghép học viên',
     reject: 'Từ chối đề xuất',
-    choose_another: 'Chọn tài khoản Classroom đúng'
+    choose_another: 'Chọn tài khoản Classroom đúng',
+    edit_mapping: 'Sửa tài khoản Classroom đã mapping',
+    reopen: 'Đưa học viên về Chờ duyệt'
   }[decision];
-  elements.dialogSummary.textContent = decision === 'reject'
-    ? `${review.erpStudentName}: từ chối gợi ý hiện tại.`
-    : `${review.erpStudentName} → ${review.classroomEmail || 'chưa chọn tài khoản'}.`;
+  elements.dialogSummary.textContent = {
+    reject: `${review.erpStudentName}: từ chối gợi ý hiện tại.`,
+    reopen: `${review.erpStudentName}: bỏ quyết định hiện tại và đưa về Chờ duyệt.`
+  }[decision] || `${review.erpStudentName} → ${review.classroomEmail || 'chưa chọn tài khoản'}.`;
   elements.alternateAccountField.hidden = !choosingAnother;
   elements.alternateAccountSelect.innerHTML = (review.candidates || [])
     .map(candidate => `<option value="${escapeHtml(candidate.userId)}">${escapeHtml(candidate.fullName)} — ${escapeHtml(candidate.email)}</option>`)
@@ -259,21 +270,28 @@ function openDecision(review, decision) {
   if (choosingAnother && review.classroomUserId) {
     elements.alternateAccountSelect.value = review.classroomUserId;
   }
-  elements.confirmDecisionButton.textContent = decision === 'reject' ? 'Từ chối' : 'Xác nhận mapping';
+  elements.confirmDecisionButton.textContent = {
+    reject: 'Từ chối',
+    reopen: 'Đưa về Chờ duyệt',
+    edit_mapping: 'Lưu mapping mới'
+  }[decision] || 'Xác nhận mapping';
   elements.confirmDecisionButton.className = decision === 'reject' ? 'button button-danger' : 'button button-primary';
   elements.decisionNote.value = '';
   elements.decisionDialog.showModal();
 }
 
 async function saveDecision(review, decision, note) {
-  const classroomUserId = decision === 'choose_another' ? elements.alternateAccountSelect.value : undefined;
-  if (decision === 'choose_another' && !classroomUserId) {
+  const needsClassroomAccount = ['choose_another', 'edit_mapping'].includes(decision);
+  const classroomUserId = needsClassroomAccount ? elements.alternateAccountSelect.value : undefined;
+  if (needsClassroomAccount && !classroomUserId) {
     throw new Error('Lớp chưa có tài khoản Classroom để chọn.');
   }
 
   if (isDemo) {
-    review.status = decision === 'reject' ? 'rejected' : 'approved';
-    if (decision !== 'reject') state.approvedThisSession += 1;
+    review.status = decision === 'reject'
+      ? 'rejected'
+      : decision === 'reopen' ? 'pending_review' : 'approved';
+    if (['approve', 'choose_another'].includes(decision)) state.approvedThisSession += 1;
     return;
   }
 
@@ -288,8 +306,14 @@ async function saveDecision(review, decision, note) {
       reviewerName: state.reviewerName
     })
   });
-  if (decision !== 'reject') state.approvedThisSession += 1;
+  if (['approve', 'choose_another'].includes(decision)) state.approvedThisSession += 1;
   await loadReviews();
+}
+
+function closeDecisionDialog() {
+  state.selectedReview = null;
+  elements.decisionNote.value = '';
+  if (elements.decisionDialog.open) elements.decisionDialog.close('cancel');
 }
 
 elements.connectButton.addEventListener('click', async () => {
@@ -326,21 +350,36 @@ elements.reviewTableBody.addEventListener('click', event => {
 
 elements.decisionForm.addEventListener('submit', async event => {
   event.preventDefault();
+  if (event.submitter && event.submitter !== elements.confirmDecisionButton) return;
   if (!state.selectedReview) return;
   const { review, decision } = state.selectedReview;
   elements.confirmDecisionButton.disabled = true;
   try {
     await saveDecision(review, decision, elements.decisionNote.value.trim());
     elements.decisionDialog.close();
-    showNotice(isDemo
-      ? 'Đã cập nhật bản xem thử; chưa ghi vào cơ sở dữ liệu.'
-      : 'Đã ghi quyết định và cập nhật mapping chính thức.', true);
+    const successMessage = decision === 'reopen'
+      ? 'Đã đưa học viên về Chờ duyệt.'
+      : decision === 'edit_mapping'
+        ? 'Đã cập nhật mapping sang tài khoản Classroom mới.'
+        : 'Đã ghi quyết định và cập nhật mapping chính thức.';
+    showNotice(isDemo ? 'Đã cập nhật bản xem thử; chưa ghi vào cơ sở dữ liệu.' : successMessage, true);
     render();
   } catch (error) {
     showNotice(`Không thể ghi nhận quyết định: ${error.message}`);
   } finally {
     elements.confirmDecisionButton.disabled = false;
   }
+});
+
+elements.cancelDecisionButton.addEventListener('click', closeDecisionDialog);
+elements.closeDecisionButton.addEventListener('click', closeDecisionDialog);
+elements.decisionDialog.addEventListener('cancel', event => {
+  // ESC chỉ đóng cửa sổ; không gửi form và không đổi trạng thái học viên.
+  event.preventDefault();
+  closeDecisionDialog();
+});
+elements.decisionDialog.addEventListener('close', () => {
+  state.selectedReview = null;
 });
 
 elements.statusFilter.addEventListener('change', renderRows);

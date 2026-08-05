@@ -15,6 +15,8 @@ Mở trang GitHub Pages, nhập tên người duyệt và mã truy cập do qu�
 
 Mapping đã duyệt là nguồn dùng chung cho các workflow về bài tập, điểm danh và hành chính. Email ERP trùng chính xác email Classroom được tự duyệt nếu không xung đột; các trường hợp ghép theo tên vẫn cần giảng viên xác nhận. Thuật toán chạy cục bộ và không gửi dữ liệu học viên sang mô hình AI bên ngoài.
 
+Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom hoặc mở lại phiếu để duyệt lại. Workflow hằng ngày phát hiện học viên mới vào lớp, rời lớp, chuyển lớp và đổi tên/email Google. Nếu Google ID không đổi, tên/email mới được cập nhật vào mapping hiện có mà không cần duyệt lại.
+
 ## Trạng thái triển khai
 
 - PostgreSQL `mapping_db` lưu mapping, snapshot thành viên lớp và lịch sử thay đổi từ ERP/Classroom/Lark.
