@@ -75,6 +75,10 @@ API phải kiểm tra người duyệt trước khi ghi. Không coi việc ẩn 
 
 1. Apps Script dùng tài khoản chủ lớp đọc course/roster Classroom.
 2. Backend dùng Metabase để đọc danh sách học viên ERP; query phải đi qua danh sách tham số được cho phép.
-3. Thuật toán chạy cục bộ trong n8n tạo ứng viên, điểm tin cậy và lý do; không gửi tên/email học viên sang mô hình AI bên ngoài. Ứng viên vào `mapping.student_mapping_review` với trạng thái `pending_review`.
-4. Giảng viên duyệt trên GitHub Pages; backend ghi mapping chính thức và lịch sử quyết định vào PostgreSQL.
+3. Thuật toán chạy cục bộ trong n8n tạo ứng viên, điểm tin cậy và lý do; không gửi tên/email học viên sang mô hình AI bên ngoài. Email ERP trùng chính xác email Classroom được ghi thẳng vào mapping `approved`, trừ khi xung đột với mapping đã duyệt trước đó.
+4. Các trường hợp còn lại vào `mapping.student_mapping_review` với trạng thái `pending_review`; giảng viên duyệt trên GitHub Pages và backend mới ghi mapping chính thức.
 5. Các workflow khác chỉ đọc mapping đã `approved`, không tự lấy lại tên để ghép lần nữa.
+
+## Quét thay đổi lớp
+
+Mỗi ngày, workflow đọc toàn bộ lớp còn nằm trong view Lark được cấu hình, đối chiếu với trạng thái đăng ký ERP và roster Classroom, rồi ghi snapshot cùng sự kiện thay đổi vào PostgreSQL. Lớp bị thêm/xóa khỏi view, học viên rời/quay lại Classroom, hoặc trạng thái đăng ký thay đổi đều có lịch sử riêng; lượt chạy đầu chỉ tạo mốc ban đầu, ngoại trừ các trạng thái ERP cần chú ý như `on_hold`, `transferred`, `dropped` hoặc `cancelled`.

@@ -44,6 +44,7 @@ const DEMO_REVIEWS = [
 ];
 
 const isDemo = window.APP_CONFIG?.DEMO_MODE !== false;
+const DEFAULT_REVIEW_STATUS = 'pending_review';
 const state = {
   reviews: [],
   selectedReview: null,
@@ -343,7 +344,11 @@ elements.decisionForm.addEventListener('submit', async event => {
 });
 
 elements.statusFilter.addEventListener('change', renderRows);
-elements.classFilter.addEventListener('change', renderRows);
+elements.classFilter.addEventListener('change', () => {
+  // Khi mở một lớp khác, luôn quay về hàng chờ quan trọng nhất.
+  elements.statusFilter.value = DEFAULT_REVIEW_STATUS;
+  renderRows();
+});
 elements.searchInput.addEventListener('input', renderRows);
 elements.refreshButton.addEventListener('click', async () => {
   elements.refreshButton.disabled = true;
@@ -358,6 +363,7 @@ elements.refreshButton.addEventListener('click', async () => {
   }
 });
 
+elements.statusFilter.value = DEFAULT_REVIEW_STATUS;
 updateConnectionUi();
 if (isDemo) {
   loadReviews().then(render).catch(error => showNotice(`Không tải được dữ liệu mẫu: ${error.message}`));

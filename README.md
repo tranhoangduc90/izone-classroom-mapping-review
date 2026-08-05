@@ -13,12 +13,12 @@ Mở trang GitHub Pages, nhập tên người duyệt và mã truy cập do qu�
 - PostgreSQL riêng cho tích hợp: lưu mapping đã duyệt, hàng chờ AI, lịch sử quyết định và snapshot roster.
 - GitHub Pages: chỉ phục vụ HTML/CSS/JavaScript. API n8n xác thực bằng header và giới hạn CORS về origin GitHub Pages.
 
-Mapping đã duyệt là nguồn dùng chung cho các workflow về bài tập, điểm danh và hành chính. Bản đầu dùng thuật toán ghép cục bộ theo email/tên, không gửi dữ liệu học viên sang mô hình AI bên ngoài. Giảng viên vẫn là người xác nhận cuối.
+Mapping đã duyệt là nguồn dùng chung cho các workflow về bài tập, điểm danh và hành chính. Email ERP trùng chính xác email Classroom được tự duyệt nếu không xung đột; các trường hợp ghép theo tên vẫn cần giảng viên xác nhận. Thuật toán chạy cục bộ và không gửi dữ liệu học viên sang mô hình AI bên ngoài.
 
 ## Trạng thái triển khai
 
-- PostgreSQL `mapping_db` đã có schema `mapping` và 37 phiếu duyệt của IC2172/IC2200.
-- Workflow `Đồng bộ học viên IC2172 IC2200 để giảng viên duyệt` đã chạy thử thành công và đang để `Inactive`.
+- PostgreSQL `mapping_db` lưu mapping, snapshot thành viên lớp và lịch sử thay đổi từ ERP/Classroom/Lark.
+- Workflow đồng bộ đọc toàn bộ lớp trong view Lark đã chọn, quét mỗi ngày lúc 04:30 và vẫn có nút chạy thủ công.
 - Workflow `API để giảng viên duyệt mapping học viên` đang hoạt động; mã sai bị chặn và CORS chỉ cho phép origin GitHub Pages.
 - `config.js` đặt `DEMO_MODE: false` để giao diện tải dữ liệu thật sau khi xác thực.
 
