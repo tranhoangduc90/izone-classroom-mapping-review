@@ -68,9 +68,20 @@ CREATE INDEX IF NOT EXISTS idx_term_test_attempt_completed
   WHERE completed_at IS NOT NULL;
 
 -- API chỉ được đọc định nghĩa đề và ghi/đọc lượt làm; không được sửa hoặc xóa đáp án chuẩn.
-GRANT USAGE ON SCHEMA assessment TO mapping_app;
-GRANT SELECT ON assessment.test_definition TO mapping_app;
-GRANT SELECT ON assessment.term_test_roster TO mapping_app;
-GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_app;
+DO $permissions$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mapping_review_api') THEN
+    GRANT USAGE ON SCHEMA assessment TO mapping_review_api;
+    GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_review_api;
+    GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_review_api;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mapping_app') THEN
+    GRANT USAGE ON SCHEMA assessment TO mapping_app;
+    GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_app;
+    GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_app;
+  END IF;
+END
+$permissions$;
 
 COMMIT;

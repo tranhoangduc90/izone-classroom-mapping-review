@@ -24,7 +24,7 @@ function makeSection() {
 }
 
 const mappingSchema = `
-  CREATE ROLE mapping_app;
+  CREATE ROLE mapping_review_api;
   CREATE SCHEMA mapping;
   CREATE TABLE mapping.classroom_course_mapping (
     erp_course_class_id BIGINT PRIMARY KEY,
@@ -38,8 +38,8 @@ const mappingSchema = `
     erp_student_name_snapshot TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending_review'
   );
-  GRANT USAGE ON SCHEMA mapping TO mapping_app;
-  GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review TO mapping_app;
+  GRANT USAGE ON SCHEMA mapping TO mapping_review_api;
+  GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review TO mapping_review_api;
 `;
 
 test('migration và luồng Listening → Reading → Result chạy trên PostgreSQL trong RAM', async () => {
@@ -72,7 +72,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   `);
 
   // Từ đây chạy đúng bằng quyền của API production để bắt lỗi GRANT trước khi deploy.
-  await database.exec('SET ROLE mapping_app;');
+  await database.exec('SET ROLE mapping_review_api;');
 
   const roster = await database.query(listTermTestRosterSql, ['IC2139', 'term-test-1']);
   assert.equal(roster.rows[0].students.length, 1);
