@@ -278,7 +278,6 @@ CREATE INDEX idx_term_test_attempt_completed
   ON assessment.term_test_attempt (test_slug, completed_at DESC)
   WHERE completed_at IS NOT NULL;
 
-GRANT USAGE ON SCHEMA assessment TO mapping_app;
-GRANT SELECT ON assessment.test_definition TO mapping_app;
-GRANT SELECT ON assessment.term_test_roster TO mapping_app;
-GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_app;
+GRANT USAGE ON SCHEMA assessment TO mapping_review_api;
+GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_review_api;
+GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_review_api;

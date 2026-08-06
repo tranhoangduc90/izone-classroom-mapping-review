@@ -14,3 +14,7 @@ GRANT SELECT ON mapping.reviewer_class_access TO mapping_review_api;
 
 GRANT USAGE, SELECT ON SEQUENCE mapping.mapping_decision_event_id_seq TO mapping_review_api;
 GRANT USAGE, SELECT ON SEQUENCE mapping.student_identity_mapping_id_seq TO mapping_review_api;
+
+GRANT USAGE ON SCHEMA assessment TO mapping_review_api;
+GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_review_api;
+GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_review_api;
