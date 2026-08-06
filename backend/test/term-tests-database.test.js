@@ -53,10 +53,17 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const section = makeSection();
   await database.exec(`
     INSERT INTO mapping.classroom_course_mapping (erp_course_class_id, erp_class_name_snapshot)
-    VALUES (2139, 'IC2139');
+    VALUES (2139, 'IC2139'), (9999, 'IC9999');
     INSERT INTO mapping.student_mapping_review (
       public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot
-    ) VALUES ('00000000-0000-4000-8000-000000000001', 2139, 9001, 'Học viên thử nghiệm');
+    ) VALUES
+      ('00000000-0000-4000-8000-000000000001', 2139, 9001, 'Học viên trong roster riêng'),
+      ('00000000-0000-4000-8000-000000000003', 2139, 9002, 'Học viên thừa trong matching'),
+      ('00000000-0000-4000-8000-000000000004', 9999, 9901, 'Học viên lấy từ matching'),
+      ('00000000-0000-4000-8000-000000000005', 9999, 9902, 'Học viên đã supersede');
+    UPDATE mapping.student_mapping_review
+    SET status = 'superseded'
+    WHERE public_id = '00000000-0000-4000-8000-000000000005';
   `);
   await database.query(`
     INSERT INTO assessment.test_definition (
@@ -67,7 +74,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     INSERT INTO assessment.term_test_roster (
       test_slug, erp_course_class_id, erp_student_contact_id, student_ref, student_name_snapshot
     ) VALUES (
-      'term-test-1', 2139, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên thử nghiệm'
+      'term-test-1', 2139, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên trong roster riêng'
     );
   `);
 
@@ -76,7 +83,11 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
 
   const roster = await database.query(listTermTestRosterSql, ['IC2139', 'term-test-1']);
   assert.equal(roster.rows[0].students.length, 1);
-  assert.equal(roster.rows[0].students[0].name, 'Học viên thử nghiệm');
+  assert.equal(roster.rows[0].students[0].name, 'Học viên trong roster riêng');
+
+  const fallbackRoster = await database.query(listTermTestRosterSql, ['IC9999', 'term-test-1']);
+  assert.equal(fallbackRoster.rows[0].students.length, 1);
+  assert.equal(fallbackRoster.rows[0].students[0].name, 'Học viên lấy từ matching');
 
   const student = await database.query(findStudentForTermTestSql, [
     'IC2139',
@@ -84,6 +95,15 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     '00000000-0000-4000-8000-000000000001'
   ]);
   assert.equal(student.rows.length, 1);
+
+  const fallbackStudent = await database.query(findStudentForTermTestSql, [
+    'IC9999',
+    'term-test-1',
+    '00000000-0000-4000-8000-000000000004'
+  ]);
+  assert.equal(fallbackStudent.rows.length, 1);
+  assert.equal(fallbackStudent.rows[0].student_id, '9901');
+  assert.equal(fallbackStudent.rows[0].student_name, 'Học viên lấy từ matching');
   const definition = parseStoredTest(student.rows[0]);
   const answers = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [
     String(index + 1),

@@ -90,7 +90,7 @@ Sau khi duyệt, giảng viên có thể dùng `Sửa mapping` để chuyển sa
 
 Hai trang GitHub Pages dùng query `?class=<MÃ_LỚP>` và gọi API công khai theo thứ tự:
 
-1. `GET /api/term-tests/roster?class=<MÃ_LỚP>&test=term-test-1` để lấy tên học viên và UUID ngẫu nhiên. Response không chứa ID ERP, email hoặc đáp án.
+1. `GET /api/term-tests/roster?class=<MÃ_LỚP>&test=term-test-1` để lấy tên học viên và UUID ngẫu nhiên. Nếu lớp/test có roster riêng trong `assessment.term_test_roster`, API dùng đúng roster đó; nếu chưa có, API tự lấy học viên không bị supersede từ matching database. Response không chứa ID ERP, email hoặc đáp án.
 2. `POST /api/term-tests/<test-slug>/listening` để lưu 40 câu Listening. API trả `attemptToken`, chưa trả điểm.
 3. `POST /api/term-tests/<test-slug>/reading` với `attemptToken` để lưu 40 câu Reading và chấm cả hai phần.
 4. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả của lượt làm đó.

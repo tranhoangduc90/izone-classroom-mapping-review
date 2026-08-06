@@ -268,6 +268,15 @@ target_classes AS (
   FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
 ),
+roster_mode AS (
+  SELECT EXISTS (
+    SELECT 1
+    FROM assessment.term_test_roster AS roster
+    JOIN target_classes AS target
+      ON target.erp_course_class_id = roster.erp_course_class_id
+    WHERE roster.test_slug = $2
+  ) AS has_curated_roster
+),
 students AS (
   SELECT
     roster.student_ref::text AS student_ref,
@@ -276,6 +285,18 @@ students AS (
   JOIN target_classes AS target
     ON target.erp_course_class_id = roster.erp_course_class_id
   WHERE roster.test_slug = $2
+
+  UNION ALL
+
+  SELECT
+    review.public_id::text AS student_ref,
+    review.erp_student_name_snapshot AS student_name
+  FROM mapping.student_mapping_review AS review
+  JOIN target_classes AS target
+    ON target.erp_course_class_id = review.erp_course_class_id
+  CROSS JOIN roster_mode
+  WHERE roster_mode.has_curated_roster = false
+    AND review.status <> 'superseded'
 )
 SELECT
   definition.slug AS test_slug,
@@ -293,25 +314,61 @@ SELECT
   ), '[]'::jsonb) AS students
 FROM definition;`;
 
-// Xác minh học viên thuộc đúng lớp và tải đáp án chỉ ở backend để chấm.
-export const findStudentForTermTestSql = `SELECT
+// Xác minh học viên thuộc roster riêng; nếu lớp chưa có roster riêng thì dùng matching database.
+export const findStudentForTermTestSql = `WITH target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+roster_mode AS (
+  SELECT EXISTS (
+    SELECT 1
+    FROM assessment.term_test_roster AS roster
+    JOIN target_classes AS target
+      ON target.erp_course_class_id = roster.erp_course_class_id
+    WHERE roster.test_slug = $2
+  ) AS has_curated_roster
+),
+eligible_student AS (
+  SELECT
+    roster.erp_course_class_id,
+    roster.erp_student_contact_id,
+    roster.student_name_snapshot AS student_name
+  FROM assessment.term_test_roster AS roster
+  JOIN target_classes AS target
+    ON target.erp_course_class_id = roster.erp_course_class_id
+  WHERE roster.test_slug = $2
+    AND roster.student_ref = $3::uuid
+
+  UNION ALL
+
+  SELECT
+    review.erp_course_class_id,
+    review.erp_student_contact_id,
+    review.erp_student_name_snapshot AS student_name
+  FROM mapping.student_mapping_review AS review
+  JOIN target_classes AS target
+    ON target.erp_course_class_id = review.erp_course_class_id
+  CROSS JOIN roster_mode
+  WHERE roster_mode.has_curated_roster = false
+    AND review.public_id = $3::uuid
+    AND review.status <> 'superseded'
+)
+SELECT
   definition.slug AS test_slug,
   definition.title AS test_title,
   definition.version AS definition_version,
   definition.listening_band_adjustment,
   definition.listening_definition,
   definition.reading_definition,
-  course.erp_course_class_id::text AS class_id,
-  course.erp_class_name_snapshot AS class_name,
-  roster.erp_student_contact_id::text AS student_id,
-  roster.student_name_snapshot AS student_name
+  student.erp_course_class_id::text AS class_id,
+  target.erp_class_name_snapshot AS class_name,
+  student.erp_student_contact_id::text AS student_id,
+  student.student_name
 FROM assessment.test_definition AS definition
-JOIN assessment.term_test_roster AS roster
-  ON roster.test_slug = definition.slug
- AND roster.student_ref = $3::uuid
-JOIN mapping.classroom_course_mapping AS course
-  ON course.erp_course_class_id = roster.erp_course_class_id
- AND upper(trim(course.erp_class_name_snapshot)) = upper(trim($1))
+JOIN eligible_student AS student ON true
+JOIN target_classes AS target
+  ON target.erp_course_class_id = student.erp_course_class_id
 WHERE definition.slug = $2
   AND definition.is_active = true;`;
 
