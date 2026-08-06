@@ -255,3 +255,164 @@ SELECT CASE
     'decidedAt', now()
   )
 END AS response;`;
+
+// Danh sách công khai chỉ trả tên và UUID ngẫu nhiên của phiếu; không trả ID ERP, email hoặc đáp án.
+export const listTermTestRosterSql = `WITH definition AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE slug = $2
+    AND is_active = true
+),
+target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+students AS (
+  SELECT
+    roster.student_ref::text AS student_ref,
+    roster.student_name_snapshot AS student_name
+  FROM assessment.term_test_roster AS roster
+  JOIN target_classes AS target
+    ON target.erp_course_class_id = roster.erp_course_class_id
+  WHERE roster.test_slug = $2
+)
+SELECT
+  definition.slug AS test_slug,
+  definition.title AS test_title,
+  definition.version AS definition_version,
+  (SELECT count(*)::int FROM target_classes) AS class_count,
+  (SELECT erp_course_class_id::text FROM target_classes LIMIT 1) AS class_id,
+  (SELECT erp_class_name_snapshot FROM target_classes LIMIT 1) AS class_name,
+  COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object('ref', students.student_ref, 'name', students.student_name)
+      ORDER BY students.student_name
+    )
+    FROM students
+  ), '[]'::jsonb) AS students
+FROM definition;`;
+
+// Xác minh học viên thuộc đúng lớp và tải đáp án chỉ ở backend để chấm.
+export const findStudentForTermTestSql = `SELECT
+  definition.slug AS test_slug,
+  definition.title AS test_title,
+  definition.version AS definition_version,
+  definition.listening_band_adjustment,
+  definition.listening_definition,
+  definition.reading_definition,
+  course.erp_course_class_id::text AS class_id,
+  course.erp_class_name_snapshot AS class_name,
+  roster.erp_student_contact_id::text AS student_id,
+  roster.student_name_snapshot AS student_name
+FROM assessment.test_definition AS definition
+JOIN assessment.term_test_roster AS roster
+  ON roster.test_slug = definition.slug
+ AND roster.student_ref = $3::uuid
+JOIN mapping.classroom_course_mapping AS course
+  ON course.erp_course_class_id = roster.erp_course_class_id
+ AND upper(trim(course.erp_class_name_snapshot)) = upper(trim($1))
+WHERE definition.slug = $2
+  AND definition.is_active = true;`;
+
+// client_submission_id giúp lần gửi lại do mạng chập chờn không tạo thêm lượt làm.
+export const insertListeningAttemptSql = `WITH inserted AS (
+  INSERT INTO assessment.term_test_attempt (
+    client_submission_id,
+    test_slug,
+    definition_version,
+    erp_course_class_id,
+    class_name_snapshot,
+    erp_student_contact_id,
+    student_name_snapshot,
+    listening_answers,
+    listening_result,
+    listening_submitted_at
+  ) VALUES (
+    $1::uuid, $2, $3::int, $4::bigint, $5, $6::bigint, $7,
+    $8::jsonb, $9::jsonb, now()
+  )
+  ON CONFLICT (test_slug, client_submission_id) DO NOTHING
+  RETURNING *
+),
+resolved AS (
+  SELECT * FROM inserted
+  UNION ALL
+  SELECT existing.*
+  FROM assessment.term_test_attempt AS existing
+  WHERE existing.test_slug = $2
+    AND existing.client_submission_id = $1::uuid
+    AND NOT EXISTS (SELECT 1 FROM inserted)
+)
+SELECT
+  id::text AS attempt_token,
+  test_slug,
+  erp_course_class_id::text AS class_id,
+  erp_student_contact_id::text AS student_id,
+  student_name_snapshot AS student_name,
+  listening_submitted_at,
+  completed_at
+FROM resolved
+LIMIT 1;`;
+
+export const findAttemptForReadingSql = `SELECT
+  attempt.id::text AS attempt_token,
+  attempt.test_slug,
+  attempt.definition_version,
+  attempt.erp_course_class_id::text AS class_id,
+  attempt.class_name_snapshot AS class_name,
+  attempt.erp_student_contact_id::text AS student_id,
+  attempt.student_name_snapshot AS student_name,
+  attempt.listening_result,
+  attempt.completed_at,
+  attempt.combined_result,
+  definition.slug,
+  definition.title AS test_title,
+  definition.version,
+  definition.listening_band_adjustment,
+  definition.listening_definition,
+  definition.reading_definition
+FROM assessment.term_test_attempt AS attempt
+JOIN assessment.test_definition AS definition
+  ON definition.slug = attempt.test_slug
+ AND definition.version = attempt.definition_version
+WHERE attempt.id = $1::uuid
+  AND attempt.test_slug = $2;`;
+
+export const completeReadingAttemptSql = `WITH updated AS (
+  UPDATE assessment.term_test_attempt
+  SET
+    reading_answers = $2::jsonb,
+    reading_result = $3::jsonb,
+    combined_result = $4::jsonb,
+    reading_submitted_at = now(),
+    completed_at = now(),
+    updated_at = now()
+  WHERE id = $1::uuid
+    AND completed_at IS NULL
+  RETURNING *
+),
+resolved AS (
+  SELECT * FROM updated
+  UNION ALL
+  SELECT existing.*
+  FROM assessment.term_test_attempt AS existing
+  WHERE existing.id = $1::uuid
+    AND NOT EXISTS (SELECT 1 FROM updated)
+)
+SELECT id::text AS attempt_token, completed_at, combined_result
+FROM resolved
+LIMIT 1;`;
+
+export const fetchTermTestResultSql = `SELECT
+  id::text AS attempt_token,
+  test_slug,
+  class_name_snapshot AS class_name,
+  student_name_snapshot AS student_name,
+  listening_submitted_at,
+  reading_submitted_at,
+  completed_at,
+  combined_result
+FROM assessment.term_test_attempt
+WHERE id = $1::uuid
+  AND completed_at IS NOT NULL;`;

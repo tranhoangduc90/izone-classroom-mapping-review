@@ -86,6 +86,17 @@ API phải kiểm tra người duyệt trước khi ghi. Không coi việc ẩn 
 
 Sau khi duyệt, giảng viên có thể dùng `Sửa mapping` để chuyển sang một tài khoản khác trong roster hiện tại. `Mở lại duyệt` đưa phiếu về `pending_review` và tạm ngừng mapping chính thức. Tên/email hiển thị của cùng một Google ID được làm mới từ roster mỗi ngày, nên học viên chỉ đổi tên tài khoản thì không cần mapping lại.
 
+## Answer sheet Term Test
+
+Hai trang GitHub Pages dùng query `?class=<MÃ_LỚP>` và gọi API công khai theo thứ tự:
+
+1. `GET /api/term-tests/roster?class=<MÃ_LỚP>&test=term-test-1` để lấy tên học viên và UUID ngẫu nhiên. Response không chứa ID ERP, email hoặc đáp án.
+2. `POST /api/term-tests/<test-slug>/listening` để lưu 40 câu Listening. API trả `attemptToken`, chưa trả điểm.
+3. `POST /api/term-tests/<test-slug>/reading` với `attemptToken` để lưu 40 câu Reading và chấm cả hai phần.
+4. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả của lượt làm đó.
+
+`attemptToken` chỉ được giữ trong `sessionStorage` của tab. Định nghĩa đáp án nằm trong PostgreSQL production, không nằm trong HTML/JavaScript công khai. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
+
 ## Quét thay đổi lớp
 
 Mỗi ngày, workflow đọc toàn bộ lớp còn nằm trong view Lark được cấu hình, đối chiếu với trạng thái đăng ký ERP và roster Classroom, rồi ghi snapshot cùng sự kiện thay đổi vào PostgreSQL. Hệ thống ghi riêng các trường hợp học viên mới vào lớp, rời hoặc quay lại lớp, đổi tên/email Google, và thay đổi trạng thái đăng ký ERP. Một ca chuyển lớp được thể hiện thành hai sự kiện: rời lớp cũ và vào lớp mới. Lượt quét đầu của một lớp chỉ tạo mốc ban đầu để tránh cảnh báo hàng loạt; từ lượt sau mới phát hiện thành viên mới.
