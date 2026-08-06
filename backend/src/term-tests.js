@@ -195,6 +195,10 @@ export function buildCombinedResult(test, listening, reading) {
   }));
   const totalCorrect = listening.correct + reading.correct;
   const totalQuestions = listening.total + reading.total;
+  const bands = [listening.band, reading.band];
+  const averageBand = bands.every(band => typeof band === 'number' && Number.isFinite(band))
+    ? Number(((bands[0] + bands[1]) / 2).toFixed(2))
+    : null;
   return {
     testSlug: test.test_slug,
     testTitle: test.test_title,
@@ -204,7 +208,8 @@ export function buildCombinedResult(test, listening, reading) {
     summary: {
       totalCorrect,
       totalQuestions,
-      percentage: totalQuestions ? totalCorrect / totalQuestions : 0
+      percentage: totalQuestions ? totalCorrect / totalQuestions : 0,
+      averageBand
     },
     performance: splitPerformance(typeStats),
     typeStats: [...typeStats].sort((left, right) =>

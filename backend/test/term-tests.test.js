@@ -94,6 +94,7 @@ test('phân biệt sai và bỏ trống, đồng thời tạo performance', () =
   assert.equal(listening.details[0].result, 'incorrect');
   assert.equal(listening.details[39].result, 'blank');
   assert.equal(combined.summary.totalCorrect, 78);
+  assert.equal(combined.summary.averageBand, 8.75);
   assert.ok(combined.performance.best.length >= 1);
   assert.ok(combined.performance.needsImprovement.length >= 1);
 });
