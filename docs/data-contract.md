@@ -1,12 +1,18 @@
 # Hợp đồng dữ liệu cho API duyệt mapping
 
-Tài liệu này mô tả dữ liệu giao diện cần. API trung gian có thể được viết bằng Apps Script, n8n hoặc một dịch vụ nhỏ khác; giao diện không gọi thẳng Metabase/PostgreSQL.
+Tài liệu này mô tả dữ liệu giao diện cần. API chạy trong container riêng, không chiếm execution của n8n; giao diện không gọi thẳng Metabase/PostgreSQL.
+
+## Xác thực
+
+Production dùng Google Sign-In. Trình duyệt gửi Google ID token qua header `Authorization: Bearer <token>`; token chỉ giữ trong bộ nhớ tab. Backend xác minh chữ ký, audience, email đã xác thực, rồi kiểm tra email và quyền lớp trong PostgreSQL. Giảng viên có thể dùng tài khoản Google thuộc bất kỳ tên miền nào.
+
+Header `x-review-token` chỉ tồn tại trong chế độ `legacy` ngắn hạn khi chuyển từ API n8n sang API độc lập.
 
 ## Tải hàng chờ
 
 `GET /api/mapping/reviews?class_id=<erp_course_class_id>&status=pending_review`
 
-Request phải có header `x-review-token`. Mã này do quản trị viên cấp, chỉ giữ trong `sessionStorage` của tab đang mở và không được ghi vào repo.
+Request phải có Google ID token hợp lệ và tài khoản được cấp quyền cho lớp đang đọc.
 
 Response tối thiểu:
 
@@ -15,7 +21,7 @@ Response tối thiểu:
   "ok": true,
   "items": [
     {
-      "id": "review-id",
+      "id": "review-uuid-khong-tuan-tu",
       "classId": "erp-course-class-id",
       "className": "Tên lớp tại thời điểm tạo đề xuất",
       "erpStudentId": "contact-id",
@@ -50,12 +56,11 @@ Request:
 {
   "reviewId": "review-id",
   "decision": "approve",
-  "note": "Đã xác nhận với học viên tại lớp.",
-  "reviewerName": "Tên giảng viên"
+  "note": "Đã xác nhận với học viên tại lớp."
 }
 ```
 
-Giá trị `decision` là `approve`, `reject` hoặc `choose_another`. Với `choose_another`, request cần thêm `classroomUserId` của ứng viên mới. API chỉ chấp nhận tài khoản còn nằm trong roster hiện tại của đúng lớp và từ chối nếu Google ID đã được duyệt cho học viên ERP khác.
+Giá trị `decision` là `approve`, `reject`, `choose_another`, `edit_mapping` hoặc `reopen`. Với `choose_another` và `edit_mapping`, request cần thêm `classroomUserId` của ứng viên mới. API lấy danh tính người duyệt từ token, chỉ chấp nhận tài khoản còn nằm trong roster hiện tại của đúng lớp và từ chối nếu Google ID đã gắn cho học viên ERP khác.
 
 Response:
 

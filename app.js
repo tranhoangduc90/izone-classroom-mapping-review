@@ -1,6 +1,6 @@
 /*
  * Mục đích: tải hàng chờ mapping và cho giảng viên duyệt trên trình duyệt.
- * Dữ liệu nhận vào: mã truy cập, tên người duyệt và JSON từ API n8n; bản xem thử dùng dữ liệu giả.
+ * Dữ liệu nhận vào: Google ID token hoặc mã truy cập chuyển tiếp, cùng JSON từ API; bản xem thử dùng dữ liệu giả.
  * Xử lý: lọc danh sách, hiển thị gợi ý, cho phép chọn tài khoản khác rồi gửi quyết định có xác thực.
  * Kết quả: PostgreSQL chỉ nhận mapping sau khi API xác nhận; giao diện tải lại trạng thái mới nhất.
  * Lỗi: hiện thông báo rõ, không tự coi yêu cầu thất bại là đã duyệt.
@@ -44,21 +44,29 @@ const DEMO_REVIEWS = [
 ];
 
 const isDemo = window.APP_CONFIG?.DEMO_MODE !== false;
+const authMode = window.APP_CONFIG?.AUTH_MODE === 'google' ? 'google' : 'legacy';
+const isGoogleAuth = !isDemo && authMode === 'google';
 const DEFAULT_REVIEW_STATUS = 'pending_review';
 const state = {
   reviews: [],
   selectedReview: null,
   approvedThisSession: 0,
-  accessCode: sessionStorage.getItem('mappingReviewAccessCode') || '',
-  reviewerName: sessionStorage.getItem('mappingReviewerName') || '',
+  accessCode: authMode === 'legacy' ? sessionStorage.getItem('mappingReviewAccessCode') || '' : '',
+  idToken: '',
+  reviewerName: authMode === 'legacy' ? sessionStorage.getItem('mappingReviewerName') || '' : '',
   connected: isDemo
 };
 
 const elements = {
   accessPanel: document.querySelector('#accessPanel'),
+  accessTitle: document.querySelector('#accessTitle'),
+  accessDescription: document.querySelector('#accessDescription'),
+  accessCodeField: document.querySelector('#accessCodeField'),
+  reviewerNameField: document.querySelector('#reviewerNameField'),
   accessCode: document.querySelector('#accessCode'),
   reviewerName: document.querySelector('#reviewerName'),
   connectButton: document.querySelector('#connectButton'),
+  googleSignInButton: document.querySelector('#googleSignInButton'),
   modeBadge: document.querySelector('#modeBadge'),
   classFilter: document.querySelector('#classFilter'),
   statusFilter: document.querySelector('#statusFilter'),
@@ -119,6 +127,14 @@ function updateConnectionUi() {
     : state.connected ? 'Đã kết nối' : 'Chưa kết nối';
   elements.connectButton.textContent = state.connected && !isDemo ? 'Kết nối lại' : 'Kết nối';
   if (isDemo) elements.accessPanel.hidden = true;
+  if (isGoogleAuth) {
+    elements.accessTitle.textContent = state.connected ? `Đã đăng nhập: ${state.reviewerName}` : 'Đăng nhập để duyệt lớp';
+    elements.accessDescription.textContent = 'Dùng tài khoản Google đã được quản trị viên cấp quyền. Tài khoản có thể thuộc bất kỳ tên miền nào.';
+    elements.reviewerNameField.hidden = true;
+    elements.accessCodeField.hidden = true;
+    elements.connectButton.hidden = true;
+    elements.googleSignInButton.hidden = false;
+  }
 }
 
 function filteredReviews() {
@@ -215,19 +231,30 @@ function render() {
 async function apiRequest(path, options = {}) {
   const apiBaseUrl = window.APP_CONFIG?.API_BASE_URL || '';
   if (!apiBaseUrl) throw new Error('Chưa cấu hình địa chỉ API.');
-  if (!state.accessCode) throw new Error('Bạn chưa nhập mã truy cập.');
+  if (isGoogleAuth && !state.idToken) throw new Error('Bạn chưa đăng nhập Google.');
+  if (!isGoogleAuth && !state.accessCode) throw new Error('Bạn chưa nhập mã truy cập.');
+
+  const authHeaders = isGoogleAuth
+    ? { Authorization: `Bearer ${state.idToken}` }
+    : { 'x-review-token': state.accessCode };
 
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
     headers: {
-      'x-review-token': state.accessCode,
+      ...authHeaders,
       ...(options.headers || {})
     }
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(response.status === 403
-    ? 'Mã truy cập không đúng hoặc đã hết hiệu lực.'
-    : `API trả về mã ${response.status}.`);
+  if (!response.ok) {
+    if (response.status === 401) throw new Error(isGoogleAuth
+      ? 'Phiên Google đã hết hạn; hãy đăng nhập lại.'
+      : 'Mã truy cập không đúng hoặc đã hết hiệu lực.');
+    if (response.status === 403) throw new Error(isGoogleAuth
+      ? 'Tài khoản Google này chưa được cấp quyền cho hệ thống hoặc lớp đã chọn.'
+      : 'Mã truy cập không đúng hoặc đã hết hiệu lực.');
+    throw new Error(payload?.message || `API trả về mã ${response.status}.`);
+  }
   if (!payload?.ok) throw new Error(payload?.message || payload?.error || 'API không xác nhận yêu cầu.');
   return payload;
 }
@@ -240,7 +267,54 @@ async function loadReviews() {
 
   const payload = await apiRequest('/api/mapping/reviews?status=all');
   state.reviews = payload.items || [];
+  if (payload.reviewer?.displayName || payload.reviewer?.email) {
+    state.reviewerName = payload.reviewer.displayName || payload.reviewer.email;
+  }
   state.connected = true;
+}
+
+// Tải nút Google Sign-In khi dùng backend độc lập; ID token chỉ giữ trong RAM của tab.
+function initializeGoogleSignIn() {
+  const clientId = window.APP_CONFIG?.GOOGLE_CLIENT_ID || '';
+  if (!clientId) {
+    showNotice('Chưa cấu hình Google OAuth Client ID.');
+    return;
+  }
+
+  const renderButton = () => {
+    window.google.accounts.id.initialize({
+      client_id: clientId,
+      callback: async googleResponse => {
+        state.idToken = googleResponse.credential || '';
+        try {
+          await loadReviews();
+          updateConnectionUi();
+          render();
+          showNotice(`Đã tải ${state.reviews.length} phiếu duyệt.`, true);
+        } catch (error) {
+          state.idToken = '';
+          state.connected = false;
+          updateConnectionUi();
+          showNotice(`Không thể đăng nhập: ${error.message}`);
+        }
+      }
+    });
+    window.google.accounts.id.renderButton(elements.googleSignInButton, {
+      type: 'standard',
+      theme: 'outline',
+      size: 'large',
+      text: 'signin_with',
+      shape: 'rectangular'
+    });
+  };
+
+  const script = document.createElement('script');
+  script.src = 'https://accounts.google.com/gsi/client';
+  script.async = true;
+  script.defer = true;
+  script.onload = renderButton;
+  script.onerror = () => showNotice('Không tải được màn hình đăng nhập Google.');
+  document.head.append(script);
 }
 
 function openDecision(review, decision) {
@@ -303,7 +377,7 @@ async function saveDecision(review, decision, note) {
       decision,
       classroomUserId,
       note,
-      reviewerName: state.reviewerName
+      ...(isGoogleAuth ? {} : { reviewerName: state.reviewerName })
     })
   });
   if (['approve', 'choose_another'].includes(decision)) state.approvedThisSession += 1;
@@ -317,6 +391,7 @@ function closeDecisionDialog() {
 }
 
 elements.connectButton.addEventListener('click', async () => {
+  if (isGoogleAuth) return;
   state.accessCode = elements.accessCode.value.trim();
   state.reviewerName = elements.reviewerName.value.trim();
   if (!state.accessCode || !state.reviewerName) {
@@ -420,5 +495,9 @@ if (isDemo) {
     });
 } else {
   render();
-  showNotice('Nhập tên người duyệt và mã truy cập để tải dữ liệu thật.');
+  showNotice(isGoogleAuth
+    ? 'Đăng nhập bằng tài khoản Google đã được cấp quyền để tải dữ liệu.'
+    : 'Nhập tên người duyệt và mã truy cập để tải dữ liệu thật.');
 }
+
+if (isGoogleAuth) initializeGoogleSignIn();

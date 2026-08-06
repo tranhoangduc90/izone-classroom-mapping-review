@@ -1,0 +1,33 @@
+services:
+  mapping-review-api:
+    build:
+      context: .
+    container_name: mapping-review-api
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    env_file:
+      - /opt/mapping-review-api/.env
+    ports:
+      - "127.0.0.1:8788:8788"
+    networks:
+      - mapping-api-net
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 256m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  mapping-api-net:
+    external: true

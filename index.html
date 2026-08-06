@@ -28,18 +28,19 @@
       <section class="access-panel panel" id="accessPanel" aria-label="Kết nối dữ liệu duyệt">
         <div>
           <p class="eyebrow">Quyền truy cập</p>
-          <h2>Kết nối hàng chờ của lớp</h2>
-          <p>Mã truy cập chỉ được giữ trong tab đang mở, không lưu vào GitHub hay trình duyệt lâu dài.</p>
+          <h2 id="accessTitle">Kết nối hàng chờ của lớp</h2>
+          <p id="accessDescription">Mã truy cập chỉ được giữ trong tab đang mở, không lưu vào GitHub hay trình duyệt lâu dài.</p>
         </div>
-        <label>
+        <label id="reviewerNameField">
           Tên người duyệt
           <input id="reviewerName" autocomplete="name" placeholder="Ví dụ: Nguyễn Văn A">
         </label>
-        <label>
+        <label id="accessCodeField">
           Mã truy cập
           <input id="accessCode" type="password" autocomplete="current-password" placeholder="Nhập mã do quản trị viên cấp">
         </label>
         <button class="button button-primary" id="connectButton" type="button">Kết nối</button>
+        <div id="googleSignInButton" hidden></div>
       </section>
 
       <section class="toolbar panel" aria-label="Bộ lọc">

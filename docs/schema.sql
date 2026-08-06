@@ -128,6 +128,7 @@ CREATE TABLE mapping.student_identity_mapping (
 
 CREATE TABLE mapping.student_mapping_review (
   id BIGSERIAL PRIMARY KEY,
+  public_id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   erp_course_class_id BIGINT NOT NULL,
   erp_student_contact_id BIGINT NOT NULL,
   erp_student_code TEXT,
@@ -167,6 +168,34 @@ CREATE TABLE mapping.mapping_decision_event (
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE mapping.reviewer_account (
+  email TEXT PRIMARY KEY,
+  google_subject TEXT UNIQUE,
+  display_name TEXT,
+  role TEXT NOT NULL DEFAULT 'teacher'
+    CHECK (role IN ('teacher', 'admin')),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'inactive')),
+  can_access_all_classes BOOLEAN NOT NULL DEFAULT false,
+  last_login_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT reviewer_account_email_lowercase_check
+    CHECK (email = lower(email))
+);
+
+CREATE TABLE mapping.reviewer_class_access (
+  reviewer_email TEXT NOT NULL
+    REFERENCES mapping.reviewer_account(email) ON DELETE CASCADE,
+  erp_course_class_id BIGINT NOT NULL
+    REFERENCES mapping.classroom_course_mapping(erp_course_class_id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (reviewer_email, erp_course_class_id)
+);
+
+CREATE INDEX idx_reviewer_class_access_class
+  ON mapping.reviewer_class_access (erp_course_class_id);
 
 CREATE VIEW mapping.approved_student_classroom_mapping AS
 SELECT

@@ -4,3 +4,4 @@ Thumbs.db
 *.local.js
 node_modules/
 _backups/
+.playwright-cli/
