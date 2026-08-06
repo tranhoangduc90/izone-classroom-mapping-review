@@ -23,6 +23,7 @@ Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom 
 - PostgreSQL `mapping_db` lưu mapping, snapshot thành viên lớp và lịch sử thay đổi từ ERP/Classroom/Lark.
 - Workflow đồng bộ đọc toàn bộ lớp trong view Lark đã chọn, quét mỗi ngày lúc 04:30 và vẫn có nút chạy thủ công.
 - API độc lập hoạt động tại `/mapping-api/`, dùng Google Sign-In và phân quyền theo lớp trong PostgreSQL.
+- Quyền giảng viên được lưu trước theo mã lớp; khi một lớp mới có mapping ERP–Classroom, lần quét kế tiếp tự kích hoạt quyền xem lớp đó.
 - API n8n cũ vẫn được giữ tạm thời làm phương án quay lại; giao diện không còn gọi endpoint này.
 - `config.js` đặt `DEMO_MODE: false` để giao diện tải dữ liệu thật sau khi xác thực.
 

@@ -185,6 +185,20 @@ CREATE TABLE mapping.reviewer_account (
     CHECK (email = lower(email))
 );
 
+CREATE TABLE mapping.reviewer_class_assignment (
+  reviewer_email TEXT NOT NULL
+    REFERENCES mapping.reviewer_account(email) ON DELETE CASCADE,
+  class_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (reviewer_email, class_name),
+  CONSTRAINT reviewer_class_assignment_name_not_blank_check
+    CHECK (length(trim(class_name)) > 0)
+);
+
+CREATE INDEX idx_reviewer_class_assignment_normalized_name
+  ON mapping.reviewer_class_assignment (upper(trim(class_name)));
+
 CREATE TABLE mapping.reviewer_class_access (
   reviewer_email TEXT NOT NULL
     REFERENCES mapping.reviewer_account(email) ON DELETE CASCADE,

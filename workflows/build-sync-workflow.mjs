@@ -114,6 +114,33 @@ function meaningfulNameTokens(value) {
   });
 }
 
+function isTokenSubsequence(fullTokens, shortTokens) {
+  if (!shortTokens.length || shortTokens.length > fullTokens.length) return false;
+  let shortIndex = 0;
+  for (const token of fullTokens) {
+    if (token === shortTokens[shortIndex]) shortIndex += 1;
+    if (shortIndex === shortTokens.length) return true;
+  }
+  return false;
+}
+
+function emailNameEvidence(erpTokens, classroomTokens, email) {
+  const localPart = compactName(String(email || '').split('@')[0]);
+  if (!localPart) return { strong: false, tokenHits: 0 };
+
+  const classroomCompact = classroomTokens.join('');
+  const distinctLongTokens = [...new Set([...erpTokens, ...classroomTokens])]
+    .filter(token => token.length >= 3);
+  const tokenHits = distinctLongTokens.filter(token => localPart.includes(token)).length;
+  const containsClassroomName = classroomCompact.length >= 6
+    && localPart.includes(classroomCompact);
+
+  return {
+    strong: containsClassroomName || tokenHits >= 2,
+    tokenHits
+  };
+}
+
 function levenshtein(a, b) {
   const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
   for (let i = 1; i <= a.length; i += 1) {
@@ -141,33 +168,74 @@ function scoreCandidate(erp, classroom) {
   const erpEmail = String(erp.email || '').trim().toLowerCase();
   const googleEmail = String(classroom.email || '').trim().toLowerCase();
   if (erpEmail && googleEmail && erpEmail === googleEmail) {
-    return { score: 1, method: 'email', reason: 'Email ERP trùng chính xác với email Google Classroom.' };
+    return {
+      score: 1,
+      method: 'email',
+      evidence: 'exact_email',
+      reason: 'Email ERP trùng chính xác với email Google Classroom.'
+    };
   }
 
   if (compactName(erp.fullName) && compactName(erp.fullName) === compactName(classroom.fullName)) {
-    return { score: 0.98, method: 'ai_suggested', reason: 'Tên đầy đủ trùng sau khi bỏ dấu và ký tự thừa.' };
+    return {
+      score: 0.985,
+      method: 'ai_suggested',
+      evidence: 'exact_name',
+      reason: 'Tên đầy đủ trùng sau khi bỏ dấu và ký tự thừa; cần giảng viên xác nhận.'
+    };
   }
 
   if (sortedTokens(erp.fullName) && sortedTokens(erp.fullName) === sortedTokens(classroom.fullName)) {
-    return { score: 0.96, method: 'ai_suggested', reason: 'Các thành phần họ tên trùng, chỉ khác thứ tự hiển thị.' };
+    return {
+      score: 0.975,
+      method: 'ai_suggested',
+      evidence: 'same_name_tokens',
+      reason: 'Các thành phần họ tên trùng, chỉ khác thứ tự hiển thị; cần giảng viên xác nhận.'
+    };
   }
 
   const erpTokens = meaningfulNameTokens(erp.fullName);
   const classroomTokens = meaningfulNameTokens(classroom.fullName);
   const erpTokenSet = new Set(erpTokens);
+  const emailEvidence = emailNameEvidence(erpTokens, classroomTokens, googleEmail);
   const classroomIsShortenedName = classroomTokens.length >= 2
     && classroomTokens.length < erpTokens.length
     && classroomTokens.every(token => erpTokenSet.has(token));
 
   if (classroomIsShortenedName) {
-    const keepsSurnameAndGivenName = classroomTokens.includes(erpTokens[0])
-      && classroomTokens.includes(erpTokens[erpTokens.length - 1]);
+    const reversedClassroomTokens = [...classroomTokens].reverse();
+    const erpCompact = erpTokens.join('');
+    const classroomCompact = classroomTokens.join('');
+    const reversedClassroomCompact = reversedClassroomTokens.join('');
+    const keepsFamilyName = classroomTokens.includes(erpTokens[0]);
+    const keepsGivenName = classroomTokens.includes(erpTokens[erpTokens.length - 1]);
+    const keepsNameOrder = isTokenSubsequence(erpTokens, classroomTokens);
+    const reversesNameOrder = isTokenSubsequence(erpTokens, reversedClassroomTokens);
+    const keepsAdjacentNameParts = erpCompact.includes(classroomCompact)
+      || erpCompact.includes(reversedClassroomCompact);
+    const tokenCoverage = classroomTokens.length / erpTokens.length;
+
+    let score = 0.94;
+    let pattern = 'Tên Classroom dùng một phần họ tên ERP';
+    if (keepsAdjacentNameParts) {
+      score = 0.968;
+      pattern = 'Tên Classroom giữ các phần tên liền nhau nhưng có thể đảo thứ tự';
+    } else if (keepsNameOrder || reversesNameOrder) {
+      score = 0.962;
+      pattern = 'Tên Classroom giữ đúng các phần tên chính nhưng đổi thứ tự hiển thị';
+    } else if (keepsGivenName && (keepsFamilyName || tokenCoverage >= 0.6)) {
+      score = 0.958;
+      pattern = 'Tên Classroom giữ họ/tên chính và lược bỏ tên đệm';
+    }
+    if (emailEvidence.strong) score = Math.min(0.978, score + 0.01);
+
     return {
-      score: keepsSurnameAndGivenName ? 0.95 : 0.93,
+      score,
       method: 'ai_suggested',
-      reason: keepsSurnameAndGivenName
-        ? 'Tên Classroom là tên rút gọn nhưng vẫn giữ họ và tên chính; cần giảng viên xác nhận.'
-        : 'Tên Classroom dùng một phần họ tên ERP và có thể đảo thứ tự; cần giảng viên xác nhận.'
+      evidence: emailEvidence.strong ? 'shortened_name_with_email' : 'shortened_name',
+      reason: pattern
+        + (emailEvidence.strong ? ', đồng thời email có chứa các phần tên tương ứng' : '')
+        + '; cần giảng viên xác nhận.'
     };
   }
 
@@ -177,17 +245,26 @@ function scoreCandidate(erp, classroom) {
     && erpCompact.length > classroomCompact.length
     && erpCompact.endsWith(classroomCompact)) {
     return {
-      score: 0.94,
+      score: emailEvidence.strong ? 0.96 : 0.945,
       method: 'ai_suggested',
-      reason: 'Tên Classroom viết liền và khớp phần tên chính trong ERP; cần giảng viên xác nhận.'
+      evidence: emailEvidence.strong ? 'joined_name_with_email' : 'joined_name',
+      reason: 'Tên Classroom viết liền và khớp phần tên chính trong ERP'
+        + (emailEvidence.strong ? '; email cũng chứa phần tên này' : '')
+        + '; cần giảng viên xác nhận.'
     };
   }
 
   const similarity = nameSimilarity(erp.fullName, classroom.fullName);
+  const adjustedSimilarity = emailEvidence.strong
+    ? Math.min(0.94, similarity + 0.04)
+    : similarity;
   return {
-    score: Number(similarity.toFixed(4)),
+    score: Number(adjustedSimilarity.toFixed(4)),
     method: 'ai_suggested',
-    reason: 'Tên gần giống sau khi chuẩn hóa; cần giảng viên kiểm tra.'
+    evidence: emailEvidence.strong ? 'similar_name_with_email' : 'similar_name',
+    reason: emailEvidence.strong
+      ? 'Tên gần giống sau khi chuẩn hóa và email chứa các phần tên tương ứng; cần giảng viên kiểm tra.'
+      : 'Tên gần giống sau khi chuẩn hóa; cần giảng viên kiểm tra.'
   };
 }
 
@@ -267,8 +344,10 @@ const proposals = erpStudents.map(erp => {
   const margin = best ? best.score - secondScore : 0;
   const obvious = Boolean(best) && (
     best.method === 'email' ||
-    best.score >= 0.95 ||
-    (best.score >= 0.88 && margin >= 0.08)
+    (best.evidence === 'exact_name' && margin >= 0.01) ||
+    (best.evidence === 'same_name_tokens' && margin >= 0.02) ||
+    (best.score >= 0.955 && margin >= 0.04) ||
+    (best.score >= 0.9 && margin >= 0.1)
   );
 
   return { erp, course, best, obvious, margin };
@@ -533,10 +612,41 @@ upsert_courses AS (
     updated_at = now()
   RETURNING id
 ),
+reconcile_reviewer_class_access AS (
+  INSERT INTO mapping.reviewer_class_access (
+    reviewer_email,
+    erp_course_class_id
+  )
+  SELECT
+    assignment.reviewer_email,
+    course.erp_course_class_id
+  FROM mapping.reviewer_class_assignment AS assignment
+  JOIN mapping.classroom_course_mapping AS course
+    ON upper(trim(course.erp_class_name_snapshot)) = upper(trim(assignment.class_name))
+  JOIN mapping.reviewer_account AS reviewer
+    ON reviewer.email = assignment.reviewer_email
+   AND reviewer.status = 'active'
+  ON CONFLICT (reviewer_email, erp_course_class_id) DO NOTHING
+  RETURNING reviewer_email
+),
 roster_rows AS (
   SELECT DISTINCT ON (row ->> 'classroomCourseId', row ->> 'classroomUserId') row
   FROM payload, LATERAL jsonb_array_elements(body -> 'rosters') AS row
   ORDER BY row ->> 'classroomCourseId', row ->> 'classroomUserId'
+),
+unique_roster_users AS (
+  SELECT DISTINCT ON (row ->> 'classroomUserId') row
+  FROM roster_rows
+  ORDER BY row ->> 'classroomUserId', row ->> 'classroomCourseId'
+),
+exact_email_candidate_keys AS (
+  SELECT DISTINCT row ->> 'classroomUserId' AS google_user_id
+  FROM payload, LATERAL jsonb_array_elements(body -> 'reviews') AS row
+  WHERE row ->> 'status' = 'approved'
+    AND row ->> 'matchMethod' = 'email'
+    AND NULLIF(row ->> 'erpStudentEmail', '') IS NOT NULL
+    AND lower(row ->> 'erpStudentEmail') = lower(row ->> 'classroomEmail')
+    AND NULLIF(row ->> 'classroomUserId', '') IS NOT NULL
 ),
 classroom_roster_change_events AS (
   INSERT INTO mapping.class_change_event (
@@ -662,18 +772,23 @@ upsert_roster AS (
 refresh_identity_snapshots AS (
   UPDATE mapping.student_identity_mapping AS identity
   SET
-    google_name_snapshot = NULLIF(roster_rows.row ->> 'fullName', ''),
-    google_email_snapshot = NULLIF(roster_rows.row ->> 'email', ''),
+    google_name_snapshot = NULLIF(unique_roster_users.row ->> 'fullName', ''),
+    google_email_snapshot = NULLIF(unique_roster_users.row ->> 'email', ''),
     last_seen_at = now(),
     updated_at = CASE
-      WHEN identity.google_name_snapshot IS DISTINCT FROM NULLIF(roster_rows.row ->> 'fullName', '')
-        OR identity.google_email_snapshot IS DISTINCT FROM NULLIF(roster_rows.row ->> 'email', '')
+      WHEN identity.google_name_snapshot IS DISTINCT FROM NULLIF(unique_roster_users.row ->> 'fullName', '')
+        OR identity.google_email_snapshot IS DISTINCT FROM NULLIF(unique_roster_users.row ->> 'email', '')
       THEN now()
       ELSE identity.updated_at
     END
-  FROM roster_rows
-  WHERE identity.google_user_id = roster_rows.row ->> 'classroomUserId'
+  FROM unique_roster_users
+  WHERE identity.google_user_id = unique_roster_users.row ->> 'classroomUserId'
     AND identity.status = 'approved'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM exact_email_candidate_keys AS exact_candidate
+      WHERE exact_candidate.google_user_id = identity.google_user_id
+    )
   RETURNING identity.id
 ),
 membership_rows AS (
@@ -1024,6 +1139,7 @@ SELECT
   (SELECT count(*) FROM upsert_memberships) AS membership_rows_written,
   (SELECT count(*) FROM upsert_reviews) AS review_rows_written,
   (SELECT count(*) FROM upsert_exact_email_mappings) AS exact_email_mappings_written,
+  (SELECT count(*) FROM reconcile_reviewer_class_access) AS reviewer_access_rows_written,
   (SELECT count(*) FROM supersede_stale) AS stale_reviews_superseded,
   (
     (SELECT count(*) FROM lark_class_change_events)
