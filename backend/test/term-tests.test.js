@@ -196,6 +196,7 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const listening = gradeSection(makeSection(), perfectAnswers(), 0);
   let combinedResult;
+  const syncPayloads = [];
   const pool = makePool(async (_sql, params, callNumber) => {
     if (callNumber === 1) {
       return {
@@ -220,6 +221,8 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
       rows: [{
         attempt_token: attemptToken,
         test_slug: 'term-test-1',
+        class_id: '2139',
+        student_id: '9001',
         class_name: 'IC2139',
         student_name: 'Học viên thử nghiệm',
         completed_at: new Date().toISOString(),
@@ -227,7 +230,14 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
       }]
     };
   });
-  const app = createApp({ config: makeConfig(), pool });
+  const app = createApp({
+    config: makeConfig(),
+    pool,
+    syncErpGrades: async payload => {
+      syncPayloads.push(payload);
+      return { status: 'synced' };
+    }
+  });
   const readingResponse = await request(app)
     .post('/api/term-tests/term-test-1/reading')
     .set('Origin', 'https://tranhoangduc90.github.io')
@@ -242,4 +252,7 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
   assert.equal(resultResponse.status, 200);
   assert.equal(resultResponse.body.result.summary.totalCorrect, 80);
   assert.equal(resultResponse.body.studentName, 'Học viên thử nghiệm');
+  assert.equal(syncPayloads.length, 2);
+  assert.deepEqual(syncPayloads[0].grades, { listening: 9, reading: 9 });
+  assert.equal(syncPayloads[0].studentId, '9001');
 });

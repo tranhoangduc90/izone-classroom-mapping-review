@@ -464,6 +464,8 @@ LIMIT 1;`;
 export const fetchTermTestResultSql = `SELECT
   id::text AS attempt_token,
   test_slug,
+  erp_course_class_id::text AS class_id,
+  erp_student_contact_id::text AS student_id,
   class_name_snapshot AS class_name,
   student_name_snapshot AS student_name,
   listening_submitted_at,

@@ -17,6 +17,7 @@ import {
   writeDecisionSql
 } from './sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
+import { buildErpGradePayload } from './erp-sync.js';
 
 const reviewQuerySchema = z.object({
   class_id: z.string().regex(/^\d+$/).optional(),
@@ -64,6 +65,18 @@ function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
+async function trySyncErpGrades(syncErpGrades, attempt, combinedResult) {
+  try {
+    const payload = buildErpGradePayload(attempt, combinedResult);
+    await syncErpGrades(payload);
+    return 'synced';
+  } catch (error) {
+    // Không chặn học viên xem kết quả; lần mở kết quả tiếp theo sẽ tự thử lại.
+    console.error(`ERP grade sync failed type=${error?.name || 'Error'}`);
+    return 'pending';
+  }
+}
+
 function addCors(config) {
   return function corsMiddleware(req, res, next) {
     const origin = req.get('origin');
@@ -83,7 +96,7 @@ function addCors(config) {
 }
 
 // Tạo Express app bằng dependency injection để có thể kiểm thử mà không cần database thật.
-export function createApp({ config, pool, verifyGoogleToken }) {
+export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = async () => ({ status: 'disabled' }) }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops);
@@ -194,6 +207,7 @@ export function createApp({ config, pool, verifyGoogleToken }) {
     }
     const attempt = attemptResult.rows[0];
     if (attempt.completed_at && attempt.combined_result) {
+      await trySyncErpGrades(syncErpGrades, attempt, attempt.combined_result);
       return res.json({ ok: true, attemptToken: attempt.attempt_token, completed: true, next: 'result' });
     }
     const testDefinition = parseStoredTest({
@@ -211,6 +225,7 @@ export function createApp({ config, pool, verifyGoogleToken }) {
       JSON.stringify(combinedResult)
     ]);
     if (completeResult.rowCount !== 1) throw new Error('Không thể hoàn tất bài Reading.');
+    await trySyncErpGrades(syncErpGrades, attempt, combinedResult);
     return res.json({ ok: true, attemptToken: parsed.data.attemptToken, completed: true, next: 'result' });
   }));
 
@@ -224,6 +239,7 @@ export function createApp({ config, pool, verifyGoogleToken }) {
       return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
     }
     const row = result.rows[0];
+    await trySyncErpGrades(syncErpGrades, row, row.combined_result);
     return res.json({
       ok: true,
       attemptToken: row.attempt_token,

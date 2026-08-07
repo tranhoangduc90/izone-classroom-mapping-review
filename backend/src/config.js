@@ -10,7 +10,17 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().trim().optional().default(''),
   LEGACY_REVIEW_TOKEN: z.string().optional().default(''),
   ALLOWED_ORIGINS: z.string().min(1).default('https://tranhoangduc90.github.io'),
-  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1)
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1),
+  ERP_SYNC_URL: z.string().url().optional().default(''),
+  ERP_SYNC_SECRET: z.string().optional().default(''),
+  ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(10000).default(5000)
+}).superRefine((value, context) => {
+  if (Boolean(value.ERP_SYNC_URL) !== Boolean(value.ERP_SYNC_SECRET)) {
+    context.addIssue({ code: 'custom', message: 'ERP_SYNC_URL và ERP_SYNC_SECRET phải được cấu hình cùng nhau.' });
+  }
+  if (value.ERP_SYNC_SECRET && value.ERP_SYNC_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['ERP_SYNC_SECRET'], message: 'ERP_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+  }
 });
 
 export function loadConfig(env = process.env) {
@@ -31,6 +41,9 @@ export function loadConfig(env = process.env) {
     googleClientId: parsed.GOOGLE_CLIENT_ID,
     legacyReviewToken: parsed.LEGACY_REVIEW_TOKEN,
     allowedOrigins: new Set(parsed.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean)),
-    trustProxyHops: parsed.TRUST_PROXY_HOPS
+    trustProxyHops: parsed.TRUST_PROXY_HOPS,
+    erpSyncUrl: parsed.ERP_SYNC_URL,
+    erpSyncSecret: parsed.ERP_SYNC_SECRET,
+    erpSyncTimeoutMs: parsed.ERP_SYNC_TIMEOUT_MS
   };
 }
