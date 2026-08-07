@@ -97,6 +97,15 @@ Hai trang GitHub Pages dùng query `?class=<MÃ_LỚP>` và gọi API công khai
 
 `attemptToken` chỉ được giữ trong `sessionStorage` của tab. Định nghĩa đáp án nằm trong PostgreSQL production, không nằm trong HTML/JavaScript công khai. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
 
+### Dashboard giảng viên
+
+Trang giảng viên bắt buộc gửi Google ID token trong header `Authorization` và chỉ đọc các lớp có trong `mapping.reviewer_class_access` của tài khoản đó:
+
+1. `GET /api/term-tests/teacher/options` trả danh sách lớp được phép xem và Term Test đang hoạt động.
+2. `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>` trả toàn bộ roster. Mỗi học viên có trạng thái `completed`, `incomplete` hoặc `not_started`; học viên đã hoàn thành có `combined_result` mới nhất để dựng tổng quan và màn hình cá nhân.
+
+Response không chứa ID ERP, email hay `attemptToken`. Học viên chưa hoàn thành không được trả đáp án hoặc điểm tạm thời.
+
 ## Quét thay đổi lớp
 
 Mỗi ngày, workflow đọc toàn bộ lớp còn nằm trong view Lark được cấu hình, đối chiếu với trạng thái đăng ký ERP và roster Classroom, rồi ghi snapshot cùng sự kiện thay đổi vào PostgreSQL. Hệ thống ghi riêng các trường hợp học viên mới vào lớp, rời hoặc quay lại lớp, đổi tên/email Google, và thay đổi trạng thái đăng ký ERP. Một ca chuyển lớp được thể hiện thành hai sự kiện: rời lớp cũ và vào lớp mới. Lượt quét đầu của một lớp chỉ tạo mốc ban đầu để tránh cảnh báo hàng loạt; từ lượt sau mới phát hiện thành viên mới.

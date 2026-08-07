@@ -473,3 +473,145 @@ export const fetchTermTestResultSql = `SELECT
 FROM assessment.term_test_attempt
 WHERE id = $1::uuid
   AND completed_at IS NOT NULL;`;
+
+// Danh sách lớp và bài test chỉ gồm phạm vi mà giảng viên đã được cấp quyền.
+export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
+  SELECT
+    course.erp_course_class_id::text AS class_id,
+    course.erp_class_name_snapshot AS class_name
+  FROM mapping.classroom_course_mapping AS course
+  WHERE $2::boolean
+    OR EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $1
+        AND access.erp_course_class_id = course.erp_course_class_id
+    )
+),
+active_tests AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE is_active = true
+)
+SELECT jsonb_build_object(
+  'classes', COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object('id', class_id, 'name', class_name)
+      ORDER BY class_name
+    )
+    FROM allowed_classes
+  ), '[]'::jsonb),
+  'tests', COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object('slug', slug, 'title', title, 'version', version)
+      ORDER BY slug
+    )
+    FROM active_tests
+  ), '[]'::jsonb)
+) AS response;`;
+
+// Trả kết quả mới nhất đã hoàn thành của từng học viên; nếu chưa có thì giữ trạng thái để tổng quan không bỏ sót học viên.
+export const listTermTestTeacherResultsSql = `WITH definition AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE slug = $2
+    AND is_active = true
+),
+target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+authorized_classes AS (
+  SELECT target.*
+  FROM target_classes AS target
+  WHERE $4::boolean
+    OR EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $3
+        AND access.erp_course_class_id = target.erp_course_class_id
+    )
+),
+roster_mode AS (
+  SELECT EXISTS (
+    SELECT 1
+    FROM assessment.term_test_roster AS roster
+    JOIN authorized_classes AS target
+      ON target.erp_course_class_id = roster.erp_course_class_id
+    WHERE roster.test_slug = $2
+  ) AS has_curated_roster
+),
+eligible_students AS (
+  SELECT
+    roster.erp_course_class_id,
+    roster.erp_student_contact_id,
+    roster.student_ref,
+    roster.student_name_snapshot AS student_name
+  FROM assessment.term_test_roster AS roster
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = roster.erp_course_class_id
+  WHERE roster.test_slug = $2
+
+  UNION ALL
+
+  SELECT
+    review.erp_course_class_id,
+    review.erp_student_contact_id,
+    review.public_id AS student_ref,
+    review.erp_student_name_snapshot AS student_name
+  FROM mapping.student_mapping_review AS review
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = review.erp_course_class_id
+  CROSS JOIN roster_mode
+  WHERE roster_mode.has_curated_roster = false
+    AND review.status <> 'superseded'
+),
+students AS (
+  SELECT DISTINCT ON (erp_course_class_id, erp_student_contact_id)
+    erp_course_class_id,
+    erp_student_contact_id,
+    student_ref,
+    student_name
+  FROM eligible_students
+  ORDER BY erp_course_class_id, erp_student_contact_id, student_name
+)
+SELECT
+  definition.slug AS test_slug,
+  definition.title AS test_title,
+  definition.version AS definition_version,
+  (SELECT count(*)::int FROM target_classes) AS class_count,
+  (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
+  (SELECT erp_course_class_id::text FROM authorized_classes LIMIT 1) AS class_id,
+  (SELECT erp_class_name_snapshot FROM authorized_classes LIMIT 1) AS class_name,
+  COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'ref', student.student_ref::text,
+        'name', student.student_name,
+        'status', CASE
+          WHEN attempt.completed_at IS NOT NULL AND attempt.combined_result IS NOT NULL THEN 'completed'
+          WHEN attempt.id IS NOT NULL THEN 'incomplete'
+          ELSE 'not_started'
+        END,
+        'completedAt', attempt.completed_at,
+        'result', attempt.combined_result
+      )
+      ORDER BY student.student_name
+    )
+    FROM students AS student
+    LEFT JOIN LATERAL (
+      SELECT
+        stored.id,
+        stored.completed_at,
+        stored.combined_result,
+        stored.created_at
+      FROM assessment.term_test_attempt AS stored
+      WHERE stored.test_slug = definition.slug
+        AND stored.erp_course_class_id = student.erp_course_class_id
+        AND stored.erp_student_contact_id = student.erp_student_contact_id
+      ORDER BY stored.completed_at DESC NULLS LAST, stored.created_at DESC
+      LIMIT 1
+    ) AS attempt ON true
+  ), '[]'::jsonb) AS students
+FROM definition;`;

@@ -33,7 +33,7 @@ Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom 
 
 Không đặt mật khẩu Metabase, mật khẩu PostgreSQL, API key, token hoặc dữ liệu học viên vào repo.
 
-API cũng phục vụ hai answer sheet Term Test tại `/api/term-tests/`. Danh sách lớp chỉ trả tên học viên cùng UUID ngẫu nhiên; bài Listening và Reading được lưu trong schema `assessment`. Đáp án đúng được seed riêng vào PostgreSQL production và không nằm trong repo công khai.
+API cũng phục vụ hai answer sheet Term Test tại `/api/term-tests/`. Danh sách lớp chỉ trả tên học viên cùng UUID ngẫu nhiên; bài Listening và Reading được lưu trong schema `assessment`. Đáp án đúng được seed riêng vào PostgreSQL production và không nằm trong repo công khai. Dashboard giảng viên dùng Google Sign-In và `mapping.reviewer_class_access` để chỉ trả kết quả của lớp đã được cấp quyền.
 
 Hợp đồng request/response nằm ở `docs/data-contract.md`; bản phác thảo PostgreSQL nằm ở `docs/schema.sql`.
 

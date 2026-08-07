@@ -11,6 +11,8 @@ import {
   findStudentForTermTestSql,
   insertListeningAttemptSql,
   listReviewsSql,
+  listTermTestTeacherOptionsSql,
+  listTermTestTeacherResultsSql,
   listTermTestRosterSql,
   writeDecisionSql
 } from './sql.js';
@@ -53,6 +55,10 @@ const readingSubmissionSchema = z.object({
   answers: answersSchema
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
+const teacherResultsQuerySchema = z.object({
+  class: classCodeSchema,
+  test: testSlugSchema
+});
 
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -233,6 +239,45 @@ export function createApp({ config, pool, verifyGoogleToken }) {
   app.get('/api/auth/me', authenticate, (req, res) => {
     res.json({ ok: true, reviewer: req.reviewer });
   });
+
+  app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, asyncRoute(async (req, res) => {
+    const result = await pool.query(listTermTestTeacherOptionsSql, [
+      req.reviewer.email,
+      req.reviewer.canAccessAllClasses
+    ]);
+    const response = result.rows[0]?.response || { classes: [], tests: [] };
+    return res.json({ ok: true, reviewer: req.reviewer, ...response });
+  }));
+
+  app.get('/api/term-tests/teacher/results', testReadLimiter, authenticate, asyncRoute(async (req, res) => {
+    const parsed = teacherResultsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Tên lớp hoặc mã bài test không hợp lệ.' });
+    }
+    const result = await pool.query(listTermTestTeacherResultsSql, [
+      parsed.data.class,
+      parsed.data.test,
+      req.reviewer.email,
+      req.reviewer.canAccessAllClasses
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Bài test chưa được mở.' });
+    }
+    if (Number(row.class_count) !== 1) {
+      return res.status(404).json({ ok: false, error: 'CLASS_NOT_FOUND', message: 'Không tìm thấy duy nhất một lớp phù hợp.' });
+    }
+    if (Number(row.authorized_class_count) !== 1) {
+      return res.status(403).json({ ok: false, error: 'ACCESS_DENIED', message: 'Tài khoản Google này chưa được cấp quyền cho lớp.' });
+    }
+    return res.json({
+      ok: true,
+      reviewer: req.reviewer,
+      test: { slug: row.test_slug, title: row.test_title, version: Number(row.definition_version) },
+      class: { id: row.class_id, name: row.class_name },
+      students: row.students || []
+    });
+  }));
 
   app.get('/api/mapping/reviews', authenticate, asyncRoute(async (req, res) => {
     const parsed = reviewQuerySchema.safeParse(req.query);

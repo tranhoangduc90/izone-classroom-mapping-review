@@ -13,6 +13,11 @@ API này phục vụ web duyệt mapping mà không dùng execution của n8n. n
 
 Google ID token chỉ được giữ trong bộ nhớ tab trình duyệt và gửi trong header `Authorization`. API không dùng cookie, không lưu token và không ghi dữ liệu học viên vào log.
 
+Dashboard kết quả Term Test dùng hai endpoint có cùng lớp xác thực:
+
+- `GET /api/term-tests/teacher/options`: trả các lớp được phép xem và bài test đang hoạt động.
+- `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>`: trả roster cùng kết quả hoàn thành gần nhất; không trả ID ERP, email hay attempt token.
+
 ## Chạy local
 
 1. Sao chép `.env.example` thành `.env` rồi điền cấu hình thật ở máy chạy; không commit file này.

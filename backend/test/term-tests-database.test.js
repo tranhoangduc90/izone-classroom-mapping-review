@@ -8,6 +8,8 @@ import {
   findAttemptForReadingSql,
   findStudentForTermTestSql,
   insertListeningAttemptSql,
+  listTermTestTeacherOptionsSql,
+  listTermTestTeacherResultsSql,
   listTermTestRosterSql
 } from '../src/sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from '../src/term-tests.js';
@@ -38,8 +40,17 @@ const mappingSchema = `
     erp_student_name_snapshot TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending_review'
   );
+  CREATE TABLE mapping.reviewer_account (
+    email TEXT PRIMARY KEY
+  );
+  CREATE TABLE mapping.reviewer_class_access (
+    reviewer_email TEXT NOT NULL,
+    erp_course_class_id BIGINT NOT NULL,
+    PRIMARY KEY (reviewer_email, erp_course_class_id)
+  );
   GRANT USAGE ON SCHEMA mapping TO mapping_review_api;
-  GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review TO mapping_review_api;
+  GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review,
+    mapping.reviewer_class_access TO mapping_review_api;
 `;
 
 test('migration và luồng Listening → Reading → Result chạy trên PostgreSQL trong RAM', async () => {
@@ -64,6 +75,9 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     UPDATE mapping.student_mapping_review
     SET status = 'superseded'
     WHERE public_id = '00000000-0000-4000-8000-000000000005';
+    INSERT INTO mapping.reviewer_account (email) VALUES ('teacher@gmail.com');
+    INSERT INTO mapping.reviewer_class_access (reviewer_email, erp_course_class_id)
+    VALUES ('teacher@gmail.com', 2139);
   `);
   await database.query(`
     INSERT INTO assessment.test_definition (
@@ -73,17 +87,20 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   await database.exec(`
     INSERT INTO assessment.term_test_roster (
       test_slug, erp_course_class_id, erp_student_contact_id, student_ref, student_name_snapshot
-    ) VALUES (
-      'term-test-1', 2139, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên trong roster riêng'
-    );
+    ) VALUES
+      ('term-test-1', 2139, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên trong roster riêng'),
+      ('term-test-1', 2139, 9003, '00000000-0000-4000-8000-000000000006', 'Học viên chưa làm');
   `);
 
   // Từ đây chạy đúng bằng quyền của API production để bắt lỗi GRANT trước khi deploy.
   await database.exec('SET ROLE mapping_review_api;');
 
   const roster = await database.query(listTermTestRosterSql, ['IC2139', 'term-test-1']);
-  assert.equal(roster.rows[0].students.length, 1);
-  assert.equal(roster.rows[0].students[0].name, 'Học viên trong roster riêng');
+  assert.equal(roster.rows[0].students.length, 2);
+  assert.deepEqual(
+    roster.rows[0].students.map(studentRow => studentRow.name).sort(),
+    ['Học viên chưa làm', 'Học viên trong roster riêng'].sort()
+  );
 
   const fallbackRoster = await database.query(listTermTestRosterSql, ['IC9999', 'term-test-1']);
   assert.equal(fallbackRoster.rows[0].students.length, 1);
@@ -136,6 +153,30 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   ]);
   const result = await database.query(fetchTermTestResultSql, [attemptToken]);
   assert.equal(result.rows[0].combined_result.summary.totalCorrect, 80);
+
+  const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
+  assert.equal(teacherOptions.rows[0].response.classes.length, 1);
+  assert.equal(teacherOptions.rows[0].response.classes[0].name, 'IC2139');
+
+  const teacherResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC2139',
+    'term-test-1',
+    'teacher@gmail.com',
+    false
+  ]);
+  assert.equal(teacherResults.rows[0].authorized_class_count, 1);
+  assert.equal(teacherResults.rows[0].students.length, 2);
+  assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng').status, 'completed');
+  assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').status, 'not_started');
+
+  const deniedResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC2139',
+    'term-test-1',
+    'other@gmail.com',
+    false
+  ]);
+  assert.equal(deniedResults.rows[0].authorized_class_count, 0);
+  assert.deepEqual(deniedResults.rows[0].students, []);
 
   const duplicate = await database.query(insertListeningAttemptSql, [
     '00000000-0000-4000-8000-000000000002',

@@ -125,6 +125,42 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
 });
 
+test('dashboard giảng viên bắt buộc xác thực và truyền đúng phạm vi quyền lớp', async () => {
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      test_slug: 'term-test-2',
+      test_title: 'Term Test 2',
+      definition_version: 1,
+      class_count: 1,
+      authorized_class_count: 1,
+      class_id: '2139',
+      class_name: 'IC2139',
+      students: [{
+        ref: '00000000-0000-4000-8000-000000000001',
+        name: 'Học viên A',
+        status: 'completed',
+        completedAt: '2026-08-07T00:00:00.000Z',
+        result: { listening: { band: 6.5 }, reading: { band: 6.5 }, summary: { averageBand: 6.5 } }
+      }]
+    }]
+  }));
+  const app = createApp({ config: makeConfig(), pool });
+
+  const unauthorized = await request(app)
+    .get('/api/term-tests/teacher/results?class=IC2139&test=term-test-2');
+  assert.equal(unauthorized.status, 401);
+  assert.equal(pool.calls.length, 0);
+
+  const response = await request(app)
+    .get('/api/term-tests/teacher/results?class=ic2139&test=term-test-2')
+    .set('x-review-token', 'a-valid-test-token');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.students[0].result.summary.averageBand, 6.5);
+  assert.deepEqual(pool.calls[0].params, ['IC2139', 'term-test-2', 'legacy@mapping.local', true]);
+  assert.equal(JSON.stringify(response.body).includes('attemptToken'), false);
+});
+
 test('nộp Listening tạo attempt token nhưng chưa trả điểm', async () => {
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const pool = makePool(async (_sql, _params, callNumber) => {
