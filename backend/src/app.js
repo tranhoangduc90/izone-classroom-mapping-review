@@ -39,13 +39,13 @@ const decisionSchema = z.object({
 });
 
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
-const testSlugSchema = z.string().trim().regex(/^term-test-[1-9][0-9]*$/);
+const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
 const answersSchema = z.record(
   z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),
   z.string().max(120)
 ).superRefine((answers, context) => {
   if (Object.keys(answers).length > 40) {
-    context.addIssue({ code: 'custom', message: 'Mỗi phần chỉ có 40 câu.' });
+    context.addIssue({ code: 'custom', message: 'Mỗi phần chỉ nhận tối đa 40 câu.' });
   }
 });
 const listeningSubmissionSchema = z.object({
@@ -99,6 +99,8 @@ function hasValidSharedSecret(supplied, expected) {
 }
 
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult) {
+  const testSlug = String(attempt?.test_slug || attempt?.slug || combinedResult?.testSlug || '');
+  if (!/^term-test-[1-9][0-9]*$/.test(testSlug)) return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult);
     await syncErpGrades(payload);

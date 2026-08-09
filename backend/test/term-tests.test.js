@@ -33,6 +33,21 @@ function perfectAnswers() {
   return answers;
 }
 
+function makeMiniSection(numbers) {
+  return {
+    questions: numbers.map(number => ({
+      number,
+      type: number % 2 ? 'Matching' : 'Multiple choice',
+      accepted: [`mini-${number}`]
+    })),
+    pairGroups: {}
+  };
+}
+
+function miniAnswers(numbers) {
+  return Object.fromEntries(numbers.map(number => [String(number), `mini-${number}`]));
+}
+
 function makeConfig() {
   return {
     nodeEnv: 'test',
@@ -123,6 +138,25 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
     name: 'Học viên A'
   });
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
+});
+
+test('chấm đúng phần Mini Test có số câu và số thứ tự không bắt đầu từ 1', () => {
+  const listeningNumbers = Array.from({ length: 20 }, (_, index) => index + 11);
+  const readingNumbers = Array.from({ length: 13 }, (_, index) => index + 14);
+  const listening = gradeSection(makeMiniSection(listeningNumbers), miniAnswers(listeningNumbers), 0);
+  const reading = gradeSection(makeMiniSection(readingNumbers), miniAnswers(readingNumbers), 0);
+  const combined = buildCombinedResult(storedTestRow({
+    test_slug: 'mini-test-lesson-5',
+    test_title: 'Mini Test Buổi 5',
+    listening_definition: makeMiniSection(listeningNumbers),
+    reading_definition: makeMiniSection(readingNumbers)
+  }), listening, reading);
+  assert.equal(listening.total, 20);
+  assert.equal(reading.total, 13);
+  assert.equal(listening.converted, 40);
+  assert.equal(reading.converted, 40);
+  assert.equal(combined.summary.totalQuestions, 33);
+  assert.equal(combined.summary.averageBand, 9);
 });
 
 test('dashboard giảng viên bắt buộc xác thực và truyền đúng phạm vi quyền lớp', async () => {
@@ -255,4 +289,36 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
   assert.equal(syncPayloads.length, 2);
   assert.deepEqual(syncPayloads[0].grades, { listening: 9, reading: 9 });
   assert.equal(syncPayloads[0].studentId, '9001');
+});
+
+test('Mini Test trả kết quả nhưng không ghi nhầm điểm vào Portal Term Test', async () => {
+  const syncPayloads = [];
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      attempt_token: '00000000-0000-4000-8000-000000000099',
+      test_slug: 'mini-test-lesson-5',
+      class_id: '2200',
+      student_id: '9001',
+      class_name: 'IC2200',
+      student_name: 'Học viên thử nghiệm',
+      completed_at: new Date().toISOString(),
+      combined_result: { testSlug: 'mini-test-lesson-5', summary: { averageBand: 6.5 } }
+    }]
+  }));
+  const app = createApp({
+    config: makeConfig(),
+    pool,
+    syncErpGrades: async payload => {
+      syncPayloads.push(payload);
+      return { status: 'synced' };
+    }
+  });
+  const response = await request(app)
+    .post('/api/term-tests/result')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({ attemptToken: '00000000-0000-4000-8000-000000000099' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.testSlug, 'mini-test-lesson-5');
+  assert.equal(syncPayloads.length, 0);
 });

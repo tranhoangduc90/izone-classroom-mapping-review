@@ -568,6 +568,21 @@ eligible_students AS (
   CROSS JOIN roster_mode
   WHERE roster_mode.has_curated_roster = false
     AND review.status <> 'superseded'
+
+  UNION ALL
+
+  SELECT
+    legacy.erp_course_class_id,
+    legacy.erp_student_contact_id,
+    review.public_id AS student_ref,
+    legacy.student_name_snapshot AS student_name
+  FROM assessment.mini_test_result AS legacy
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = legacy.erp_course_class_id
+  JOIN mapping.student_mapping_review AS review
+    ON review.erp_course_class_id = legacy.erp_course_class_id
+   AND review.erp_student_contact_id = legacy.erp_student_contact_id
+  WHERE legacy.test_slug = $2
 ),
 students AS (
   SELECT DISTINCT ON (erp_course_class_id, erp_student_contact_id)
@@ -603,16 +618,36 @@ SELECT
     )
     FROM students AS student
     LEFT JOIN LATERAL (
-      SELECT
-        stored.id,
-        stored.completed_at,
-        stored.combined_result,
-        stored.created_at
-      FROM assessment.term_test_attempt AS stored
-      WHERE stored.test_slug = definition.slug
-        AND stored.erp_course_class_id = student.erp_course_class_id
-        AND stored.erp_student_contact_id = student.erp_student_contact_id
-      ORDER BY stored.completed_at DESC NULLS LAST, stored.created_at DESC
+      SELECT candidate.id, candidate.completed_at, candidate.combined_result, candidate.created_at
+      FROM (
+        SELECT
+          stored.id,
+          stored.completed_at,
+          stored.combined_result,
+          stored.created_at
+        FROM assessment.term_test_attempt AS stored
+        WHERE stored.test_slug = definition.slug
+          AND stored.erp_course_class_id = student.erp_course_class_id
+          AND stored.erp_student_contact_id = student.erp_student_contact_id
+
+        UNION ALL
+
+        SELECT
+          legacy.id,
+          legacy.updated_at AS completed_at,
+          jsonb_set(
+            jsonb_set(legacy.result, '{testTitle}', to_jsonb(definition.title), true),
+            '{definitionVersion}',
+            to_jsonb(definition.version),
+            true
+          ) AS combined_result,
+          legacy.created_at
+        FROM assessment.mini_test_result AS legacy
+        WHERE legacy.test_slug = definition.slug
+          AND legacy.erp_course_class_id = student.erp_course_class_id
+          AND legacy.erp_student_contact_id = student.erp_student_contact_id
+      ) AS candidate
+      ORDER BY candidate.completed_at DESC NULLS LAST, candidate.created_at DESC
       LIMIT 1
     ) AS attempt ON true
   ), '[]'::jsonb) AS students

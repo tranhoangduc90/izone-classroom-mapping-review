@@ -12,16 +12,30 @@ const questionSchema = z.object({
   pairGroup: z.string().trim().min(1).max(40).nullable().optional()
 });
 const sectionSchema = z.object({
-  questions: z.array(questionSchema).length(40),
+  questions: z.array(questionSchema).min(1).max(40),
   pairGroups: z.record(z.string(), pairGroupSchema).default({})
 }).superRefine((section, context) => {
   const numbers = new Set(section.questions.map(question => question.number));
-  if (numbers.size !== 40 || [...numbers].some(number => number < 1 || number > 40)) {
-    context.addIssue({ code: 'custom', path: ['questions'], message: 'Mỗi phần phải có đúng câu 1–40.' });
+  if (numbers.size !== section.questions.length) {
+    context.addIssue({ code: 'custom', path: ['questions'], message: 'Số thứ tự câu trong mỗi phần không được trùng.' });
   }
   for (const question of section.questions) {
     if (question.pairGroup && !section.pairGroups[question.pairGroup]) {
       context.addIssue({ code: 'custom', path: ['questions'], message: `Thiếu nhóm đáp án ${question.pairGroup}.` });
+    }
+  }
+  for (const [groupId, group] of Object.entries(section.pairGroups)) {
+    if (group.numbers.length !== group.expected.length) {
+      context.addIssue({ code: 'custom', path: ['pairGroups', groupId], message: 'Số ô và số đáp án trong nhóm phải bằng nhau.' });
+    }
+    if (new Set(group.numbers).size !== group.numbers.length) {
+      context.addIssue({ code: 'custom', path: ['pairGroups', groupId], message: 'Số câu trong nhóm đáp án không được trùng.' });
+    }
+    for (const number of group.numbers) {
+      const question = section.questions.find(item => item.number === number);
+      if (!question || question.pairGroup !== groupId) {
+        context.addIssue({ code: 'custom', path: ['pairGroups', groupId], message: `Câu ${number} chưa liên kết đúng với nhóm ${groupId}.` });
+      }
     }
   }
 });
