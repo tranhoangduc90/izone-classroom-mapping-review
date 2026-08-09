@@ -40,6 +40,14 @@ const mappingSchema = `
     erp_student_name_snapshot TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending_review'
   );
+  CREATE TABLE mapping.erp_class_membership_snapshot (
+    erp_course_class_id BIGINT NOT NULL,
+    erp_student_contact_id BIGINT NOT NULL,
+    erp_class_name_snapshot TEXT NOT NULL,
+    erp_student_name_snapshot TEXT NOT NULL,
+    source_state TEXT NOT NULL DEFAULT 'active',
+    PRIMARY KEY (erp_course_class_id, erp_student_contact_id)
+  );
   CREATE TABLE mapping.reviewer_account (
     email TEXT PRIMARY KEY
   );
@@ -60,6 +68,17 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const migrationSql = await readFile(migrationUrl, 'utf8');
   await database.exec(migrationSql);
   await database.exec(migrationSql);
+  const miniResultMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-09-mini-test-results.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(miniResultMigration);
+  const miniWebMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-09-mini-test-web.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(miniWebMigration);
+  await database.exec(miniWebMigration);
 
   const section = makeSection();
   await database.exec(`
@@ -74,7 +93,10 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
       ('00000000-0000-4000-8000-000000000005', 9999, 9902, 'Học viên đã supersede');
     UPDATE mapping.student_mapping_review
     SET status = 'superseded'
-    WHERE public_id = '00000000-0000-4000-8000-000000000005';
+    WHERE public_id IN (
+      '00000000-0000-4000-8000-000000000003',
+      '00000000-0000-4000-8000-000000000005'
+    );
     INSERT INTO mapping.reviewer_account (email) VALUES ('teacher@gmail.com');
     INSERT INTO mapping.reviewer_class_access (reviewer_email, erp_course_class_id)
     VALUES ('teacher@gmail.com', 2139);
@@ -84,6 +106,52 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
       slug, title, version, listening_definition, reading_definition, is_active
     ) VALUES ($1, $2, 1, $3::jsonb, $3::jsonb, true);
   `, ['term-test-1', 'Term Test 1', JSON.stringify(section)]);
+  const miniListeningSection = {
+    questions: Array.from({ length: 20 }, (_, index) => ({
+      number: index + 11,
+      type: 'Listening',
+      accepted: [`listen-${index + 11}`]
+    })),
+    pairGroups: {}
+  };
+  const miniReadingSection = {
+    questions: Array.from({ length: 13 }, (_, index) => ({
+      number: index + 14,
+      type: 'Reading',
+      accepted: [`read-${index + 14}`]
+    })),
+    pairGroups: {}
+  };
+  await database.query(`
+    INSERT INTO assessment.test_definition (
+      slug, title, version, listening_definition, reading_definition, is_active
+    ) VALUES ($1, $2, 1, $3::jsonb, $4::jsonb, true);
+  `, [
+    'mini-test-lesson-5',
+    'Mini Test Buổi 5',
+    JSON.stringify(miniListeningSection),
+    JSON.stringify(miniReadingSection)
+  ]);
+  await database.query(`
+    INSERT INTO assessment.mini_test_result (
+      source_submission_key, test_slug, erp_course_class_id, class_name_snapshot,
+      erp_student_contact_id, student_name_snapshot, listening_correct, reading_correct, result
+    ) VALUES
+      ($1, $2, 2139, 'IC2139', 9001, 'Học viên trong roster riêng', 15, 9, $3::jsonb),
+      ($4, $2, 2139, 'IC2139', 9002, 'Học viên có kết quả cũ', 15, 9, $3::jsonb);
+  `, [
+    'a'.repeat(64),
+    'mini-test-lesson-5',
+    JSON.stringify({
+      testSlug: 'mini-test-lesson-5',
+      listening: { correct: 15, total: 20, band: 7 },
+      reading: { correct: 9, total: 13, band: 7 },
+      summary: { totalCorrect: 24, totalQuestions: 33, averageBand: 7 },
+      typeStats: [],
+      performance: { best: [], needsImprovement: [], other: [] }
+    }),
+    'b'.repeat(64)
+  ]);
   await database.exec(`
     INSERT INTO assessment.term_test_roster (
       test_slug, erp_course_class_id, erp_student_contact_id, student_ref, student_name_snapshot
@@ -157,6 +225,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
   assert.equal(teacherOptions.rows[0].response.classes.length, 1);
   assert.equal(teacherOptions.rows[0].response.classes[0].name, 'IC2139');
+  assert.equal(teacherOptions.rows[0].response.tests.length, 2);
 
   const teacherResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
@@ -168,6 +237,21 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(teacherResults.rows[0].students.length, 2);
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng').status, 'completed');
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').status, 'not_started');
+
+  const miniTeacherResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'teacher@gmail.com',
+    false
+  ]);
+  const legacyStudent = miniTeacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng');
+  assert.equal(legacyStudent.status, 'completed');
+  assert.equal(legacyStudent.result.testTitle, 'Mini Test Buổi 5');
+  assert.equal(legacyStudent.result.summary.averageBand, 7);
+  assert.equal(
+    miniTeacherResults.rows[0].students.find(item => item.name === 'Học viên có kết quả cũ').status,
+    'completed'
+  );
 
   const deniedResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',

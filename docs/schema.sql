@@ -235,7 +235,9 @@ CREATE TABLE assessment.test_definition (
   reading_definition JSONB NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT test_definition_slug_check
+    CHECK (slug ~ '^(term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$')
 );
 
 CREATE TABLE assessment.term_test_roster (
