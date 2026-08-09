@@ -617,3 +617,41 @@ SELECT
     ) AS attempt ON true
   ), '[]'::jsonb) AS students
 FROM definition;`;
+
+// Mini Test dùng danh sách ERP lịch sử để vẫn nhận diện được học viên đã chuyển/nghỉ sau buổi kiểm tra.
+export const findStudentForMiniTestSql = `SELECT
+  student.erp_course_class_id::text AS class_id,
+  student.class_name,
+  student.erp_student_contact_id::text AS student_id,
+  student.student_name
+FROM assessment.mini_test_student_lookup AS student
+WHERE upper(trim(student.class_name)) = upper(trim($1))
+  AND lower(regexp_replace(trim(student.student_name), '\\s+', ' ', 'g')) =
+      lower(regexp_replace(trim($2), '\\s+', ' ', 'g'));`;
+
+// Cùng một phản hồi được cập nhật tại chỗ khi Apps Script chạy lại, không tạo bản ghi trùng.
+export const upsertMiniTestResultSql = `INSERT INTO assessment.mini_test_result (
+  source_submission_key,
+  test_slug,
+  erp_course_class_id,
+  class_name_snapshot,
+  erp_student_contact_id,
+  student_name_snapshot,
+  source_submitted_at,
+  listening_correct,
+  reading_correct,
+  result
+) VALUES (
+  $1, $2, $3::bigint, $4, $5::bigint, $6, NULLIF($7, ''), $8::smallint, $9::smallint, $10::jsonb
+)
+ON CONFLICT (test_slug, source_submission_key) DO UPDATE SET
+  erp_course_class_id = EXCLUDED.erp_course_class_id,
+  class_name_snapshot = EXCLUDED.class_name_snapshot,
+  erp_student_contact_id = EXCLUDED.erp_student_contact_id,
+  student_name_snapshot = EXCLUDED.student_name_snapshot,
+  source_submitted_at = EXCLUDED.source_submitted_at,
+  listening_correct = EXCLUDED.listening_correct,
+  reading_correct = EXCLUDED.reading_correct,
+  result = EXCLUDED.result,
+  updated_at = now()
+RETURNING id::text AS result_id, updated_at;`;

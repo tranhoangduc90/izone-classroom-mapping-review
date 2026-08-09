@@ -13,13 +13,17 @@ const envSchema = z.object({
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1),
   ERP_SYNC_URL: z.string().url().optional().default(''),
   ERP_SYNC_SECRET: z.string().optional().default(''),
-  ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(10000).default(5000)
+  ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(10000).default(5000),
+  MINI_TEST_SYNC_SECRET: z.string().optional().default('')
 }).superRefine((value, context) => {
   if (Boolean(value.ERP_SYNC_URL) !== Boolean(value.ERP_SYNC_SECRET)) {
     context.addIssue({ code: 'custom', message: 'ERP_SYNC_URL và ERP_SYNC_SECRET phải được cấu hình cùng nhau.' });
   }
   if (value.ERP_SYNC_SECRET && value.ERP_SYNC_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['ERP_SYNC_SECRET'], message: 'ERP_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+  }
+  if (value.MINI_TEST_SYNC_SECRET && value.MINI_TEST_SYNC_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['MINI_TEST_SYNC_SECRET'], message: 'MINI_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
   }
 });
 
@@ -44,6 +48,7 @@ export function loadConfig(env = process.env) {
     trustProxyHops: parsed.TRUST_PROXY_HOPS,
     erpSyncUrl: parsed.ERP_SYNC_URL,
     erpSyncSecret: parsed.ERP_SYNC_SECRET,
-    erpSyncTimeoutMs: parsed.ERP_SYNC_TIMEOUT_MS
+    erpSyncTimeoutMs: parsed.ERP_SYNC_TIMEOUT_MS,
+    miniTestSyncSecret: parsed.MINI_TEST_SYNC_SECRET
   };
 }

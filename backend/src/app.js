@@ -10,14 +10,17 @@ import {
   findAttemptForReadingSql,
   findStudentForTermTestSql,
   insertListeningAttemptSql,
+  findStudentForMiniTestSql,
   listReviewsSql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
+  upsertMiniTestResultSql,
   writeDecisionSql
 } from './sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
 import { buildErpGradePayload } from './erp-sync.js';
+import { buildMiniTestResult } from './mini-tests.js';
 
 const reviewQuerySchema = z.object({
   class_id: z.string().regex(/^\d+$/).optional(),
@@ -60,9 +63,39 @@ const teacherResultsQuerySchema = z.object({
   class: classCodeSchema,
   test: testSlugSchema
 });
+const miniTestTypeStatSchema = z.object({
+  type: z.string().trim().min(1).max(160),
+  correct: z.number().int().min(0).max(33),
+  total: z.number().int().min(1).max(33)
+}).refine(value => value.correct <= value.total, { message: 'Số câu đúng không thể lớn hơn tổng câu.' });
+const miniTestSubmissionSchema = z.object({
+  version: z.literal(1),
+  sourceSubmissionKey: z.string().regex(/^[0-9a-f]{64}$/),
+  testSlug: z.literal('mini-test-lesson-5'),
+  classCode: classCodeSchema,
+  studentName: z.string().trim().min(1).max(160),
+  sourceSubmittedAt: z.string().trim().max(100).optional().default(''),
+  scores: z.object({
+    listeningCorrect: z.number().int().min(0).max(20),
+    readingCorrect: z.number().int().min(0).max(13)
+  }),
+  typeStats: z.array(miniTestTypeStatSchema).min(1).max(20)
+}).superRefine((value, context) => {
+  const total = value.typeStats.reduce((sum, item) => sum + item.total, 0);
+  const correct = value.typeStats.reduce((sum, item) => sum + item.correct, 0);
+  if (total !== 33 || correct !== value.scores.listeningCorrect + value.scores.readingCorrect) {
+    context.addIssue({ code: 'custom', path: ['typeStats'], message: 'Thống kê dạng bài không khớp điểm tổng.' });
+  }
+});
 
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function hasValidSharedSecret(supplied, expected) {
+  const left = Buffer.from(String(supplied || ''), 'utf8');
+  const right = Buffer.from(String(expected || ''), 'utf8');
+  return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult) {
@@ -88,7 +121,7 @@ function addCors(config) {
       res.set('Vary', 'Origin');
     }
     res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-review-token');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-review-token, x-mini-test-sync');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
     return next();
@@ -263,6 +296,52 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     ]);
     const response = result.rows[0]?.response || { classes: [], tests: [] };
     return res.json({ ok: true, reviewer: req.reviewer, ...response });
+  }));
+
+  app.post('/api/mini-tests/results', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!config.miniTestSyncSecret) {
+      return res.status(503).json({ ok: false, error: 'MINI_TEST_SYNC_DISABLED', message: 'Chức năng lưu Mini Test chưa được cấu hình.' });
+    }
+    if (!hasValidSharedSecret(req.get('x-mini-test-sync'), config.miniTestSyncSecret)) {
+      return res.status(401).json({ ok: false, error: 'UNAUTHORIZED', message: 'Khóa đồng bộ không hợp lệ.' });
+    }
+    const parsed = miniTestSubmissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_MINI_TEST_RESULT', message: 'Kết quả Mini Test không hợp lệ.' });
+    }
+
+    const studentResult = await pool.query(findStudentForMiniTestSql, [
+      parsed.data.classCode,
+      parsed.data.studentName
+    ]);
+    if (studentResult.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy duy nhất một học viên phù hợp trong lớp.' });
+    }
+    const student = studentResult.rows[0];
+    const result = buildMiniTestResult({
+      testSlug: parsed.data.testSlug,
+      listeningCorrect: parsed.data.scores.listeningCorrect,
+      readingCorrect: parsed.data.scores.readingCorrect,
+      typeStats: parsed.data.typeStats
+    });
+    const saved = await pool.query(upsertMiniTestResultSql, [
+      parsed.data.sourceSubmissionKey,
+      parsed.data.testSlug,
+      student.class_id,
+      student.class_name,
+      student.student_id,
+      student.student_name,
+      parsed.data.sourceSubmittedAt,
+      parsed.data.scores.listeningCorrect,
+      parsed.data.scores.readingCorrect,
+      JSON.stringify(result)
+    ]);
+    if (saved.rowCount !== 1) throw new Error('Không thể lưu kết quả Mini Test.');
+    return res.status(201).json({
+      ok: true,
+      status: 'stored',
+      sourceSubmissionKey: parsed.data.sourceSubmissionKey
+    });
   }));
 
   app.get('/api/term-tests/teacher/results', testReadLimiter, authenticate, asyncRoute(async (req, res) => {

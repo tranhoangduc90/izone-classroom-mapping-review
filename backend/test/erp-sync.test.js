@@ -16,6 +16,23 @@ test('tạo payload ERP chỉ gồm ID kỹ thuật và Band', () => {
   assert.equal(JSON.stringify(payload).includes('studentName'), false);
 });
 
+test('Term Test 2 giữ đúng slug để n8n ghi vào các cột Phase 2', () => {
+  const payload = buildErpGradePayload({
+    attempt_token: '00000000-0000-4000-8000-000000000100',
+    test_slug: 'term-test-2',
+    class_id: '2139',
+    student_id: '9002'
+  }, {
+    listening: { band: 7.0 },
+    reading: { band: 6.5 }
+  }, {
+    writing: 6.0
+  });
+
+  assert.equal(payload.testSlug, 'term-test-2');
+  assert.deepEqual(payload.grades, { listening: 7, reading: 6.5, writing: 6 });
+});
+
 test('gửi payload qua header bí mật và kiểm tra attempt token trả về', async () => {
   const payload = {
     version: 1,
