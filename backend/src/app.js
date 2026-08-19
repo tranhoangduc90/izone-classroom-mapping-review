@@ -7,19 +7,29 @@ import { createAuthMiddleware } from './auth.js';
 import {
   completeReadingAttemptSql,
   fetchTermTestResultSql,
+  findTermTestExamSessionAssetSql,
+  findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
   findStudentForTermTestSql,
+  insertProtectedListeningAttemptSql,
+  insertTermTestExamSessionSql,
   insertListeningAttemptSql,
   findStudentForMiniTestSql,
   listReviewsSql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
+  resumeTermTestExamSessionSql,
+  resumeTermTestAttemptContentSql,
+  saveReadingDraftSql,
   saveTermTestWritingSql,
+  saveTermTestListeningDraftSql,
+  startReadingAttemptSql,
+  startTermTestListeningSessionSql,
   upsertMiniTestResultSql,
   writeDecisionSql
 } from './sql.js';
-import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
+import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from './term-tests.js';
 import { buildErpGradePayload } from './erp-sync.js';
 import { buildMiniTestResult } from './mini-tests.js';
 
@@ -53,6 +63,7 @@ const listeningSubmissionSchema = z.object({
   classCode: classCodeSchema,
   studentRef: z.string().uuid(),
   clientSubmissionId: z.string().uuid(),
+  examSessionToken: z.string().uuid().optional(),
   answers: answersSchema
 });
 const readingSubmissionSchema = z.object({
@@ -60,6 +71,27 @@ const readingSubmissionSchema = z.object({
   answers: answersSchema
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
+const examSessionPrepareSchema = z.object({
+  classCode: classCodeSchema,
+  studentRef: z.string().uuid(),
+  examSessionToken: z.string().uuid().optional(),
+  legacyElapsedSeconds: z.number().int().min(0).max(1844).optional().default(0)
+});
+const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid() });
+const attemptResumeSchema = z.object({
+  classCode: classCodeSchema,
+  studentRef: z.string().uuid(),
+  attemptToken: z.string().uuid()
+});
+const listeningDraftSchema = z.object({
+  examSessionToken: z.string().uuid(),
+  answers: answersSchema
+});
+const readingStartSchema = z.object({ attemptToken: z.string().uuid() });
+const readingDraftSchema = z.object({
+  attemptToken: z.string().uuid(),
+  answers: answersSchema
+});
 const writingSubmissionSchema = z.object({
   attemptToken: z.string().uuid(),
   action: z.enum(['start', 'draft', 'submit']),
@@ -111,6 +143,9 @@ function serializeTermTestWriting(row) {
     task2: String(row?.writing_task_2 || ''),
     started: Boolean(row?.writing_started_at),
     submitted: Boolean(row?.writing_submitted_at),
+    deadlineAt: row?.writing_deadline_at || null,
+    serverNow: row?.server_now || null,
+    timedOut: Boolean(row?.writing_timed_out),
     updatedAt: row?.writing_updated_at || null,
     submittedAt: row?.writing_submitted_at || null
   };
@@ -149,7 +184,14 @@ function addCors(config) {
 }
 
 // Tạo Express app bằng dependency injection để có thể kiểm thử mà không cần database thật.
-export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = async () => ({ status: 'disabled' }) }) {
+export function createApp({
+  config,
+  pool,
+  verifyGoogleToken,
+  syncErpGrades = async () => ({ status: 'disabled' }),
+  writingTestService,
+  termTestAssetService = null
+}) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops);
@@ -157,36 +199,41 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
   app.use(addCors(config));
   app.use(rateLimit({
     windowMs: 60_000,
-    limit: 120,
+    limit: 900,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   }));
   app.use(express.json({ limit: '32kb', strict: true }));
 
-  app.get('/health', (_req, res) => res.json({ ok: true }));
+  const build = Object.freeze({
+    version: config.appVersion || '1.0.0',
+    sha: config.buildSha || 'unknown'
+  });
+  app.get('/health', (_req, res) => res.json({ ok: true, build }));
+  app.get('/version', (_req, res) => res.json({ ok: true, build }));
   app.get('/ready', asyncRoute(async (_req, res) => {
     await pool.query('SELECT 1');
-    res.json({ ok: true });
+    res.json({ ok: true, build });
   }));
 
   const testReadLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 60,
+    limit: 240,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   });
   const testWriteLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 15,
+    limit: 120,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều lượt gửi; vui lòng chờ một phút.' }
   });
   const testDraftLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 60,
+    limit: 600,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
@@ -211,11 +258,264 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     });
   }));
 
+  function requireTermTestAssets(res) {
+    if (termTestAssetService) return true;
+    res.status(503).json({
+      ok: false,
+      error: 'EXAM_ASSETS_UNAVAILABLE',
+      message: 'Máy chủ chưa sẵn sàng cấp đề và audio thi.'
+    });
+    return false;
+  }
+
+  app.post('/api/term-tests/:testSlug/session/prepare', testWriteLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = examSessionPrepareSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+      return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu chuẩn bị bài thi không hợp lệ.' });
+    }
+    const studentResult = await pool.query(findStudentForTermTestSql, [
+      parsed.data.classCode,
+      slug.data,
+      parsed.data.studentRef
+    ]);
+    if (studentResult.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy học viên trong lớp này.' });
+    }
+    const student = studentResult.rows[0];
+    let session = null;
+    if (parsed.data.examSessionToken) {
+      const resumed = await pool.query(resumeTermTestExamSessionSql, [
+        parsed.data.examSessionToken,
+        slug.data,
+        student.class_id,
+        student.student_id
+      ]);
+      session = resumed.rows[0] || null;
+    }
+    if (!session) {
+      const inserted = await pool.query(insertTermTestExamSessionSql, [
+        slug.data,
+        student.definition_version,
+        student.class_id,
+        student.class_name,
+        student.student_id,
+        student.student_name,
+        parsed.data.legacyElapsedSeconds
+      ]);
+      session = inserted.rows[0];
+    }
+    return res.status(201).json({
+      ok: true,
+      examSessionToken: session.exam_session_token,
+      studentName: student.student_name,
+      listeningStartedAt: session.listening_started_at || null,
+      listeningDeadlineAt: session.listening_deadline_at || null,
+      listeningSubmitted: Boolean(session.listening_submitted_at),
+      attemptToken: session.attempt_token || null,
+      encryptedAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/audio`,
+      previewAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/preview`
+    });
+  }));
+
+  async function findAssetSession(req, res) {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const token = z.string().uuid().safeParse(req.params.examSessionToken);
+    if (!slug.success || !token.success || slug.data !== 'term-test-2') {
+      res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Phiên tải tài nguyên không hợp lệ.' });
+      return null;
+    }
+    const result = await pool.query(findTermTestExamSessionAssetSql, [token.data, slug.data]);
+    if (result.rowCount !== 1) {
+      res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
+      return null;
+    }
+    return { slug: slug.data, token: token.data, row: result.rows[0] };
+  }
+
+  app.get('/api/term-tests/:testSlug/session/:examSessionToken/audio', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const session = await findAssetSession(req, res);
+    if (!session) return;
+    await termTestAssetService.streamEncryptedAudio(session.slug, session.token, res);
+  }));
+
+  app.get('/api/term-tests/:testSlug/session/:examSessionToken/preview', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const session = await findAssetSession(req, res);
+    if (!session) return;
+    const preview = await termTestAssetService.getPreview(session.slug);
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(preview.length),
+      'Cache-Control': 'no-store, private',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    return res.send(preview);
+  }));
+
+  app.post('/api/term-tests/:testSlug/session/resume-attempt', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = attemptResumeSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+      return res.status(400).json({ ok: false, error: 'INVALID_ATTEMPT_RESUME', message: 'Yêu cầu mở lại lượt thi không hợp lệ.' });
+    }
+    const studentResult = await pool.query(findStudentForTermTestSql, [
+      parsed.data.classCode,
+      slug.data,
+      parsed.data.studentRef
+    ]);
+    if (studentResult.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy học viên trong lớp này.' });
+    }
+    const student = studentResult.rows[0];
+    const resumed = await pool.query(resumeTermTestAttemptContentSql, [
+      parsed.data.attemptToken,
+      slug.data,
+      student.class_id,
+      student.student_id
+    ]);
+    if (resumed.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt thi đã lưu của học viên này.' });
+    }
+    const attempt = resumed.rows[0];
+    const content = await termTestAssetService.getContent(slug.data);
+    return res.json({
+      ok: true,
+      attemptToken: attempt.attempt_token,
+      examSessionToken: attempt.exam_session_token || null,
+      studentName: attempt.student_name,
+      listeningStartedAt: attempt.listening_started_at || null,
+      listeningDeadlineAt: attempt.listening_deadline_at || null,
+      listeningSubmitted: true,
+      readingStartedAt: attempt.reading_started_at || null,
+      readingDeadlineAt: attempt.reading_deadline_at || null,
+      completedAt: attempt.completed_at || null,
+      writingStartedAt: attempt.writing_started_at || null,
+      writingDeadlineAt: attempt.writing_deadline_at || null,
+      writingSubmittedAt: attempt.writing_submitted_at || null,
+      serverNow: attempt.server_now,
+      timing: termTestAssetService.getTiming(slug.data),
+      content
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/session/start', testWriteLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = examSessionStartSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+      return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu bắt đầu bài thi không hợp lệ.' });
+    }
+    const timing = termTestAssetService.getTiming(slug.data);
+    const started = await pool.query(startTermTestListeningSessionSql, [
+      parsed.data.examSessionToken,
+      slug.data,
+      timing.listeningTotalSeconds
+    ]);
+    if (started.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
+    }
+    const session = started.rows[0];
+    const content = await termTestAssetService.getContent(slug.data);
+    const audioKey = termTestAssetService.getSessionAudioKey(slug.data, parsed.data.examSessionToken);
+    return res.json({
+      ok: true,
+      examSessionToken: session.exam_session_token,
+      studentName: session.student_name,
+      listeningStartedAt: session.listening_started_at,
+      listeningDeadlineAt: session.listening_deadline_at,
+      serverNow: session.server_now,
+      listeningSubmitted: Boolean(session.listening_submitted_at),
+      attemptToken: session.attempt_token || null,
+      audioKey: audioKey.toString('base64'),
+      audioEnvelope: { magic: 'IZTT1', ivBytes: 12, tagBytes: 16 },
+      timing,
+      content
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/listening/draft', testDraftLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = listeningDraftSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_LISTENING_DRAFT', message: 'Bản lưu Listening không hợp lệ.' });
+    }
+    const saved = await pool.query(saveTermTestListeningDraftSql, [
+      parsed.data.examSessionToken,
+      slug.data,
+      JSON.stringify(parsed.data.answers)
+    ]);
+    if (saved.rowCount !== 1) {
+      return res.status(409).json({ ok: false, error: 'LISTENING_LOCKED', message: 'Listening đã hết giờ hoặc đã được thu bài.' });
+    }
+    return res.json({
+      ok: true,
+      deadlineAt: saved.rows[0].listening_deadline_at,
+      savedAt: saved.rows[0].listening_draft_updated_at,
+      serverNow: saved.rows[0].server_now
+    });
+  }));
+
   app.post('/api/term-tests/:testSlug/listening', testWriteLimiter, asyncRoute(async (req, res) => {
     const slug = testSlugSchema.safeParse(req.params.testSlug);
     const parsed = listeningSubmissionSchema.safeParse(req.body);
     if (!slug.success || !parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_SUBMISSION', message: 'Bài Listening không hợp lệ.' });
+    }
+    if (parsed.data.examSessionToken) {
+      await pool.query(saveTermTestListeningDraftSql, [
+        parsed.data.examSessionToken,
+        slug.data,
+        JSON.stringify(parsed.data.answers)
+      ]);
+      const sessionResult = await pool.query(findTermTestListeningSubmissionSql, [
+        parsed.data.examSessionToken,
+        slug.data
+      ]);
+      if (sessionResult.rowCount !== 1) {
+        return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Không tìm thấy phiên Listening đã bắt đầu.' });
+      }
+      const session = sessionResult.rows[0];
+      const testDefinition = parseStoredTest({
+        ...session,
+        test_slug: session.slug,
+        definition_version: session.version
+      });
+      const effectiveAnswers = session.listening_timed_out
+        ? (session.listening_draft || {})
+        : parsed.data.answers;
+      const listeningResult = gradeSection(
+        testDefinition.listening_definition,
+        effectiveAnswers,
+        testDefinition.listening_band_adjustment
+      );
+      const inserted = await pool.query(insertProtectedListeningAttemptSql, [
+        parsed.data.clientSubmissionId,
+        parsed.data.examSessionToken,
+        slug.data,
+        JSON.stringify(effectiveAnswers),
+        JSON.stringify(listeningResult)
+      ]);
+      const attempt = inserted.rows[0];
+      if (!attempt || attempt.exam_session_token !== parsed.data.examSessionToken) {
+        return res.status(409).json({ ok: false, error: 'SUBMISSION_ID_CONFLICT', message: 'Mã gửi bài đã được dùng cho lượt làm khác.' });
+      }
+      const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
+      const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
+      return res.status(201).json({
+        ok: true,
+        attemptToken: attempt.attempt_token,
+        studentName: attempt.student_name,
+        completed: Boolean(attempt.completed_at),
+        resultAvailable: true,
+        portalSyncStatus,
+        result,
+        timedOut: Boolean(session.listening_timed_out),
+        next: attempt.completed_at ? 'result' : 'reading'
+      });
     }
     const studentResult = await pool.query(findStudentForTermTestSql, [
       parsed.data.classCode,
@@ -247,11 +547,59 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     if (!attempt || attempt.class_id !== String(row.class_id) || attempt.student_id !== String(row.student_id)) {
       return res.status(409).json({ ok: false, error: 'SUBMISSION_ID_CONFLICT', message: 'Mã gửi bài đã được dùng cho lượt làm khác.' });
     }
+    // Luôn dùng kết quả đã lưu; lần gửi lại cùng mã không được phép thay đổi điểm Portal.
+    const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
+    const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
     return res.status(201).json({
       ok: true,
       attemptToken: attempt.attempt_token,
       studentName: row.student_name,
-      next: 'reading'
+      completed: Boolean(attempt.completed_at),
+      resultAvailable: true,
+      portalSyncStatus,
+      result,
+      next: attempt.completed_at ? 'result' : 'reading'
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/reading/start', testWriteLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = readingStartSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_READING_START', message: 'Yêu cầu bắt đầu Reading không hợp lệ.' });
+    }
+    const started = await pool.query(startReadingAttemptSql, [parsed.data.attemptToken, slug.data]);
+    if (started.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt Listening để bắt đầu Reading.' });
+    }
+    const row = started.rows[0];
+    return res.json({
+      ok: true,
+      attemptToken: row.attempt_token,
+      readingStartedAt: row.reading_started_at,
+      readingDeadlineAt: row.reading_deadline_at,
+      serverNow: row.server_now
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/reading/draft', testDraftLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = readingDraftSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_READING_DRAFT', message: 'Bản lưu Reading không hợp lệ.' });
+    }
+    const saved = await pool.query(saveReadingDraftSql, [
+      parsed.data.attemptToken,
+      JSON.stringify(parsed.data.answers)
+    ]);
+    if (saved.rowCount !== 1) {
+      return res.status(409).json({ ok: false, error: 'READING_LOCKED', message: 'Reading đã hết giờ hoặc đã được thu bài.' });
+    }
+    return res.json({
+      ok: true,
+      deadlineAt: saved.rows[0].reading_deadline_at,
+      savedAt: saved.rows[0].reading_draft_updated_at,
+      serverNow: saved.rows[0].server_now
     });
   }));
 
@@ -267,8 +615,14 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     }
     const attempt = attemptResult.rows[0];
     if (attempt.completed_at && attempt.combined_result) {
-      await trySyncErpGrades(syncErpGrades, attempt, attempt.combined_result);
-      return res.json({ ok: true, attemptToken: attempt.attempt_token, completed: true, next: 'result' });
+      const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, attempt.combined_result);
+      return res.json({
+        ok: true,
+        attemptToken: attempt.attempt_token,
+        completed: true,
+        portalSyncStatus,
+        next: 'result'
+      });
     }
     const testDefinition = parseStoredTest({
       ...attempt,
@@ -276,17 +630,28 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
       definition_version: attempt.version
     });
     const listeningResult = attempt.listening_result;
-    const readingResult = gradeSection(testDefinition.reading_definition, parsed.data.answers, 0);
+    const effectiveAnswers = attempt.reading_timed_out
+      ? (attempt.reading_draft || {})
+      : parsed.data.answers;
+    const readingResult = gradeSection(testDefinition.reading_definition, effectiveAnswers, 0);
     const combinedResult = buildCombinedResult(testDefinition, listeningResult, readingResult);
     const completeResult = await pool.query(completeReadingAttemptSql, [
       parsed.data.attemptToken,
-      JSON.stringify(parsed.data.answers),
+      JSON.stringify(effectiveAnswers),
       JSON.stringify(readingResult),
       JSON.stringify(combinedResult)
     ]);
     if (completeResult.rowCount !== 1) throw new Error('Không thể hoàn tất bài Reading.');
-    await trySyncErpGrades(syncErpGrades, attempt, combinedResult);
-    return res.json({ ok: true, attemptToken: parsed.data.attemptToken, completed: true, next: 'result' });
+    const storedCombinedResult = completeResult.rows[0].combined_result;
+    const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, storedCombinedResult);
+    return res.json({
+      ok: true,
+      attemptToken: parsed.data.attemptToken,
+      completed: true,
+      portalSyncStatus,
+      timedOut: Boolean(attempt.reading_timed_out),
+      next: 'result'
+    });
   }));
 
   app.post('/api/term-tests/writing', testDraftLimiter, asyncRoute(async (req, res) => {
@@ -324,16 +689,25 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
       return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
     }
     const row = result.rows[0];
-    await trySyncErpGrades(syncErpGrades, row, row.combined_result);
+    const termTestResult = row.combined_result || buildListeningResult(row, row.listening_result);
+    const portalSyncStatus = await trySyncErpGrades(syncErpGrades, row, termTestResult);
     return res.json({
       ok: true,
       attemptToken: row.attempt_token,
       testSlug: row.test_slug,
       className: row.class_name,
       studentName: row.student_name,
+      completed: Boolean(row.completed_at),
       completedAt: row.completed_at,
+      exam: {
+        examSessionToken: row.exam_session_token || null,
+        readingStartedAt: row.reading_started_at || null,
+        readingDeadlineAt: row.reading_deadline_at || null,
+        serverNow: row.server_now || null
+      },
       writing: serializeTermTestWriting(row),
-      result: row.combined_result
+      portalSyncStatus,
+      result: termTestResult
     });
   }));
 

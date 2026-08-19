@@ -33,6 +33,20 @@ test('Term Test 2 giữ đúng slug để n8n ghi vào các cột Phase 2', () =
   assert.deepEqual(payload.grades, { listening: 7, reading: 6.5, writing: 6 });
 });
 
+test('payload nộp riêng Listening không tạo trường Reading rỗng', () => {
+  const payload = buildErpGradePayload({
+    attempt_token: '00000000-0000-4000-8000-000000000101',
+    test_slug: 'term-test-2',
+    class_id: '2139',
+    student_id: '9003'
+  }, {
+    listening: { band: 7.5 },
+    reading: null
+  });
+  assert.deepEqual(payload.grades, { listening: 7.5 });
+  assert.equal('reading' in payload.grades, false);
+});
+
 test('gửi payload qua header bí mật và kiểm tra attempt token trả về', async () => {
   const payload = {
     version: 1,

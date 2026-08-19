@@ -5,13 +5,20 @@ import { PGlite } from '@electric-sql/pglite';
 import {
   completeReadingAttemptSql,
   fetchTermTestResultSql,
+  findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
   findStudentForTermTestSql,
+  insertProtectedListeningAttemptSql,
+  insertTermTestExamSessionSql,
   insertListeningAttemptSql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
-  saveTermTestWritingSql
+  saveReadingDraftSql,
+  saveTermTestListeningDraftSql,
+  saveTermTestWritingSql,
+  startReadingAttemptSql,
+  startTermTestListeningSessionSql
 } from '../src/sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from '../src/term-tests.js';
 
@@ -75,6 +82,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(writingDraftMigration);
   await database.exec(writingDraftMigration);
+  const examControlsMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-19-term-test-exam-controls.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(examControlsMigration);
+  await database.exec(examControlsMigration);
   const miniResultMigration = await readFile(
     new URL('../../docs/migrations/2026-08-09-mini-test-results.sql', import.meta.url),
     'utf8'
@@ -216,6 +229,13 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   ]);
   const attemptToken = inserted.rows[0].attempt_token;
   assert.match(attemptToken, /^[0-9a-f-]{36}$/);
+  assert.equal(inserted.rows[0].listening_result.correct, 40);
+
+  const listeningOnlyResult = await database.query(fetchTermTestResultSql, [attemptToken]);
+  assert.equal(listeningOnlyResult.rows.length, 1);
+  assert.equal(listeningOnlyResult.rows[0].listening_result.band, 9);
+  assert.equal(listeningOnlyResult.rows[0].combined_result, null);
+  assert.equal(listeningOnlyResult.rows[0].completed_at, null);
 
   const attempt = await database.query(findAttemptForReadingSql, [attemptToken, 'term-test-1']);
   const reading = gradeSection(definition.reading_definition, answers, 0);
@@ -226,7 +246,6 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(reading),
     JSON.stringify(combined)
   ]);
-
   const draft = await database.query(saveTermTestWritingSql, [
     attemptToken,
     'Bản nháp Task 1',
@@ -307,9 +326,80 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     'IC2139',
     9001,
     'Học viên thử nghiệm',
-    JSON.stringify(answers),
-    JSON.stringify(listening)
+    JSON.stringify({}),
+    JSON.stringify(gradeSection(definition.listening_definition, {}, 0))
   ]);
   assert.equal(duplicate.rows[0].attempt_token, attemptToken);
+  assert.equal(duplicate.rows[0].listening_result.correct, 40);
+
+  const protectedSession = await database.query(insertTermTestExamSessionSql, [
+    'term-test-1', 1, 2139, 'IC2139', 9003, 'Học viên chưa làm', 0
+  ]);
+  const examSessionToken = protectedSession.rows[0].exam_session_token;
+  await database.query(startTermTestListeningSessionSql, [examSessionToken, 'term-test-1', 200]);
+  const protectedDraft = await database.query(saveTermTestListeningDraftSql, [
+    examSessionToken, 'term-test-1', JSON.stringify(answers)
+  ]);
+  assert.equal(protectedDraft.rows.length, 1);
+  await database.query(
+    `UPDATE assessment.term_test_exam_session
+     SET listening_started_at = now() - interval '10 seconds', listening_deadline_at = now() - interval '1 second'
+     WHERE id = $1::uuid`,
+    [examSessionToken]
+  );
+  const rejectedLateListening = await database.query(saveTermTestListeningDraftSql, [
+    examSessionToken, 'term-test-1', JSON.stringify({ 1: 'late-change' })
+  ]);
+  assert.equal(rejectedLateListening.rows.length, 0);
+  const lockedListening = await database.query(findTermTestListeningSubmissionSql, [examSessionToken, 'term-test-1']);
+  assert.equal(lockedListening.rows[0].listening_timed_out, true);
+  assert.equal(lockedListening.rows[0].listening_draft['1'], 'answer-1');
+  const protectedListeningResult = gradeSection(definition.listening_definition, lockedListening.rows[0].listening_draft, 0);
+  const protectedAttempt = await database.query(insertProtectedListeningAttemptSql, [
+    '00000000-0000-4000-8000-000000000007',
+    examSessionToken,
+    'term-test-1',
+    JSON.stringify(lockedListening.rows[0].listening_draft),
+    JSON.stringify(protectedListeningResult)
+  ]);
+  assert.equal(protectedAttempt.rows[0].exam_session_token, examSessionToken);
+  assert.equal(protectedAttempt.rows[0].listening_result.correct, 40);
+
+  const protectedAttemptToken = protectedAttempt.rows[0].attempt_token;
+  await database.query(startReadingAttemptSql, [protectedAttemptToken, 'term-test-1']);
+  assert.equal((await database.query(saveReadingDraftSql, [protectedAttemptToken, JSON.stringify(answers)])).rows.length, 1);
+  await database.query(
+    `UPDATE assessment.term_test_attempt
+     SET reading_started_at = now() - interval '10 seconds', reading_deadline_at = now() - interval '1 second'
+     WHERE id = $1::uuid`,
+    [protectedAttemptToken]
+  );
+  assert.equal((await database.query(saveReadingDraftSql, [protectedAttemptToken, JSON.stringify({ 1: 'late-change' })])).rows.length, 0);
+  const lockedReading = await database.query(findAttemptForReadingSql, [protectedAttemptToken, 'term-test-1']);
+  assert.equal(lockedReading.rows[0].reading_timed_out, true);
+  assert.equal(lockedReading.rows[0].reading_draft['1'], 'answer-1');
+  const protectedReadingResult = gradeSection(definition.reading_definition, lockedReading.rows[0].reading_draft, 0);
+  const protectedCombined = buildCombinedResult(definition, protectedListeningResult, protectedReadingResult);
+  await database.query(completeReadingAttemptSql, [
+    protectedAttemptToken,
+    JSON.stringify(lockedReading.rows[0].reading_draft),
+    JSON.stringify(protectedReadingResult),
+    JSON.stringify(protectedCombined)
+  ]);
+  const protectedWritingDraft = await database.query(saveTermTestWritingSql, [
+    protectedAttemptToken, 'Task 1 đúng hạn', 'Task 2 đúng hạn', 'draft'
+  ]);
+  assert.equal(protectedWritingDraft.rows[0].writing_task_1, 'Task 1 đúng hạn');
+  await database.query(
+    `UPDATE assessment.term_test_attempt SET writing_deadline_at = now() - interval '1 second' WHERE id = $1::uuid`,
+    [protectedAttemptToken]
+  );
+  const lateWritingSubmit = await database.query(saveTermTestWritingSql, [
+    protectedAttemptToken, 'Task 1 sửa muộn', 'Task 2 sửa muộn', 'submit'
+  ]);
+  assert.equal(lateWritingSubmit.rows[0].writing_task_1, 'Task 1 đúng hạn');
+  assert.equal(lateWritingSubmit.rows[0].writing_task_2, 'Task 2 đúng hạn');
+  assert.equal(lateWritingSubmit.rows[0].writing_timed_out, true);
+  assert.equal(Boolean(lateWritingSubmit.rows[0].writing_submitted_at), true);
   await database.close();
 });

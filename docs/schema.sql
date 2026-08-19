@@ -260,10 +260,15 @@ CREATE TABLE assessment.term_test_attempt (
   class_name_snapshot TEXT NOT NULL,
   erp_student_contact_id BIGINT NOT NULL,
   student_name_snapshot TEXT NOT NULL,
+  exam_session_id UUID UNIQUE,
   listening_answers JSONB NOT NULL,
   listening_result JSONB NOT NULL,
   listening_submitted_at TIMESTAMPTZ NOT NULL,
   reading_answers JSONB,
+  reading_started_at TIMESTAMPTZ,
+  reading_deadline_at TIMESTAMPTZ,
+  reading_draft JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reading_draft_updated_at TIMESTAMPTZ,
   reading_result JSONB,
   combined_result JSONB,
   reading_submitted_at TIMESTAMPTZ,
@@ -271,11 +276,16 @@ CREATE TABLE assessment.term_test_attempt (
   writing_task_1 TEXT NOT NULL DEFAULT '',
   writing_task_2 TEXT NOT NULL DEFAULT '',
   writing_started_at TIMESTAMPTZ,
+  writing_deadline_at TIMESTAMPTZ,
   writing_updated_at TIMESTAMPTZ,
   writing_submitted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (test_slug, client_submission_id),
+  CONSTRAINT term_test_attempt_section_deadline_check CHECK (
+    (reading_started_at IS NULL AND reading_deadline_at IS NULL)
+    OR (reading_started_at IS NOT NULL AND reading_deadline_at > reading_started_at)
+  ),
   CONSTRAINT term_test_attempt_writing_order_check CHECK (
     (writing_started_at IS NULL AND writing_updated_at IS NULL AND writing_submitted_at IS NULL)
     OR
@@ -288,6 +298,41 @@ CREATE TABLE assessment.term_test_attempt (
   )
 );
 
+CREATE TABLE assessment.term_test_exam_session (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_slug TEXT NOT NULL REFERENCES assessment.test_definition(slug),
+  definition_version INTEGER NOT NULL,
+  erp_course_class_id BIGINT NOT NULL,
+  class_name_snapshot TEXT NOT NULL,
+  erp_student_contact_id BIGINT NOT NULL,
+  student_name_snapshot TEXT NOT NULL,
+  prepared_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  listening_resume_offset_seconds INTEGER NOT NULL DEFAULT 0,
+  listening_started_at TIMESTAMPTZ,
+  listening_deadline_at TIMESTAMPTZ,
+  listening_draft JSONB NOT NULL DEFAULT '{}'::jsonb,
+  listening_draft_updated_at TIMESTAMPTZ,
+  listening_submitted_at TIMESTAMPTZ,
+  attempt_id UUID UNIQUE REFERENCES assessment.term_test_attempt(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT term_test_exam_session_listening_order_check CHECK (
+    (listening_started_at IS NULL AND listening_deadline_at IS NULL AND listening_submitted_at IS NULL)
+    OR (
+      listening_started_at IS NOT NULL
+      AND listening_deadline_at > listening_started_at
+      AND (listening_submitted_at IS NULL OR listening_submitted_at >= listening_started_at)
+    )
+  ),
+  CONSTRAINT term_test_exam_session_listening_resume_offset_check CHECK (
+    listening_resume_offset_seconds BETWEEN 0 AND 1844
+  )
+);
+
+ALTER TABLE assessment.term_test_attempt
+  ADD CONSTRAINT term_test_attempt_exam_session_fk
+  FOREIGN KEY (exam_session_id) REFERENCES assessment.term_test_exam_session(id);
+
 CREATE INDEX idx_term_test_attempt_class_student
   ON assessment.term_test_attempt (erp_course_class_id, erp_student_contact_id, created_at DESC);
 
@@ -297,4 +342,4 @@ CREATE INDEX idx_term_test_attempt_completed
 
 GRANT USAGE ON SCHEMA assessment TO mapping_review_api;
 GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_review_api;
-GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt TO mapping_review_api;
+GRANT SELECT, INSERT, UPDATE ON assessment.term_test_attempt, assessment.term_test_exam_session TO mapping_review_api;

@@ -195,9 +195,10 @@ function splitPerformance(stats) {
   };
 }
 
-export function buildCombinedResult(test, listening, reading) {
+function buildResult(test, listening, reading = null) {
   const merged = new Map();
-  for (const stat of [...listening.typeStats, ...reading.typeStats]) {
+  const sections = reading ? [listening, reading] : [listening];
+  for (const stat of sections.flatMap(section => section.typeStats)) {
     const current = merged.get(stat.type) || { type: stat.type, correct: 0, total: 0 };
     current.correct += stat.correct;
     current.total += stat.total;
@@ -207,11 +208,11 @@ export function buildCombinedResult(test, listening, reading) {
     ...item,
     percentage: item.total ? item.correct / item.total : 0
   }));
-  const totalCorrect = listening.correct + reading.correct;
-  const totalQuestions = listening.total + reading.total;
-  const bands = [listening.band, reading.band];
-  const averageBand = bands.every(band => typeof band === 'number' && Number.isFinite(band))
-    ? Number(((bands[0] + bands[1]) / 2).toFixed(2))
+  const totalCorrect = sections.reduce((sum, section) => sum + section.correct, 0);
+  const totalQuestions = sections.reduce((sum, section) => sum + section.total, 0);
+  const averageBand = reading
+    && [listening.band, reading.band].every(band => typeof band === 'number' && Number.isFinite(band))
+    ? Number(((listening.band + reading.band) / 2).toFixed(2))
     : null;
   return {
     testSlug: test.test_slug,
@@ -230,4 +231,12 @@ export function buildCombinedResult(test, listening, reading) {
       right.percentage - left.percentage || left.type.localeCompare(right.type, 'vi')
     )
   };
+}
+
+export function buildListeningResult(test, listening) {
+  return buildResult(test, listening);
+}
+
+export function buildCombinedResult(test, listening, reading) {
+  return buildResult(test, listening, reading);
 }

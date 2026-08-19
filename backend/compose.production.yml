@@ -8,6 +8,8 @@ services:
     stop_grace_period: 15s
     env_file:
       - /opt/mapping-review-api/.env
+    volumes:
+      - /opt/mapping-review-api/private-assets:/app/private-assets:ro
     ports:
       - "127.0.0.1:8788:8788"
     networks:
