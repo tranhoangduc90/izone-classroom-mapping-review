@@ -291,6 +291,92 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
   assert.equal(syncPayloads[0].studentId, '9001');
 });
 
+test('Writing được lưu theo attempt token và trả lại nguyên văn khi mở kết quả', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const submittedAt = '2026-08-19T04:00:00.000Z';
+  const task1 = 'Nguyên văn bài Task 1 của học viên.';
+  const task2 = 'Nguyên văn bài Task 2 của học viên.';
+  const combinedResult = buildCombinedResult(
+    storedTestRow(),
+    gradeSection(makeSection(), perfectAnswers(), 0),
+    gradeSection(makeSection(), perfectAnswers(), 0)
+  );
+  const pool = makePool(async (_sql, params, callNumber) => {
+    if (callNumber === 1) {
+      return {
+        rowCount: 1,
+        rows: [{
+          attempt_token: attemptToken,
+          writing_task_1: params[1],
+          writing_task_2: params[2],
+          writing_started_at: submittedAt,
+          writing_updated_at: submittedAt,
+          writing_submitted_at: params[3] === 'submit' ? submittedAt : null
+        }]
+      };
+    }
+    return {
+      rowCount: 1,
+      rows: [{
+        attempt_token: attemptToken,
+        test_slug: 'term-test-2',
+        class_id: '2139',
+        student_id: '9001',
+        class_name: 'IC2139',
+        student_name: 'Học viên thử nghiệm',
+        completed_at: submittedAt,
+        writing_task_1: task1,
+        writing_task_2: task2,
+        writing_started_at: submittedAt,
+        writing_updated_at: submittedAt,
+        writing_submitted_at: submittedAt,
+        combined_result: combinedResult
+      }]
+    };
+  });
+  const app = createApp({ config: makeConfig(), pool });
+
+  const saved = await request(app)
+    .post('/api/term-tests/writing')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({ attemptToken, action: 'submit', task1, task2 });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.writing, {
+    task1,
+    task2,
+    started: true,
+    submitted: true,
+    updatedAt: submittedAt,
+    submittedAt
+  });
+  assert.deepEqual(pool.calls[0].params, [attemptToken, task1, task2, 'submit']);
+
+  const result = await request(app)
+    .post('/api/term-tests/result')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({ attemptToken });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.writing.task1, task1);
+  assert.equal(result.body.writing.task2, task2);
+  assert.equal(result.body.writing.submitted, true);
+});
+
+test('không lưu Writing nếu attempt token chưa có Reading hoàn chỉnh', async () => {
+  const pool = makePool(async () => ({ rowCount: 0, rows: [] }));
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/writing')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      attemptToken: '00000000-0000-4000-8000-000000000099',
+      action: 'draft',
+      task1: 'Task 1',
+      task2: 'Task 2'
+    });
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'WRITING_ATTEMPT_NOT_FOUND');
+});
+
 test('Mini Test trả kết quả nhưng không ghi nhầm điểm vào Portal Term Test', async () => {
   const syncPayloads = [];
   const pool = makePool(async () => ({

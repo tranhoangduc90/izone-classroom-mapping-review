@@ -15,6 +15,7 @@ import {
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
+  saveTermTestWritingSql,
   upsertMiniTestResultSql,
   writeDecisionSql
 } from './sql.js';
@@ -59,6 +60,12 @@ const readingSubmissionSchema = z.object({
   answers: answersSchema
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
+const writingSubmissionSchema = z.object({
+  attemptToken: z.string().uuid(),
+  action: z.enum(['start', 'draft', 'submit']),
+  task1: z.string().max(12_000),
+  task2: z.string().max(12_000)
+});
 const teacherResultsQuerySchema = z.object({
   class: classCodeSchema,
   test: testSlugSchema
@@ -96,6 +103,17 @@ function hasValidSharedSecret(supplied, expected) {
   const left = Buffer.from(String(supplied || ''), 'utf8');
   const right = Buffer.from(String(expected || ''), 'utf8');
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function serializeTermTestWriting(row) {
+  return {
+    task1: String(row?.writing_task_1 || ''),
+    task2: String(row?.writing_task_2 || ''),
+    started: Boolean(row?.writing_started_at),
+    submitted: Boolean(row?.writing_submitted_at),
+    updatedAt: row?.writing_updated_at || null,
+    submittedAt: row?.writing_submitted_at || null
+  };
 }
 
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult) {
@@ -165,6 +183,13 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều lượt gửi; vui lòng chờ một phút.' }
+  });
+  const testDraftLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
   app.get('/api/term-tests/roster', testReadLimiter, asyncRoute(async (req, res) => {
@@ -264,6 +289,31 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
     return res.json({ ok: true, attemptToken: parsed.data.attemptToken, completed: true, next: 'result' });
   }));
 
+  app.post('/api/term-tests/writing', testDraftLimiter, asyncRoute(async (req, res) => {
+    const parsed = writingSubmissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_WRITING', message: 'Bài Writing không hợp lệ.' });
+    }
+    const saved = await pool.query(saveTermTestWritingSql, [
+      parsed.data.attemptToken,
+      parsed.data.task1,
+      parsed.data.task2,
+      parsed.data.action
+    ]);
+    if (saved.rowCount !== 1) {
+      return res.status(404).json({
+        ok: false,
+        error: 'WRITING_ATTEMPT_NOT_FOUND',
+        message: 'Chưa tìm thấy lượt Reading đã hoàn thành để lưu Writing.'
+      });
+    }
+    return res.json({
+      ok: true,
+      attemptToken: saved.rows[0].attempt_token,
+      writing: serializeTermTestWriting(saved.rows[0])
+    });
+  }));
+
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = resultRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -282,6 +332,7 @@ export function createApp({ config, pool, verifyGoogleToken, syncErpGrades = asy
       className: row.class_name,
       studentName: row.student_name,
       completedAt: row.completed_at,
+      writing: serializeTermTestWriting(row),
       result: row.combined_result
     });
   }));

@@ -461,6 +461,43 @@ SELECT id::text AS attempt_token, completed_at, combined_result
 FROM resolved
 LIMIT 1;`;
 
+// Lưu nguyên văn Writing theo attempt token; sau khi nộp thì payload gửi lại không được sửa bài đã chốt.
+export const saveTermTestWritingSql = `WITH updated AS (
+  UPDATE assessment.term_test_attempt
+  SET
+    writing_task_1 = $2,
+    writing_task_2 = $3,
+    writing_started_at = coalesce(writing_started_at, now()),
+    writing_updated_at = now(),
+    writing_submitted_at = CASE
+      WHEN $4 = 'submit' THEN coalesce(writing_submitted_at, now())
+      ELSE writing_submitted_at
+    END,
+    updated_at = now()
+  WHERE id = $1::uuid
+    AND completed_at IS NOT NULL
+    AND writing_submitted_at IS NULL
+  RETURNING *
+),
+resolved AS (
+  SELECT * FROM updated
+  UNION ALL
+  SELECT existing.*
+  FROM assessment.term_test_attempt AS existing
+  WHERE existing.id = $1::uuid
+    AND existing.completed_at IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM updated)
+)
+SELECT
+  id::text AS attempt_token,
+  writing_task_1,
+  writing_task_2,
+  writing_started_at,
+  writing_updated_at,
+  writing_submitted_at
+FROM resolved
+LIMIT 1;`;
+
 export const fetchTermTestResultSql = `SELECT
   id::text AS attempt_token,
   test_slug,
@@ -471,6 +508,11 @@ export const fetchTermTestResultSql = `SELECT
   listening_submitted_at,
   reading_submitted_at,
   completed_at,
+  writing_task_1,
+  writing_task_2,
+  writing_started_at,
+  writing_updated_at,
+  writing_submitted_at,
   combined_result
 FROM assessment.term_test_attempt
 WHERE id = $1::uuid
