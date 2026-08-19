@@ -25,7 +25,15 @@ Dashboard kết quả Term Test dùng hai endpoint có cùng lớp xác thực:
 3. Chạy `npm test` và `npm run check`.
 4. Chạy `npm start`.
 
-Endpoint kiểm tra: `GET /health` và `GET /ready`.
+Endpoint kiểm tra: `GET /health`, `GET /ready` và `GET /version`. Endpoint version trả phiên bản cùng build SHA để đối chiếu bản đã kiểm thử với container đang chạy.
+
+## Tài nguyên riêng của Term Test 2 computer-based
+
+- Chạy `node scripts/create-term-test-private-assets.mjs` ở thư mục `backend` để tạo `private-assets/term-test-2` từ nguồn tin cậy trên máy vận hành.
+- Thư mục `private-assets/` bị loại khỏi Git; production mount read-only vào `/app/private-assets`.
+- Cấu hình `TERM_TEST_ASSET_DIR=/app/private-assets` và `TERM_TEST_SESSION_SECRET` dài tối thiểu 32 ký tự trong `.env` production. Không in hoặc commit giá trị bí mật này.
+- Trước khi bật giao diện mới, áp dụng migration `docs/migrations/2026-08-19-term-test-exam-controls.sql`; migration thêm phiên Listening, deadline máy chủ và vùng nháp Listening/Reading.
+- Link học viên không đổi: `/term-test-2-computer-based/?class=<MÃ_LỚP>`.
 
 ## Triển khai production
 

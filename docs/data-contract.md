@@ -88,15 +88,18 @@ Sau khi duyệt, giảng viên có thể dùng `Sửa mapping` để chuyển sa
 
 ## Answer sheet Term Test
 
-Hai trang GitHub Pages dùng query `?class=<MÃ_LỚP>` và gọi API công khai theo thứ tự:
+Các trang GitHub Pages giữ nguyên query `?class=<MÃ_LỚP>` và gọi API công khai theo thứ tự:
 
 1. `GET /api/term-tests/roster?class=<MÃ_LỚP>&test=term-test-1` để lấy tên học viên và UUID ngẫu nhiên. Nếu lớp/test có roster riêng trong `assessment.term_test_roster`, API dùng đúng roster đó; nếu chưa có, API tự lấy học viên không bị supersede từ matching database. Response không chứa ID ERP, email hoặc đáp án.
-2. `POST /api/term-tests/<test-slug>/listening` để lưu 40 câu Listening. API trả `attemptToken`, chưa trả điểm.
-3. `POST /api/term-tests/<test-slug>/reading` với `attemptToken` để lưu 40 câu Reading và chấm cả hai phần.
-4. `POST /api/term-tests/writing` với `attemptToken`, hành động `start`/`draft`/`submit` và nguyên văn hai Task. API chỉ nhận sau khi Reading hoàn tất; bài đã `submit` không thể bị payload gửi lại ghi đè.
-5. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả và đọc lại hai bài Writing của lượt làm đó.
+2. Riêng bản computer-based Term Test 2 gọi `POST /api/term-tests/term-test-2/session/prepare`, tải audio mã hóa và bản nghe thử 30 giây. Response ở bước này chưa có đề hoặc khóa giải mã.
+3. `POST /api/term-tests/term-test-2/session/start` ghi thời điểm bắt đầu/deadline Listening trên máy chủ rồi mới trả đề, khóa audio riêng của phiên và thời lượng chính thức. Audio kéo dài 30 phút 44 giây, sau đó có 2 phút kiểm tra; hết hạn tự khóa và thu bài.
+4. `POST /api/term-tests/<test-slug>/listening/draft` lưu đáp án trước hạn; `POST /api/term-tests/<test-slug>/listening` chấm Listening độc lập và đồng bộ Band Listening lên Portal. Sau hạn, máy chủ chỉ dùng bản nháp cuối cùng đã nhận trước hạn.
+5. `POST /api/term-tests/<test-slug>/reading/start` tạo deadline 60 phút; endpoint `reading/draft` lưu nháp trước hạn và endpoint `reading` chấm/đồng bộ Reading. Sau hạn, máy chủ không nhận thay đổi mới.
+6. `POST /api/term-tests/writing` với `attemptToken`, hành động `start`/`draft`/`submit` và nguyên văn hai Task. Deadline 60 phút do máy chủ tạo; bài sau hạn hoặc đã `submit` không thể bị payload gửi lại ghi đè.
+7. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả và đọc lại hai bài Writing của lượt làm đó. Kết quả chỉ mở sau khi Writing đã nộp hoặc tự thu.
+8. `POST /api/term-tests/term-test-2/session/resume-attempt` nối các lượt đã nộp Listening trên giao diện cũ vào giao diện mới mà không tạo lại điểm hoặc khởi động thêm Listening.
 
-`attemptToken` và bản dự phòng cục bộ được giữ trong bộ nhớ trình duyệt của máy đang thi để đóng tab rồi mở lại vẫn tiếp tục được. Hai bài Writing đồng thời được lưu trong PostgreSQL và chỉ được đọc bằng đúng `attemptToken`; dashboard công khai và luồng xuất Lark/Portal không đọc nguyên văn bài viết. Định nghĩa đáp án nằm trong PostgreSQL production, không nằm trong HTML/JavaScript công khai. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
+`attemptToken` và bản dự phòng cục bộ được giữ trong bộ nhớ trình duyệt của máy đang thi để đóng tab rồi mở lại vẫn tiếp tục được. Nháp Listening, Reading và hai bài Writing đồng thời được lưu trong PostgreSQL; deadline luôn tính bằng giờ máy chủ. Dashboard công khai và luồng xuất Lark/Portal không đọc nguyên văn bài viết. Định nghĩa đáp án nằm trong PostgreSQL production; đề/audio computer-based nằm trong thư mục riêng chỉ mount vào container, không nằm trên GitHub Pages. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
 
 ### Dashboard giảng viên
 

@@ -14,7 +14,12 @@ const envSchema = z.object({
   ERP_SYNC_URL: z.string().url().optional().default(''),
   ERP_SYNC_SECRET: z.string().optional().default(''),
   ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(10000).default(5000),
-  MINI_TEST_SYNC_SECRET: z.string().optional().default('')
+  MINI_TEST_SYNC_SECRET: z.string().optional().default(''),
+  WRITING_TEST_SYNC_SECRET: z.string().optional().default(''),
+  TERM_TEST_ASSET_DIR: z.string().trim().optional().default(''),
+  TERM_TEST_SESSION_SECRET: z.string().optional().default(''),
+  APP_VERSION: z.string().trim().max(100).default('1.0.0'),
+  BUILD_SHA: z.string().trim().regex(/^(?:unknown|[0-9a-f]{7,64})$/i).default('unknown')
 }).superRefine((value, context) => {
   if (Boolean(value.ERP_SYNC_URL) !== Boolean(value.ERP_SYNC_SECRET)) {
     context.addIssue({ code: 'custom', message: 'ERP_SYNC_URL và ERP_SYNC_SECRET phải được cấu hình cùng nhau.' });
@@ -24,6 +29,15 @@ const envSchema = z.object({
   }
   if (value.MINI_TEST_SYNC_SECRET && value.MINI_TEST_SYNC_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['MINI_TEST_SYNC_SECRET'], message: 'MINI_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+  }
+  if (value.WRITING_TEST_SYNC_SECRET && value.WRITING_TEST_SYNC_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['WRITING_TEST_SYNC_SECRET'], message: 'WRITING_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+  }
+  if (Boolean(value.TERM_TEST_ASSET_DIR) !== Boolean(value.TERM_TEST_SESSION_SECRET)) {
+    context.addIssue({ code: 'custom', message: 'TERM_TEST_ASSET_DIR và TERM_TEST_SESSION_SECRET phải được cấu hình cùng nhau.' });
+  }
+  if (value.TERM_TEST_SESSION_SECRET && value.TERM_TEST_SESSION_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['TERM_TEST_SESSION_SECRET'], message: 'TERM_TEST_SESSION_SECRET phải có ít nhất 32 ký tự.' });
   }
 });
 
@@ -49,6 +63,11 @@ export function loadConfig(env = process.env) {
     erpSyncUrl: parsed.ERP_SYNC_URL,
     erpSyncSecret: parsed.ERP_SYNC_SECRET,
     erpSyncTimeoutMs: parsed.ERP_SYNC_TIMEOUT_MS,
-    miniTestSyncSecret: parsed.MINI_TEST_SYNC_SECRET
+    miniTestSyncSecret: parsed.MINI_TEST_SYNC_SECRET,
+    writingTestSyncSecret: parsed.WRITING_TEST_SYNC_SECRET,
+    termTestAssetDir: parsed.TERM_TEST_ASSET_DIR,
+    termTestSessionSecret: parsed.TERM_TEST_SESSION_SECRET,
+    appVersion: parsed.APP_VERSION,
+    buildSha: parsed.BUILD_SHA
   };
 }
