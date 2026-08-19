@@ -268,9 +268,24 @@ CREATE TABLE assessment.term_test_attempt (
   combined_result JSONB,
   reading_submitted_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
+  writing_task_1 TEXT NOT NULL DEFAULT '',
+  writing_task_2 TEXT NOT NULL DEFAULT '',
+  writing_started_at TIMESTAMPTZ,
+  writing_updated_at TIMESTAMPTZ,
+  writing_submitted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (test_slug, client_submission_id)
+  UNIQUE (test_slug, client_submission_id),
+  CONSTRAINT term_test_attempt_writing_order_check CHECK (
+    (writing_started_at IS NULL AND writing_updated_at IS NULL AND writing_submitted_at IS NULL)
+    OR
+    (
+      completed_at IS NOT NULL
+      AND writing_started_at IS NOT NULL
+      AND writing_updated_at IS NOT NULL
+      AND (writing_submitted_at IS NULL OR writing_submitted_at >= writing_started_at)
+    )
+  )
 );
 
 CREATE INDEX idx_term_test_attempt_class_student

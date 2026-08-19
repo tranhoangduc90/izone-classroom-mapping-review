@@ -93,9 +93,10 @@ Hai trang GitHub Pages dùng query `?class=<MÃ_LỚP>` và gọi API công khai
 1. `GET /api/term-tests/roster?class=<MÃ_LỚP>&test=term-test-1` để lấy tên học viên và UUID ngẫu nhiên. Nếu lớp/test có roster riêng trong `assessment.term_test_roster`, API dùng đúng roster đó; nếu chưa có, API tự lấy học viên không bị supersede từ matching database. Response không chứa ID ERP, email hoặc đáp án.
 2. `POST /api/term-tests/<test-slug>/listening` để lưu 40 câu Listening. API trả `attemptToken`, chưa trả điểm.
 3. `POST /api/term-tests/<test-slug>/reading` với `attemptToken` để lưu 40 câu Reading và chấm cả hai phần.
-4. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả của lượt làm đó.
+4. `POST /api/term-tests/writing` với `attemptToken`, hành động `start`/`draft`/`submit` và nguyên văn hai Task. API chỉ nhận sau khi Reading hoàn tất; bài đã `submit` không thể bị payload gửi lại ghi đè.
+5. `POST /api/term-tests/result` với `attemptToken` để mở đúng kết quả và đọc lại hai bài Writing của lượt làm đó.
 
-`attemptToken` chỉ được giữ trong `sessionStorage` của tab. Định nghĩa đáp án nằm trong PostgreSQL production, không nằm trong HTML/JavaScript công khai. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
+`attemptToken` và bản dự phòng cục bộ được giữ trong bộ nhớ trình duyệt của máy đang thi để đóng tab rồi mở lại vẫn tiếp tục được. Hai bài Writing đồng thời được lưu trong PostgreSQL và chỉ được đọc bằng đúng `attemptToken`; dashboard công khai và luồng xuất Lark/Portal không đọc nguyên văn bài viết. Định nghĩa đáp án nằm trong PostgreSQL production, không nằm trong HTML/JavaScript công khai. API áp dụng CORS, giới hạn tần suất, UUID không tuần tự và không ghi payload học viên vào log lỗi.
 
 ### Dashboard giảng viên
 

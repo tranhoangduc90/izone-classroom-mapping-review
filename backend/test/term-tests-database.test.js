@@ -10,7 +10,8 @@ import {
   insertListeningAttemptSql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
-  listTermTestRosterSql
+  listTermTestRosterSql,
+  saveTermTestWritingSql
 } from '../src/sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from '../src/term-tests.js';
 
@@ -68,6 +69,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const migrationSql = await readFile(migrationUrl, 'utf8');
   await database.exec(migrationSql);
   await database.exec(migrationSql);
+  const writingDraftMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-19-term-test-writing-drafts.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(writingDraftMigration);
+  await database.exec(writingDraftMigration);
   const miniResultMigration = await readFile(
     new URL('../../docs/migrations/2026-08-09-mini-test-results.sql', import.meta.url),
     'utf8'
@@ -219,8 +226,38 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(reading),
     JSON.stringify(combined)
   ]);
+
+  const draft = await database.query(saveTermTestWritingSql, [
+    attemptToken,
+    'Bản nháp Task 1',
+    'Bản nháp Task 2',
+    'draft'
+  ]);
+  assert.equal(draft.rows[0].writing_task_1, 'Bản nháp Task 1');
+  assert.equal(Boolean(draft.rows[0].writing_started_at), true);
+  assert.equal(draft.rows[0].writing_submitted_at, null);
+
+  const submittedWriting = await database.query(saveTermTestWritingSql, [
+    attemptToken,
+    'Bài nộp Task 1',
+    'Bài nộp Task 2',
+    'submit'
+  ]);
+  assert.equal(Boolean(submittedWriting.rows[0].writing_submitted_at), true);
+
+  const duplicateWriting = await database.query(saveTermTestWritingSql, [
+    attemptToken,
+    'Không được ghi đè Task 1',
+    'Không được ghi đè Task 2',
+    'submit'
+  ]);
+  assert.equal(duplicateWriting.rows[0].writing_task_1, 'Bài nộp Task 1');
+  assert.equal(duplicateWriting.rows[0].writing_task_2, 'Bài nộp Task 2');
+
   const result = await database.query(fetchTermTestResultSql, [attemptToken]);
   assert.equal(result.rows[0].combined_result.summary.totalCorrect, 80);
+  assert.equal(result.rows[0].writing_task_1, 'Bài nộp Task 1');
+  assert.equal(Boolean(result.rows[0].writing_submitted_at), true);
 
   const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
   assert.equal(teacherOptions.rows[0].response.classes.length, 1);
