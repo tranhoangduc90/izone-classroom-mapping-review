@@ -650,3 +650,35 @@ test('Mini Test trả kết quả nhưng không ghi nhầm điểm vào Portal T
   assert.equal(response.body.testSlug, 'mini-test-lesson-5');
   assert.equal(syncPayloads.length, 0);
 });
+
+test('lớp CODEXDEMO806 không bao giờ ghi điểm vào Portal', async () => {
+  const syncPayloads = [];
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      attempt_token: '00000000-0000-4000-8000-000000000100',
+      test_slug: 'term-test-2',
+      class_id: '-806',
+      student_id: '-700',
+      class_name: 'CODEXDEMO806',
+      student_name: 'Học viên demo',
+      completed_at: new Date().toISOString(),
+      combined_result: { testSlug: 'term-test-2', summary: { averageBand: 6.5 } }
+    }]
+  }));
+  const app = createApp({
+    config: makeConfig(),
+    pool,
+    syncErpGrades: async payload => {
+      syncPayloads.push(payload);
+      return { status: 'synced' };
+    }
+  });
+  const response = await request(app)
+    .post('/api/term-tests/result')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({ attemptToken: '00000000-0000-4000-8000-000000000100' });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.portalSyncStatus, 'not_applicable');
+  assert.equal(syncPayloads.length, 0);
+});

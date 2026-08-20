@@ -154,6 +154,7 @@ function serializeTermTestWriting(row) {
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult) {
   const testSlug = String(attempt?.test_slug || attempt?.slug || combinedResult?.testSlug || '');
   if (!/^term-test-[1-9][0-9]*$/.test(testSlug)) return 'not_applicable';
+  if (String(attempt?.class_name || '').trim().toUpperCase() === 'CODEXDEMO806') return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult);
     await syncErpGrades(payload);
