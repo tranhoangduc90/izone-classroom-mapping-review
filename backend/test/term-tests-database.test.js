@@ -330,6 +330,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(gradeSection(definition.listening_definition, {}, 0))
   ]);
   assert.equal(duplicate.rows[0].attempt_token, attemptToken);
+  assert.equal(duplicate.rows[0].class_name, 'IC2139');
   assert.equal(duplicate.rows[0].listening_result.correct, 40);
 
   const protectedSession = await database.query(insertTermTestExamSessionSql, [
@@ -363,6 +364,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(protectedListeningResult)
   ]);
   assert.equal(protectedAttempt.rows[0].exam_session_token, examSessionToken);
+  assert.equal(protectedAttempt.rows[0].class_name, 'IC2139');
   assert.equal(protectedAttempt.rows[0].listening_result.correct, 40);
 
   const protectedAttemptToken = protectedAttempt.rows[0].attempt_token;
