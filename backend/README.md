@@ -18,6 +18,30 @@ Dashboard kết quả Term Test dùng hai endpoint có cùng lớp xác thực:
 - `GET /api/term-tests/teacher/options`: trả các lớp được phép xem và bài test đang hoạt động.
 - `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>`: trả roster cùng kết quả hoàn thành gần nhất; không trả ID ERP, email hay attempt token.
 
+## Đồng bộ điểm Writing Test
+
+Các endpoint `/api/writing-tests/*` chỉ dành cho n8n và yêu cầu header `x-writing-test-sync` khớp biến môi trường `WRITING_TEST_SYNC_SECRET`.
+
+- `POST /api/writing-tests/config`: phản chiếu các dòng cấu hình đã bật từ Lark vào PostgreSQL.
+- `POST /api/writing-tests/scores`: nhận một điểm Task hoặc điểm trực tiếp, chống gửi trùng và bắt đầu đồng hồ chờ khi cần ghép hai Task.
+- `POST /api/writing-tests/process-due`: chốt Task còn thiếu bằng 0 sau thời gian chờ, trừ khi phát hiện nhiều học viên cùng thiếu một Task.
+- `GET /api/writing-tests/records`: trả trạng thái để n8n dựng bảng theo dõi Lark và chọn điểm sẵn sàng chuyển Portal.
+- `POST /api/writing-tests/portal-result`: lưu kết quả đọc lại từ Portal, gồm thành công, xung đột hoặc lỗi.
+
+Writing Term Test 2 của khóa 67 dùng khóa chuẩn `course-67-phase-2` và gồm hai Task tính
+`ceil(((Task 1 + 2 × Task 2) / 3) × 2) / 2`, tức làm tròn lên theo bước 0,5.
+Kết quả ghi vào cột Portal `Phase 2 Writing`; nhánh `course-56-term-2` của khóa 56
+vẫn nhận một bài Writing trực tiếp. Mã tạm `course-56-term-2-weighted` đã tắt sau migration
+ngày 2026-08-16 và không được dùng cho lớp mới. Đồng hồ mặc định là
+720 phút và không bị đặt lại khi quét trùng hoặc chấm lại.
+
+Writing trong giao diện computer-based dùng hàng đợi riêng ở PostgreSQL. Khi học viên nộp bài,
+backend tạo một lượt Task 1 và một lượt Task 2; n8n chỉ nhận tối đa hai việc mỗi 15 giây rồi
+gọi lại bộ chấm Writing 56/67. Kết quả chỉ chuyển sang `ready` khi cả hai Task đều đủ bốn tiêu chí.
+Nếu Lark, bộ chấm hoặc mạng tạm lỗi, việc chấm được xếp lịch thử lại mà không yêu cầu học viên
+mở lại trang. Các endpoint `/api/term-tests/writing-grading/jobs/*` chỉ dành cho n8n và dùng
+cùng header bí mật `x-writing-test-sync`; không mở trực tiếp cho trình duyệt học viên.
+
 ## Chạy local
 
 1. Sao chép `.env.example` thành `.env` rồi điền cấu hình thật ở máy chạy; không commit file này.

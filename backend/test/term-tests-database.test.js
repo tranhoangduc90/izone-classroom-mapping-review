@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import {
   completeReadingAttemptSql,
   fetchTermTestResultSql,
+  findLatestTermTestAttemptForStudentSql,
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
   findStudentForTermTestSql,
@@ -82,6 +83,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(writingDraftMigration);
   await database.exec(writingDraftMigration);
+  const writingGradingMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-19-term-test-writing-grading.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(writingGradingMigration);
+  await database.exec(writingGradingMigration);
   const examControlsMigration = await readFile(
     new URL('../../docs/migrations/2026-08-19-term-test-exam-controls.sql', import.meta.url),
     'utf8'
@@ -237,6 +244,15 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(listeningOnlyResult.rows[0].combined_result, null);
   assert.equal(listeningOnlyResult.rows[0].completed_at, null);
 
+  const latestAttempt = await database.query(findLatestTermTestAttemptForStudentSql, [
+    'term-test-1',
+    1,
+    2139,
+    9001
+  ]);
+  assert.equal(latestAttempt.rows.length, 1);
+  assert.equal(latestAttempt.rows[0].attempt_token, attemptToken);
+
   const attempt = await database.query(findAttemptForReadingSql, [attemptToken, 'term-test-1']);
   const reading = gradeSection(definition.reading_definition, answers, 0);
   const combined = buildCombinedResult(definition, listening, reading);
@@ -293,6 +309,14 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(teacherResults.rows[0].students.length, 2);
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng').status, 'completed');
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').status, 'not_started');
+  assert.equal(
+    teacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng').writing.status,
+    'processing'
+  );
+  assert.equal(
+    teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').writing.status,
+    'not_submitted'
+  );
 
   const miniTeacherResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
