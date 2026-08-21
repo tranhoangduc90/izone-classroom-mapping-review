@@ -406,6 +406,33 @@ WHERE id = $1::uuid
   AND erp_student_contact_id = $4::bigint
   AND prepared_at >= now() - interval '8 hours';`;
 
+// Khi học viên chọn lại tên trên một máy khác, nối vào lượt đã nộp Listening gần nhất.
+// Chỉ trả lượt thuộc đúng phiên bản đề đang hoạt động để tránh mở nhầm dữ liệu của đợt thi cũ.
+export const findLatestTermTestAttemptForStudentSql = `SELECT
+  attempt.id::text AS attempt_token,
+  attempt.exam_session_id::text AS exam_session_token,
+  attempt.student_name_snapshot AS student_name,
+  attempt.listening_submitted_at,
+  attempt.reading_started_at,
+  attempt.reading_deadline_at,
+  attempt.completed_at,
+  attempt.writing_started_at,
+  attempt.writing_deadline_at,
+  attempt.writing_submitted_at,
+  session.listening_started_at,
+  session.listening_deadline_at,
+  now() AS server_now
+FROM assessment.term_test_attempt AS attempt
+LEFT JOIN assessment.term_test_exam_session AS session
+  ON session.id = attempt.exam_session_id
+WHERE attempt.test_slug = $1
+  AND attempt.definition_version = $2::int
+  AND attempt.erp_course_class_id = $3::bigint
+  AND attempt.erp_student_contact_id = $4::bigint
+  AND attempt.listening_submitted_at IS NOT NULL
+ORDER BY attempt.listening_submitted_at DESC, attempt.created_at DESC
+LIMIT 1;`;
+
 // Nối lại lượt thi đã nộp Listening trên giao diện cũ mà không khởi động thêm một phiên Listening.
 export const resumeTermTestAttemptContentSql = `SELECT
   attempt.id::text AS attempt_token,
@@ -571,6 +598,7 @@ SELECT
   resolved.exam_session_id::text AS exam_session_token,
   resolved.test_slug,
   resolved.erp_course_class_id::text AS class_id,
+  resolved.class_name_snapshot AS class_name,
   resolved.erp_student_contact_id::text AS student_id,
   resolved.student_name_snapshot AS student_name,
   resolved.listening_result,
@@ -614,6 +642,7 @@ SELECT
   id::text AS attempt_token,
   test_slug,
   erp_course_class_id::text AS class_id,
+  class_name_snapshot AS class_name,
   erp_student_contact_id::text AS student_id,
   student_name_snapshot AS student_name,
   listening_result,
@@ -747,6 +776,7 @@ resolved AS (
 )
 SELECT
   id::text AS attempt_token,
+  test_slug,
   writing_task_1,
   writing_task_2,
   writing_started_at,
@@ -933,18 +963,45 @@ SELECT
           ELSE 'not_started'
         END,
         'completedAt', attempt.completed_at,
-        'result', attempt.combined_result
+        'result', attempt.combined_result,
+        'writing', jsonb_build_object(
+          'status', CASE
+            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            WHEN grading.final_status = 'ready' THEN 'ready'
+            WHEN grading.task_1_status IN ('review_required', 'failed')
+              OR grading.task_2_status IN ('review_required', 'failed') THEN 'review_required'
+            ELSE 'processing'
+          END,
+          'task1State', CASE
+            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            ELSE coalesce(grading.task_1_status, 'queued')
+          END,
+          'task2State', CASE
+            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            ELSE coalesce(grading.task_2_status, 'queued')
+          END,
+          'task1Score', grading.task_1_score,
+          'task2Score', grading.task_2_score,
+          'writingScore', grading.writing_score,
+          'updatedAt', grading.updated_at
+        )
       )
       ORDER BY student.student_name
     )
     FROM students AS student
     LEFT JOIN LATERAL (
-      SELECT candidate.id, candidate.completed_at, candidate.combined_result, candidate.created_at
+      SELECT
+        candidate.id,
+        candidate.completed_at,
+        candidate.combined_result,
+        candidate.writing_submitted_at,
+        candidate.created_at
       FROM (
         SELECT
           stored.id,
           stored.completed_at,
           stored.combined_result,
+          stored.writing_submitted_at,
           stored.created_at
         FROM assessment.term_test_attempt AS stored
         WHERE stored.test_slug = definition.slug
@@ -962,6 +1019,7 @@ SELECT
             to_jsonb(definition.version),
             true
           ) AS combined_result,
+          NULL::timestamptz AS writing_submitted_at,
           legacy.created_at
         FROM assessment.mini_test_result AS legacy
         WHERE legacy.test_slug = definition.slug
@@ -971,8 +1029,119 @@ SELECT
       ORDER BY candidate.completed_at DESC NULLS LAST, candidate.created_at DESC
       LIMIT 1
     ) AS attempt ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        (SELECT final.status
+         FROM assessment.term_test_writing_grading_final AS final
+         WHERE final.attempt_id = attempt.id) AS final_status,
+        (SELECT final.task_1_score
+         FROM assessment.term_test_writing_grading_final AS final
+         WHERE final.attempt_id = attempt.id) AS task_1_score,
+        (SELECT final.task_2_score
+         FROM assessment.term_test_writing_grading_final AS final
+         WHERE final.attempt_id = attempt.id) AS task_2_score,
+        (SELECT final.writing_score
+         FROM assessment.term_test_writing_grading_final AS final
+         WHERE final.attempt_id = attempt.id) AS writing_score,
+        (SELECT run.status
+         FROM assessment.term_test_writing_grading_run AS run
+         WHERE run.attempt_id = attempt.id AND run.task_number = 1
+         ORDER BY run.grading_version DESC
+         LIMIT 1) AS task_1_status,
+        (SELECT run.status
+         FROM assessment.term_test_writing_grading_run AS run
+         WHERE run.attempt_id = attempt.id AND run.task_number = 2
+         ORDER BY run.grading_version DESC
+         LIMIT 1) AS task_2_status,
+        (SELECT max(run.updated_at)
+         FROM assessment.term_test_writing_grading_run AS run
+         WHERE run.attempt_id = attempt.id) AS updated_at
+    ) AS grading ON true
   ), '[]'::jsonb) AS students
 FROM definition;`;
+
+// Chỉ tải một bài chấm Writing khi giáo viên đã mở đúng học viên và đúng Task.
+// Query giữ nguyên cổng phân quyền lớp của dashboard, không trả attempt token hoặc bài viết thô.
+export const fetchTermTestTeacherWritingDetailSql = `WITH definition AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE slug = $2
+    AND is_active = true
+),
+target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+authorized_classes AS (
+  SELECT target.*
+  FROM target_classes AS target
+  WHERE $4::boolean
+    OR EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $3
+        AND access.erp_course_class_id = target.erp_course_class_id
+    )
+),
+latest_attempt AS (
+  SELECT attempt.*
+  FROM assessment.term_test_attempt AS attempt
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = attempt.erp_course_class_id
+  WHERE attempt.test_slug = $2
+    AND (
+      EXISTS (
+        SELECT 1
+        FROM assessment.term_test_roster AS roster
+        WHERE roster.test_slug = attempt.test_slug
+          AND roster.erp_course_class_id = attempt.erp_course_class_id
+          AND roster.erp_student_contact_id = attempt.erp_student_contact_id
+          AND roster.student_ref = $5::uuid
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM mapping.student_mapping_review AS review
+        WHERE review.erp_course_class_id = attempt.erp_course_class_id
+          AND review.erp_student_contact_id = attempt.erp_student_contact_id
+          AND review.public_id = $5::uuid
+          AND review.status <> 'superseded'
+      )
+    )
+  ORDER BY attempt.completed_at DESC NULLS LAST, attempt.created_at DESC
+  LIMIT 1
+),
+detail AS (
+  SELECT
+    attempt.student_name_snapshot AS student_name,
+    jsonb_build_object(
+      'taskNumber', run.task_number,
+      'taskScore', run.task_score,
+      'wordCount', run.word_count,
+      'prompt', run.prompt_text,
+      'promptImage', run.prompt_image_url,
+      'criteria', coalesce(run.result_json->'criteria', '[]'::jsonb),
+      'report', coalesce(run.result_json->>'report', ''),
+      'completedAt', run.completed_at
+    ) AS writing_detail
+  FROM latest_attempt AS attempt
+  JOIN assessment.term_test_writing_grading_final AS final
+    ON final.attempt_id = attempt.id
+   AND final.status = 'ready'
+  JOIN assessment.term_test_writing_grading_run AS run
+    ON run.id = CASE WHEN $6::smallint = 1 THEN final.task_1_run_id ELSE final.task_2_run_id END
+   AND run.task_number = $6::smallint
+   AND run.status = 'complete'
+  WHERE attempt.writing_submitted_at IS NOT NULL
+)
+SELECT
+  definition.slug AS test_slug,
+  (SELECT count(*)::int FROM target_classes) AS class_count,
+  (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
+  detail.student_name,
+  detail.writing_detail
+FROM definition
+LEFT JOIN detail ON true;`;
 
 // Mini Test dùng danh sách ERP lịch sử để vẫn nhận diện được học viên đã chuyển/nghỉ sau buổi kiểm tra.
 export const findStudentForMiniTestSql = `SELECT

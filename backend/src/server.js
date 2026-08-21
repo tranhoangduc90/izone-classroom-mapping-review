@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { createDatabasePool } from './db.js';
 import { createErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
+import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
@@ -14,7 +15,16 @@ const termTestAssetService = config.termTestAssetDir
       sessionSecret: config.termTestSessionSecret
     })
   : null;
-const app = createApp({ config, pool, syncErpGrades, termTestAssetService });
+const termTestWritingGradingService = config.writingTestSyncSecret
+  ? createTermTestWritingGradingService({ pool, syncErpGrades })
+  : null;
+const app = createApp({
+  config,
+  pool,
+  syncErpGrades,
+  termTestAssetService,
+  termTestWritingGradingService
+});
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Mapping review API đang lắng nghe tại cổng ${config.port}.`);

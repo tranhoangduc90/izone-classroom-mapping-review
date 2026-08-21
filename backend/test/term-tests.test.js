@@ -48,7 +48,7 @@ function miniAnswers(numbers) {
   return Object.fromEntries(numbers.map(number => [String(number), `mini-${number}`]));
 }
 
-function makeConfig() {
+function makeConfig(overrides = {}) {
   return {
     nodeEnv: 'test',
     port: 8788,
@@ -58,7 +58,8 @@ function makeConfig() {
     googleClientId: '',
     legacyReviewToken: 'a-valid-test-token',
     allowedOrigins: new Set(['https://tranhoangduc90.github.io']),
-    trustProxyHops: 0
+    trustProxyHops: 0,
+    ...overrides
   };
 }
 
@@ -207,6 +208,50 @@ test('dashboard giảng viên bắt buộc xác thực và truyền đúng phạ
   assert.equal(JSON.stringify(response.body).includes('attemptToken'), false);
 });
 
+test('giảng viên chỉ tải bài chấm Writing chi tiết sau khi qua phân quyền lớp', async () => {
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      class_count: 1,
+      authorized_class_count: 1,
+      student_name: 'Học viên A',
+      writing_detail: {
+        taskNumber: 1,
+        taskScore: 6.5,
+        wordCount: 178,
+        prompt: 'The chart below shows...',
+        promptImage: 'data:image/png;base64,iVBORw0KGgo=',
+        criteria: [{ code: 'TA', bandScore: 6.5, feedback: 'Nhận xét', components: [] }],
+        report: ''
+      }
+    }]
+  }));
+  const app = createApp({ config: makeConfig(), pool });
+  const path = '/api/term-tests/teacher/writing-detail?class=IC2172&test=term-test-2&student=00000000-0000-4000-8000-000000000001&task=1';
+
+  const unauthorized = await request(app).get(path);
+  assert.equal(unauthorized.status, 401);
+  assert.equal(pool.calls.length, 0);
+
+  const response = await request(app)
+    .get(path)
+    .set('x-review-token', 'a-valid-test-token');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.studentName, 'Học viên A');
+  assert.equal(response.body.writing.taskScore, 6.5);
+  assert.equal(response.body.writing.criteria[0].code, 'TA');
+  assert.deepEqual(pool.calls[0].params, [
+    'IC2172',
+    'term-test-2',
+    'legacy@mapping.local',
+    true,
+    '00000000-0000-4000-8000-000000000001',
+    1
+  ]);
+  assert.equal(JSON.stringify(response.body).includes('attemptToken'), false);
+  assert.equal(JSON.stringify(response.body).includes('essay'), false);
+});
+
 test('nộp Listening trả ngay điểm, phân tích và chỉ đồng bộ Band Listening', async () => {
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const syncPayloads = [];
@@ -254,6 +299,49 @@ test('nộp Listening trả ngay điểm, phân tích và chỉ đồng bộ Ban
   assert.equal(response.body.result.typeStats.length >= 2, true);
   assert.deepEqual(syncPayloads[0].grades, { listening: 9 });
   assert.equal(pool.calls.length, 2);
+});
+
+test('worker nhận URL ảnh Task 1 có chữ ký và URL giả không đọc được ảnh', async () => {
+  const jobId = '00000000-0000-4000-8000-000000000288';
+  const imageDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+  let imageReads = 0;
+  const gradingService = {
+    claimJobs: async () => [{
+      jobId,
+      jobType: 'dispatch',
+      taskNumber: 1,
+      imageUrl: imageDataUrl
+    }],
+    getJobImage: async receivedJobId => {
+      imageReads += 1;
+      return receivedJobId === jobId ? imageDataUrl : null;
+    }
+  };
+  const app = createApp({
+    config: makeConfig({
+      writingTestSyncSecret: 'w'.repeat(32),
+      termTestPublicApiBaseUrl: 'https://example.test'
+    }),
+    pool: makePool(async () => ({ rowCount: 1, rows: [{ '?column?': 1 }] })),
+    termTestWritingGradingService: gradingService
+  });
+  const claimed = await request(app)
+    .post('/api/term-tests/writing-grading/jobs/claim')
+    .set('x-writing-test-sync', 'w'.repeat(32))
+    .send({ workerId: 'test-image-worker', limit: 1 });
+  assert.equal(claimed.status, 200);
+  assert.equal(claimed.body.jobs[0].imageUrl.startsWith('https://example.test/api/term-tests/writing-grading/assets/'), true);
+
+  const signedUrl = new URL(claimed.body.jobs[0].imageUrl);
+  const fetched = await request(app).get(`${signedUrl.pathname}${signedUrl.search}`);
+  assert.equal(fetched.status, 200);
+  assert.match(fetched.headers['content-type'], /^image\/png/);
+  assert.equal(imageReads, 1);
+
+  signedUrl.searchParams.set('token', '0'.repeat(64));
+  const rejected = await request(app).get(`${signedUrl.pathname}${signedUrl.search}`);
+  assert.equal(rejected.status, 403);
+  assert.equal(imageReads, 1);
 });
 
 test('gửi lại cùng mã chỉ dùng kết quả Listening đã lưu, không dùng gói đáp án mới', async () => {
@@ -491,7 +579,8 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
     serverNow: null,
     timedOut: false,
     updatedAt: submittedAt,
-    submittedAt
+    submittedAt,
+    grading: null
   });
   assert.deepEqual(pool.calls[0].params, [attemptToken, task1, task2, 'submit']);
 
@@ -527,7 +616,8 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   const deadlineAt = '2026-08-19T04:32:44.000Z';
   const pool = makePool(async (_sql, _params, callNumber) => {
     if (callNumber === 1) return { rowCount: 1, rows: [storedTestRow()] };
-    if (callNumber === 2) {
+    if (callNumber === 2) return { rowCount: 0, rows: [] };
+    if (callNumber === 3) {
       return { rowCount: 1, rows: [{ exam_session_token: examSessionToken }] };
     }
     return {
@@ -561,7 +651,7 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   assert.equal(prepared.body.content, undefined);
   assert.equal(prepared.body.audioKey, undefined);
   assert.match(prepared.body.encryptedAudioUrl, /\/audio$/);
-  assert.equal(pool.calls[1].params[6], 0);
+  assert.equal(pool.calls[2].params[6], 0);
 
   const started = await request(app)
     .post('/api/term-tests/term-test-2/session/start')
@@ -571,7 +661,7 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   assert.equal(started.body.content.protected, true);
   assert.equal(typeof started.body.audioKey, 'string');
   assert.equal(started.body.listeningDeadlineAt, deadlineAt);
-  assert.equal(pool.calls[2].params[2], 1964);
+  assert.equal(pool.calls[3].params[2], 1964);
 });
 
 test('lượt cũ đã nộp Listening mở lại nội dung mà không khởi động phiên Listening mới', async () => {
@@ -617,6 +707,51 @@ test('lượt cũ đã nộp Listening mở lại nội dung mà không khởi �
   assert.equal(response.body.content.protected, true);
   assert.equal(response.body.audioKey, undefined);
   assert.equal(pool.calls.length, 2);
+});
+
+test('chọn lại tên trên máy khác tự nối lượt đã nộp Listening gần nhất', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const pool = makePool(async (_sql, _params, callNumber) => {
+    if (callNumber === 1) return { rowCount: 1, rows: [storedTestRow({ test_slug: 'term-test-2' })] };
+    if (callNumber === 2) {
+      return {
+        rowCount: 1,
+        rows: [{
+          attempt_token: attemptToken,
+          exam_session_token: '00000000-0000-4000-8000-000000000088',
+          student_name: 'Học viên thử nghiệm',
+          listening_submitted_at: '2026-08-19T04:00:00.000Z',
+          reading_started_at: '2026-08-19T04:01:00.000Z',
+          reading_deadline_at: '2026-08-19T05:01:00.000Z',
+          completed_at: '2026-08-19T05:00:00.000Z',
+          writing_started_at: '2026-08-19T05:02:00.000Z',
+          writing_deadline_at: '2026-08-19T06:02:00.000Z',
+          writing_submitted_at: '2026-08-19T06:00:00.000Z',
+          listening_started_at: '2026-08-19T03:27:16.000Z',
+          listening_deadline_at: '2026-08-19T04:00:00.000Z',
+          server_now: '2026-08-19T06:05:00.000Z'
+        }]
+      };
+    }
+    throw new Error('Không được tạo phiên Listening mới khi đã có lượt thi.');
+  });
+  const termTestAssetService = {
+    getTiming: () => ({ listeningDurationSeconds: 1844, listeningReviewSeconds: 120, listeningTotalSeconds: 1964 })
+  };
+  const app = createApp({ config: makeConfig(), pool, termTestAssetService });
+  const response = await request(app)
+    .post('/api/term-tests/term-test-2/session/prepare')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      classCode: 'IC2139',
+      studentRef: '00000000-0000-4000-8000-000000000001'
+    });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.attemptToken, attemptToken);
+  assert.equal(response.body.listeningSubmitted, true);
+  assert.equal(response.body.encryptedAudioUrl, undefined);
+  assert.equal(pool.calls.length, 2);
+  assert.deepEqual(pool.calls[1].params, ['term-test-2', 1, '2139', '9001']);
 });
 
 test('Mini Test trả kết quả nhưng không ghi nhầm điểm vào Portal Term Test', async () => {
