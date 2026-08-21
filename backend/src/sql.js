@@ -827,6 +827,23 @@ JOIN assessment.test_definition AS definition
 WHERE attempt.id = $1::uuid
   AND attempt.listening_submitted_at IS NOT NULL;`;
 
+// Chỉ trả dữ liệu cần để dựng lại bài thi sau khi học viên đã nộp đủ ba kỹ năng.
+// Nội dung đề được ghép ở tầng API; query này không đọc hay trả đáp án chuẩn.
+export const fetchTermTestAttemptReviewSql = `SELECT
+  attempt.id::text AS attempt_token,
+  attempt.test_slug,
+  attempt.student_name_snapshot AS student_name,
+  attempt.listening_answers,
+  attempt.reading_answers,
+  attempt.writing_task_1,
+  attempt.writing_task_2,
+  attempt.completed_at,
+  attempt.writing_submitted_at
+FROM assessment.term_test_attempt AS attempt
+WHERE attempt.id = $1::uuid
+  AND attempt.completed_at IS NOT NULL
+  AND attempt.writing_submitted_at IS NOT NULL;`;
+
 // Danh sách lớp và bài test chỉ gồm phạm vi mà giảng viên đã được cấp quyền.
 export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
   SELECT
@@ -1142,6 +1159,73 @@ SELECT
   detail.writing_detail
 FROM definition
 LEFT JOIN detail ON true;`;
+
+// Giảng viên chỉ tải toàn bộ bài làm sau khi bấm xem và sau khi qua cổng phân quyền lớp.
+// Kết quả không chứa đáp án chuẩn; nội dung đề được ghép ở tầng API từ kho tài nguyên riêng.
+export const fetchTermTestTeacherAttemptReviewSql = `WITH definition AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE slug = $2
+    AND is_active = true
+),
+target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+authorized_classes AS (
+  SELECT target.*
+  FROM target_classes AS target
+  WHERE $4::boolean
+    OR EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $3
+        AND access.erp_course_class_id = target.erp_course_class_id
+    )
+),
+latest_attempt AS (
+  SELECT attempt.*
+  FROM assessment.term_test_attempt AS attempt
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = attempt.erp_course_class_id
+  WHERE attempt.test_slug = $2
+    AND attempt.completed_at IS NOT NULL
+    AND attempt.writing_submitted_at IS NOT NULL
+    AND (
+      EXISTS (
+        SELECT 1
+        FROM assessment.term_test_roster AS roster
+        WHERE roster.test_slug = attempt.test_slug
+          AND roster.erp_course_class_id = attempt.erp_course_class_id
+          AND roster.erp_student_contact_id = attempt.erp_student_contact_id
+          AND roster.student_ref = $5::uuid
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM mapping.student_mapping_review AS review
+        WHERE review.erp_course_class_id = attempt.erp_course_class_id
+          AND review.erp_student_contact_id = attempt.erp_student_contact_id
+          AND review.public_id = $5::uuid
+          AND review.status <> 'superseded'
+      )
+    )
+  ORDER BY attempt.completed_at DESC NULLS LAST, attempt.created_at DESC
+  LIMIT 1
+)
+SELECT
+  definition.slug AS test_slug,
+  (SELECT count(*)::int FROM target_classes) AS class_count,
+  (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
+  attempt.student_name_snapshot AS student_name,
+  attempt.listening_answers,
+  attempt.reading_answers,
+  attempt.writing_task_1,
+  attempt.writing_task_2,
+  attempt.completed_at,
+  attempt.writing_submitted_at
+FROM definition
+LEFT JOIN latest_attempt AS attempt ON true;`;
 
 // Mini Test dùng danh sách ERP lịch sử để vẫn nhận diện được học viên đã chuyển/nghỉ sau buổi kiểm tra.
 export const findStudentForMiniTestSql = `SELECT

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { createAuthMiddleware } from './auth.js';
 import {
   completeReadingAttemptSql,
+  fetchTermTestAttemptReviewSql,
   fetchTermTestResultSql,
   findTermTestExamSessionAssetSql,
   findTermTestListeningSubmissionSql,
@@ -19,6 +20,7 @@ import {
   listReviewsSql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
+  fetchTermTestTeacherAttemptReviewSql,
   fetchTermTestTeacherWritingDetailSql,
   listTermTestRosterSql,
   resumeTermTestExamSessionSql,
@@ -155,6 +157,9 @@ const teacherResultsQuerySchema = z.object({
 const teacherWritingDetailQuerySchema = teacherResultsQuerySchema.extend({
   student: z.string().uuid(),
   task: z.coerce.number().int().min(1).max(2)
+});
+const teacherAttemptReviewQuerySchema = teacherResultsQuerySchema.extend({
+  student: z.string().uuid()
 });
 const miniTestTypeStatSchema = z.object({
   type: z.string().trim().min(1).max(160),
@@ -359,6 +364,56 @@ export function createApp({
       task2: row.writing_task_2,
       taskDefinitions: content?.writing?.tasks || []
     });
+  }
+
+  // Dữ liệu vào: lượt thi đã nộp đủ và nội dung đề trong kho tài nguyên riêng.
+  // Việc chính: chỉ ghép nội dung học viên từng thấy với câu trả lời đã lưu, tuyệt đối không ghép đáp án chuẩn.
+  // Kết quả: giao diện học viên/giảng viên có thể dựng lại bài thi ở chế độ chỉ đọc sau khi người dùng bấm xem.
+  // Khi thiếu dữ liệu: route gọi hàm này sẽ trả lỗi rõ, không trả một bài làm dở dang.
+  function serializeAttemptReview(row, content) {
+    const listeningSections = Array.from(content?.listening?.sections || []).map(section => ({
+      label: String(section?.label || ''),
+      range: String(section?.range || ''),
+      html: String(section?.html || '')
+    }));
+    const readingSections = Array.from(content?.reading?.sections || []).map(section => ({
+      label: String(section?.label || ''),
+      range: String(section?.range || ''),
+      title: String(section?.title || ''),
+      passageHtml: String(section?.passageHtml || ''),
+      questionsHtml: String(section?.questionsHtml || '')
+    }));
+    const writingTasks = Array.from(content?.writing?.tasks || []).map(task => ({
+      id: String(task?.id || ''),
+      label: String(task?.label || ''),
+      recommendedMinutes: Number(task?.recommendedMinutes) || null,
+      minimumWords: Number(task?.minimumWords) || null,
+      prompt: String(task?.prompt || ''),
+      followUp: String(task?.followUp || ''),
+      image: task?.image && typeof task.image === 'object'
+        ? { src: String(task.image.src || ''), alt: String(task.image.alt || '') }
+        : null
+    }));
+    return {
+      testSlug: String(row.test_slug || ''),
+      testTitle: String(content?.title || ''),
+      studentName: String(row.student_name || ''),
+      completedAt: row.completed_at || null,
+      writingSubmittedAt: row.writing_submitted_at || null,
+      content: {
+        listening: { sections: listeningSections },
+        reading: { sections: readingSections },
+        writing: { tasks: writingTasks }
+      },
+      answers: {
+        listening: row.listening_answers || {},
+        reading: row.reading_answers || {},
+        writing: {
+          task1: String(row.writing_task_1 || ''),
+          task2: String(row.writing_task_2 || '')
+        }
+      }
+    };
   }
   app.get('/version', (_req, res) => res.json({ ok: true, build }));
   app.get('/ready', asyncRoute(async (_req, res) => {
@@ -889,6 +944,25 @@ export function createApp({
     });
   }));
 
+  app.post('/api/term-tests/result/review', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const parsed = resultRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
+    }
+    const result = await pool.query(fetchTermTestAttemptReviewSql, [parsed.data.attemptToken]);
+    if (result.rowCount !== 1) {
+      return res.status(404).json({
+        ok: false,
+        error: 'ATTEMPT_REVIEW_NOT_READY',
+        message: 'Chỉ có thể xem lại toàn bộ bài sau khi đã nộp đủ Listening, Reading và Writing.'
+      });
+    }
+    const row = result.rows[0];
+    const content = await termTestAssetService.getContent(row.test_slug);
+    return res.json({ ok: true, review: serializeAttemptReview(row, content) });
+  }));
+
   const authenticate = createAuthMiddleware({ config, pool, verifyGoogleToken });
   app.get('/api/auth/me', authenticate, (req, res) => {
     res.json({ ok: true, reviewer: req.reviewer });
@@ -1141,6 +1215,40 @@ export function createApp({
       studentName: row.student_name,
       writing: row.writing_detail
     });
+  }));
+
+  app.get('/api/term-tests/teacher/attempt-review', testReadLimiter, authenticate, asyncRoute(async (req, res) => {
+    if (!requireTermTestAssets(res)) return;
+    const parsed = teacherAttemptReviewQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Yêu cầu xem lại bài làm không hợp lệ.' });
+    }
+    const result = await pool.query(fetchTermTestTeacherAttemptReviewSql, [
+      parsed.data.class,
+      parsed.data.test,
+      req.reviewer.email,
+      req.reviewer.canAccessAllClasses,
+      parsed.data.student
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Bài test chưa được mở.' });
+    }
+    if (Number(row.class_count) !== 1) {
+      return res.status(404).json({ ok: false, error: 'CLASS_NOT_FOUND', message: 'Không tìm thấy duy nhất một lớp phù hợp.' });
+    }
+    if (Number(row.authorized_class_count) !== 1) {
+      return res.status(403).json({ ok: false, error: 'ACCESS_DENIED', message: 'Tài khoản Google này chưa được cấp quyền cho lớp.' });
+    }
+    if (!row.student_name) {
+      return res.status(404).json({
+        ok: false,
+        error: 'ATTEMPT_REVIEW_NOT_READY',
+        message: 'Học viên chưa nộp đủ ba kỹ năng để xem lại toàn bộ bài.'
+      });
+    }
+    const content = await termTestAssetService.getContent(row.test_slug);
+    return res.json({ ok: true, review: serializeAttemptReview(row, content) });
   }));
 
   app.get('/api/mapping/reviews', authenticate, asyncRoute(async (req, res) => {

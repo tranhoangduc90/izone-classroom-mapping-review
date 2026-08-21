@@ -252,6 +252,89 @@ test('giảng viên chỉ tải bài chấm Writing chi tiết sau khi qua phân
   assert.equal(JSON.stringify(response.body).includes('essay'), false);
 });
 
+test('học viên chỉ tải toàn bộ bài làm sau khi đã nộp đủ và API không trả đáp án chuẩn', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      attempt_token: attemptToken,
+      test_slug: 'term-test-2',
+      student_name: 'Học viên A',
+      listening_answers: { 1: 'hotel' },
+      reading_answers: { 1: 'oval' },
+      writing_task_1: 'Bài Task 1',
+      writing_task_2: 'Bài Task 2',
+      completed_at: '2026-08-21T01:00:00.000Z',
+      writing_submitted_at: '2026-08-21T02:00:00.000Z'
+    }]
+  }));
+  const termTestAssetService = {
+    getContent: async () => ({
+      title: 'Term Test 2',
+      listening: { sections: [{ label: 'Part 1', range: 'Questions 1–10', html: '<p data-answer-slot="1"></p>' }] },
+      reading: { sections: [{ label: 'Passage 1', range: 'Questions 1–13', title: 'Nutmeg', passageHtml: '<p>Passage</p>', questionsHtml: '<p data-answer-slot="1"></p>' }] },
+      writing: { tasks: [{ id: 'task1', label: 'Task 1', prompt: 'Prompt', followUp: '', image: null }] },
+      answerKey: { listening: { 1: 'secret' } }
+    })
+  };
+  const app = createApp({ config: makeConfig(), pool, termTestAssetService });
+  const response = await request(app)
+    .post('/api/term-tests/result/review')
+    .send({ attemptToken });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.review.studentName, 'Học viên A');
+  assert.equal(response.body.review.answers.writing.task2, 'Bài Task 2');
+  assert.equal(response.body.review.content.reading.sections[0].title, 'Nutmeg');
+  assert.equal(JSON.stringify(response.body).includes('secret'), false);
+  assert.equal(JSON.stringify(response.body).includes('correctAnswer'), false);
+  assert.deepEqual(pool.calls[0].params, [attemptToken]);
+});
+
+test('giảng viên chỉ tải toàn bộ bài làm sau khi qua phân quyền lớp', async () => {
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      test_slug: 'term-test-2',
+      class_count: 1,
+      authorized_class_count: 1,
+      student_name: 'Học viên A',
+      listening_answers: { 1: 'hotel' },
+      reading_answers: { 1: 'oval' },
+      writing_task_1: 'Bài Task 1',
+      writing_task_2: 'Bài Task 2',
+      completed_at: '2026-08-21T01:00:00.000Z',
+      writing_submitted_at: '2026-08-21T02:00:00.000Z'
+    }]
+  }));
+  const termTestAssetService = {
+    getContent: async () => ({
+      title: 'Term Test 2',
+      listening: { sections: [] },
+      reading: { sections: [] },
+      writing: { tasks: [] }
+    })
+  };
+  const app = createApp({ config: makeConfig(), pool, termTestAssetService });
+  const path = '/api/term-tests/teacher/attempt-review?class=IC2172&test=term-test-2&student=00000000-0000-4000-8000-000000000001';
+
+  const unauthorized = await request(app).get(path);
+  assert.equal(unauthorized.status, 401);
+  assert.equal(pool.calls.length, 0);
+
+  const response = await request(app)
+    .get(path)
+    .set('x-review-token', 'a-valid-test-token');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.review.answers.listening['1'], 'hotel');
+  assert.deepEqual(pool.calls[0].params, [
+    'IC2172',
+    'term-test-2',
+    'legacy@mapping.local',
+    true,
+    '00000000-0000-4000-8000-000000000001'
+  ]);
+});
+
 test('nộp Listening trả ngay điểm, phân tích và chỉ đồng bộ Band Listening', async () => {
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const syncPayloads = [];

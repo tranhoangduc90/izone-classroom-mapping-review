@@ -4,7 +4,9 @@ import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import {
   completeReadingAttemptSql,
+  fetchTermTestAttemptReviewSql,
   fetchTermTestResultSql,
+  fetchTermTestTeacherAttemptReviewSql,
   findLatestTermTestAttemptForStudentSql,
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
@@ -294,6 +296,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(result.rows[0].writing_task_1, 'Bài nộp Task 1');
   assert.equal(Boolean(result.rows[0].writing_submitted_at), true);
 
+  const studentReview = await database.query(fetchTermTestAttemptReviewSql, [attemptToken]);
+  assert.equal(studentReview.rows.length, 1);
+  assert.equal(studentReview.rows[0].listening_answers['1'], 'answer-1');
+  assert.equal(studentReview.rows[0].reading_answers['40'], 'answer-40');
+  assert.equal(studentReview.rows[0].writing_task_2, 'Bài nộp Task 2');
+
   const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
   assert.equal(teacherOptions.rows[0].response.classes.length, 1);
   assert.equal(teacherOptions.rows[0].response.classes[0].name, 'IC2139');
@@ -317,6 +325,17 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').writing.status,
     'not_submitted'
   );
+
+  const teacherReview = await database.query(fetchTermTestTeacherAttemptReviewSql, [
+    'IC2139',
+    'term-test-1',
+    'teacher@gmail.com',
+    false,
+    '00000000-0000-4000-8000-000000000001'
+  ]);
+  assert.equal(teacherReview.rows[0].authorized_class_count, 1);
+  assert.equal(teacherReview.rows[0].student_name, 'Học viên thử nghiệm');
+  assert.equal(teacherReview.rows[0].writing_task_1, 'Bài nộp Task 1');
 
   const miniTeacherResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
