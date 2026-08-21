@@ -23,6 +23,7 @@ import {
   fetchTermTestTeacherAttemptReviewSql,
   fetchTermTestTeacherWritingDetailSql,
   listTermTestRosterSql,
+  resetDemoTermTestStudentSql,
   resumeTermTestExamSessionSql,
   resumeTermTestAttemptContentSql,
   saveReadingDraftSql,
@@ -82,6 +83,12 @@ const readingSubmissionSchema = z.object({
   answers: answersSchema
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
+const demoResetSchema = z.object({
+  classCode: z.literal('CODEXDEMO806'),
+  testSlug: z.literal('term-test-2'),
+  studentRef: z.string().uuid(),
+  confirmation: z.literal('RESET_DEMO_STUDENT')
+});
 const examSessionPrepareSchema = z.object({
   classCode: classCodeSchema,
   studentRef: z.string().uuid(),
@@ -459,6 +466,37 @@ export function createApp({
       test: { slug: row.test_slug, title: row.test_title, version: Number(row.definition_version) },
       class: { id: row.class_id, name: row.class_name },
       students: row.students || []
+    });
+  }));
+
+  app.post('/api/term-tests/demo/reset', testWriteLimiter, asyncRoute(async (req, res) => {
+    const parsed = demoResetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_DEMO_RESET',
+        message: 'Chỉ được reset đúng học viên Term Test 2 của lớp demo.'
+      });
+    }
+    const reset = await pool.query(resetDemoTermTestStudentSql, [
+      parsed.data.classCode,
+      parsed.data.testSlug,
+      parsed.data.studentRef
+    ]);
+    const row = reset.rows[0];
+    if (!row) {
+      return res.status(404).json({
+        ok: false,
+        error: 'DEMO_STUDENT_NOT_FOUND',
+        message: 'Không tìm thấy học viên trong lớp demo.'
+      });
+    }
+    return res.json({
+      ok: true,
+      reset: {
+        attempts: Number(row.deleted_attempts) || 0,
+        sessions: Number(row.deleted_sessions) || 0
+      }
     });
   }));
 

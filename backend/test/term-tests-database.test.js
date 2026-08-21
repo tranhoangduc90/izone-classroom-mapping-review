@@ -17,6 +17,7 @@ import {
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
+  resetDemoTermTestStudentSql,
   saveReadingDraftSql,
   saveTermTestListeningDraftSql,
   saveTermTestWritingSql,
@@ -97,6 +98,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(examControlsMigration);
   await database.exec(examControlsMigration);
+  const demoResetMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-21-demo-term-test-reset.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(demoResetMigration);
+  await database.exec(demoResetMigration);
   const miniResultMigration = await readFile(
     new URL('../../docs/migrations/2026-08-09-mini-test-results.sql', import.meta.url),
     'utf8'
@@ -112,7 +119,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const section = makeSection();
   await database.exec(`
     INSERT INTO mapping.classroom_course_mapping (erp_course_class_id, erp_class_name_snapshot)
-    VALUES (2139, 'IC2139'), (9999, 'IC9999');
+    VALUES (2139, 'IC2139'), (9999, 'IC9999'), (-8062028, 'CODEXDEMO806');
     INSERT INTO mapping.student_mapping_review (
       public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot
     ) VALUES
@@ -135,6 +142,11 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
       slug, title, version, listening_definition, reading_definition, is_active
     ) VALUES ($1, $2, 1, $3::jsonb, $3::jsonb, true);
   `, ['term-test-1', 'Term Test 1', JSON.stringify(section)]);
+  await database.query(`
+    INSERT INTO assessment.test_definition (
+      slug, title, version, listening_definition, reading_definition, is_active
+    ) VALUES ($1, $2, 1, $3::jsonb, $3::jsonb, true);
+  `, ['term-test-2', 'Term Test 2', JSON.stringify(section)]);
   const miniListeningSection = {
     questions: Array.from({ length: 20 }, (_, index) => ({
       number: index + 11,
@@ -186,7 +198,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
       test_slug, erp_course_class_id, erp_student_contact_id, student_ref, student_name_snapshot
     ) VALUES
       ('term-test-1', 2139, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên trong roster riêng'),
-      ('term-test-1', 2139, 9003, '00000000-0000-4000-8000-000000000006', 'Học viên chưa làm');
+      ('term-test-1', 2139, 9003, '00000000-0000-4000-8000-000000000006', 'Học viên chưa làm'),
+      ('term-test-2', -8062028, -8062110, '00000000-0000-4000-8000-000000000010', 'Demo Học viên 10');
   `);
 
   // Từ đây chạy đúng bằng quyền của API production để bắt lỗi GRANT trước khi deploy.
@@ -305,7 +318,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
   assert.equal(teacherOptions.rows[0].response.classes.length, 1);
   assert.equal(teacherOptions.rows[0].response.classes[0].name, 'IC2139');
-  assert.equal(teacherOptions.rows[0].response.tests.length, 2);
+  assert.equal(teacherOptions.rows[0].response.tests.length, 3);
 
   const teacherResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
@@ -468,5 +481,48 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(lateWritingSubmit.rows[0].writing_task_2, 'Task 2 đúng hạn');
   assert.equal(lateWritingSubmit.rows[0].writing_timed_out, true);
   assert.equal(Boolean(lateWritingSubmit.rows[0].writing_submitted_at), true);
+
+  const demoSession = await database.query(insertTermTestExamSessionSql, [
+    'term-test-2', 1, -8062028, 'CODEXDEMO806', -8062110, 'Demo Học viên 10', 0
+  ]);
+  const demoSessionToken = demoSession.rows[0].exam_session_token;
+  await database.query(startTermTestListeningSessionSql, [demoSessionToken, 'term-test-2', 200]);
+  const demoAttempt = await database.query(insertProtectedListeningAttemptSql, [
+    '00000000-0000-4000-8000-000000000011',
+    demoSessionToken,
+    'term-test-2',
+    JSON.stringify(answers),
+    JSON.stringify(protectedListeningResult)
+  ]);
+  await database.query(`
+    INSERT INTO assessment.term_test_writing_grading_run (
+      attempt_id, task_number, run_key, prompt_text, essay_text
+    ) VALUES ($1::uuid, 1, 'demo-reset-run', 'Đề demo', 'Bài viết demo');
+  `, [demoAttempt.rows[0].attempt_token]);
+
+  const demoReset = await database.query(resetDemoTermTestStudentSql, [
+    'CODEXDEMO806',
+    'term-test-2',
+    '00000000-0000-4000-8000-000000000010'
+  ]);
+  assert.deepEqual(demoReset.rows[0], { deleted_attempts: 1, deleted_sessions: 1 });
+  assert.equal((await database.query(
+    `SELECT count(*)::int AS count FROM assessment.term_test_attempt
+     WHERE test_slug = 'term-test-2' AND erp_student_contact_id = -8062110`
+  )).rows[0].count, 0);
+  assert.equal((await database.query(
+    `SELECT count(*)::int AS count FROM assessment.term_test_exam_session
+     WHERE test_slug = 'term-test-2' AND erp_student_contact_id = -8062110`
+  )).rows[0].count, 0);
+  assert.equal((await database.query(
+    `SELECT count(*)::int AS count FROM assessment.term_test_writing_grading_run
+     WHERE run_key = 'demo-reset-run'`
+  )).rows[0].count, 0);
+  assert.deepEqual((await database.query(resetDemoTermTestStudentSql, [
+    'CODEXDEMO806',
+    'term-test-2',
+    '00000000-0000-4000-8000-000000000010'
+  ])).rows[0], { deleted_attempts: 0, deleted_sessions: 0 });
+
   await database.close();
 });

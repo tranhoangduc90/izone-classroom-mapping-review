@@ -153,6 +153,49 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
 });
 
+test('reset lớp demo gọi đúng hàm database và trả số bản ghi đã xóa', async () => {
+  const studentRef = '00000000-0000-4000-8000-000000000010';
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{ deleted_attempts: 2, deleted_sessions: 3 }]
+  }));
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/demo/reset')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      classCode: 'CODEXDEMO806',
+      testSlug: 'term-test-2',
+      studentRef,
+      confirmation: 'RESET_DEMO_STUDENT'
+    });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.reset, { attempts: 2, sessions: 3 });
+  assert.deepEqual(pool.calls[0].params, ['CODEXDEMO806', 'term-test-2', studentRef]);
+  assert.match(pool.calls[0].sql, /reset_demo_term_test_student/);
+});
+
+test('reset từ chối lớp thật trước khi chạm database', async () => {
+  const pool = makePool(async () => {
+    throw new Error('Không được gọi database');
+  });
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/demo/reset')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      classCode: 'IC2172',
+      testSlug: 'term-test-2',
+      studentRef: '00000000-0000-4000-8000-000000000010',
+      confirmation: 'RESET_DEMO_STUDENT'
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'INVALID_DEMO_RESET');
+  assert.equal(pool.calls.length, 0);
+});
+
 test('chấm đúng phần Mini Test có số câu và số thứ tự không bắt đầu từ 1', () => {
   const listeningNumbers = Array.from({ length: 20 }, (_, index) => index + 11);
   const readingNumbers = Array.from({ length: 13 }, (_, index) => index + 14);

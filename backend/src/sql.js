@@ -314,6 +314,10 @@ SELECT
   ), '[]'::jsonb) AS students
 FROM definition;`;
 
+// Chỉ gọi hàm bảo vệ trong database; hàm tự xác minh lại lớp, bài test và roster demo trước khi xóa.
+export const resetDemoTermTestStudentSql = `SELECT deleted_attempts, deleted_sessions
+FROM assessment.reset_demo_term_test_student($1, $2, $3::uuid);`;
+
 // Xác minh học viên thuộc roster riêng; nếu lớp chưa có roster riêng thì dùng matching database.
 export const findStudentForTermTestSql = `WITH target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
