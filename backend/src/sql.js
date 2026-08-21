@@ -1078,7 +1078,7 @@ SELECT
 FROM definition;`;
 
 // Chỉ tải một bài chấm Writing khi giáo viên đã mở đúng học viên và đúng Task.
-// Query giữ nguyên cổng phân quyền lớp của dashboard, không trả attempt token hoặc bài viết thô.
+// Query giữ nguyên cổng phân quyền lớp, không trả attempt token và chỉ trả bài viết của Task đang mở.
 export const fetchTermTestTeacherWritingDetailSql = `WITH definition AS (
   SELECT slug, title, version
   FROM assessment.test_definition
@@ -1135,6 +1135,10 @@ detail AS (
       'taskNumber', run.task_number,
       'taskScore', run.task_score,
       'wordCount', run.word_count,
+      'essay', coalesce(
+        CASE WHEN run.task_number = 1 THEN attempt.writing_task_1 ELSE attempt.writing_task_2 END,
+        ''
+      ),
       'prompt', run.prompt_text,
       'promptImage', run.prompt_image_url,
       'criteria', coalesce(run.result_json->'criteria', '[]'::jsonb),

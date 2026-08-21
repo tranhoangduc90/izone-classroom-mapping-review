@@ -219,6 +219,7 @@ test('giảng viên chỉ tải bài chấm Writing chi tiết sau khi qua phân
         taskNumber: 1,
         taskScore: 6.5,
         wordCount: 178,
+        essay: 'Bài viết Task 1 của học viên.',
         prompt: 'The chart below shows...',
         promptImage: 'data:image/png;base64,iVBORw0KGgo=',
         criteria: [{ code: 'TA', bandScore: 6.5, feedback: 'Nhận xét', components: [] }],
@@ -239,6 +240,7 @@ test('giảng viên chỉ tải bài chấm Writing chi tiết sau khi qua phân
   assert.equal(response.status, 200);
   assert.equal(response.body.studentName, 'Học viên A');
   assert.equal(response.body.writing.taskScore, 6.5);
+  assert.equal(response.body.writing.essay, 'Bài viết Task 1 của học viên.');
   assert.equal(response.body.writing.criteria[0].code, 'TA');
   assert.deepEqual(pool.calls[0].params, [
     'IC2172',
@@ -248,8 +250,10 @@ test('giảng viên chỉ tải bài chấm Writing chi tiết sau khi qua phân
     '00000000-0000-4000-8000-000000000001',
     1
   ]);
+  assert.match(pool.calls[0].sql, /'essay', coalesce/);
+  assert.match(pool.calls[0].sql, /attempt\.writing_task_1/);
+  assert.match(pool.calls[0].sql, /attempt\.writing_task_2/);
   assert.equal(JSON.stringify(response.body).includes('attemptToken'), false);
-  assert.equal(JSON.stringify(response.body).includes('essay'), false);
 });
 
 test('học viên chỉ tải toàn bộ bài làm sau khi đã nộp đủ và API không trả đáp án chuẩn', async () => {
