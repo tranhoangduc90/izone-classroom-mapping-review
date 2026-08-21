@@ -580,6 +580,7 @@ resolved AS (
   FROM assessment.term_test_attempt AS existing
   WHERE existing.test_slug = $3
     AND existing.client_submission_id = $1::uuid
+    AND existing.exam_session_id = $2::uuid
     AND NOT EXISTS (SELECT 1 FROM inserted)
 ),
 linked AS (

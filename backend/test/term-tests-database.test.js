@@ -410,6 +410,28 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(protectedAttempt.rows[0].class_name, 'IC2139');
   assert.equal(protectedAttempt.rows[0].listening_result.correct, 40);
 
+  const conflictingSession = await database.query(insertTermTestExamSessionSql, [
+    'term-test-1', 1, 2139, 'IC2139', 9004, 'Học viên đổi tên thử nghiệm', 0
+  ]);
+  const conflictingSessionToken = conflictingSession.rows[0].exam_session_token;
+  await database.query(startTermTestListeningSessionSql, [conflictingSessionToken, 'term-test-1', 200]);
+  const conflictingAttempt = await database.query(insertProtectedListeningAttemptSql, [
+    '00000000-0000-4000-8000-000000000007',
+    conflictingSessionToken,
+    'term-test-1',
+    JSON.stringify(answers),
+    JSON.stringify(protectedListeningResult)
+  ]);
+  assert.equal(conflictingAttempt.rows.length, 0);
+  const unlinkedConflictSession = await database.query(
+    `SELECT attempt_id, listening_submitted_at
+     FROM assessment.term_test_exam_session
+     WHERE id = $1::uuid`,
+    [conflictingSessionToken]
+  );
+  assert.equal(unlinkedConflictSession.rows[0].attempt_id, null);
+  assert.equal(unlinkedConflictSession.rows[0].listening_submitted_at, null);
+
   const protectedAttemptToken = protectedAttempt.rows[0].attempt_token;
   await database.query(startReadingAttemptSql, [protectedAttemptToken, 'term-test-1']);
   assert.equal((await database.query(saveReadingDraftSql, [protectedAttemptToken, JSON.stringify(answers)])).rows.length, 1);

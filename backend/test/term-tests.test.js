@@ -751,6 +751,50 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   assert.equal(pool.calls[3].params[2], 1964);
 });
 
+test('mã gửi bài của phiên Listening khác trả xung đột có kiểm soát', async () => {
+  const examSessionToken = '00000000-0000-4000-8000-000000000088';
+  const pool = makePool(async (_sql, _params, callNumber) => {
+    if (callNumber === 1) {
+      return {
+        rowCount: 1,
+        rows: [{
+          listening_deadline_at: '2026-08-19T04:32:44.000Z',
+          listening_draft_updated_at: '2026-08-19T04:01:00.000Z',
+          server_now: '2026-08-19T04:01:00.000Z'
+        }]
+      };
+    }
+    if (callNumber === 2) {
+      return {
+        rowCount: 1,
+        rows: [{
+          ...storedTestRow({ test_slug: 'term-test-2' }),
+          slug: 'term-test-2',
+          version: 1,
+          exam_session_token: examSessionToken,
+          listening_timed_out: false,
+          listening_draft: {}
+        }]
+      };
+    }
+    return { rowCount: 0, rows: [] };
+  });
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/term-test-2/listening')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      classCode: 'IC2139',
+      studentRef: '00000000-0000-4000-8000-000000000001',
+      clientSubmissionId: '00000000-0000-4000-8000-000000000002',
+      examSessionToken,
+      answers: perfectAnswers()
+    });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'SUBMISSION_ID_CONFLICT');
+  assert.equal(pool.calls.length, 3);
+});
+
 test('lượt cũ đã nộp Listening mở lại nội dung mà không khởi động phiên Listening mới', async () => {
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const pool = makePool(async (_sql, _params, callNumber) => {
