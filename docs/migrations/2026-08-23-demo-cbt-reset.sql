@@ -1,5 +1,5 @@
 -- Dữ liệu nhận vào: mã lớp demo, mã bài thi CBT và UUID công khai của một học viên demo.
--- Việc chính: xác minh đúng roster CODEXDEMO806 rồi xóa phiên thi, bài làm và kết quả Mini cũ của riêng học viên đó.
+-- Việc chính: xác minh đúng danh sách CODEXDEMO806 rồi xóa phiên thi, bài làm và kết quả Mini cũ của riêng học viên đó.
 -- Kết quả: học viên vẫn còn trong danh sách lớp nhưng có thể bắt đầu lại đúng bài đã chọn.
 -- Khi lỗi: transaction rollback; lớp thật, bài ngoài danh sách và học viên ngoài roster demo không thể bị xóa.
 
@@ -19,6 +19,7 @@ DECLARE
   target_class_id BIGINT;
   target_student_id BIGINT;
   class_count INTEGER;
+  has_curated_roster BOOLEAN := false;
   deleted_term_attempts INTEGER := 0;
   deleted_mini_results INTEGER := 0;
 BEGIN
@@ -38,15 +39,32 @@ BEGIN
       USING ERRCODE = 'P0002';
   END IF;
 
-  SELECT roster.erp_student_contact_id
-  INTO target_student_id
-  FROM assessment.term_test_roster AS roster
-  WHERE roster.test_slug = trim(p_test_slug)
-    AND roster.erp_course_class_id = target_class_id
-    AND roster.student_ref = p_student_ref;
+  SELECT EXISTS (
+    SELECT 1
+    FROM assessment.term_test_roster AS roster
+    WHERE roster.test_slug = trim(p_test_slug)
+      AND roster.erp_course_class_id = target_class_id
+  )
+  INTO has_curated_roster;
+
+  IF has_curated_roster THEN
+    SELECT roster.erp_student_contact_id
+    INTO target_student_id
+    FROM assessment.term_test_roster AS roster
+    WHERE roster.test_slug = trim(p_test_slug)
+      AND roster.erp_course_class_id = target_class_id
+      AND roster.student_ref = p_student_ref;
+  ELSE
+    SELECT review.erp_student_contact_id
+    INTO target_student_id
+    FROM mapping.student_mapping_review AS review
+    WHERE review.erp_course_class_id = target_class_id
+      AND review.public_id = p_student_ref
+      AND review.status <> 'superseded';
+  END IF;
 
   IF target_student_id IS NULL THEN
-    RAISE EXCEPTION 'Học viên không thuộc roster của bài demo đã chọn.'
+    RAISE EXCEPTION 'Học viên không thuộc danh sách của bài demo đã chọn.'
       USING ERRCODE = 'P0002';
   END IF;
 
