@@ -692,7 +692,7 @@ WHERE attempt.id = $1::uuid
 export const startReadingAttemptSql = `UPDATE assessment.term_test_attempt
 SET
   reading_started_at = coalesce(reading_started_at, now()),
-  reading_deadline_at = coalesce(reading_deadline_at, now() + interval '60 minutes'),
+  reading_deadline_at = coalesce(reading_deadline_at, now() + make_interval(mins => $3::int)),
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
@@ -758,7 +758,7 @@ export const saveTermTestWritingSql = `WITH updated AS (
       ELSE writing_task_2
     END,
     writing_started_at = coalesce(writing_started_at, now()),
-    writing_deadline_at = coalesce(writing_deadline_at, now() + interval '60 minutes'),
+    writing_deadline_at = coalesce(writing_deadline_at, now() + make_interval(mins => $5::int)),
     writing_updated_at = now(),
     writing_submitted_at = CASE
       WHEN $4 = 'submit' THEN coalesce(writing_submitted_at, now())
@@ -794,6 +794,12 @@ SELECT
     ELSE now() > writing_deadline_at
   END AS writing_timed_out
 FROM resolved
+LIMIT 1;`;
+
+export const findTermTestAttemptSlugSql = `SELECT test_slug
+FROM assessment.term_test_attempt
+WHERE id = $1::uuid
+  AND completed_at IS NOT NULL
 LIMIT 1;`;
 
 export const fetchTermTestResultSql = `SELECT
@@ -847,7 +853,10 @@ export const fetchTermTestAttemptReviewSql = `SELECT
 FROM assessment.term_test_attempt AS attempt
 WHERE attempt.id = $1::uuid
   AND attempt.completed_at IS NOT NULL
-  AND attempt.writing_submitted_at IS NOT NULL;`;
+  AND (
+    attempt.test_slug = 'mini-test-lesson-5'
+    OR attempt.writing_submitted_at IS NOT NULL
+  );`;
 
 // Danh sách lớp và bài test chỉ gồm phạm vi mà giảng viên đã được cấp quyền.
 export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
@@ -1200,7 +1209,10 @@ latest_attempt AS (
     ON target.erp_course_class_id = attempt.erp_course_class_id
   WHERE attempt.test_slug = $2
     AND attempt.completed_at IS NOT NULL
-    AND attempt.writing_submitted_at IS NOT NULL
+    AND (
+      attempt.test_slug = 'mini-test-lesson-5'
+      OR attempt.writing_submitted_at IS NOT NULL
+    )
     AND (
       EXISTS (
         SELECT 1

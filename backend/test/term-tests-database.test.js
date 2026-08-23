@@ -37,6 +37,10 @@ function makeSection() {
   };
 }
 
+function range(start, end) {
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
 const mappingSchema = `
   CREATE ROLE mapping_review_api;
   CREATE SCHEMA mapping;
@@ -281,7 +285,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     attemptToken,
     'Bản nháp Task 1',
     'Bản nháp Task 2',
-    'draft'
+    'draft',
+    40
   ]);
   assert.equal(draft.rows[0].writing_task_1, 'Bản nháp Task 1');
   assert.equal(Boolean(draft.rows[0].writing_started_at), true);
@@ -291,7 +296,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     attemptToken,
     'Bài nộp Task 1',
     'Bài nộp Task 2',
-    'submit'
+    'submit',
+    40
   ]);
   assert.equal(Boolean(submittedWriting.rows[0].writing_submitted_at), true);
 
@@ -299,7 +305,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     attemptToken,
     'Không được ghi đè Task 1',
     'Không được ghi đè Task 2',
-    'submit'
+    'submit',
+    40
   ]);
   assert.equal(duplicateWriting.rows[0].writing_task_1, 'Bài nộp Task 1');
   assert.equal(duplicateWriting.rows[0].writing_task_2, 'Bài nộp Task 2');
@@ -364,6 +371,50 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     miniTeacherResults.rows[0].students.find(item => item.name === 'Học viên có kết quả cũ').status,
     'completed'
   );
+
+  const miniListeningAnswers = Object.fromEntries(range(11, 30).map(number => [String(number), `listen-${number}`]));
+  const miniReadingAnswers = Object.fromEntries(range(14, 26).map(number => [String(number), `read-${number}`]));
+  const miniListeningResult = gradeSection(miniListeningSection, miniListeningAnswers, 0);
+  const miniAttempt = await database.query(insertListeningAttemptSql, [
+    '00000000-0000-4000-8000-000000000012',
+    'mini-test-lesson-5',
+    1,
+    2139,
+    'IC2139',
+    9001,
+    'Học viên trong roster riêng',
+    JSON.stringify(miniListeningAnswers),
+    JSON.stringify(miniListeningResult)
+  ]);
+  const miniReadingResult = gradeSection(miniReadingSection, miniReadingAnswers, 0);
+  const miniCombinedResult = buildCombinedResult(
+    {
+      test_slug: 'mini-test-lesson-5',
+      title: 'Mini Test Buổi 5',
+      listening_definition: miniListeningSection,
+      reading_definition: miniReadingSection
+    },
+    miniListeningResult,
+    miniReadingResult
+  );
+  await database.query(completeReadingAttemptSql, [
+    miniAttempt.rows[0].attempt_token,
+    JSON.stringify(miniReadingAnswers),
+    JSON.stringify(miniReadingResult),
+    JSON.stringify(miniCombinedResult)
+  ]);
+  const miniStudentReview = await database.query(fetchTermTestAttemptReviewSql, [miniAttempt.rows[0].attempt_token]);
+  assert.equal(miniStudentReview.rows.length, 1);
+  assert.equal(miniStudentReview.rows[0].writing_submitted_at, null);
+  const miniTeacherReview = await database.query(fetchTermTestTeacherAttemptReviewSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'teacher@gmail.com',
+    false,
+    '00000000-0000-4000-8000-000000000001'
+  ]);
+  assert.equal(miniTeacherReview.rows[0].student_name, 'Học viên trong roster riêng');
+  assert.equal(miniTeacherReview.rows[0].writing_submitted_at, null);
 
   const deniedResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
@@ -446,7 +497,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(unlinkedConflictSession.rows[0].listening_submitted_at, null);
 
   const protectedAttemptToken = protectedAttempt.rows[0].attempt_token;
-  await database.query(startReadingAttemptSql, [protectedAttemptToken, 'term-test-1']);
+  await database.query(startReadingAttemptSql, [protectedAttemptToken, 'term-test-1', 60]);
   assert.equal((await database.query(saveReadingDraftSql, [protectedAttemptToken, JSON.stringify(answers)])).rows.length, 1);
   await database.query(
     `UPDATE assessment.term_test_attempt
@@ -467,7 +518,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(protectedCombined)
   ]);
   const protectedWritingDraft = await database.query(saveTermTestWritingSql, [
-    protectedAttemptToken, 'Task 1 đúng hạn', 'Task 2 đúng hạn', 'draft'
+    protectedAttemptToken, 'Task 1 đúng hạn', 'Task 2 đúng hạn', 'draft', 40
   ]);
   assert.equal(protectedWritingDraft.rows[0].writing_task_1, 'Task 1 đúng hạn');
   await database.query(
@@ -475,7 +526,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     [protectedAttemptToken]
   );
   const lateWritingSubmit = await database.query(saveTermTestWritingSql, [
-    protectedAttemptToken, 'Task 1 sửa muộn', 'Task 2 sửa muộn', 'submit'
+    protectedAttemptToken, 'Task 1 sửa muộn', 'Task 2 sửa muộn', 'submit', 40
   ]);
   assert.equal(lateWritingSubmit.rows[0].writing_task_1, 'Task 1 đúng hạn');
   assert.equal(lateWritingSubmit.rows[0].writing_task_2, 'Task 2 đúng hạn');

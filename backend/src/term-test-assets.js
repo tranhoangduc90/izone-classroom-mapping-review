@@ -5,12 +5,32 @@ import path from 'node:path';
 const AUDIO_MAGIC = Buffer.from('IZTT1', 'ascii');
 const SESSION_KEY_INFO = Buffer.from('izone-term-test-session-audio-v1', 'utf8');
 const ASSETS = Object.freeze({
+  'term-test-1': Object.freeze({
+    content: 'term-test-1/content.json',
+    audio: 'term-test-1/listening-audio.mp3',
+    preview: 'term-test-1/listening-preview-30s.mp3',
+    listeningDurationSeconds: 1735,
+    listeningReviewSeconds: 120,
+    readingDurationMinutes: 60,
+    writingDurationMinutes: 40
+  }),
   'term-test-2': Object.freeze({
     content: 'term-test-2/content.json',
     audio: 'term-test-2/listening-audio.mp3',
     preview: 'term-test-2/listening-preview-30s.mp3',
     listeningDurationSeconds: 1844,
-    listeningReviewSeconds: 120
+    listeningReviewSeconds: 120,
+    readingDurationMinutes: 60,
+    writingDurationMinutes: 60
+  }),
+  'mini-test-lesson-5': Object.freeze({
+    content: 'mini-test-lesson-5/content.json',
+    audio: 'mini-test-lesson-5/listening-audio.mp3',
+    preview: 'mini-test-lesson-5/listening-preview-30s.mp3',
+    listeningDurationSeconds: 972,
+    listeningReviewSeconds: 120,
+    readingDurationMinutes: 20,
+    writingDurationMinutes: 0
   })
 });
 
@@ -69,8 +89,14 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     return {
       listeningDurationSeconds: definition.listeningDurationSeconds,
       listeningReviewSeconds: definition.listeningReviewSeconds,
-      listeningTotalSeconds: definition.listeningDurationSeconds + definition.listeningReviewSeconds
+      listeningTotalSeconds: definition.listeningDurationSeconds + definition.listeningReviewSeconds,
+      readingDurationMinutes: definition.readingDurationMinutes,
+      writingDurationMinutes: definition.writingDurationMinutes
     };
+  }
+
+  function supports(testSlug) {
+    return Boolean(ASSETS[testSlug]);
   }
 
   function getSessionAudioKey(testSlug, sessionToken) {
@@ -111,7 +137,7 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     });
   }
 
-  return { getContent, getPreview, getTiming, getSessionAudioKey, streamEncryptedAudio };
+  return { supports, getContent, getPreview, getTiming, getSessionAudioKey, streamEncryptedAudio };
 }
 
 export const termTestAudioEnvelope = Object.freeze({

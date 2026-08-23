@@ -662,6 +662,9 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
   );
   const pool = makePool(async (_sql, params, callNumber) => {
     if (callNumber === 1) {
+      return { rowCount: 1, rows: [{ test_slug: 'term-test-2' }] };
+    }
+    if (callNumber === 2) {
       return {
         rowCount: 1,
         rows: [{
@@ -712,7 +715,8 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
     submittedAt,
     grading: null
   });
-  assert.deepEqual(pool.calls[0].params, [attemptToken, task1, task2, 'submit']);
+  assert.deepEqual(pool.calls[0].params, [attemptToken]);
+  assert.deepEqual(pool.calls[1].params, [attemptToken, task1, task2, 'submit', 60]);
 
   const result = await request(app)
     .post('/api/term-tests/result')

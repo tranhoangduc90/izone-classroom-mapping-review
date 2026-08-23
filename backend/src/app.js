@@ -12,6 +12,7 @@ import {
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
   findLatestTermTestAttemptForStudentSql,
+  findTermTestAttemptSlugSql,
   findStudentForTermTestSql,
   insertProtectedListeningAttemptSql,
   insertTermTestExamSessionSql,
@@ -85,7 +86,7 @@ const readingSubmissionSchema = z.object({
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
 const demoResetSchema = z.object({
   classCode: z.literal('CODEXDEMO806'),
-  testSlug: z.literal('term-test-2'),
+  testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5']),
   studentRef: z.string().uuid(),
   confirmation: z.literal('RESET_DEMO_STUDENT')
 });
@@ -93,7 +94,7 @@ const examSessionPrepareSchema = z.object({
   classCode: classCodeSchema,
   studentRef: z.string().uuid(),
   examSessionToken: z.string().uuid().optional(),
-  legacyElapsedSeconds: z.number().int().min(0).max(1844).optional().default(0)
+  legacyElapsedSeconds: z.number().int().min(0).max(7200).optional().default(0)
 });
 const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid() });
 const attemptResumeSchema = z.object({
@@ -510,11 +511,20 @@ export function createApp({
     return false;
   }
 
+  function supportsProtectedTest(testSlug) {
+    if (!termTestAssetService) return false;
+    if (typeof termTestAssetService.supports === 'function') {
+      return termTestAssetService.supports(testSlug);
+    }
+    // Giữ tương thích với các bộ giả lập cũ trong test; production luôn dùng supports().
+    return testSlug === 'term-test-2';
+  }
+
   app.post('/api/term-tests/:testSlug/session/prepare', testWriteLimiter, asyncRoute(async (req, res) => {
     if (!requireTermTestAssets(res)) return;
     const slug = testSlugSchema.safeParse(req.params.testSlug);
     const parsed = examSessionPrepareSchema.safeParse(req.body);
-    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+    if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu chuẩn bị bài thi không hợp lệ.' });
     }
     const studentResult = await pool.query(findStudentForTermTestSql, [
@@ -584,7 +594,7 @@ export function createApp({
   async function findAssetSession(req, res) {
     const slug = testSlugSchema.safeParse(req.params.testSlug);
     const token = z.string().uuid().safeParse(req.params.examSessionToken);
-    if (!slug.success || !token.success || slug.data !== 'term-test-2') {
+    if (!slug.success || !token.success || !supportsProtectedTest(slug.data)) {
       res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Phiên tải tài nguyên không hợp lệ.' });
       return null;
     }
@@ -621,7 +631,7 @@ export function createApp({
     if (!requireTermTestAssets(res)) return;
     const slug = testSlugSchema.safeParse(req.params.testSlug);
     const parsed = attemptResumeSchema.safeParse(req.body);
-    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+    if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
       return res.status(400).json({ ok: false, error: 'INVALID_ATTEMPT_RESUME', message: 'Yêu cầu mở lại lượt thi không hợp lệ.' });
     }
     const studentResult = await pool.query(findStudentForTermTestSql, [
@@ -668,7 +678,7 @@ export function createApp({
     if (!requireTermTestAssets(res)) return;
     const slug = testSlugSchema.safeParse(req.params.testSlug);
     const parsed = examSessionStartSchema.safeParse(req.body);
-    if (!slug.success || !parsed.success || slug.data !== 'term-test-2') {
+    if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu bắt đầu bài thi không hợp lệ.' });
     }
     const timing = termTestAssetService.getTiming(slug.data);
@@ -830,7 +840,10 @@ export function createApp({
     if (!slug.success || !parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_READING_START', message: 'Yêu cầu bắt đầu Reading không hợp lệ.' });
     }
-    const started = await pool.query(startReadingAttemptSql, [parsed.data.attemptToken, slug.data]);
+    const readingMinutes = supportsProtectedTest(slug.data)
+      ? termTestAssetService.getTiming(slug.data).readingDurationMinutes
+      : 60;
+    const started = await pool.query(startReadingAttemptSql, [parsed.data.attemptToken, slug.data, readingMinutes || 60]);
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt Listening để bắt đầu Reading.' });
     }
@@ -921,11 +934,17 @@ export function createApp({
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_WRITING', message: 'Bài Writing không hợp lệ.' });
     }
+    const attemptSlugResult = await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken]);
+    const attemptSlug = String(attemptSlugResult.rows[0]?.test_slug || '');
+    const writingMinutes = supportsProtectedTest(attemptSlug)
+      ? termTestAssetService.getTiming(attemptSlug).writingDurationMinutes
+      : 60;
     const saved = await pool.query(saveTermTestWritingSql, [
       parsed.data.attemptToken,
       parsed.data.task1,
       parsed.data.task2,
-      parsed.data.action
+      parsed.data.action,
+      writingMinutes || 60
     ]);
     if (saved.rowCount !== 1) {
       return res.status(404).json({
@@ -993,7 +1012,7 @@ export function createApp({
       return res.status(404).json({
         ok: false,
         error: 'ATTEMPT_REVIEW_NOT_READY',
-        message: 'Chỉ có thể xem lại toàn bộ bài sau khi đã nộp đủ Listening, Reading và Writing.'
+        message: 'Chỉ có thể xem lại toàn bộ bài sau khi đã hoàn thành mọi kỹ năng của đề.'
       });
     }
     const row = result.rows[0];
@@ -1282,7 +1301,7 @@ export function createApp({
       return res.status(404).json({
         ok: false,
         error: 'ATTEMPT_REVIEW_NOT_READY',
-        message: 'Học viên chưa nộp đủ ba kỹ năng để xem lại toàn bộ bài.'
+        message: 'Học viên chưa hoàn thành mọi kỹ năng của đề để xem lại toàn bộ bài.'
       });
     }
     const content = await termTestAssetService.getContent(row.test_slug);

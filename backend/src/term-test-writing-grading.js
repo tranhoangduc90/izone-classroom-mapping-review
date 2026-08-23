@@ -206,10 +206,7 @@ function taskSource(taskDefinitions, taskNumber) {
 }
 
 function serializePending(runs) {
-  const taskStates = Object.fromEntries([1, 2].map(taskNumber => {
-    const run = runs.find(item => Number(item.task_number) === taskNumber);
-    return [`task${taskNumber}`, run?.status || 'queued'];
-  }));
+  const taskStates = Object.fromEntries(runs.map(run => [`task${Number(run.task_number)}`, run.status || 'queued']));
   const terminal = runs.some(run => run.status === 'review_required' || run.status === 'failed');
   return {
     status: terminal ? 'review_required' : (runs.length ? 'processing' : 'not_started'),
@@ -246,7 +243,7 @@ async function readStatus(client, attemptToken) {
   return {
     status: 'ready',
     ready: true,
-    taskStates: { task1: 'complete', task2: 'complete' },
+    taskStates: Object.fromEntries(runs.map(run => [`task${Number(run.task_number)}`, 'complete'])),
     task1Score: numericOrNull(runs[0].task_1_score),
     task2Score: numericOrNull(runs[0].task_2_score),
     writingScore: numericOrNull(runs[0].writing_score),
@@ -262,22 +259,30 @@ async function readStatus(client, attemptToken) {
 }
 
 async function refreshFinal(client, attemptId) {
-  const runsResult = await client.query(`SELECT id::text, task_number, task_score
+  const runsResult = await client.query(`SELECT id::text, task_number, task_score, status
   FROM assessment.term_test_writing_grading_run
   WHERE attempt_id = $1::uuid
     AND grading_version = $2
-    AND status = 'complete'
   ORDER BY task_number;`, [attemptId, GRADING_VERSION]);
-  const task1 = runsResult.rows.find(row => Number(row.task_number) === 1);
-  const task2 = runsResult.rows.find(row => Number(row.task_number) === 2);
-  if (!task1 || !task2) {
+  if (!runsResult.rows.length || runsResult.rows.some(row => row.status !== 'complete')) {
     await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
       attempt_id, grading_version, status
     ) VALUES ($1::uuid, $2, 'waiting')
     ON CONFLICT (attempt_id) DO NOTHING;`, [attemptId, GRADING_VERSION]);
     return null;
   }
-  const writingScore = calculateTermTestWritingOverall(task1.task_score, task2.task_score);
+  const task1 = runsResult.rows.find(row => Number(row.task_number) === 1);
+  const task2 = runsResult.rows.find(row => Number(row.task_number) === 2);
+  if (!task2 || (runsResult.rows.length > 1 && !task1)) {
+    await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
+      attempt_id, grading_version, status
+    ) VALUES ($1::uuid, $2, 'waiting')
+    ON CONFLICT (attempt_id) DO NOTHING;`, [attemptId, GRADING_VERSION]);
+    return null;
+  }
+  const writingScore = task1
+    ? calculateTermTestWritingOverall(task1.task_score, task2.task_score)
+    : validateBand(task2.task_score, 'Task 2');
   await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
     attempt_id, grading_version, task_1_run_id, task_2_run_id,
     task_1_score, task_2_score, writing_score, status, ready_at, updated_at
@@ -294,9 +299,9 @@ async function refreshFinal(client, attemptId) {
     updated_at = now();`, [
     attemptId,
     GRADING_VERSION,
-    task1.id,
+    task1?.id || null,
     task2.id,
-    task1.task_score,
+    task1?.task_score ?? null,
     task2.task_score,
     writingScore
   ]);
@@ -322,7 +327,17 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       }
 
       const essays = { 1: cleanText(task1, 120_000), 2: cleanText(task2, 180_000) };
-      for (const taskNumber of [1, 2]) {
+      const taskNumbers = Array.from(taskDefinitions || [])
+        .map(task => Number(String(task?.id || '').replace(/\D/g, '')))
+        .filter(taskNumber => [1, 2].includes(taskNumber));
+      if (!taskNumbers.length || new Set(taskNumbers).size !== taskNumbers.length) {
+        throw new TermTestWritingGradingError(
+          'WRITING_GRADING_TASKS_INVALID',
+          'Cấu hình đề Writing không có Task hợp lệ.',
+          500
+        );
+      }
+      for (const taskNumber of taskNumbers) {
         const source = taskSource(taskDefinitions, taskNumber);
         const runKey = buildRunKey(testSlug, attemptToken, taskNumber);
         await client.query(`INSERT INTO assessment.term_test_writing_grading_run (

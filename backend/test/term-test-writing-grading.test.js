@@ -184,6 +184,68 @@ test('chỉ mở điểm sau khi đủ hai Task và không tạo việc trùng',
   await database.close();
 });
 
+test('Term Test 1 chỉ có Task 2 vẫn chấm xong, hiện điểm và đồng bộ Portal', async () => {
+  const database = await makeDatabase();
+  const attemptToken = '00000000-0000-4000-8000-000000000211';
+  const portalPayloads = [];
+  await database.query(`INSERT INTO assessment.term_test_attempt (
+    id, test_slug, erp_course_class_id, erp_student_contact_id,
+    class_name_snapshot, student_name_snapshot, combined_result,
+    completed_at, writing_submitted_at
+  ) VALUES ($1::uuid, 'term-test-1', 2146, 9011, 'IC2146', 'Học viên Task 2',
+    $2::jsonb, now(), now());`, [attemptToken, JSON.stringify({
+    listening: { band: 6 },
+    reading: { band: 6.5 }
+  })]);
+  const service = createTermTestWritingGradingService({
+    pool: database,
+    syncErpGrades: async payload => {
+      portalPayloads.push(payload);
+      return { status: 'synced' };
+    }
+  });
+
+  const pending = await service.ensureSubmission({
+    attemptToken,
+    testSlug: 'term-test-1',
+    task1: '',
+    task2: 'Bài Task 2 của Term Test 1',
+    taskDefinitions: [{ id: 'task2', prompt: 'Đề Task 2 Term Test 1' }]
+  });
+  assert.equal(pending.ready, false);
+  assert.deepEqual(pending.taskStates, { task2: 'queued' });
+
+  const [dispatchJob] = await service.claimJobs({ workerId: 'term-1-dispatch', limit: 2 });
+  assert.equal(dispatchJob.taskNumber, 2);
+  await service.completeDispatch({
+    jobId: dispatchJob.jobId,
+    workerId: 'term-1-dispatch',
+    sourceRecordId: 'lark-term-1-task-2'
+  });
+  await database.query(`UPDATE assessment.term_test_writing_grading_job
+    SET next_attempt_at = now()
+    WHERE job_type = 'collect';`);
+  const [collectJob] = await service.claimJobs({ workerId: 'term-1-collect', limit: 2 });
+  const completed = await service.completeResult({
+    jobId: collectJob.jobId,
+    workerId: 'term-1-collect',
+    runKey: collectJob.runKey,
+    sourceRecordId: 'lark-term-1-task-2',
+    result: {
+      taskScore: 6.5,
+      criteria: criteria(2, [6.5, 6.5, 6.5, 6.5]),
+      report: 'Báo cáo Task 2'
+    }
+  });
+  assert.equal(completed.grading.ready, true);
+  assert.equal(completed.grading.task1Score, null);
+  assert.equal(completed.grading.task2Score, 6.5);
+  assert.equal(completed.grading.writingScore, 6.5);
+  assert.deepEqual(completed.grading.taskStates, { task2: 'complete' });
+  assert.deepEqual(portalPayloads[0].grades, { listening: 6, reading: 6.5, writing: 6.5 });
+  await database.close();
+});
+
 test('Portal lỗi tạm thời thì điểm Writing vẫn sẵn sàng và việc ghi điểm được đưa lại vào hàng chờ', async () => {
   const database = await makeDatabase();
   const attemptToken = '00000000-0000-4000-8000-000000000205';
