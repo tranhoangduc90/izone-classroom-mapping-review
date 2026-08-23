@@ -153,27 +153,34 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
 });
 
-test('reset lớp demo gọi đúng hàm database và trả số bản ghi đã xóa', async () => {
+test('reset lớp demo gọi đúng hàm database cho mọi bài CBT và trả số bản ghi đã xóa', async () => {
   const studentRef = '00000000-0000-4000-8000-000000000010';
   const pool = makePool(async () => ({
     rowCount: 1,
     rows: [{ deleted_attempts: 2, deleted_sessions: 3 }]
   }));
   const app = createApp({ config: makeConfig(), pool });
-  const response = await request(app)
-    .post('/api/term-tests/demo/reset')
-    .set('Origin', 'https://tranhoangduc90.github.io')
-    .send({
-      classCode: 'CODEXDEMO806',
-      testSlug: 'term-test-2',
-      studentRef,
-      confirmation: 'RESET_DEMO_STUDENT'
-    });
+  const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
+  for (const testSlug of slugs) {
+    const response = await request(app)
+      .post('/api/term-tests/demo/reset')
+      .set('Origin', 'https://tranhoangduc90.github.io')
+      .send({
+        classCode: 'CODEXDEMO806',
+        testSlug,
+        studentRef,
+        confirmation: 'RESET_DEMO_STUDENT'
+      });
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body.reset, { attempts: 2, sessions: 3 });
-  assert.deepEqual(pool.calls[0].params, ['CODEXDEMO806', 'term-test-2', studentRef]);
-  assert.match(pool.calls[0].sql, /reset_demo_term_test_student/);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.reset, { attempts: 2, sessions: 3 });
+  }
+
+  assert.deepEqual(
+    pool.calls.map((call) => call.params),
+    slugs.map((testSlug) => ['CODEXDEMO806', testSlug, studentRef])
+  );
+  assert.equal(pool.calls.every((call) => /reset_demo_term_test_student/.test(call.sql)), true);
 });
 
 test('reset từ chối lớp thật trước khi chạm database', async () => {

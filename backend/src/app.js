@@ -476,7 +476,7 @@ export function createApp({
       return res.status(400).json({
         ok: false,
         error: 'INVALID_DEMO_RESET',
-        message: 'Chỉ được reset đúng học viên Term Test 2 của lớp demo.'
+        message: 'Chỉ được reset đúng học viên và đúng bài thi của lớp demo.'
       });
     }
     const reset = await pool.query(resetDemoTermTestStudentSql, [
