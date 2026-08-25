@@ -1,0 +1,56 @@
+{
+  "name": "Đăng ký và làm Mini Test bằng danh tính học viên tạm",
+  "source_mode": "single",
+  "identity": {
+    "scope": "per_item",
+    "entity_key": "student_ref",
+    "operation_key": "client_submission_id",
+    "idempotency_key": "test_slug:class_id:temporary_code_normalized"
+  },
+  "stages": [
+    {
+      "name": "Đăng ký mã tạm",
+      "kind": "deduplicate",
+      "preserves": [
+        "test_slug",
+        "class_id",
+        "temporary_code_normalized",
+        "student_ref"
+      ]
+    },
+    {
+      "name": "Tạo hoặc tiếp tục phiên thi",
+      "kind": "retry",
+      "preserves": [
+        "student_ref",
+        "client_submission_id"
+      ]
+    },
+    {
+      "name": "Ghi bài làm",
+      "kind": "write",
+      "preserves": [
+        "student_ref",
+        "client_submission_id"
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "name": "Ghi bài vào đúng hồ sơ học viên tạm",
+      "target_key": "student_ref",
+      "guard": "fail_closed",
+      "readback": true
+    }
+  ],
+  "tests": [
+    "single",
+    "variable_cardinality",
+    "batch_interleaved",
+    "out_of_order",
+    "duplicate_retry",
+    "partial_failure",
+    "same_display_name_distinct_ids",
+    "wrong_target_readback"
+  ]
+}
