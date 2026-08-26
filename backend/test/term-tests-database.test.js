@@ -17,6 +17,7 @@ import {
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
+  registerTemporaryTermTestStudentSql,
   resetDemoTermTestStudentSql,
   saveReadingDraftSql,
   saveTermTestListeningDraftSql,
@@ -84,6 +85,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const migrationSql = await readFile(migrationUrl, 'utf8');
   await database.exec(migrationSql);
   await database.exec(migrationSql);
+  const temporaryStudentMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-25-mini-test-temporary-students.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(temporaryStudentMigration);
+  await database.exec(temporaryStudentMigration);
   const writingDraftMigration = await readFile(
     new URL('../../docs/migrations/2026-08-19-term-test-writing-drafts.sql', import.meta.url),
     'utf8'
@@ -241,6 +248,66 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(fallbackStudent.rows.length, 1);
   assert.equal(fallbackStudent.rows[0].student_id, '9901');
   assert.equal(fallbackStudent.rows[0].student_name, 'Học viên lấy từ matching');
+
+  const temporaryRegistration = await database.query(registerTemporaryTermTestStudentSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'T01',
+    'Học viên tạm A',
+    'học viên tạm a'
+  ]);
+  const temporaryStudentRef = temporaryRegistration.rows[0].student_ref;
+  assert.equal(temporaryRegistration.rows[0].name_matches, true);
+  assert.equal(temporaryRegistration.rows[0].student_name, 'Học viên tạm A');
+
+  const temporaryRetry = await database.query(registerTemporaryTermTestStudentSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'T01',
+    'Học viên tạm A',
+    'học viên tạm a'
+  ]);
+  assert.equal(temporaryRetry.rows[0].student_ref, temporaryStudentRef);
+  assert.equal(temporaryRetry.rows[0].name_matches, true);
+
+  const temporaryConflict = await database.query(registerTemporaryTermTestStudentSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'T01',
+    'Tên khác',
+    'tên khác'
+  ]);
+  assert.equal(temporaryConflict.rows[0].student_ref, temporaryStudentRef);
+  assert.equal(temporaryConflict.rows[0].name_matches, false);
+  assert.equal(temporaryConflict.rows[0].student_name, 'Học viên tạm A');
+
+  const sameNameDifferentCode = await database.query(registerTemporaryTermTestStudentSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    'T02',
+    'Học viên tạm A',
+    'học viên tạm a'
+  ]);
+  assert.notEqual(sameNameDifferentCode.rows[0].student_ref, temporaryStudentRef);
+
+  const publicMiniRoster = await database.query(listTermTestRosterSql, ['IC2139', 'mini-test-lesson-5']);
+  assert.equal(publicMiniRoster.rows[0].students.some(item => item.ref === temporaryStudentRef), false);
+
+  const resolvedTemporaryStudent = await database.query(findStudentForTermTestSql, [
+    'IC2139',
+    'mini-test-lesson-5',
+    temporaryStudentRef
+  ]);
+  assert.equal(resolvedTemporaryStudent.rows.length, 1);
+  assert.equal(Number(resolvedTemporaryStudent.rows[0].student_id) < 0, true);
+  assert.equal(resolvedTemporaryStudent.rows[0].student_name, 'Học viên tạm A');
+
+  const wrongTestTemporaryStudent = await database.query(findStudentForTermTestSql, [
+    'IC2139',
+    'term-test-1',
+    temporaryStudentRef
+  ]);
+  assert.equal(wrongTestTemporaryStudent.rows.length, 0);
   const definition = parseStoredTest(student.rows[0]);
   const answers = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [
     String(index + 1),
@@ -370,6 +437,9 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     false
   ]);
   const legacyStudent = miniTeacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng');
+  const temporaryTeacherStudent = miniTeacherResults.rows[0].students.find(item => item.ref === temporaryStudentRef);
+  assert.equal(temporaryTeacherStudent.temporary, true);
+  assert.equal(temporaryTeacherStudent.status, 'not_started');
   assert.equal(legacyStudent.status, 'completed');
   assert.equal(legacyStudent.result.testTitle, 'Mini Test Buổi 5');
   assert.equal(legacyStudent.result.summary.averageBand, 7);

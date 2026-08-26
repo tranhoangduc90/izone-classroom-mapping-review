@@ -314,6 +314,59 @@ SELECT
   ), '[]'::jsonb) AS students
 FROM definition;`;
 
+// Mã tạm là identity do giáo viên cấp, không phải mật khẩu. Cùng mã/tên trả lại UUID cũ;
+// cùng mã nhưng tên khác vẫn trả bản ghi cũ để API phát hiện xung đột mà không ghi đè danh tính.
+export const registerTemporaryTermTestStudentSql = `WITH definition AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE slug = $2
+    AND slug ~ '^mini-test-[a-z0-9-]+$'
+    AND is_active = true
+),
+target_classes AS (
+  SELECT erp_course_class_id, erp_class_name_snapshot
+  FROM mapping.classroom_course_mapping
+  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+),
+registered AS (
+  INSERT INTO assessment.term_test_temporary_student (
+    test_slug,
+    erp_course_class_id,
+    temporary_code_normalized,
+    student_name_snapshot,
+    student_name_key
+  )
+  SELECT
+    definition.slug,
+    target.erp_course_class_id,
+    $3,
+    $4,
+    $5
+  FROM definition
+  CROSS JOIN target_classes AS target
+  WHERE (SELECT count(*) FROM target_classes) = 1
+  ON CONFLICT (test_slug, erp_course_class_id, temporary_code_normalized) DO UPDATE SET
+    updated_at = assessment.term_test_temporary_student.updated_at
+  RETURNING
+    student_ref::text AS student_ref,
+    student_name_snapshot AS student_name,
+    student_name_key,
+    active
+)
+SELECT
+  definition.slug AS test_slug,
+  definition.title AS test_title,
+  definition.version AS definition_version,
+  (SELECT count(*)::int FROM target_classes) AS class_count,
+  (SELECT erp_course_class_id::text FROM target_classes LIMIT 1) AS class_id,
+  (SELECT erp_class_name_snapshot FROM target_classes LIMIT 1) AS class_name,
+  registered.student_ref,
+  registered.student_name,
+  registered.active,
+  registered.student_name_key = $5 AS name_matches
+FROM definition
+LEFT JOIN registered ON true;`;
+
 // Chỉ gọi hàm bảo vệ trong database; hàm tự xác minh lại lớp, bài test và roster demo trước khi xóa.
 export const resetDemoTermTestStudentSql = `SELECT deleted_attempts, deleted_sessions
 FROM assessment.reset_demo_term_test_student($1, $2, $3::uuid);`;
@@ -357,6 +410,19 @@ eligible_student AS (
   WHERE roster_mode.has_curated_roster = false
     AND review.public_id = $3::uuid
     AND review.status <> 'superseded'
+
+  UNION ALL
+
+  SELECT
+    temporary.erp_course_class_id,
+    -temporary.temporary_student_id AS erp_student_contact_id,
+    temporary.student_name_snapshot AS student_name
+  FROM assessment.term_test_temporary_student AS temporary
+  JOIN target_classes AS target
+    ON target.erp_course_class_id = temporary.erp_course_class_id
+  WHERE temporary.test_slug = $2
+    AND temporary.student_ref = $3::uuid
+    AND temporary.active = true
 )
 SELECT
   definition.slug AS test_slug,
@@ -1110,7 +1176,8 @@ eligible_students AS (
     roster.erp_course_class_id,
     roster.erp_student_contact_id,
     roster.student_ref,
-    roster.student_name_snapshot AS student_name
+    roster.student_name_snapshot AS student_name,
+    false AS temporary
   FROM assessment.term_test_roster AS roster
   JOIN authorized_classes AS target
     ON target.erp_course_class_id = roster.erp_course_class_id
@@ -1122,7 +1189,8 @@ eligible_students AS (
     review.erp_course_class_id,
     review.erp_student_contact_id,
     review.public_id AS student_ref,
-    review.erp_student_name_snapshot AS student_name
+    review.erp_student_name_snapshot AS student_name,
+    false AS temporary
   FROM mapping.student_mapping_review AS review
   JOIN authorized_classes AS target
     ON target.erp_course_class_id = review.erp_course_class_id
@@ -1136,7 +1204,8 @@ eligible_students AS (
     legacy.erp_course_class_id,
     legacy.erp_student_contact_id,
     review.public_id AS student_ref,
-    legacy.student_name_snapshot AS student_name
+    legacy.student_name_snapshot AS student_name,
+    false AS temporary
   FROM assessment.mini_test_result AS legacy
   JOIN authorized_classes AS target
     ON target.erp_course_class_id = legacy.erp_course_class_id
@@ -1144,13 +1213,28 @@ eligible_students AS (
     ON review.erp_course_class_id = legacy.erp_course_class_id
    AND review.erp_student_contact_id = legacy.erp_student_contact_id
   WHERE legacy.test_slug = $2
+
+  UNION ALL
+
+  SELECT
+    temporary_student.erp_course_class_id,
+    -temporary_student.temporary_student_id AS erp_student_contact_id,
+    temporary_student.student_ref,
+    temporary_student.student_name_snapshot AS student_name,
+    true AS temporary
+  FROM assessment.term_test_temporary_student AS temporary_student
+  JOIN authorized_classes AS target
+    ON target.erp_course_class_id = temporary_student.erp_course_class_id
+  WHERE temporary_student.test_slug = $2
+    AND temporary_student.active = true
 ),
 students AS (
   SELECT DISTINCT ON (erp_course_class_id, erp_student_contact_id)
     erp_course_class_id,
     erp_student_contact_id,
     student_ref,
-    student_name
+    student_name,
+    temporary
   FROM eligible_students
   ORDER BY erp_course_class_id, erp_student_contact_id, student_name
 )
@@ -1167,6 +1251,7 @@ SELECT
       jsonb_build_object(
         'ref', student.student_ref::text,
         'name', student.student_name,
+        'temporary', student.temporary,
         'status', CASE
           WHEN attempt.completed_at IS NOT NULL AND attempt.combined_result IS NOT NULL THEN 'completed'
           WHEN attempt.id IS NOT NULL THEN 'incomplete'
@@ -1317,6 +1402,15 @@ latest_attempt AS (
           AND review.public_id = $5::uuid
           AND review.status <> 'superseded'
       )
+      OR EXISTS (
+        SELECT 1
+        FROM assessment.term_test_temporary_student AS temporary
+        WHERE temporary.test_slug = attempt.test_slug
+          AND temporary.erp_course_class_id = attempt.erp_course_class_id
+          AND -temporary.temporary_student_id = attempt.erp_student_contact_id
+          AND temporary.student_ref = $5::uuid
+          AND temporary.active = true
+      )
     )
   ORDER BY attempt.completed_at DESC NULLS LAST, attempt.created_at DESC
   LIMIT 1
@@ -1408,6 +1502,15 @@ latest_attempt AS (
           AND review.erp_student_contact_id = attempt.erp_student_contact_id
           AND review.public_id = $5::uuid
           AND review.status <> 'superseded'
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM assessment.term_test_temporary_student AS temporary
+        WHERE temporary.test_slug = attempt.test_slug
+          AND temporary.erp_course_class_id = attempt.erp_course_class_id
+          AND -temporary.temporary_student_id = attempt.erp_student_contact_id
+          AND temporary.student_ref = $5::uuid
+          AND temporary.active = true
       )
     )
   ORDER BY attempt.completed_at DESC NULLS LAST, attempt.created_at DESC

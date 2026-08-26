@@ -153,6 +153,86 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
 });
 
+test('Mini Test tạo hoặc lấy lại đúng hồ sơ học viên tạm mà không trả mã tạm', async () => {
+  const studentRef = '00000000-0000-4000-8000-000000000021';
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      test_slug: 'mini-test-lesson-5',
+      class_count: 1,
+      class_id: '2238',
+      class_name: 'IC2238',
+      student_ref: studentRef,
+      student_name: 'Học viên thử nghiệm',
+      active: true,
+      name_matches: true
+    }]
+  }));
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/mini-test-lesson-5/temporary-students')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({ classCode: 'ic2238', studentName: '  Học viên   thử nghiệm ', temporaryCode: ' t01 ' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.student, {
+    ref: studentRef,
+    name: 'Học viên thử nghiệm',
+    temporary: true
+  });
+  assert.equal(JSON.stringify(response.body).includes('T01'), false);
+  assert.deepEqual(pool.calls[0].params, [
+    'IC2238',
+    'mini-test-lesson-5',
+    'T01',
+    'Học viên thử nghiệm',
+    'học viên thử nghiệm'
+  ]);
+});
+
+test('Mini Test chặn mã tạm đã gắn với tên khác mà không lộ tên cũ', async () => {
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      test_slug: 'mini-test-lesson-5',
+      class_count: 1,
+      class_id: '2238',
+      class_name: 'IC2238',
+      student_ref: '00000000-0000-4000-8000-000000000021',
+      student_name: 'Tên đã đăng ký',
+      active: true,
+      name_matches: false
+    }]
+  }));
+  const app = createApp({ config: makeConfig(), pool });
+  const response = await request(app)
+    .post('/api/term-tests/mini-test-lesson-5/temporary-students')
+    .send({ classCode: 'IC2238', studentName: 'Tên mới', temporaryCode: 'T01' });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'TEMPORARY_CODE_CONFLICT');
+  assert.equal(JSON.stringify(response.body).includes('Tên đã đăng ký'), false);
+});
+
+test('đăng ký học viên tạm chỉ nhận Mini Test và dữ liệu tên/mã hợp lệ', async () => {
+  const pool = makePool(async () => {
+    throw new Error('Không được gọi database');
+  });
+  const app = createApp({ config: makeConfig(), pool });
+  const invalidRequests = [
+    ['/api/term-tests/term-test-1/temporary-students', { classCode: 'IC2238', studentName: 'Học viên A', temporaryCode: 'T01' }],
+    ['/api/term-tests/mini-test-lesson-5/temporary-students', { classCode: 'IC2238', studentName: '<script>', temporaryCode: 'T01' }],
+    ['/api/term-tests/mini-test-lesson-5/temporary-students', { classCode: 'IC2238', studentName: 'Học viên A', temporaryCode: 'mã có dấu cách' }]
+  ];
+
+  for (const [path, body] of invalidRequests) {
+    const response = await request(app).post(path).send(body);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'INVALID_TEMPORARY_STUDENT');
+  }
+  assert.equal(pool.calls.length, 0);
+});
+
 test('reset lớp demo gọi đúng hàm database cho mọi bài CBT và trả số bản ghi đã xóa', async () => {
   const studentRef = '00000000-0000-4000-8000-000000000010';
   const pool = makePool(async () => ({

@@ -25,6 +25,7 @@ import {
   fetchTermTestTeacherAttemptReviewSql,
   fetchTermTestTeacherWritingDetailSql,
   listTermTestRosterSql,
+  registerTemporaryTermTestStudentSql,
   resetDemoTermTestStudentSql,
   resumeTermTestExamSessionSql,
   resumeTermTestAttemptContentSql,
@@ -66,6 +67,16 @@ const decisionSchema = z.object({
 
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
 const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
+const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
+const temporaryStudentRegistrationSchema = z.object({
+  classCode: classCodeSchema,
+  studentName: z.string()
+    .transform(normalizeTemporaryStudentName)
+    .pipe(z.string().min(2).max(80).regex(/^[\p{L}\p{M} .'-]+$/u)),
+  temporaryCode: z.string()
+    .transform(value => String(value || '').normalize('NFKC').trim().toUpperCase())
+    .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,15}$/))
+});
 const answersSchema = z.record(
   z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),
   z.string().max(120)
@@ -610,6 +621,46 @@ export function createApp({
       clientOccurredAt: parsed.data.occurredAt || null
     });
     return res.status(202).json({ ok: true });
+  }));
+
+  app.post('/api/term-tests/:testSlug/temporary-students', testWriteLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = temporaryStudentRegistrationSchema.safeParse(req.body);
+    if (!slug.success || !slug.data.startsWith('mini-test-') || !parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_TEMPORARY_STUDENT',
+        message: 'Họ tên hoặc mã tạm không hợp lệ. Mã gồm 2–16 ký tự chữ, số, gạch ngang hoặc gạch dưới.'
+      });
+    }
+
+    const studentNameKey = parsed.data.studentName.toLocaleLowerCase('vi-VN');
+    const result = await pool.query(registerTemporaryTermTestStudentSql, [
+      parsed.data.classCode,
+      slug.data,
+      parsed.data.temporaryCode,
+      parsed.data.studentName,
+      studentNameKey
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Mini Test chưa được mở.' });
+    }
+    if (Number(row.class_count) !== 1 || !row.class_id) {
+      return res.status(404).json({ ok: false, error: 'CLASS_NOT_FOUND', message: 'Không tìm thấy duy nhất một lớp phù hợp.' });
+    }
+    if (!row.student_ref || row.name_matches !== true || row.active !== true) {
+      return res.status(409).json({
+        ok: false,
+        error: 'TEMPORARY_CODE_CONFLICT',
+        message: 'Mã tạm này đã được dùng cho một tên khác. Hãy kiểm tra lại hoặc xin giáo viên cấp mã mới.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      student: { ref: row.student_ref, name: row.student_name, temporary: true }
+    });
   }));
 
   app.post('/api/term-tests/demo/reset', testWriteLimiter, asyncRoute(async (req, res) => {
