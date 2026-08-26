@@ -11,6 +11,7 @@ import {
   findTermTestExamSessionAssetSql,
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
+  findActiveTermTestAttemptForStudentSql,
   findLatestTermTestAttemptForStudentSql,
   findTermTestAttemptSlugSql,
   findStudentForTermTestSql,
@@ -32,6 +33,7 @@ import {
   saveTermTestListeningDraftSql,
   startReadingAttemptSql,
   startTermTestListeningSessionSql,
+  supersedeStaleTermTestExamSessionsSql,
   upsertMiniTestResultSql,
   writeDecisionSql
 } from './sql.js';
@@ -77,10 +79,12 @@ const listeningSubmissionSchema = z.object({
   studentRef: z.string().uuid(),
   clientSubmissionId: z.string().uuid(),
   examSessionToken: z.string().uuid().optional(),
+  draftRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   answers: answersSchema
 });
 const readingSubmissionSchema = z.object({
   attemptToken: z.string().uuid(),
+  draftRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   answers: answersSchema
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
@@ -102,14 +106,40 @@ const attemptResumeSchema = z.object({
   studentRef: z.string().uuid(),
   attemptToken: z.string().uuid()
 });
+const activeAttemptSchema = z.object({
+  classCode: classCodeSchema,
+  studentRef: z.string().uuid()
+});
 const listeningDraftSchema = z.object({
   examSessionToken: z.string().uuid(),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   answers: answersSchema
 });
 const readingStartSchema = z.object({ attemptToken: z.string().uuid() });
 const readingDraftSchema = z.object({
   attemptToken: z.string().uuid(),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   answers: answersSchema
+});
+const termTestClientEventSchema = z.object({
+  attemptToken: z.string().uuid().optional(),
+  examSessionToken: z.string().uuid().optional(),
+  event: z.enum([
+    'deadline_guard_started',
+    'deadline_reached',
+    'draft_retry_scheduled',
+    'submit_started',
+    'submit_failed',
+    'attempt_resumed'
+  ]),
+  section: z.enum(['listening', 'reading']),
+  build: z.string().trim().min(1).max(80),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  answeredCount: z.number().int().min(0).max(40).optional(),
+  online: z.boolean().optional(),
+  occurredAt: z.iso.datetime().optional()
+}).refine(value => Boolean(value.attemptToken || value.examSessionToken), {
+  message: 'Cần mã lượt thi để ghi sự kiện.'
 });
 const writingSubmissionSchema = z.object({
   attemptToken: z.string().uuid(),
@@ -265,6 +295,33 @@ const writingConfigSchema = z.object({
   }
 });
 
+function countAnswered(answers) {
+  return Object.values(answers || {}).filter(value => String(value || '').trim()).length;
+}
+
+// Dữ liệu vào: payload nộp cuối, bản nháp đã xác nhận trên server và revision của hai bản.
+// Việc chính: trong 5 phút dự phòng sau hạn, ưu tiên snapshot cuối nếu nó không cũ hơn server.
+// Kết quả: request nộp và ghi bài dùng cùng một snapshot; quá thời gian dự phòng thì giữ bản server.
+// Khi identity/revision mâu thuẫn: fail closed về bản server, không ghi đè bằng payload cũ.
+function chooseTimedSubmissionAnswers({
+  timedOut,
+  graceActive,
+  submittedAnswers,
+  submittedRevision,
+  serverDraft,
+  serverRevision
+}) {
+  const normalizedServerRevision = Number(serverRevision) || 0;
+  const hasSubmittedRevision = Number.isSafeInteger(submittedRevision);
+  const submittedIsCurrent = hasSubmittedRevision
+    ? submittedRevision >= normalizedServerRevision
+    : normalizedServerRevision === 0;
+  if (!timedOut || (graceActive && submittedIsCurrent)) {
+    return { answers: submittedAnswers, source: timedOut ? 'grace_submission' : 'on_time_submission' };
+  }
+  return { answers: serverDraft || {}, source: 'server_draft' };
+}
+
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
@@ -331,7 +388,8 @@ export function createApp({
   syncErpGrades = async () => ({ status: 'disabled' }),
   writingTestService,
   termTestWritingGradingService = null,
-  termTestAssetService = null
+  termTestAssetService = null,
+  logger = console
 }) {
   const app = express();
   const writingTests = writingTestService ?? createWritingTestService({ pool });
@@ -352,6 +410,21 @@ export function createApp({
     version: config.appVersion || '1.0.0',
     sha: config.buildSha || 'unknown'
   });
+  function logTermTestEvent(event, testSlug, token, details = {}) {
+    const correlation = crypto
+      .createHash('sha256')
+      .update(`${testSlug}:${token}`)
+      .digest('hex')
+      .slice(0, 16);
+    logger.info(JSON.stringify({
+      type: 'term_test_reliability',
+      event,
+      testSlug,
+      correlation,
+      serverOccurredAt: new Date().toISOString(),
+      ...details
+    }));
+  }
   app.get('/health', (_req, res) => res.json({ ok: true, build }));
 
   async function ensureTermTestWritingGrading(row) {
@@ -470,6 +543,75 @@ export function createApp({
     });
   }));
 
+  app.post('/api/term-tests/:testSlug/attempt/active', testReadLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = activeAttemptSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_ATTEMPT_LOOKUP', message: 'Yêu cầu tìm lượt đang làm không hợp lệ.' });
+    }
+    const studentResult = await pool.query(findStudentForTermTestSql, [
+      parsed.data.classCode,
+      slug.data,
+      parsed.data.studentRef
+    ]);
+    if (studentResult.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy học viên trong lớp này.' });
+    }
+    const student = studentResult.rows[0];
+    const activeResult = await pool.query(findActiveTermTestAttemptForStudentSql, [
+      slug.data,
+      student.definition_version,
+      student.class_id,
+      student.student_id
+    ]);
+    const attempt = activeResult.rows[0] || null;
+    if (!attempt) return res.json({ ok: true, active: false });
+    logTermTestEvent('attempt_resumed', slug.data, attempt.attempt_token, {
+      section: attempt.reading_started_at ? 'reading' : 'listening',
+      source: 'active_attempt_lookup',
+      revision: Number(attempt.reading_draft_revision) || 0,
+      answeredCount: countAnswered(attempt.reading_draft)
+    });
+    return res.json({
+      ok: true,
+      active: true,
+      attemptToken: attempt.attempt_token,
+      examSessionToken: attempt.exam_session_token || null,
+      studentName: attempt.student_name,
+      listeningSubmitted: true,
+      readingStartedAt: attempt.reading_started_at || null,
+      readingDeadlineAt: attempt.reading_deadline_at || null,
+      readingDraft: attempt.reading_draft || {},
+      readingDraftRevision: Number(attempt.reading_draft_revision) || 0,
+      serverNow: attempt.server_now
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/client-event', testDraftLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = termTestClientEventSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_CLIENT_EVENT', message: 'Sự kiện trình duyệt không hợp lệ.' });
+    }
+    const token = parsed.data.attemptToken || parsed.data.examSessionToken;
+    const tokenResult = parsed.data.attemptToken
+      ? await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken])
+      : await pool.query(findTermTestExamSessionAssetSql, [parsed.data.examSessionToken, slug.data]);
+    const storedSlug = String(tokenResult.rows[0]?.test_slug || '');
+    if (tokenResult.rowCount !== 1 || storedSlug !== slug.data) {
+      return res.status(404).json({ ok: false, error: 'EVENT_ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt thi cho sự kiện này.' });
+    }
+    logTermTestEvent(parsed.data.event, slug.data, token, {
+      section: parsed.data.section,
+      build: parsed.data.build,
+      revision: parsed.data.revision,
+      answeredCount: parsed.data.answeredCount,
+      online: parsed.data.online,
+      clientOccurredAt: parsed.data.occurredAt || null
+    });
+    return res.status(202).json({ ok: true });
+  }));
+
   app.post('/api/term-tests/demo/reset', testWriteLimiter, asyncRoute(async (req, res) => {
     const parsed = demoResetSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -562,11 +704,22 @@ export function createApp({
           listeningStartedAt: attempt.listening_started_at || null,
           listeningDeadlineAt: attempt.listening_deadline_at || null,
           listeningSubmitted: true,
-          attemptToken: attempt.attempt_token
+          attemptToken: attempt.attempt_token,
+          readingStartedAt: attempt.reading_started_at || null,
+          readingDeadlineAt: attempt.reading_deadline_at || null,
+          readingDraft: attempt.reading_draft || {},
+          readingDraftRevision: Number(attempt.reading_draft_revision) || 0,
+          serverNow: attempt.server_now
         });
       }
     }
     if (!session) {
+      await pool.query(supersedeStaleTermTestExamSessionsSql, [
+        slug.data,
+        student.definition_version,
+        student.class_id,
+        student.student_id
+      ]);
       const inserted = await pool.query(insertTermTestExamSessionSql, [
         slug.data,
         student.definition_version,
@@ -584,8 +737,11 @@ export function createApp({
       studentName: student.student_name,
       listeningStartedAt: session.listening_started_at || null,
       listeningDeadlineAt: session.listening_deadline_at || null,
+      listeningDraft: session.listening_draft || {},
+      listeningDraftRevision: Number(session.listening_draft_revision) || 0,
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
+      serverNow: session.server_now || null,
       encryptedAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/audio`,
       previewAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/preview`
     });
@@ -664,6 +820,8 @@ export function createApp({
       listeningSubmitted: true,
       readingStartedAt: attempt.reading_started_at || null,
       readingDeadlineAt: attempt.reading_deadline_at || null,
+      readingDraft: attempt.reading_draft || {},
+      readingDraftRevision: Number(attempt.reading_draft_revision) || 0,
       completedAt: attempt.completed_at || null,
       writingStartedAt: attempt.writing_started_at || null,
       writingDeadlineAt: attempt.writing_deadline_at || null,
@@ -718,16 +876,27 @@ export function createApp({
     const saved = await pool.query(saveTermTestListeningDraftSql, [
       parsed.data.examSessionToken,
       slug.data,
-      JSON.stringify(parsed.data.answers)
+      JSON.stringify(parsed.data.answers),
+      parsed.data.revision ?? null
     ]);
     if (saved.rowCount !== 1) {
       return res.status(409).json({ ok: false, error: 'LISTENING_LOCKED', message: 'Listening đã hết giờ hoặc đã được thu bài.' });
     }
+    const row = saved.rows[0];
+    logTermTestEvent('draft_saved', slug.data, parsed.data.examSessionToken, {
+      section: 'listening',
+      revision: Number(row.listening_draft_revision) || 0,
+      answeredCount: countAnswered(parsed.data.answers),
+      accepted: Boolean(row.accepted)
+    });
     return res.json({
       ok: true,
-      deadlineAt: saved.rows[0].listening_deadline_at,
-      savedAt: saved.rows[0].listening_draft_updated_at,
-      serverNow: saved.rows[0].server_now
+      accepted: Boolean(row.accepted),
+      revision: Number(row.listening_draft_revision) || 0,
+      draft: row.listening_draft || {},
+      deadlineAt: row.listening_deadline_at,
+      savedAt: row.listening_draft_updated_at,
+      serverNow: row.server_now
     });
   }));
 
@@ -741,7 +910,8 @@ export function createApp({
       await pool.query(saveTermTestListeningDraftSql, [
         parsed.data.examSessionToken,
         slug.data,
-        JSON.stringify(parsed.data.answers)
+        JSON.stringify(parsed.data.answers),
+        parsed.data.draftRevision ?? null
       ]);
       const sessionResult = await pool.query(findTermTestListeningSubmissionSql, [
         parsed.data.examSessionToken,
@@ -756,9 +926,15 @@ export function createApp({
         test_slug: session.slug,
         definition_version: session.version
       });
-      const effectiveAnswers = session.listening_timed_out
-        ? (session.listening_draft || {})
-        : parsed.data.answers;
+      const selectedSubmission = chooseTimedSubmissionAnswers({
+        timedOut: Boolean(session.listening_timed_out),
+        graceActive: Boolean(session.listening_submission_grace_active),
+        submittedAnswers: parsed.data.answers,
+        submittedRevision: parsed.data.draftRevision,
+        serverDraft: session.listening_draft,
+        serverRevision: session.listening_draft_revision
+      });
+      const effectiveAnswers = selectedSubmission.answers;
       const listeningResult = gradeSection(
         testDefinition.listening_definition,
         effectiveAnswers,
@@ -776,6 +952,13 @@ export function createApp({
         return res.status(409).json({ ok: false, error: 'SUBMISSION_ID_CONFLICT', message: 'Mã gửi bài đã được dùng cho lượt làm khác.' });
       }
       const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
+      logTermTestEvent('submission_completed', slug.data, parsed.data.examSessionToken, {
+        section: 'listening',
+        revision: parsed.data.draftRevision,
+        answeredCount: countAnswered(effectiveAnswers),
+        timedOut: Boolean(session.listening_timed_out),
+        snapshotSource: selectedSubmission.source
+      });
       const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
       return res.status(201).json({
         ok: true,
@@ -821,6 +1004,11 @@ export function createApp({
     }
     // Luôn dùng kết quả đã lưu; lần gửi lại cùng mã không được phép thay đổi điểm Portal.
     const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
+    logTermTestEvent('submission_completed', testDefinition.test_slug, attempt.attempt_token, {
+      section: 'listening',
+      answeredCount: Number(attempt.listening_result?.answered) || 0,
+      resumedActiveAttempt: Boolean(attempt.resumed_active_attempt)
+    });
     const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
     return res.status(201).json({
       ok: true,
@@ -830,6 +1018,11 @@ export function createApp({
       resultAvailable: true,
       portalSyncStatus,
       result,
+      resumedActiveAttempt: Boolean(attempt.resumed_active_attempt),
+      readingStartedAt: attempt.reading_started_at || null,
+      readingDeadlineAt: attempt.reading_deadline_at || null,
+      readingDraft: attempt.reading_draft || {},
+      readingDraftRevision: Number(attempt.reading_draft_revision) || 0,
       next: attempt.completed_at ? 'result' : 'reading'
     });
   }));
@@ -853,6 +1046,8 @@ export function createApp({
       attemptToken: row.attempt_token,
       readingStartedAt: row.reading_started_at,
       readingDeadlineAt: row.reading_deadline_at,
+      readingDraft: row.reading_draft || {},
+      readingDraftRevision: Number(row.reading_draft_revision) || 0,
       serverNow: row.server_now
     });
   }));
@@ -865,16 +1060,27 @@ export function createApp({
     }
     const saved = await pool.query(saveReadingDraftSql, [
       parsed.data.attemptToken,
-      JSON.stringify(parsed.data.answers)
+      JSON.stringify(parsed.data.answers),
+      parsed.data.revision ?? null
     ]);
     if (saved.rowCount !== 1) {
       return res.status(409).json({ ok: false, error: 'READING_LOCKED', message: 'Reading đã hết giờ hoặc đã được thu bài.' });
     }
+    const row = saved.rows[0];
+    logTermTestEvent('draft_saved', slug.data, parsed.data.attemptToken, {
+      section: 'reading',
+      revision: Number(row.reading_draft_revision) || 0,
+      answeredCount: countAnswered(parsed.data.answers),
+      accepted: Boolean(row.accepted)
+    });
     return res.json({
       ok: true,
-      deadlineAt: saved.rows[0].reading_deadline_at,
-      savedAt: saved.rows[0].reading_draft_updated_at,
-      serverNow: saved.rows[0].server_now
+      accepted: Boolean(row.accepted),
+      revision: Number(row.reading_draft_revision) || 0,
+      draft: row.reading_draft || {},
+      deadlineAt: row.reading_deadline_at,
+      savedAt: row.reading_draft_updated_at,
+      serverNow: row.server_now
     });
   }));
 
@@ -905,9 +1111,15 @@ export function createApp({
       definition_version: attempt.version
     });
     const listeningResult = attempt.listening_result;
-    const effectiveAnswers = attempt.reading_timed_out
-      ? (attempt.reading_draft || {})
-      : parsed.data.answers;
+    const selectedSubmission = chooseTimedSubmissionAnswers({
+      timedOut: Boolean(attempt.reading_timed_out),
+      graceActive: Boolean(attempt.reading_submission_grace_active),
+      submittedAnswers: parsed.data.answers,
+      submittedRevision: parsed.data.draftRevision,
+      serverDraft: attempt.reading_draft,
+      serverRevision: attempt.reading_draft_revision
+    });
+    const effectiveAnswers = selectedSubmission.answers;
     const readingResult = gradeSection(testDefinition.reading_definition, effectiveAnswers, 0);
     const combinedResult = buildCombinedResult(testDefinition, listeningResult, readingResult);
     const completeResult = await pool.query(completeReadingAttemptSql, [
@@ -918,6 +1130,13 @@ export function createApp({
     ]);
     if (completeResult.rowCount !== 1) throw new Error('Không thể hoàn tất bài Reading.');
     const storedCombinedResult = completeResult.rows[0].combined_result;
+    logTermTestEvent('submission_completed', slug.data, parsed.data.attemptToken, {
+      section: 'reading',
+      revision: parsed.data.draftRevision,
+      answeredCount: countAnswered(effectiveAnswers),
+      timedOut: Boolean(attempt.reading_timed_out),
+      snapshotSource: selectedSubmission.source
+    });
     const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, storedCombinedResult);
     return res.json({
       ok: true,

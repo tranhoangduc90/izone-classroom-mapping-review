@@ -269,10 +269,12 @@ CREATE TABLE assessment.term_test_attempt (
   reading_deadline_at TIMESTAMPTZ,
   reading_draft JSONB NOT NULL DEFAULT '{}'::jsonb,
   reading_draft_updated_at TIMESTAMPTZ,
+  reading_draft_revision BIGINT NOT NULL DEFAULT 0,
   reading_result JSONB,
   combined_result JSONB,
   reading_submitted_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
   writing_task_1 TEXT NOT NULL DEFAULT '',
   writing_task_2 TEXT NOT NULL DEFAULT '',
   writing_started_at TIMESTAMPTZ,
@@ -312,7 +314,9 @@ CREATE TABLE assessment.term_test_exam_session (
   listening_deadline_at TIMESTAMPTZ,
   listening_draft JSONB NOT NULL DEFAULT '{}'::jsonb,
   listening_draft_updated_at TIMESTAMPTZ,
+  listening_draft_revision BIGINT NOT NULL DEFAULT 0,
   listening_submitted_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
   attempt_id UUID UNIQUE REFERENCES assessment.term_test_attempt(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -339,6 +343,24 @@ CREATE INDEX idx_term_test_attempt_class_student
 CREATE INDEX idx_term_test_attempt_completed
   ON assessment.term_test_attempt (test_slug, completed_at DESC)
   WHERE completed_at IS NOT NULL;
+
+CREATE UNIQUE INDEX uq_term_test_exam_session_one_active_student
+  ON assessment.term_test_exam_session (
+    test_slug,
+    definition_version,
+    erp_course_class_id,
+    erp_student_contact_id
+  )
+  WHERE listening_submitted_at IS NULL AND superseded_at IS NULL;
+
+CREATE UNIQUE INDEX uq_term_test_attempt_one_active_student
+  ON assessment.term_test_attempt (
+    test_slug,
+    definition_version,
+    erp_course_class_id,
+    erp_student_contact_id
+  )
+  WHERE completed_at IS NULL AND superseded_at IS NULL;
 
 CREATE TABLE assessment.term_test_writing_grading_run (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

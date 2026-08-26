@@ -376,24 +376,47 @@ JOIN target_classes AS target
 WHERE definition.slug = $2
   AND definition.is_active = true;`;
 
-// Phiên Listening chỉ giữ UUID ngẫu nhiên ở trình duyệt; không tạo giới hạn số lượt theo học viên.
-export const insertTermTestExamSessionSql = `INSERT INTO assessment.term_test_exam_session (
-  test_slug,
-  definition_version,
-  erp_course_class_id,
-  class_name_snapshot,
-  erp_student_contact_id,
-  student_name_snapshot,
-  listening_resume_offset_seconds
-) VALUES ($1, $2::int, $3::bigint, $4, $5::bigint, $6, $7::int)
-RETURNING
+// Tạo hoặc lấy đúng một phiên Listening active của học viên; unique index chặn hai máy tạo trùng.
+export const insertTermTestExamSessionSql = `WITH inserted AS (
+  INSERT INTO assessment.term_test_exam_session (
+    test_slug,
+    definition_version,
+    erp_course_class_id,
+    class_name_snapshot,
+    erp_student_contact_id,
+    student_name_snapshot,
+    listening_resume_offset_seconds
+  ) VALUES ($1, $2::int, $3::bigint, $4, $5::bigint, $6, $7::int)
+  ON CONFLICT DO NOTHING
+  RETURNING *
+), resolved AS (
+  SELECT inserted.*, 0 AS match_priority
+  FROM inserted
+  UNION ALL
+  SELECT existing.*, 1 AS match_priority
+  FROM assessment.term_test_exam_session AS existing
+  WHERE existing.test_slug = $1
+    AND existing.definition_version = $2::int
+    AND existing.erp_course_class_id = $3::bigint
+    AND existing.erp_student_contact_id = $5::bigint
+    AND existing.listening_submitted_at IS NULL
+    AND existing.superseded_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM inserted)
+)
+SELECT
   id::text AS exam_session_token,
   test_slug,
   prepared_at,
   listening_started_at,
   listening_deadline_at,
+  listening_draft,
+  listening_draft_revision,
   listening_submitted_at,
-  attempt_id::text AS attempt_token;`;
+  attempt_id::text AS attempt_token,
+  now() AS server_now
+FROM resolved
+ORDER BY match_priority
+LIMIT 1;`;
 
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
@@ -401,14 +424,30 @@ export const resumeTermTestExamSessionSql = `SELECT
   prepared_at,
   listening_started_at,
   listening_deadline_at,
+  listening_draft,
+  listening_draft_revision,
   listening_submitted_at,
-  attempt_id::text AS attempt_token
+  attempt_id::text AS attempt_token,
+  now() AS server_now
 FROM assessment.term_test_exam_session
 WHERE id = $1::uuid
   AND test_slug = $2
   AND erp_course_class_id = $3::bigint
   AND erp_student_contact_id = $4::bigint
+  AND superseded_at IS NULL
   AND prepared_at >= now() - interval '8 hours';`;
+
+export const supersedeStaleTermTestExamSessionsSql = `UPDATE assessment.term_test_exam_session
+SET
+  superseded_at = now(),
+  updated_at = now()
+WHERE test_slug = $1
+  AND definition_version = $2::int
+  AND erp_course_class_id = $3::bigint
+  AND erp_student_contact_id = $4::bigint
+  AND listening_submitted_at IS NULL
+  AND superseded_at IS NULL
+  AND prepared_at < now() - interval '8 hours';`;
 
 // Khi học viên chọn lại tên trên một máy khác, nối vào lượt đã nộp Listening gần nhất.
 // Chỉ trả lượt thuộc đúng phiên bản đề đang hoạt động để tránh mở nhầm dữ liệu của đợt thi cũ.
@@ -419,6 +458,8 @@ export const findLatestTermTestAttemptForStudentSql = `SELECT
   attempt.listening_submitted_at,
   attempt.reading_started_at,
   attempt.reading_deadline_at,
+  attempt.reading_draft,
+  attempt.reading_draft_revision,
   attempt.completed_at,
   attempt.writing_started_at,
   attempt.writing_deadline_at,
@@ -434,7 +475,35 @@ WHERE attempt.test_slug = $1
   AND attempt.erp_course_class_id = $3::bigint
   AND attempt.erp_student_contact_id = $4::bigint
   AND attempt.listening_submitted_at IS NOT NULL
+  AND attempt.superseded_at IS NULL
 ORDER BY attempt.listening_submitted_at DESC, attempt.created_at DESC
+LIMIT 1;`;
+
+// Tìm đúng một lượt đang dở để answer sheet có thể nối lại trên trình duyệt khác.
+// Chỉ nhận lượt của phiên bản đề hiện tại, chưa hoàn tất, chưa bị thay thế và còn trong 8 giờ.
+export const findActiveTermTestAttemptForStudentSql = `SELECT
+  attempt.id::text AS attempt_token,
+  attempt.exam_session_id::text AS exam_session_token,
+  attempt.student_name_snapshot AS student_name,
+  attempt.listening_submitted_at,
+  attempt.reading_started_at,
+  attempt.reading_deadline_at,
+  attempt.reading_draft,
+  attempt.reading_draft_revision,
+  now() AS server_now
+FROM assessment.term_test_attempt AS attempt
+WHERE attempt.test_slug = $1
+  AND attempt.definition_version = $2::int
+  AND attempt.erp_course_class_id = $3::bigint
+  AND attempt.erp_student_contact_id = $4::bigint
+  AND attempt.listening_submitted_at IS NOT NULL
+  AND attempt.completed_at IS NULL
+  AND attempt.superseded_at IS NULL
+  AND attempt.created_at >= now() - interval '8 hours'
+ORDER BY
+  attempt.reading_draft_updated_at DESC NULLS LAST,
+  attempt.reading_started_at DESC NULLS LAST,
+  attempt.listening_submitted_at DESC
 LIMIT 1;`;
 
 // Nối lại lượt thi đã nộp Listening trên giao diện cũ mà không khởi động thêm một phiên Listening.
@@ -445,6 +514,8 @@ export const resumeTermTestAttemptContentSql = `SELECT
   attempt.listening_submitted_at,
   attempt.reading_started_at,
   attempt.reading_deadline_at,
+  attempt.reading_draft,
+  attempt.reading_draft_revision,
   attempt.completed_at,
   attempt.writing_started_at,
   attempt.writing_deadline_at,
@@ -459,7 +530,8 @@ WHERE attempt.id = $1::uuid
   AND attempt.test_slug = $2
   AND attempt.erp_course_class_id = $3::bigint
   AND attempt.erp_student_contact_id = $4::bigint
-  AND attempt.listening_submitted_at IS NOT NULL;`;
+  AND attempt.listening_submitted_at IS NOT NULL
+  AND attempt.superseded_at IS NULL;`;
 
 export const findTermTestExamSessionAssetSql = `SELECT
   id::text AS exam_session_token,
@@ -471,6 +543,7 @@ export const findTermTestExamSessionAssetSql = `SELECT
 FROM assessment.term_test_exam_session
 WHERE id = $1::uuid
   AND test_slug = $2
+  AND superseded_at IS NULL
   AND prepared_at >= now() - interval '8 hours';`;
 
 export const startTermTestListeningSessionSql = `UPDATE assessment.term_test_exam_session
@@ -486,6 +559,7 @@ SET
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
+  AND superseded_at IS NULL
   AND prepared_at >= now() - interval '8 hours'
 RETURNING
   id::text AS exam_session_token,
@@ -497,21 +571,55 @@ RETURNING
   attempt_id::text AS attempt_token,
   now() AS server_now;`;
 
-export const saveTermTestListeningDraftSql = `UPDATE assessment.term_test_exam_session
-SET
-  listening_draft = $3::jsonb,
-  listening_draft_updated_at = now(),
-  updated_at = now()
-WHERE id = $1::uuid
-  AND test_slug = $2
-  AND listening_started_at IS NOT NULL
-  AND listening_submitted_at IS NULL
-  AND now() <= listening_deadline_at
-RETURNING
-  id::text AS exam_session_token,
-  listening_deadline_at,
-  listening_draft_updated_at,
-  now() AS server_now;`;
+export const saveTermTestListeningDraftSql = `WITH updated AS (
+  UPDATE assessment.term_test_exam_session
+  SET
+    listening_draft = $3::jsonb,
+    listening_draft_revision = CASE
+      WHEN $4::bigint IS NULL THEN listening_draft_revision + 1
+      ELSE $4::bigint
+    END,
+    listening_draft_updated_at = now(),
+    updated_at = now()
+  WHERE id = $1::uuid
+    AND test_slug = $2
+    AND superseded_at IS NULL
+    AND listening_started_at IS NOT NULL
+    AND listening_submitted_at IS NULL
+    AND now() <= listening_deadline_at
+    AND ($4::bigint IS NULL OR $4::bigint > listening_draft_revision)
+  RETURNING
+    id::text AS exam_session_token,
+    listening_deadline_at,
+    listening_draft_updated_at,
+    listening_draft_revision,
+    listening_draft,
+    true AS accepted,
+    now() AS server_now
+), stale AS (
+  SELECT
+    session.id::text AS exam_session_token,
+    session.listening_deadline_at,
+    session.listening_draft_updated_at,
+    session.listening_draft_revision,
+    session.listening_draft,
+    false AS accepted,
+    now() AS server_now
+  FROM assessment.term_test_exam_session AS session
+  WHERE session.id = $1::uuid
+    AND session.test_slug = $2
+    AND session.superseded_at IS NULL
+    AND session.listening_started_at IS NOT NULL
+    AND session.listening_submitted_at IS NULL
+    AND now() <= session.listening_deadline_at
+    AND $4::bigint IS NOT NULL
+    AND $4::bigint <= session.listening_draft_revision
+    AND NOT EXISTS (SELECT 1 FROM updated)
+)
+SELECT * FROM updated
+UNION ALL
+SELECT * FROM stale
+LIMIT 1;`;
 
 export const findTermTestListeningSubmissionSql = `SELECT
   session.id::text AS exam_session_token,
@@ -524,9 +632,11 @@ export const findTermTestListeningSubmissionSql = `SELECT
   session.listening_started_at,
   session.listening_deadline_at,
   session.listening_draft,
+  session.listening_draft_revision,
   session.listening_submitted_at,
   session.attempt_id::text AS attempt_token,
   now() > session.listening_deadline_at AS listening_timed_out,
+  now() <= session.listening_deadline_at + interval '5 minutes' AS listening_submission_grace_active,
   definition.slug,
   definition.title AS test_title,
   definition.version,
@@ -539,6 +649,7 @@ JOIN assessment.test_definition AS definition
  AND definition.version = session.definition_version
 WHERE session.id = $1::uuid
   AND session.test_slug = $2
+  AND session.superseded_at IS NULL
   AND session.listening_started_at IS NOT NULL;`;
 
 export const insertProtectedListeningAttemptSql = `WITH target_session AS (
@@ -546,6 +657,7 @@ export const insertProtectedListeningAttemptSql = `WITH target_session AS (
   FROM assessment.term_test_exam_session
   WHERE id = $2::uuid
     AND test_slug = $3
+    AND superseded_at IS NULL
 ),
 inserted AS (
   INSERT INTO assessment.term_test_attempt (
@@ -574,7 +686,7 @@ inserted AS (
     $5::jsonb,
     now()
   FROM target_session AS session
-  ON CONFLICT (test_slug, client_submission_id) DO NOTHING
+  ON CONFLICT DO NOTHING
   RETURNING *
 ),
 resolved AS (
@@ -631,17 +743,34 @@ export const insertListeningAttemptSql = `WITH inserted AS (
     $1::uuid, $2, $3::int, $4::bigint, $5, $6::bigint, $7,
     $8::jsonb, $9::jsonb, now()
   )
-  ON CONFLICT (test_slug, client_submission_id) DO NOTHING
+  ON CONFLICT DO NOTHING
   RETURNING *
 ),
 resolved AS (
-  SELECT * FROM inserted
+  SELECT inserted.*, 0 AS match_priority
+  FROM inserted
   UNION ALL
-  SELECT existing.*
+  SELECT existing.*, 1 AS match_priority
   FROM assessment.term_test_attempt AS existing
   WHERE existing.test_slug = $2
     AND existing.client_submission_id = $1::uuid
     AND NOT EXISTS (SELECT 1 FROM inserted)
+  UNION ALL
+  SELECT existing.*, 2 AS match_priority
+  FROM assessment.term_test_attempt AS existing
+  WHERE existing.test_slug = $2
+    AND existing.definition_version = $3::int
+    AND existing.erp_course_class_id = $4::bigint
+    AND existing.erp_student_contact_id = $6::bigint
+    AND existing.completed_at IS NULL
+    AND existing.superseded_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM inserted)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM assessment.term_test_attempt AS same_submission
+      WHERE same_submission.test_slug = $2
+        AND same_submission.client_submission_id = $1::uuid
+    )
 )
 SELECT
   id::text AS attempt_token,
@@ -652,9 +781,15 @@ SELECT
   student_name_snapshot AS student_name,
   listening_result,
   listening_submitted_at,
+  reading_started_at,
+  reading_deadline_at,
+  reading_draft,
+  reading_draft_revision,
   completed_at,
-  combined_result
+  combined_result,
+  (match_priority = 2) AS resumed_active_attempt
 FROM resolved
+ORDER BY match_priority
 LIMIT 1;`;
 
 export const findAttemptForReadingSql = `SELECT
@@ -670,10 +805,15 @@ export const findAttemptForReadingSql = `SELECT
   attempt.reading_deadline_at,
   attempt.reading_draft,
   attempt.reading_draft_updated_at,
+  attempt.reading_draft_revision,
   CASE
     WHEN attempt.reading_deadline_at IS NULL THEN false
     ELSE now() > attempt.reading_deadline_at
   END AS reading_timed_out,
+  CASE
+    WHEN attempt.reading_deadline_at IS NULL THEN false
+    ELSE now() <= attempt.reading_deadline_at + interval '5 minutes'
+  END AS reading_submission_grace_active,
   attempt.completed_at,
   attempt.combined_result,
   definition.slug,
@@ -687,7 +827,8 @@ JOIN assessment.test_definition AS definition
   ON definition.slug = attempt.test_slug
  AND definition.version = attempt.definition_version
 WHERE attempt.id = $1::uuid
-  AND attempt.test_slug = $2;`;
+  AND attempt.test_slug = $2
+  AND attempt.superseded_at IS NULL;`;
 
 export const startReadingAttemptSql = `UPDATE assessment.term_test_attempt
 SET
@@ -697,28 +838,64 @@ SET
 WHERE id = $1::uuid
   AND test_slug = $2
   AND completed_at IS NULL
+  AND superseded_at IS NULL
 RETURNING
   id::text AS attempt_token,
   reading_started_at,
   reading_deadline_at,
+  reading_draft,
+  reading_draft_revision,
   reading_submitted_at,
   completed_at,
   now() AS server_now;`;
 
-export const saveReadingDraftSql = `UPDATE assessment.term_test_attempt
-SET
-  reading_draft = $2::jsonb,
-  reading_draft_updated_at = now(),
-  updated_at = now()
-WHERE id = $1::uuid
-  AND completed_at IS NULL
-  AND reading_started_at IS NOT NULL
-  AND now() <= reading_deadline_at
-RETURNING
-  id::text AS attempt_token,
-  reading_deadline_at,
-  reading_draft_updated_at,
-  now() AS server_now;`;
+export const saveReadingDraftSql = `WITH updated AS (
+  UPDATE assessment.term_test_attempt
+  SET
+    reading_draft = $2::jsonb,
+    reading_draft_revision = CASE
+      WHEN $3::bigint IS NULL THEN reading_draft_revision + 1
+      ELSE $3::bigint
+    END,
+    reading_draft_updated_at = now(),
+    updated_at = now()
+  WHERE id = $1::uuid
+    AND completed_at IS NULL
+    AND superseded_at IS NULL
+    AND reading_started_at IS NOT NULL
+    AND now() <= reading_deadline_at
+    AND ($3::bigint IS NULL OR $3::bigint > reading_draft_revision)
+  RETURNING
+    id::text AS attempt_token,
+    reading_deadline_at,
+    reading_draft_updated_at,
+    reading_draft_revision,
+    reading_draft,
+    true AS accepted,
+    now() AS server_now
+), stale AS (
+  SELECT
+    attempt.id::text AS attempt_token,
+    attempt.reading_deadline_at,
+    attempt.reading_draft_updated_at,
+    attempt.reading_draft_revision,
+    attempt.reading_draft,
+    false AS accepted,
+    now() AS server_now
+  FROM assessment.term_test_attempt AS attempt
+  WHERE attempt.id = $1::uuid
+    AND attempt.completed_at IS NULL
+    AND attempt.superseded_at IS NULL
+    AND attempt.reading_started_at IS NOT NULL
+    AND now() <= attempt.reading_deadline_at
+    AND $3::bigint IS NOT NULL
+    AND $3::bigint <= attempt.reading_draft_revision
+    AND NOT EXISTS (SELECT 1 FROM updated)
+)
+SELECT * FROM updated
+UNION ALL
+SELECT * FROM stale
+LIMIT 1;`;
 
 export const completeReadingAttemptSql = `WITH updated AS (
   UPDATE assessment.term_test_attempt
@@ -731,6 +908,7 @@ export const completeReadingAttemptSql = `WITH updated AS (
     updated_at = now()
   WHERE id = $1::uuid
     AND completed_at IS NULL
+    AND superseded_at IS NULL
   RETURNING *
 ),
 resolved AS (
@@ -739,6 +917,7 @@ resolved AS (
   SELECT existing.*
   FROM assessment.term_test_attempt AS existing
   WHERE existing.id = $1::uuid
+    AND existing.completed_at IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM updated)
 )
 SELECT id::text AS attempt_token, completed_at, combined_result

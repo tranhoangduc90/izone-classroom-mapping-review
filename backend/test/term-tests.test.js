@@ -657,6 +657,94 @@ test('nộp Reading chấm cả hai phần và result chỉ mở bằng attempt 
   assert.equal(syncPayloads[0].studentId, '9001');
 });
 
+test('Reading hết giờ chỉ nhận snapshot cuối còn trong cửa sổ dự phòng và không để payload cũ ghi đè', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const listening = gradeSection(makeSection(), perfectAnswers(), 0);
+  const serverDraft = { ...perfectAnswers(), 1: 'server-draft' };
+
+  async function submitWithRevision({ submittedRevision, serverRevision, graceActive }) {
+    let storedAnswers = null;
+    const pool = makePool(async (_sql, params, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          rowCount: 1,
+          rows: [storedTestRow({
+            attempt_token: attemptToken,
+            slug: 'term-test-1',
+            title: 'Term Test 1',
+            version: 1,
+            listening_result: listening,
+            reading_timed_out: true,
+            reading_submission_grace_active: graceActive,
+            reading_draft: serverDraft,
+            reading_draft_revision: serverRevision,
+            completed_at: null,
+            combined_result: null
+          })]
+        };
+      }
+      storedAnswers = JSON.parse(params[1]);
+      return {
+        rowCount: 1,
+        rows: [{ attempt_token: attemptToken, combined_result: JSON.parse(params[3]) }]
+      };
+    });
+    const app = createApp({ config: makeConfig(), pool, logger: { info() {} } });
+    const response = await request(app)
+      .post('/api/term-tests/term-test-1/reading')
+      .set('Origin', 'https://tranhoangduc90.github.io')
+      .send({
+        attemptToken,
+        ...(submittedRevision === undefined ? {} : { draftRevision: submittedRevision }),
+        answers: perfectAnswers()
+      });
+    assert.equal(response.status, 200);
+    return storedAnswers;
+  }
+
+  const acceptedFinal = await submitWithRevision({ submittedRevision: 6, serverRevision: 5, graceActive: true });
+  assert.equal(acceptedFinal['1'], 'color');
+  const rejectedStale = await submitWithRevision({ submittedRevision: 4, serverRevision: 5, graceActive: true });
+  assert.equal(rejectedStale['1'], 'server-draft');
+  const rejectedAfterGrace = await submitWithRevision({ submittedRevision: 6, serverRevision: 5, graceActive: false });
+  assert.equal(rejectedAfterGrace['1'], 'server-draft');
+  const rejectedLegacyStale = await submitWithRevision({ submittedRevision: undefined, serverRevision: 5, graceActive: true });
+  assert.equal(rejectedLegacyStale['1'], 'server-draft');
+});
+
+test('log trình duyệt chỉ giữ metadata kỹ thuật, không giữ token, tên hay đáp án', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const logs = [];
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{ attempt_token: attemptToken, test_slug: 'term-test-1' }]
+  }));
+  const app = createApp({
+    config: makeConfig(),
+    pool,
+    logger: { info(message) { logs.push(message); } }
+  });
+  const response = await request(app)
+    .post('/api/term-tests/term-test-1/client-event')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      attemptToken,
+      event: 'submit_failed',
+      section: 'reading',
+      build: 'test-build',
+      revision: 7,
+      answeredCount: 40,
+      answers: { 1: 'đáp án riêng tư' },
+      studentName: 'Tên học viên riêng tư'
+    });
+  assert.equal(response.status, 202);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].includes(attemptToken), false);
+  assert.equal(logs[0].includes('đáp án riêng tư'), false);
+  assert.equal(logs[0].includes('Tên học viên riêng tư'), false);
+  assert.match(logs[0], /"answeredCount":40/);
+});
+
 test('Writing được lưu theo attempt token và trả lại nguyên văn khi mở kết quả', async () => {
   const attemptToken = '00000000-0000-4000-8000-000000000099';
   const submittedAt = '2026-08-19T04:00:00.000Z';
@@ -758,8 +846,19 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   const pool = makePool(async (_sql, _params, callNumber) => {
     if (callNumber === 1) return { rowCount: 1, rows: [storedTestRow()] };
     if (callNumber === 2) return { rowCount: 0, rows: [] };
-    if (callNumber === 3) {
-      return { rowCount: 1, rows: [{ exam_session_token: examSessionToken }] };
+    if (callNumber === 3) return { rowCount: 0, rows: [] };
+    if (callNumber === 4) {
+      return {
+        rowCount: 1,
+        rows: [{
+          exam_session_token: examSessionToken,
+          listening_started_at: startedAt,
+          listening_deadline_at: deadlineAt,
+          listening_draft: { 1: 'bản Listening đã lưu' },
+          listening_draft_revision: 4,
+          server_now: startedAt
+        }]
+      };
     }
     return {
       rowCount: 1,
@@ -791,8 +890,11 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   assert.equal(prepared.body.examSessionToken, examSessionToken);
   assert.equal(prepared.body.content, undefined);
   assert.equal(prepared.body.audioKey, undefined);
+  assert.equal(prepared.body.listeningDraft['1'], 'bản Listening đã lưu');
+  assert.equal(prepared.body.listeningDraftRevision, 4);
   assert.match(prepared.body.encryptedAudioUrl, /\/audio$/);
-  assert.equal(pool.calls[2].params[6], 0);
+  assert.deepEqual(pool.calls[2].params, ['term-test-2', 1, '2139', '9001']);
+  assert.equal(pool.calls[3].params[6], 0);
 
   const started = await request(app)
     .post('/api/term-tests/term-test-2/session/start')
@@ -802,7 +904,7 @@ test('phòng chờ chỉ nhận đề và khóa audio sau khi máy chủ ghi nh�
   assert.equal(started.body.content.protected, true);
   assert.equal(typeof started.body.audioKey, 'string');
   assert.equal(started.body.listeningDeadlineAt, deadlineAt);
-  assert.equal(pool.calls[3].params[2], 1964);
+  assert.equal(pool.calls[4].params[2], 1964);
 });
 
 test('mã gửi bài của phiên Listening khác trả xung đột có kiểm soát', async () => {
@@ -937,6 +1039,41 @@ test('chọn lại tên trên máy khác tự nối lượt đã nộp Listening
   assert.equal(response.body.encryptedAudioUrl, undefined);
   assert.equal(pool.calls.length, 2);
   assert.deepEqual(pool.calls[1].params, ['term-test-2', 1, '2139', '9001']);
+});
+
+test('answer sheet nối lại đúng lượt Reading đang dở và trả bản nháp mới nhất', async () => {
+  const attemptToken = '00000000-0000-4000-8000-000000000099';
+  const readingDraft = { 1: 'bản đã lưu', 2: 'B' };
+  const pool = makePool(async (_sql, _params, callNumber) => {
+    if (callNumber === 1) return { rowCount: 1, rows: [storedTestRow()] };
+    return {
+      rowCount: 1,
+      rows: [{
+        attempt_token: attemptToken,
+        exam_session_token: null,
+        student_name: 'Học viên thử nghiệm',
+        listening_submitted_at: '2026-08-26T01:00:00.000Z',
+        reading_started_at: '2026-08-26T01:05:00.000Z',
+        reading_deadline_at: '2026-08-26T02:05:00.000Z',
+        reading_draft: readingDraft,
+        reading_draft_revision: 8,
+        server_now: '2026-08-26T01:30:00.000Z'
+      }]
+    };
+  });
+  const app = createApp({ config: makeConfig(), pool, logger: { info() {} } });
+  const response = await request(app)
+    .post('/api/term-tests/term-test-1/attempt/active')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .send({
+      classCode: 'IC2139',
+      studentRef: '00000000-0000-4000-8000-000000000001'
+    });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.attemptToken, attemptToken);
+  assert.deepEqual(response.body.readingDraft, readingDraft);
+  assert.equal(response.body.readingDraftRevision, 8);
+  assert.deepEqual(pool.calls[1].params, ['term-test-1', 1, '2139', '9001']);
 });
 
 test('Mini Test trả kết quả nhưng không ghi nhầm điểm vào Portal Term Test', async () => {
