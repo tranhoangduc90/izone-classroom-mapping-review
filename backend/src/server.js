@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
-import { createDatabasePool } from './db.js';
+import { createDatabasePool, createLearningDatabasePool } from './db.js';
 import { createErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
@@ -8,6 +8,7 @@ import { createTermTestWritingGradingService } from './term-test-writing-grading
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
 const pool = createDatabasePool(config);
+const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
 const syncErpGrades = createErpGradeSync({ config });
 const termTestAssetService = config.termTestAssetDir
   ? createTermTestAssetService({
@@ -21,6 +22,7 @@ const termTestWritingGradingService = config.writingTestSyncSecret
 const app = createApp({
   config,
   pool,
+  learningPool,
   syncErpGrades,
   termTestAssetService,
   termTestWritingGradingService
@@ -37,7 +39,7 @@ server.keepAliveTimeout = 5_000;
 async function shutdown(signal) {
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   server.close(async () => {
-    await pool.end();
+    await Promise.all([pool.end(), learningPool?.end()]);
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

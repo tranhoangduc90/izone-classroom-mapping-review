@@ -6,6 +6,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8788),
   DATABASE_URL: z.string().min(1),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(10),
+  LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  LEARNING_DATABASE_URL: z.string().optional().default(''),
+  LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
   AUTH_MODE: z.enum(['google', 'legacy']).default('google'),
   GOOGLE_CLIENT_ID: z.string().trim().optional().default(''),
   LEGACY_REVIEW_TOKEN: z.string().optional().default(''),
@@ -40,6 +43,9 @@ const envSchema = z.object({
   if (value.TERM_TEST_SESSION_SECRET && value.TERM_TEST_SESSION_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['TERM_TEST_SESSION_SECRET'], message: 'TERM_TEST_SESSION_SECRET phải có ít nhất 32 ký tự.' });
   }
+  if (value.LEARNING_ENABLED && !value.LEARNING_DATABASE_URL) {
+    context.addIssue({ code: 'custom', path: ['LEARNING_DATABASE_URL'], message: 'LEARNING_DATABASE_URL là bắt buộc khi bật Progress Log.' });
+  }
 });
 
 export function loadConfig(env = process.env) {
@@ -56,6 +62,9 @@ export function loadConfig(env = process.env) {
     port: parsed.PORT,
     databaseUrl: parsed.DATABASE_URL,
     dbPoolMax: parsed.DB_POOL_MAX,
+    learningEnabled: parsed.LEARNING_ENABLED,
+    learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
+    learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,
     authMode: parsed.AUTH_MODE,
     googleClientId: parsed.GOOGLE_CLIENT_ID,
     legacyReviewToken: parsed.LEGACY_REVIEW_TOKEN,

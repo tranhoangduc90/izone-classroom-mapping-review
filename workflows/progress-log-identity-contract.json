@@ -1,0 +1,94 @@
+{
+  "name": "Progress Log: nộp phiếu, chấm và tạo evidence",
+  "source_mode": "batch",
+  "identity": {
+    "scope": "per_item",
+    "entity_key": "student_ref",
+    "unit_key": "submission_id:item_version_id",
+    "operation_key": "grading_run_id",
+    "idempotency_key": "submission_id:operation"
+  },
+  "stages": [
+    {
+      "name": "Khóa form version và roster",
+      "kind": "join",
+      "preserves": [
+        "assignment_id",
+        "student_ref",
+        "form_version_id"
+      ],
+      "join_on": [
+        "assignment_id",
+        "student_ref"
+      ]
+    },
+    {
+      "name": "Tách câu trả lời để chấm",
+      "kind": "fan_out",
+      "preserves": [
+        "submission_id",
+        "student_ref",
+        "item_version_id",
+        "grading_run_id"
+      ]
+    },
+    {
+      "name": "Chấm câu khách quan hoặc xếp hàng câu tự luận",
+      "kind": "async",
+      "preserves": [
+        "submission_id",
+        "student_ref",
+        "item_version_id",
+        "grading_run_id"
+      ]
+    },
+    {
+      "name": "Gom kết quả đúng học viên",
+      "kind": "aggregate",
+      "preserves": [
+        "submission_id",
+        "student_ref",
+        "grading_run_id"
+      ],
+      "group_by": [
+        "submission_id",
+        "student_ref",
+        "grading_run_id"
+      ]
+    },
+    {
+      "name": "Xử lý lại job bị lỗi",
+      "kind": "retry",
+      "preserves": [
+        "student_ref",
+        "submission_id:item_version_id",
+        "grading_run_id",
+        "idempotency_key"
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "name": "Ghi submission, điểm danh, evidence và outbox",
+      "target_key": "student_ref",
+      "guard": "fail_closed",
+      "readback": true
+    },
+    {
+      "name": "Ghi kết quả AI hoặc báo cáo định kỳ",
+      "target_key": "student_ref",
+      "guard": "fail_closed",
+      "readback": true
+    }
+  ],
+  "tests": [
+    "single",
+    "variable_cardinality",
+    "batch_interleaved",
+    "out_of_order",
+    "duplicate_retry",
+    "partial_failure",
+    "same_display_name",
+    "wrong_target_readback"
+  ]
+}

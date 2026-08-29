@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { createAuthMiddleware } from './auth.js';
+import { createLearningRouter } from './learning-routes.js';
 import {
   completeReadingAttemptSql,
   fetchTermTestAttemptReviewSql,
@@ -383,7 +384,7 @@ function addCors(config) {
       res.set('Access-Control-Allow-Origin', origin);
       res.set('Vary', 'Origin');
     }
-    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-review-token, x-mini-test-sync, x-writing-test-sync');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
@@ -395,6 +396,7 @@ function addCors(config) {
 export function createApp({
   config,
   pool,
+  learningPool = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   writingTestService,
@@ -413,6 +415,7 @@ export function createApp({
     limit: 900,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
+    skip: req => req.path.startsWith('/api/learning'),
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   }));
   app.use(express.json({ limit: '768kb', strict: true }));
@@ -510,6 +513,7 @@ export function createApp({
   app.get('/version', (_req, res) => res.json({ ok: true, build }));
   app.get('/ready', asyncRoute(async (_req, res) => {
     await pool.query('SELECT 1');
+    if (config.learningEnabled) await learningPool.query('SELECT 1');
     res.json({ ok: true, build });
   }));
 
@@ -1291,6 +1295,12 @@ export function createApp({
   }));
 
   const authenticate = createAuthMiddleware({ config, pool, verifyGoogleToken });
+  if (config.learningEnabled && !learningPool) {
+    throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
+  }
+  if (config.learningEnabled) {
+    app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
+  }
   app.get('/api/auth/me', authenticate, (req, res) => {
     res.json({ ok: true, reviewer: req.reviewer });
   });

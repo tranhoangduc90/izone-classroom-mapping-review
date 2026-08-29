@@ -19,6 +19,23 @@ export function createDatabasePool(config) {
   return pool;
 }
 
+// Progress Log dùng pool/role riêng để không kế thừa quyền rộng của API mapping.
+export function createLearningDatabasePool(config) {
+  const pool = new Pool({
+    connectionString: config.learningDatabaseUrl,
+    max: config.learningDbPoolMax,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    application_name: 'izone_learning_api'
+  });
+
+  pool.on('error', () => {
+    // Không ghi connection string, token hoặc nội dung học viên vào log.
+    console.error('PostgreSQL pool Progress Log gặp lỗi kết nối nền.');
+  });
+  return pool;
+}
+
 // Chạy một thao tác trong transaction; lỗi ở bất kỳ bước nào đều rollback.
 export async function withTransaction(pool, work) {
   const client = await pool.connect();
