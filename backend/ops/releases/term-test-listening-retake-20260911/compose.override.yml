@@ -2,5 +2,6 @@ services:
   mapping-review-api:
     image: mapping-review-api:term-test-listening-retake-20260911
     build:
-      context: .
+      # Compose giải đường dẫn theo file gốc của stack, nên dùng đúng thư mục deploy tuyệt đối.
+      context: /opt/mapping-review-api/deploy/term-test-listening-retake-20260911
       dockerfile: Dockerfile
