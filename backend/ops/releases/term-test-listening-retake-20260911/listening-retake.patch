@@ -39,13 +39,13 @@ diff --git a/src/app.js b/src/app.js
    examSessionToken: z.string().uuid(),
 @@ -349,16 +351,54 @@
  }
- 
+~
  function hasValidSharedSecret(supplied, expected) {
    const left = Buffer.from(String(supplied || ''), 'utf8');
    const right = Buffer.from(String(expected || ''), 'utf8');
    return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
  }
- 
+~
 +const listeningRetakeGrantSchema = z.object({
 +  v: z.literal(1),
 +  purpose: z.literal('listening-retake'),
@@ -93,7 +93,7 @@ diff --git a/src/app.js b/src/app.js
      deadlineAt: row?.writing_deadline_at || null,
      serverNow: row?.server_now || null,
 @@ -729,36 +769,47 @@
- 
+~
    app.post('/api/term-tests/:testSlug/session/prepare', testWriteLimiter, asyncRoute(async (req, res) => {
      if (!requireTermTestAssets(res)) return;
      const slug = testSlugSchema.safeParse(req.params.testSlug);
@@ -205,7 +205,7 @@ diff --git a/src/sql.js b/src/sql.js
  FROM resolved
  ORDER BY match_priority
  LIMIT 1;`;
- 
+~
 +// Dữ liệu vào: UUID phiên nằm trong vé thi bù đã được backend xác thực.
 +// Việc chính: tạo đúng một phiên mới theo UUID đó hoặc lấy lại chính phiên đã tạo khi trình duyệt gửi lại.
 +// Kết quả: lượt thi bù không nối vào kết quả Term Test cũ và không thể nhân bản chỉ bằng cách tải lại trang.

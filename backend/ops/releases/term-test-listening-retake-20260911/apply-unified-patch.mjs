@@ -59,6 +59,10 @@ while (index < patchLines.length) {
         oldCursor += 1;
       } else if (line.startsWith('+')) {
         result.push(line.slice(1));
+      } else if (line === '~') {
+        if (originalLines[oldCursor] !== '') throw new Error(`patch_empty_context_mismatch:${relativePath}:${oldCursor + 1}`);
+        result.push('');
+        oldCursor += 1;
       } else if (line !== '' && !line.startsWith('\\ No newline')) {
         throw new Error(`patch_line_invalid:${relativePath}`);
       }
