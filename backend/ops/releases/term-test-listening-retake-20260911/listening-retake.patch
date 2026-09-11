@@ -1,0 +1,261 @@
+diff --git a/src/app.js b/src/app.js
+--- a/src/app.js
++++ b/src/app.js
+@@ -13,16 +13,17 @@
+   fetchTermTestResultSql,
+   findTermTestExamSessionAssetSql,
+   findTermTestListeningSubmissionSql,
+   findAttemptForReadingSql,
+   findActiveTermTestAttemptForStudentSql,
+   findLatestTermTestAttemptForStudentSql,
+   findTermTestAttemptSlugSql,
+   findStudentForTermTestSql,
++  insertGrantedTermTestExamSessionSql,
+   insertProtectedListeningAttemptSql,
+   insertTermTestExamSessionSql,
+   insertListeningAttemptSql,
+   findStudentForMiniTestSql,
+   listReviewsSql,
+   listTermTestTeacherOptionsSql,
+   listTermTestTeacherResultsSql,
+   fetchTermTestTeacherAttemptReviewSql,
+@@ -107,16 +108,17 @@
+   testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5']),
+   studentRef: z.string().uuid(),
+   confirmation: z.literal('RESET_DEMO_STUDENT')
+ });
+ const examSessionPrepareSchema = z.object({
+   classCode: classCodeSchema,
+   studentRef: z.string().uuid(),
+   examSessionToken: z.string().uuid().optional(),
++  retakeGrant: z.string().trim().min(80).max(2048).optional(),
+   legacyElapsedSeconds: z.number().int().min(0).max(7200).optional().default(0)
+ });
+ const examSessionStartSchema = z.object({
+   examSessionToken: z.string().uuid(),
+   heardSeconds: z.number().min(0).max(7200).optional()
+ });
+ const audioProgressSchema = z.object({
+   examSessionToken: z.string().uuid(),
+@@ -349,16 +351,54 @@
+ }
+ 
+ function hasValidSharedSecret(supplied, expected) {
+   const left = Buffer.from(String(supplied || ''), 'utf8');
+   const right = Buffer.from(String(expected || ''), 'utf8');
+   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+ }
+ 
++const listeningRetakeGrantSchema = z.object({
++  v: z.literal(1),
++  purpose: z.literal('listening-retake'),
++  sessionToken: z.string().uuid(),
++  testSlug: testSlugSchema,
++  classCode: classCodeSchema,
++  studentRef: z.string().uuid(),
++  expiresAt: z.number().int().positive()
++});
++
++// Vé thi bù được ký bằng bí mật chỉ có trên máy chủ. Trình duyệt chỉ gửi vé;
++// nếu chữ ký, lớp, học viên, bài thi hoặc hạn dùng sai thì không tạo phiên mới.
++function verifyListeningRetakeGrant(token, expected, secret, nowSeconds = Math.floor(Date.now() / 1000)) {
++  try {
++    if (!secret || typeof token !== 'string') return null;
++    const parts = token.split('.');
++    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
++    const suppliedSignature = Buffer.from(parts[1], 'base64url');
++    const expectedSignature = crypto
++      .createHmac('sha256', secret)
++      .update(`izone-listening-retake-v1:${parts[0]}`)
++      .digest();
++    if (suppliedSignature.length !== expectedSignature.length
++      || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return null;
++    const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
++    const parsed = listeningRetakeGrantSchema.safeParse(decoded);
++    if (!parsed.success) return null;
++    const grant = parsed.data;
++    if (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60) return null;
++    if (grant.testSlug !== expected.testSlug
++      || grant.classCode !== expected.classCode
++      || grant.studentRef !== expected.studentRef) return null;
++    return grant;
++  } catch {
++    return null;
++  }
++}
++
+ function serializeTermTestWriting(row, grading = null) {
+   return {
+     task1: String(row?.writing_task_1 || ''),
+     task2: String(row?.writing_task_2 || ''),
+     started: Boolean(row?.writing_started_at),
+     submitted: Boolean(row?.writing_submitted_at),
+     deadlineAt: row?.writing_deadline_at || null,
+     serverNow: row?.server_now || null,
+@@ -729,36 +769,47 @@
+ 
+   app.post('/api/term-tests/:testSlug/session/prepare', testWriteLimiter, asyncRoute(async (req, res) => {
+     if (!requireTermTestAssets(res)) return;
+     const slug = testSlugSchema.safeParse(req.params.testSlug);
+     const parsed = examSessionPrepareSchema.safeParse(req.body);
+     if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
+       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu chuẩn bị bài thi không hợp lệ.' });
+     }
++    const retakeGrant = parsed.data.retakeGrant
++      ? verifyListeningRetakeGrant(parsed.data.retakeGrant, {
++        testSlug: slug.data,
++        classCode: parsed.data.classCode,
++        studentRef: parsed.data.studentRef
++      }, config.termTestSessionSecret)
++      : null;
++    if (parsed.data.retakeGrant && !retakeGrant) {
++      return res.status(403).json({ ok: false, error: 'INVALID_RETAKE_GRANT', message: 'Liên kết thi bù không hợp lệ hoặc đã hết hạn.' });
++    }
+     const studentResult = await pool.query(findStudentForTermTestSql, [
+       parsed.data.classCode,
+       slug.data,
+       parsed.data.studentRef
+     ]);
+     if (studentResult.rowCount !== 1) {
+       return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy học viên trong lớp này.' });
+     }
+     const student = studentResult.rows[0];
+     let session = null;
+-    if (parsed.data.examSessionToken) {
++    const requestedSessionToken = retakeGrant?.sessionToken || parsed.data.examSessionToken;
++    if (requestedSessionToken) {
+       const resumed = await pool.query(resumeTermTestExamSessionSql, [
+-        parsed.data.examSessionToken,
++        requestedSessionToken,
+         slug.data,
+         student.class_id,
+         student.student_id
+       ]);
+       session = resumed.rows[0] || null;
+     }
+-    if (!session) {
++    if (!session && !retakeGrant) {
+       const latestAttempt = await pool.query(findLatestTermTestAttemptForStudentSql, [
+         slug.data,
+         student.definition_version,
+         student.class_id,
+         student.student_id
+       ]);
+       const attempt = latestAttempt.rows[0] || null;
+       if (attempt) {
+@@ -780,27 +831,41 @@
+     }
+     if (!session) {
+       await pool.query(supersedeStaleTermTestExamSessionsSql, [
+         slug.data,
+         student.definition_version,
+         student.class_id,
+         student.student_id
+       ]);
+-      const inserted = await pool.query(insertTermTestExamSessionSql, [
+-        slug.data,
+-        student.definition_version,
+-        student.class_id,
+-        student.class_name,
+-        student.student_id,
+-        student.student_name,
+-        parsed.data.legacyElapsedSeconds
+-      ]);
++      const inserted = retakeGrant
++        ? await pool.query(insertGrantedTermTestExamSessionSql, [
++          retakeGrant.sessionToken,
++          slug.data,
++          student.definition_version,
++          student.class_id,
++          student.class_name,
++          student.student_id,
++          student.student_name,
++          parsed.data.legacyElapsedSeconds
++        ])
++        : await pool.query(insertTermTestExamSessionSql, [
++          slug.data,
++          student.definition_version,
++          student.class_id,
++          student.class_name,
++          student.student_id,
++          student.student_name,
++          parsed.data.legacyElapsedSeconds
++        ]);
+       session = inserted.rows[0];
+     }
++    if (!session) {
++      return res.status(409).json({ ok: false, error: 'RETAKE_SESSION_UNAVAILABLE', message: 'Chưa thể mở lượt thi bù này. Hãy dùng lại đúng liên kết hoặc liên hệ giáo viên.' });
++    }
+     return res.status(201).json({
+       ok: true,
+       examSessionToken: session.exam_session_token,
+       studentName: student.student_name,
+       listeningStartedAt: session.listening_started_at || null,
+       listeningDeadlineAt: session.listening_deadline_at || null,
+       listeningDraft: session.listening_draft || {},
+       listeningDraftRevision: Number(session.listening_draft_revision) || 0,
+diff --git a/src/sql.js b/src/sql.js
+--- a/src/sql.js
++++ b/src/sql.js
+@@ -479,16 +479,61 @@
+   listening_draft_revision,
+   listening_submitted_at,
+   attempt_id::text AS attempt_token,
+   now() AS server_now
+ FROM resolved
+ ORDER BY match_priority
+ LIMIT 1;`;
+ 
++// Dữ liệu vào: UUID phiên nằm trong vé thi bù đã được backend xác thực.
++// Việc chính: tạo đúng một phiên mới theo UUID đó hoặc lấy lại chính phiên đã tạo khi trình duyệt gửi lại.
++// Kết quả: lượt thi bù không nối vào kết quả Term Test cũ và không thể nhân bản chỉ bằng cách tải lại trang.
++// Khi lỗi/xung đột: không trả phiên khác; API dừng an toàn và yêu cầu dùng lại đúng liên kết.
++export const insertGrantedTermTestExamSessionSql = `WITH inserted AS (
++  INSERT INTO assessment.term_test_exam_session (
++    id,
++    test_slug,
++    definition_version,
++    erp_course_class_id,
++    class_name_snapshot,
++    erp_student_contact_id,
++    student_name_snapshot,
++    listening_resume_offset_seconds
++  ) VALUES ($1::uuid, $2, $3::int, $4::bigint, $5, $6::bigint, $7, $8::int)
++  ON CONFLICT DO NOTHING
++  RETURNING *
++), resolved AS (
++  SELECT inserted.*
++  FROM inserted
++  UNION ALL
++  SELECT existing.*
++  FROM assessment.term_test_exam_session AS existing
++  WHERE existing.id = $1::uuid
++    AND existing.test_slug = $2
++    AND existing.definition_version = $3::int
++    AND existing.erp_course_class_id = $4::bigint
++    AND existing.erp_student_contact_id = $6::bigint
++    AND existing.superseded_at IS NULL
++    AND NOT EXISTS (SELECT 1 FROM inserted)
++)
++SELECT
++  id::text AS exam_session_token,
++  test_slug,
++  prepared_at,
++  listening_started_at,
++  listening_deadline_at,
++  listening_draft,
++  listening_draft_revision,
++  listening_submitted_at,
++  attempt_id::text AS attempt_token,
++  now() AS server_now
++FROM resolved
++LIMIT 1;`;
++
+ export const resumeTermTestExamSessionSql = `SELECT
+   id::text AS exam_session_token,
+   test_slug,
+   prepared_at,
+   listening_started_at,
+   listening_deadline_at,
+   listening_draft,
+   listening_draft_revision,

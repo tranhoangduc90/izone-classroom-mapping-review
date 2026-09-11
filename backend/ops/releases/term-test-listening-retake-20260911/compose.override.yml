@@ -1,0 +1,6 @@
+services:
+  mapping-review-api:
+    image: mapping-review-api:term-test-listening-retake-20260911
+    build:
+      context: .
+      dockerfile: Dockerfile
