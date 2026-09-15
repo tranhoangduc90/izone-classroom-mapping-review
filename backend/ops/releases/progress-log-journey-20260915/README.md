@@ -3,6 +3,7 @@
 ## Phạm vi
 
 - Image nền: `izone-term-test-backend:20260914.3-k67`.
+- Image phát hành: `izone-term-test-backend:20260915.1-progress-log`, image ID `sha256:d826205511f7cd9ffa5d45b458432ca14d3a49d8a007ea89599133a27c80422e`.
 - Chỉ thay `learning-routes.js`, `learning-service.js`, `learning-sql.js`.
 - Không thay mã Term Test, biến môi trường, secret, volume hoặc cấu hình mạng.
 - Schema `learning` được migration sau backup `20260915T091846Z`.

@@ -19,7 +19,7 @@ AI không nằm trên đường nộp bài. Sau khi bài, điểm danh và evide
 - Giao diện học viên và giảng viên không dùng HTML tự do; token phiếu nằm sau dấu `#`, không nằm trong query của GitHub Pages.
 - Bộ kiểm thử unit, database, API boundary, static security và load-test harness.
 
-Đã có demo production dùng dữ liệu giả: GitHub Pages học viên/giảng viên và assignment seed hoạt động qua API thật. Chưa thực hiện: kết nối provider AI, đồng bộ nguồn homework thực, chạy load test staging 1.650 người và pilot bằng dữ liệu lớp thật. Những bước này cần threat model, backup/restore, staging và phê duyệt riêng.
+Đã có demo production dùng dữ liệu giả: GitHub Pages học viên/giảng viên, hành trình cá nhân và assignment seed hoạt động qua API thật. Link hành trình nằm trong URL fragment; backend chỉ lưu hash, link mới làm link cũ hết hiệu lực và API chỉ trả evidence có quyền `student_visible`. Chưa thực hiện: kết nối provider AI, đồng bộ nguồn homework thực, chạy load test staging 1.650 người và pilot bằng dữ liệu lớp thật.
 
 ## 3. Vị trí thành phần
 
@@ -31,7 +31,7 @@ AI không nằm trên đường nộp bài. Sau khi bài, điểm danh và evide
 | SQL nghiệp vụ | `src/learning-sql.js` |
 | Service và API | `src/learning-service.js`, `src/learning-routes.js` |
 | Queue có kiểm identity | `src/learning-outbox.js` |
-| Migration riêng | `ops/learning-migrations/202608290001_learning_platform_v1.sql`, `202609150001_learning_platform_v2.sql`, `202609150003_student_course_journey.sql` |
+| Migration riêng | `ops/learning-migrations/202608290001_learning_platform_v1.sql` đến `202609150004_seed_student_course_journey_demo.sql` |
 | Test tải staging | `scripts/learning-load-benchmark.mjs` |
 | Contract lineage | `../workflows/progress-log-identity-contract.json` |
 | Giao diện tĩnh | repo `izone-ai-team-pages/progress-log/` |
@@ -75,7 +75,9 @@ Giao diện có bộ test tĩnh riêng. Lệnh này kiểm CSP, URL fragment, kh
 node --test tests/progress-log-static.mjs
 ```
 
-## 6. Quy trình migration staging
+## 6. Trạng thái migration và quy trình cho lần sau
+
+Production đã áp dụng đến `202609150004` ngày 2026-09-15 sau backup đã kiểm chứng `20260915T091846Z`. Readback chi tiết nằm trong `PROGRESS_LOG_PRODUCTION_2026-09-15.md`.
 
 Migration Progress Log đã được tách khỏi thư mục migration mapping mặc định. Điều này ngăn công cụ cũ vô tình đưa schema mới lên production.
 
@@ -91,7 +93,7 @@ Chỉ sau khi backup staging có marker `VERIFIED`, IT mới dùng `--apply`. Ru
 node scripts/mapping-db-migrate.mjs --apply --target <staging-ssh-target> --migration-dir ops/learning-migrations --backup-id <YYYYMMDDTHHMMSSZ>
 ```
 
-Không dùng lệnh apply với production trong lượt triển khai hiện tại. Trước production phải readback PostgreSQL version/tài nguyên/backup, test restore staging, chạy load test và có phê duyệt riêng.
+Không sửa nội dung migration đã được áp dụng. Mọi migration mới phải dùng version mới, chạy plan/checksum, có backup `VERIFIED` và được phê duyệt riêng trước khi apply production.
 
 ## 7. Load test 1.650 người trên staging
 
@@ -131,7 +133,7 @@ Chạy lại phase `submit` với `--duration-seconds 10` để đo 100 lượt/
 
 Kết quả đạt khi phase 60 giây có p95 submit dưới hai giây, p99 dưới năm giây, không có 429 hợp lệ do shared NAT, replay không sai submission và `readback.verified=true`. Chạy mỗi kịch bản tối thiểu ba lần cho cả reflection ngắn và quiz 40 câu. Bắt đầu với pool 5; chỉ thử 10 rồi 20 khi pool chờ tăng nhưng CPU database còn dư. Tổng connection phải tính trên mọi API replica, không đặt 20 cho từng replica theo mặc định.
 
-## 8. Cổng trước production
+## 8. Cổng trước pilot dữ liệu thật và mở rộng
 
 1. Chốt contract và fixture của toàn bộ dạng Term Test.
 2. Migration staging và test rollback/restore đạt.
@@ -139,7 +141,7 @@ Kết quả đạt khi phase 60 giây có p95 submit dưới hai giây, p99 dư�
 4. Kiểm answer key không xuất hiện ở public bundle/API/log/Markdown học viên.
 5. Kiểm quyền login `learning_api`, CORS, token hết hạn và retention/purge.
 6. Chạy pilot bốn lớp và review buổi 2, 5, 10.
-7. Đức và người duyệt phát hành phê duyệt riêng migration production.
+7. Đức và người duyệt phát hành phê duyệt riêng từng đợt đưa lớp thật vào hệ thống.
 
 ## 9. Rủi ro còn mở
 
