@@ -33,6 +33,20 @@
       ]
     },
     {
+      "name": "Ghi submission và các dòng chi tiết theo một batch",
+      "kind": "aggregate",
+      "preserves": [
+        "submission_id",
+        "student_ref",
+        "assignment_id",
+        "form_version_id"
+      ],
+      "group_by": [
+        "submission_id",
+        "student_ref"
+      ]
+    },
+    {
       "name": "Chấm câu khách quan hoặc xếp hàng câu tự luận",
       "kind": "async",
       "preserves": [
@@ -65,6 +79,20 @@
         "grading_run_id",
         "idempotency_key"
       ]
+    },
+    {
+      "name": "Ghép hành trình học tập theo đúng lớp và học viên",
+      "kind": "join",
+      "preserves": [
+        "class_id",
+        "student_ref",
+        "class_id:session_number",
+        "evidence_event_id"
+      ],
+      "join_on": [
+        "class_id",
+        "student_ref"
+      ]
     }
   ],
   "side_effects": [
@@ -79,6 +107,12 @@
       "target_key": "student_ref",
       "guard": "fail_closed",
       "readback": true
+    },
+    {
+      "name": "Tạo hoặc xoay link hành trình riêng của học viên",
+      "target_key": "student_ref",
+      "guard": "fail_closed",
+      "readback": true
     }
   ],
   "tests": [
@@ -89,6 +123,9 @@
     "duplicate_retry",
     "partial_failure",
     "same_display_name",
-    "wrong_target_readback"
+    "wrong_target_readback",
+    "expired_or_revoked_access",
+    "student_visible_only",
+    "published_report_only"
   ]
 }

@@ -19,7 +19,7 @@ AI không nằm trên đường nộp bài. Sau khi bài, điểm danh và evide
 - Giao diện học viên và giảng viên không dùng HTML tự do; token phiếu nằm sau dấu `#`, không nằm trong query của GitHub Pages.
 - Bộ kiểm thử unit, database, API boundary, static security và load-test harness.
 
-Chưa thực hiện: migration production, kết nối provider AI, đồng bộ nguồn homework thực, chạy load test staging 1.650 người và phát hành GitHub Pages. Những bước này cần hạ tầng/backup/staging và phê duyệt riêng.
+Đã có demo production dùng dữ liệu giả: GitHub Pages học viên/giảng viên và assignment seed hoạt động qua API thật. Chưa thực hiện: kết nối provider AI, đồng bộ nguồn homework thực, chạy load test staging 1.650 người và pilot bằng dữ liệu lớp thật. Những bước này cần threat model, backup/restore, staging và phê duyệt riêng.
 
 ## 3. Vị trí thành phần
 
@@ -31,7 +31,7 @@ Chưa thực hiện: migration production, kết nối provider AI, đồng bộ
 | SQL nghiệp vụ | `src/learning-sql.js` |
 | Service và API | `src/learning-service.js`, `src/learning-routes.js` |
 | Queue có kiểm identity | `src/learning-outbox.js` |
-| Migration riêng | `ops/learning-migrations/202608290001_learning_platform_v1.sql` |
+| Migration riêng | `ops/learning-migrations/202608290001_learning_platform_v1.sql`, `202609150001_learning_platform_v2.sql`, `202609150003_student_course_journey.sql` |
 | Test tải staging | `scripts/learning-load-benchmark.mjs` |
 | Contract lineage | `../workflows/progress-log-identity-contract.json` |
 | Giao diện tĩnh | repo `izone-ai-team-pages/progress-log/` |
@@ -45,7 +45,7 @@ Backend nhận bốn biến cấu hình. `LEARNING_DATABASE_URL` phải trỏ t�
 ```dotenv
 LEARNING_ENABLED=true
 LEARNING_DATABASE_URL=postgresql://<learning-login>:<secret-from-store>@<host>/<database>
-LEARNING_DB_POOL_MAX=20
+LEARNING_DB_POOL_MAX=5
 ```
 
 IT cần tạo một login PostgreSQL riêng rồi grant role `learning_api` cho login đó. Migration chỉ tạo role quyền `NOLOGIN`, không tạo hoặc lưu mật khẩu.
@@ -106,19 +106,30 @@ File manifest chỉ chứa public token của 110 assignment staging, không ch�
 }
 ```
 
-Phase `open` là read-only: script mở form theo lịch năm phút, tổng hợp p50/p95/max và chỉ in mã lỗi, không in token/roster.
+Phase `open` là read-only: script mở form theo lịch năm phút, tổng hợp p50/p95/p99/max và chỉ in mã lỗi, không in token/roster.
 
 ```powershell
 node scripts/learning-load-benchmark.mjs --phase open --base-url https://<staging-host> --assignments-file <manifest.json> --virtual-users 1650 --duration-seconds 300 --concurrency 100
 ```
 
-Phase `submit` tạo start/draft/submission và điểm danh trên **dữ liệu staging**. Vì có ghi dữ liệu, script bắt buộc `--confirm-write` khớp chính xác origin và cố ý chặn host production hiện tại.
+Phase `autosave` tạo sẵn attempt rồi phân tán đúng 1.000 lượt lưu draft trong cửa sổ đã chọn. Dùng 10 giây để mô phỏng cả lớp ngừng gõ gần nhau và 60 giây để đo tải thông thường. Vì có ghi dữ liệu, script bắt buộc `--confirm-write` khớp chính xác origin và cố ý chặn host production hiện tại.
 
 ```powershell
-node scripts/learning-load-benchmark.mjs --phase submit --base-url https://<staging-host> --confirm-write https://<staging-host> --assignments-file <manifest.json> --virtual-users 1650 --duration-seconds 60 --concurrency 200
+node scripts/learning-load-benchmark.mjs --phase autosave --base-url https://<staging-host> --confirm-write https://<staging-host> --assignments-file <manifest.json> --virtual-users 1000 --duration-seconds 10 --concurrency 200
 ```
 
-Kết quả đạt khi p95 start/draft/submit dưới 1 giây, receipt dưới 2 giây, không duplicate và không có 429 do shared NAT. Sau test phải kiểm readback số submission/attendance/evidence/outbox theo assignment, không chỉ nhìn exit code của script.
+Phase `submit` chuẩn bị start, draft và các checkpoint đang mở **trước khi bắt đầu tính thời gian**. Cửa sổ đo vì vậy chỉ chứa đúng cao điểm bấm nút nộp cuối. `--verify-replay` gửi lại cùng request để chứng minh retry quay về đúng submission. `--readback` dùng `LEARNING_DATABASE_URL` của staging để đối chiếu submission, item, điểm danh, evidence và outbox; thiếu hoặc sai identity làm script trả exit code 2.
+
+```powershell
+$env:LEARNING_DATABASE_URL='<chuỗi kết nối staging lấy từ secret store>'
+node scripts/learning-load-benchmark.mjs --phase submit --base-url https://<staging-host> --confirm-write https://<staging-host> --assignments-file <manifest.json> --virtual-users 1000 --duration-seconds 60 --concurrency 200 --checkpoint-mode open --verify-replay --readback
+```
+
+Chuỗi kết nối staging phải lấy từ secret store của terminal, không truyền trên command line. Chạy `ops/learning-load-observability.sql` bằng tài khoản chỉ đọc trước, trong và sau mỗi lượt benchmark. File này trả thống kê kết nối, transaction, cache, file tạm, deadlock, lock chờ và dung lượng bảng; không đọc câu trả lời của học viên.
+
+Chạy lại phase `submit` với `--duration-seconds 10` để đo 100 lượt/giây. Kịch bản một giây là shock test: mục tiêu là retry thành công, không mất hoặc nhân đôi dữ liệu; không cam kết mọi receipt dưới hai giây.
+
+Kết quả đạt khi phase 60 giây có p95 submit dưới hai giây, p99 dưới năm giây, không có 429 hợp lệ do shared NAT, replay không sai submission và `readback.verified=true`. Chạy mỗi kịch bản tối thiểu ba lần cho cả reflection ngắn và quiz 40 câu. Bắt đầu với pool 5; chỉ thử 10 rồi 20 khi pool chờ tăng nhưng CPU database còn dư. Tổng connection phải tính trên mọi API replica, không đặt 20 cho từng replica theo mặc định.
 
 ## 8. Cổng trước production
 

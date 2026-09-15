@@ -42,16 +42,37 @@ export function normalizeText(value, policy = {}) {
 
 function isAnswered(value) {
   if (Array.isArray(value)) return value.some(item => String(item).trim());
+  if (value && typeof value === 'object') {
+    return Number.isInteger(value.correct) && Number.isInteger(value.total) && value.total > 0;
+  }
   return Boolean(String(value ?? '').trim());
 }
 
 function assertResponseIdentity(definition, responses) {
-  const validIds = new Set(definition.blocks.flatMap(block => block.items.map(item => item.itemVersionId)));
+  const items = definition.blocks.flatMap(block => block.items);
+  const itemById = new Map(items.map(item => [item.itemVersionId, item]));
   for (const itemVersionId of Object.keys(responses)) {
-    if (!validIds.has(itemVersionId)) {
+    const item = itemById.get(itemVersionId);
+    if (!item) {
       const error = new Error('Câu trả lời không thuộc đúng version của form.');
       error.code = 'RESPONSE_ITEM_MISMATCH';
       error.httpStatus = 409;
+      throw error;
+    }
+    const value = responses[itemVersionId];
+    if (item.interactionType === 'number_score') {
+      const expectedTotal = item.interactionConfig.max;
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || value.correct > value.total || value.total !== expectedTotal) {
+        const error = new Error('Kết quả số không khớp cấu hình của câu hỏi.');
+        error.code = 'NUMBER_SCORE_INVALID';
+        error.httpStatus = 400;
+        throw error;
+      }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const error = new Error('Loại câu trả lời không khớp câu hỏi.');
+      error.code = 'RESPONSE_TYPE_MISMATCH';
+      error.httpStatus = 400;
       throw error;
     }
   }
@@ -269,7 +290,9 @@ export function buildSubmissionReceipt({ submissionId, receivedAt, completeness,
 }
 
 function markdownCode(value) {
-  const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+  const text = Array.isArray(value)
+    ? value.join(', ')
+    : (value && typeof value === 'object' ? `${value.correct}/${value.total}` : String(value ?? ''));
   return text.split(/\r?\n/u).map(line => `    ${line}`).join('\n') || '    (trống)';
 }
 
@@ -287,8 +310,12 @@ export function buildEvidenceEnvelope({
   formVersionId,
   assignmentId,
   responses,
-  quizResult
+  quizResult,
+  definition
 }) {
+  const definitionItems = new Map(
+    definition?.blocks?.flatMap(block => block.items).map(item => [item.itemVersionId, item]) || []
+  );
   const payload = {
     responses,
     grading: {
@@ -296,11 +323,14 @@ export function buildEvidenceEnvelope({
       summary: quizResult.summary,
       typeStats: quizResult.typeStats,
       items: quizResult.items.map(item => ({
+        prompt: definitionItems.get(item.itemVersionId)?.prompt || '',
+        interactionType: definitionItems.get(item.itemVersionId)?.interactionType || 'unknown',
         itemVersionId: item.itemVersionId,
         itemFamilyId: item.itemFamilyId,
         position: item.position,
         pedagogicalTypeCode: item.pedagogicalTypeCode,
         skillCodes: item.skillCodes,
+        evidenceSource: definitionItems.get(item.itemVersionId)?.evidenceSource || 'student_self_report',
         rawAnswer: item.rawAnswer,
         normalizedAnswer: item.normalizedAnswer,
         answerState: item.answerState,
@@ -324,14 +354,21 @@ export function buildEvidenceEnvelope({
     '',
     '## Câu trả lời và kết quả',
     '',
-    ...quizResult.items.flatMap(item => [
+    ...quizResult.items.flatMap(item => {
+      const definitionItem = definitionItems.get(item.itemVersionId);
+      return [
       `### Mục ${item.position} · ${item.pedagogicalTypeCode}`,
+      '',
+      `Câu hỏi: ${definitionItem?.prompt || '(không có prompt trong nguồn)'}`,
+      `Nguồn nội dung: ${definitionItem?.evidenceSource || 'student_self_report'}`,
+      `Kỹ năng: ${item.skillCodes.join(', ') || '(chưa gắn)'}`,
       '',
       markdownCode(item.rawAnswer),
       '',
       `Kết quả: ${item.verdict}; điểm ${item.scoreEarned}/${item.maxScore}.`,
       ''
-    ])
+      ];
+    })
   ].join('\n');
   return evidenceEnvelopeV1Schema.parse({
     schemaVersion: 'EvidenceEnvelopeV1',
@@ -358,7 +395,7 @@ export function buildEvidenceEnvelope({
     },
     payload,
     contentHash,
-    rendererVersion: 'learning-markdown-v1',
+    rendererVersion: 'learning-markdown-v2',
     markdown
   });
 }

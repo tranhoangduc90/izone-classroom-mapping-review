@@ -7,11 +7,19 @@ const optionSchema = z.object({
   label: z.string().trim().min(1).max(300)
 }).strict();
 
+const interactionConfigSchema = z.object({
+  min: z.number().int().min(0).max(10_000).optional(),
+  max: z.number().int().min(1).max(10_000).optional(),
+  step: z.number().positive().max(1_000).optional(),
+  unit: z.string().trim().min(1).max(40).optional()
+}).strict();
+
 export const interactionTypeSchema = z.enum([
   'short_text',
   'long_text',
   'single_choice',
-  'multi_choice_group'
+  'multi_choice_group',
+  'number_score'
 ]);
 
 export const graderTypeSchema = z.enum([
@@ -36,7 +44,10 @@ export const formItemSchema = z.object({
   required: z.boolean().default(true),
   maxScore: z.number().min(0).max(100).default(0),
   options: z.array(optionSchema).max(40).optional().default([]),
+  interactionConfig: interactionConfigSchema.optional().default({}),
   skillCodes: z.array(codeSchema).max(20).optional().default([]),
+  evidenceSource: z.enum(['student_self_report', 'student_reported_teacher_feedback'])
+    .default('student_self_report'),
   releasePolicy: z.enum(['inherit', 'hidden', 'immediate', 'teacher_release']).default('inherit')
 }).strict().superRefine((item, context) => {
   const optionIds = item.options.map(option => option.id);
@@ -46,8 +57,17 @@ export const formItemSchema = z.object({
   if (['single_choice', 'multi_choice_group'].includes(item.interactionType) && item.options.length < 2) {
     context.addIssue({ code: 'custom', path: ['options'], message: 'Câu lựa chọn cần ít nhất hai phương án.' });
   }
-  if (['short_text', 'long_text'].includes(item.interactionType) && item.options.length) {
+  if (['short_text', 'long_text', 'number_score'].includes(item.interactionType) && item.options.length) {
     context.addIssue({ code: 'custom', path: ['options'], message: 'Câu nhập chữ không được chứa option.' });
+  }
+  if (item.interactionType === 'number_score') {
+    const { min = 0, max } = item.interactionConfig;
+    if (!Number.isInteger(max) || max <= min) {
+      context.addIssue({ code: 'custom', path: ['interactionConfig', 'max'], message: 'Câu nhập kết quả cần max lớn hơn min.' });
+    }
+    if (item.graderType !== 'none' || item.maxScore !== 0) {
+      context.addIssue({ code: 'custom', path: ['graderType'], message: 'Kết quả học viên tự nhập chỉ là evidence, không phải điểm do hệ thống chấm.' });
+    }
   }
   if (item.graderType === 'unordered_group_slot' && !item.groupId) {
     context.addIssue({ code: 'custom', path: ['groupId'], message: 'Câu chọn TWO/THREE phải có groupId.' });
@@ -131,9 +151,19 @@ export const formGradingKeyV1Schema = z.object({
   groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({})
 }).strict();
 
+export const scoreResponseSchema = z.object({
+  correct: z.number().int().min(0).max(10_000),
+  total: z.number().int().min(1).max(10_000)
+}).strict().superRefine((value, context) => {
+  if (value.correct > value.total) {
+    context.addIssue({ code: 'custom', path: ['correct'], message: 'Số câu đúng không thể lớn hơn tổng số câu.' });
+  }
+});
+
 export const responseValueSchema = z.union([
   z.string().max(12_000),
-  z.array(z.string().trim().min(1).max(80)).min(1).max(10)
+  z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+  scoreResponseSchema
 ]);
 
 export const responseMapSchema = z.record(uuidSchema, responseValueSchema).superRefine((responses, context) => {

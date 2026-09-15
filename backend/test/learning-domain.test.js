@@ -207,6 +207,37 @@ test('completeness phụ thuộc trường bắt buộc, không phụ thuộc đ
   assert.deepEqual(incomplete.missingItemVersionIds, [ids.reflection]);
 });
 
+test('kết quả tự khai được lưu dạng số có mẫu số cố định, không bị coi là điểm máy chấm', () => {
+  const definition = makeDefinition();
+  const scoreItem = item({
+    itemFamilyId: '31000000-0000-4000-8000-000000000001',
+    itemVersionId: '31000000-0000-4000-8000-000000000002',
+    interactionType: 'number_score',
+    interactionConfig: { min: 0, max: 10, step: 1, unit: 'câu đúng' },
+    evidenceSource: 'student_self_report'
+  });
+  definition.blocks[0].items = [scoreItem];
+  const gradingKey = {
+    schemaVersion: 'FormGradingKeyV1',
+    formVersionId: ids.form,
+    graderVersion: 1,
+    items: {},
+    groups: {}
+  };
+  const result = gradeLearningSubmission({
+    definition,
+    gradingKey,
+    responses: { [scoreItem.itemVersionId]: { correct: 8, total: 10 } }
+  });
+  assert.equal(result.items[0].verdict, 'ungraded');
+  assert.deepEqual(result.items[0].rawAnswer, { correct: 8, total: 10 });
+  assert.equal(result.summary.maxScore, 0);
+  assert.throws(
+    () => evaluateCompleteness(definition, { [scoreItem.itemVersionId]: { correct: 8, total: 12 } }),
+    error => error.code === 'NUMBER_SCORE_INVALID'
+  );
+});
+
 test('kết quả học viên mặc định không chứa đáp án riêng tư', () => {
   const internal = gradeLearningSubmission({ definition: makeDefinition(), gradingKey: makeGradingKey(), responses: completeResponses });
   const student = buildStudentQuizResult(internal, makeDefinition());
@@ -230,13 +261,16 @@ test('EvidenceEnvelope giữ đủ bốn lớp identity và không đưa đáp �
     formVersionId: ids.form,
     assignmentId: '40000000-0000-4000-8000-000000000004',
     responses: completeResponses,
-    quizResult: result
+    quizResult: result,
+    definition: makeDefinition()
   });
   assert.equal(envelope.entityKey, 'student:40000000-0000-4000-8000-000000000003');
   assert.equal(envelope.unitKey, 'submission:40000000-0000-4000-8000-000000000002');
   assert.match(envelope.operationKey, /^grade:/);
   assert.match(envelope.idempotencyKey, /^progress_log:/);
   assert.equal(envelope.markdown.includes('blue-green'), false);
+  assert.match(envelope.markdown, /Câu hỏi: Câu hỏi kiểm thử/);
+  assert.match(envelope.markdown, /Nguồn nội dung: student_self_report/);
   assert.equal(envelope.contentHash, sha256(stableStringify(envelope.payload)));
 });
 

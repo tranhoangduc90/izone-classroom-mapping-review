@@ -57,3 +57,25 @@ test('override điểm danh bắt buộc có lý do đủ dài', async () => {
   assert.equal(response.status, 400);
   assert.equal(response.body.error, 'INVALID_ATTENDANCE_OVERRIDE');
 });
+
+test('link hành trình sai định dạng bị từ chối trước khi chạm database', async () => {
+  const response = await request(appWithPool(failIfQueriedPool()))
+    .post('/api/learning/student/course-journey')
+    .send({ accessToken: 'token-ngan' });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'INVALID_PROGRESS_LINK');
+});
+
+test('tạo link hành trình bắt buộc identity và token đủ mạnh', async () => {
+  const response = await request(appWithPool(failIfQueriedPool()))
+    .post('/api/learning/teacher/student-progress-links')
+    .send({
+      assignmentId: '11111111-1111-4111-8111-111111111111',
+      studentRef: '22222222-2222-4222-8222-222222222222',
+      accessToken: 'token-ngan',
+      expiresInDays: 30,
+      operationId: '33333333-3333-4333-8333-333333333333'
+    });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'INVALID_PROGRESS_LINK_REQUEST');
+});
