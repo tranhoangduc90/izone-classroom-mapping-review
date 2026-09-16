@@ -96,6 +96,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(attendanceOutboxMigration);
+  const attendanceDashboardIndex = await readFile(
+    new URL('../ops/learning-migrations/202609160006_portal_attendance_dashboard_index.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(attendanceDashboardIndex);
   const authorityMigration = await readFile(
     new URL('../ops/learning-migrations/202609160001_course_content_authority.sql', import.meta.url),
     'utf8'
@@ -522,6 +527,64 @@ test('submit idempotent, draft cũ fail-closed và readback không đổi nhầm
   assert.equal(attendanceJob.payload.sessionNumber, 3);
   assert.equal(attendanceJob.entity_key, `student:${firstStudent.studentRef}`);
   assert.equal(attendanceJob.unit_key, `portal-attendance:${published.assignmentId}:session:3`);
+  await database.close();
+});
+
+test('giảng viên xác nhận có mặt tạo đúng một job Portal cho đúng học viên', async () => {
+  const { database, service } = await setupDatabase();
+  const published = await service.publishReflectionForm({
+    reviewer: { email: 'teacher@example.test', canAccessAllClasses: false },
+    title: 'Phiếu điểm danh lớp thử', courseCode: '56', classId: '2139', sessionNumber: 3,
+    opensAt: null, closesAt: null,
+    items: [
+      { libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true },
+      { libraryItemId: '10000000-0000-4000-8000-000000000003', checkpoint: 2, required: true }
+    ]
+  });
+  const common = {
+    assignmentId: published.assignmentId,
+    studentRef: '60000000-0000-4000-8000-000000000002',
+    reviewer: { email: 'teacher@example.test', canAccessAllClasses: false },
+    reason: 'Giảng viên đã xác nhận trong lớp.'
+  };
+  const confirmed = await service.overrideAttendance({
+    ...common, status: 'teacher_confirmed',
+    operationKey: 'attendance-override:70000000-0000-4000-8000-000000000010'
+  });
+  assert.equal(confirmed.status, 'teacher_confirmed');
+  assert.equal(confirmed.portalSyncQueued, true);
+  const jobs = await database.query(`SELECT entity_key, unit_key, operation_key, payload
+    FROM learning.outbox_job WHERE job_type = 'sync_portal_attendance';`);
+  assert.equal(jobs.rows.length, 1);
+  assert.equal(jobs.rows[0].payload.schemaVersion, 'LearningPortalAttendanceOverrideJobV1');
+  assert.equal(jobs.rows[0].payload.studentId, '9002');
+  assert.equal(jobs.rows[0].payload.classId, '2139');
+  assert.equal(jobs.rows[0].payload.sessionNumber, 3);
+  assert.equal(jobs.rows[0].entity_key, `student:${common.studentRef}`);
+  assert.equal(jobs.rows[0].unit_key, `portal-attendance:${common.assignmentId}:session:3`);
+  const dashboard = await service.getTeacherDashboard({
+    assignmentId: published.assignmentId,
+    reviewer: common.reviewer
+  });
+  const targetStudent = dashboard.students.find(student => student.studentRef === common.studentRef);
+  const otherStudent = dashboard.students.find(student => student.studentRef !== common.studentRef);
+  assert.equal(targetStudent.portalSync.status, 'queued');
+  assert.equal(otherStudent.portalSync, null);
+  const replay = await service.overrideAttendance({
+    ...common, status: 'teacher_confirmed',
+    operationKey: 'attendance-override:70000000-0000-4000-8000-000000000010'
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.portalSyncQueued, true);
+  const pending = await service.overrideAttendance({
+    ...common, status: 'pending_teacher',
+    operationKey: 'attendance-override:70000000-0000-4000-8000-000000000011'
+  });
+  assert.equal(pending.portalSyncQueued, false);
+  const counts = await database.query(`SELECT
+    (SELECT count(*)::int FROM learning.outbox_job WHERE job_type = 'sync_portal_attendance') AS jobs,
+    (SELECT count(*)::int FROM learning.attendance_event WHERE actor_type = 'teacher') AS events;`);
+  assert.deepEqual(counts.rows[0], { jobs: 1, events: 2 });
   await database.close();
 });
 

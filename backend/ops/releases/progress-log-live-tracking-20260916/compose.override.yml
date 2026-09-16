@@ -1,0 +1,6 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260916.3-progress-log-live-tracking
+    environment:
+      APP_VERSION: 1.8.7-k56-live-tracking
+      BUILD_SHA: ${PROGRESS_LOG_LIVE_BUILD_SHA:?set PROGRESS_LOG_LIVE_BUILD_SHA}

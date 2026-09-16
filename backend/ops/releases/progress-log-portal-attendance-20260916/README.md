@@ -29,3 +29,11 @@ job đồng bộ Portal đã hoàn tất. Bản ghi bài, checkpoint và điểm
 
 Dựng lại `mapping-review-api` bằng image `izone-term-test-backend:20260916.1-ic2305`.
 Không xóa assignment hoặc migration; job chưa hoàn tất giữ trong hàng đợi để forward-fix.
+
+## Bổ sung: xác nhận có mặt thủ công từ dashboard
+
+- Khi GV chọn **Có mặt** và nhập lý do, API ghi trạng thái/audit và tạo job Portal trong cùng câu lệnh database. Job mang ID của sự kiện xác nhận, không giả làm bài nộp của học viên.
+- Hàng đợi xử lý sau khi API đã trả lời. Dashboard hiển thị đang chờ, đang thử lại, đã ghi nhận hoặc cần kiểm tra xung đột.
+- Workflow chỉ ghi `PRESENT` vào đúng ô lớp–học viên–buổi nếu ô đó trống; nếu Portal đã có trạng thái khác thì dừng `review_required`, không tự ghi đè. Nếu đã là `PRESENT`, coi là hoàn tất idempotent.
+- **Chờ xác nhận** và **Không đủ điều kiện** chỉ là trạng thái nội bộ Progress Log; không ánh xạ chúng thành mã vắng của Portal khi chưa có quy tắc nghiệp vụ được xác minh. Khi cần đổi một ô Portal đã có trạng thái, GV thao tác trực tiếp trên Portal.
+- Trước khi phát hành: backup workflow hiện hành, so sánh diff, kiểm thử `commit=false` đúng lớp/học viên/buổi, kiểm thử live bằng tài khoản thử được phê duyệt, rồi readback cả dashboard và Portal. Không dùng học viên thật để test mặc định.

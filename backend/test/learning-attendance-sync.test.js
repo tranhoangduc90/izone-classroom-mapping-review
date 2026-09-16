@@ -81,3 +81,37 @@ test('lỗi mạng và phản hồi sai contract được đưa về mã retry a
   });
   await assert.rejects(() => invalid(job), error => error.code === 'PORTAL_ATTENDANCE_INVALID_RESPONSE');
 });
+
+test('xác nhận của giảng viên dùng attendance event, không giả làm submission', async () => {
+  const overridePayload = {
+    ...payload,
+    schemaVersion: 'LearningPortalAttendanceOverrideJobV1',
+    attendanceEventId: '55555555-5555-4555-8555-555555555555'
+  };
+  delete overridePayload.submissionId;
+  const overrideIdentity = {
+    ...identity,
+    operationKey: `portal-attendance-override:${overridePayload.attendanceEventId}:v1`,
+    idempotencyKey: `portal-attendance-override:${overridePayload.attendanceEventId}:enqueue:v1`
+  };
+  const overrideJob = { ...job, ...overrideIdentity, payload: overridePayload };
+  let sent;
+  const sync = createLearningAttendanceSync({
+    config,
+    fetchImpl: async (_url, options) => {
+      sent = JSON.parse(options.body);
+      return {
+        ok: true, status: 200,
+        async json() {
+          return { ok: true, status: 'synced', ...overrideIdentity,
+            classId: overridePayload.classId, studentId: overridePayload.studentId,
+            sessionNumber: overridePayload.sessionNumber };
+        }
+      };
+    }
+  });
+  assert.equal((await sync(overrideJob)).status, 'complete');
+  assert.equal(sent.attendanceEventId, overridePayload.attendanceEventId);
+  assert.equal(sent.submissionId, undefined);
+  await assert.rejects(() => sync({ ...overrideJob, entityKey: 'student:wrong' }), LearningJobIdentityError);
+});

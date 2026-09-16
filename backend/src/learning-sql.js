@@ -1065,6 +1065,19 @@ export const fetchLearningTeacherDashboardSql = `SELECT
       'attendanceStatus', status.attendance_status,
       'attendanceReason', status.attendance_reason,
       'decidedBy', status.decided_by_email,
+      'portalSync', CASE WHEN status.attendance_status IN ('self_confirmed', 'teacher_confirmed') THEN (
+        SELECT jsonb_build_object(
+          'status', job.status,
+          'updatedAt', job.updated_at,
+          'lastErrorCode', job.last_error_code
+        )
+        FROM learning.outbox_job AS job
+        WHERE job.job_type = 'sync_portal_attendance'
+          AND job.entity_key = 'student:' || status.student_ref::text
+          AND job.unit_key = 'portal-attendance:' || assignment.id::text || ':session:' || assignment.session_number::text
+        ORDER BY job.created_at DESC, job.id DESC
+        LIMIT 1
+      ) ELSE NULL END,
       'checkpoints', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           'blockId', checkpoint.block_id::text,
@@ -1202,12 +1215,17 @@ LEFT JOIN roster_state ON roster_state.assignment_id = authorized_assignment.id
 GROUP BY authorized_assignment.id;`;
 
 export const overrideLearningAttendanceSql = `WITH target AS (
-  SELECT assignment.id, roster.student_ref
+  SELECT assignment.id, assignment.erp_course_class_id, assignment.session_number,
+    roster.student_ref, roster.erp_student_contact_id
   FROM learning.form_assignment AS assignment
   JOIN learning.form_assignment_roster AS roster
     ON roster.assignment_id = assignment.id
     AND roster.student_ref = $2::uuid
   WHERE assignment.id = $1::uuid
+    AND NOT EXISTS (
+      SELECT 1 FROM learning.attendance_event
+      WHERE operation_key = $7
+    )
     AND (
       $6::boolean
       OR EXISTS (
@@ -1252,7 +1270,48 @@ event AS (
     updated.decided_by_email,
     $7
   FROM updated
+  ON CONFLICT (operation_key) DO NOTHING
+  RETURNING id, assignment_id, student_ref
+),
+portal_job AS (
+  INSERT INTO learning.outbox_job (
+    job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+  )
+  SELECT
+    'sync_portal_attendance',
+    'student:' || event.student_ref::text,
+    'portal-attendance:' || event.assignment_id::text || ':session:' || target.session_number::text,
+    'portal-attendance-override:' || event.id::text || ':v1',
+    'portal-attendance-override:' || event.id::text || ':enqueue:v1',
+    jsonb_build_object(
+      'schemaVersion', 'LearningPortalAttendanceOverrideJobV1',
+      'attendanceEventId', event.id::text,
+      'assignmentId', event.assignment_id::text,
+      'classId', target.erp_course_class_id::text,
+      'studentId', target.erp_student_contact_id::text,
+      'studentRef', event.student_ref::text,
+      'sessionNumber', target.session_number,
+      'attendanceStatus', 'PRESENT'
+    )
+  FROM event
+  JOIN target ON target.id = event.assignment_id AND target.student_ref = event.student_ref
+  WHERE $3 = 'teacher_confirmed'
+  ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
+),
+replayed AS (
+  SELECT record.assignment_id, record.student_ref, record.status,
+    record.current_reason, record.decided_by_email, record.decided_at,
+    old_event.id AS event_id
+  FROM learning.attendance_event AS old_event
+  JOIN learning.attendance_record AS record
+    ON record.assignment_id = old_event.assignment_id
+    AND record.student_ref = old_event.student_ref
+  WHERE old_event.operation_key = $7
+    AND old_event.assignment_id = $1::uuid
+    AND old_event.student_ref = $2::uuid
+    AND old_event.new_status = $3
+    AND record.status = old_event.new_status
 )
 SELECT
   updated.assignment_id::text AS assignment_id,
@@ -1260,5 +1319,17 @@ SELECT
   updated.status,
   updated.current_reason,
   updated.decided_by_email,
-  updated.decided_at
-FROM updated;`;
+  updated.decided_at,
+  EXISTS (SELECT 1 FROM portal_job) AS portal_sync_queued,
+  false AS replayed
+FROM updated
+UNION ALL
+SELECT replayed.assignment_id::text, replayed.student_ref::text,
+  replayed.status, replayed.current_reason, replayed.decided_by_email,
+  replayed.decided_at,
+  EXISTS (
+    SELECT 1 FROM learning.outbox_job AS job
+    WHERE job.operation_key = 'portal-attendance-override:' || replayed.event_id::text || ':v1'
+  ), true
+FROM replayed
+WHERE NOT EXISTS (SELECT 1 FROM updated);`;

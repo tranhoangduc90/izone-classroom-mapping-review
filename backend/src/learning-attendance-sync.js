@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { LearningJobIdentityError } from './learning-outbox.js';
 
 const uuid = z.string().uuid();
-const payloadSchema = z.object({
+const submissionPayloadSchema = z.object({
   schemaVersion: z.literal('LearningPortalAttendanceJobV1'),
   submissionId: uuid,
   assignmentId: uuid,
@@ -12,6 +12,17 @@ const payloadSchema = z.object({
   sessionNumber: z.number().int().min(1).max(100),
   attendanceStatus: z.literal('PRESENT')
 }).strict();
+const overridePayloadSchema = z.object({
+  schemaVersion: z.literal('LearningPortalAttendanceOverrideJobV1'),
+  attendanceEventId: uuid,
+  assignmentId: uuid,
+  classId: z.string().regex(/^\d+$/),
+  studentId: z.string().regex(/^\d+$/),
+  studentRef: uuid,
+  sessionNumber: z.number().int().min(1).max(100),
+  attendanceStatus: z.literal('PRESENT')
+}).strict();
+const payloadSchema = z.union([submissionPayloadSchema, overridePayloadSchema]);
 
 const responseSchema = z.object({
   ok: z.literal(true),
@@ -26,6 +37,14 @@ const responseSchema = z.object({
 }).strict();
 
 function identityFor(payload) {
+  if (payload.schemaVersion === 'LearningPortalAttendanceOverrideJobV1') {
+    return {
+      entityKey: `student:${payload.studentRef}`,
+      unitKey: `portal-attendance:${payload.assignmentId}:session:${payload.sessionNumber}`,
+      operationKey: `portal-attendance-override:${payload.attendanceEventId}:v1`,
+      idempotencyKey: `portal-attendance-override:${payload.attendanceEventId}:enqueue:v1`
+    };
+  }
   return {
     entityKey: `student:${payload.studentRef}`,
     unitKey: `portal-attendance:${payload.assignmentId}:session:${payload.sessionNumber}`,

@@ -793,7 +793,9 @@ export function createLearningService({ pool }) {
         status: row.status,
         reason: row.current_reason,
         decidedBy: row.decided_by_email,
-        decidedAt: row.decided_at
+        decidedAt: row.decided_at,
+        portalSyncQueued: row.portal_sync_queued,
+        replayed: row.replayed
       };
     },
 
