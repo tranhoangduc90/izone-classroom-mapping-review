@@ -21,6 +21,9 @@ Ngày 16/09, một lượt nộp thử Writing 1 buổi 2 được nhập thay h
 ô điểm danh được ghi để kiểm luồng, không chứng minh học viên dự buổi học.
 Không tự xóa hoặc hoàn nguyên khi chưa có quyết định của Đức. Trước khi dùng dữ
 liệu để nhận xét học tập, phải loại rõ lượt thử khỏi phân tích hoặc xử lý hoàn nguyên.
+Job phân tích của đúng bài thử được giữ ở `review_required` với mã
+`SYNTHETIC_TEST_SUBMISSION_HOLD` để không đưa câu trả lời giả vào nhận xét học tập;
+job đồng bộ Portal đã hoàn tất. Bản ghi bài, checkpoint và điểm danh chưa bị xóa.
 
 ## Rollback
 
