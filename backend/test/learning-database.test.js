@@ -5,6 +5,7 @@ import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { LearningError, createLearningService } from '../src/learning-service.js';
 import { claimLearningJobs, processLearningJob } from '../src/learning-outbox.js';
+import { createLearningAttendanceSync } from '../src/learning-attendance-sync.js';
 
 function poolFrom(database, onQuery = () => {}) {
   const query = async (sql, params) => {
@@ -771,12 +772,43 @@ test('GV mở từng phần và checkpoint được lưu thật, idempotent, kh�
     operationId: crypto.randomUUID()
   });
   assert.equal(release.status, 'open');
+  await service.setBlockRelease({
+    assignmentId: published.assignmentId,
+    blockId: firstBlock.blockId,
+    status: 'closed',
+    reviewer,
+    operationId: crypto.randomUUID()
+  });
+  const lateReplay = await service.submitCheckpoint(checkpointInput);
+  assert.equal(lateReplay.replayed, true, 'Mất phản hồi rồi thử lại phải đọc được checkpoint cũ dù phần đã đóng.');
+  await assert.rejects(
+    () => service.submitCheckpoint({
+      ...checkpointInput,
+      responses: { [firstBlock.items[0].itemVersionId]: 'Nội dung khác.' }
+    }),
+    error => error instanceof LearningError && error.code === 'CHECKPOINT_IDEMPOTENCY_CONFLICT'
+  );
   const counts = await database.query(`SELECT
     (SELECT count(*)::int FROM learning.checkpoint_submission) AS checkpoints,
     (SELECT count(*)::int FROM learning.attendance_record) AS attendance,
     (SELECT count(*)::int FROM learning.assignment_block_release_event) AS release_events;
   `);
-  assert.deepEqual(counts.rows[0], { checkpoints: 1, attendance: 0, release_events: 1 });
+  assert.deepEqual(counts.rows[0], { checkpoints: 1, attendance: 0, release_events: 2 });
+  const final = await service.submit({
+    attemptToken: attempt.attemptToken,
+    submissionId: crypto.randomUUID(),
+    definitionHash: published.definitionHash,
+    draftRevision: 1,
+    responses: { ...firstResponses, [secondBlock.items[0].itemVersionId]: 'Em đã hoàn thành phần cuối.' }
+  });
+  assert.equal(final.receipt.attendanceStatus, 'self_confirmed');
+  const replayAfterFinal = await service.submitCheckpoint(checkpointInput);
+  assert.equal(replayAfterFinal.replayed, true, 'Retry checkpoint sau khi phiếu cuối đã nộp phải đọc lại bản cũ.');
+  await assert.rejects(() => service.submitCheckpoint({
+    ...checkpointInput,
+    checkpointSubmissionId: crypto.randomUUID(),
+    idempotencyKey: `checkpoint-test:${crypto.randomUUID()}`
+  }), error => error instanceof LearningError && error.code === 'ATTEMPT_NOT_ACTIVE');
   await database.close();
 });
 
@@ -829,6 +861,108 @@ test('outbox lease đúng một lần và output sai identity bị fail-closed',
   assert.equal(correct.status, 'complete');
   assert.equal(mismatch.status, 'failed');
   assert.equal(mismatch.last_error_code, 'OUTPUT_IDENTITY_MISMATCH');
+  await database.close();
+});
+
+test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal lỗi rồi hồi phục không làm mất biên nhận', async () => {
+  const { database, service } = await setupDatabase();
+  const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };
+  const published = await service.publishReflectionForm({
+    reviewer, title: 'Phiếu thử thiếu câu', courseCode: '56', classId: '2139', sessionNumber: 6,
+    opensAt: null, closesAt: null,
+    items: [
+      { libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true },
+      { libraryItemId: '10000000-0000-4000-8000-000000000003', checkpoint: 2, required: true }
+    ]
+  });
+  const assignment = await service.getPublicAssignment(published.publicToken);
+  const student = assignment.roster[0];
+  const attempt = await service.startAttempt({
+    publicToken: published.publicToken, studentRef: student.studentRef,
+    clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true
+  });
+  const firstItem = assignment.definition.blocks[0].items[0].itemVersionId;
+  const responses = { [firstItem]: 'Em chỉ kịp ghi phần đầu.' };
+  const submission = await service.submit({
+    attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
+    definitionHash: published.definitionHash, draftRevision: 0, responses
+  });
+  assert.equal(submission.receipt.attendanceStatus, 'pending_teacher');
+  const before = await database.query(`SELECT job_type FROM learning.outbox_job ORDER BY job_type;`);
+  assert.deepEqual(before.rows.map(row => row.job_type), ['analyze_submission']);
+  const replay = await service.submit({
+    attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
+    definitionHash: published.definitionHash, draftRevision: 0, responses
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.receipt.submissionId, submission.receipt.submissionId);
+  await assert.rejects(() => service.submit({
+    attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
+    definitionHash: published.definitionHash, draftRevision: 0,
+    responses: { [firstItem]: 'Nội dung bị đổi sau nộp.' }
+  }), error => error instanceof LearningError && error.code === 'SUBMISSION_ALREADY_FINAL');
+
+  const override = await service.overrideAttendance({
+    assignmentId: published.assignmentId, studentRef: student.studentRef,
+    status: 'teacher_confirmed', reason: 'Giảng viên thấy học viên có mặt.',
+    reviewer, operationKey: `attendance-override:${crypto.randomUUID()}`
+  });
+  assert.equal(override.portalSyncQueued, true);
+  const pool = poolFrom(database);
+  const [job] = await claimLearningJobs({
+    pool, workerId: 'portal-test-1', limit: 10,
+    jobTypes: ['sync_portal_attendance']
+  });
+  assert.equal(job.payload.studentRef, student.studentRef);
+  const config = {
+    learningAttendanceSyncUrl: 'https://example.test/attendance',
+    learningAttendanceSyncSecret: 'test-only-secret',
+    learningAttendanceSyncTimeoutMs: 1000
+  };
+  const firstHandler = createLearningAttendanceSync({
+    config, fetchImpl: async () => ({ ok: false, status: 503 })
+  });
+  const failed = await processLearningJob({
+    pool, workerId: 'portal-test-1', job, handler: firstHandler
+  });
+  assert.equal(failed.errorCode, 'PORTAL_ATTENDANCE_HTTP_503');
+  const failedReadback = await database.query(`SELECT status, last_error_code, attempt_count
+    FROM learning.outbox_job WHERE id = $1::uuid;`, [job.id]);
+  assert.deepEqual(failedReadback.rows[0], {
+    status: 'retry_wait', last_error_code: 'PORTAL_ATTENDANCE_HTTP_503', attempt_count: 1
+  });
+  await database.query(`UPDATE learning.outbox_job SET next_attempt_at = now() - interval '1 second'
+    WHERE id = $1::uuid;`, [job.id]);
+  const [retried] = await claimLearningJobs({
+    pool, workerId: 'portal-test-2', limit: 10,
+    jobTypes: ['sync_portal_attendance']
+  });
+  assert.equal(retried.id, job.id);
+  let sent;
+  const recoveryHandler = createLearningAttendanceSync({ config, fetchImpl: async (_url, options) => {
+    sent = JSON.parse(options.body);
+    return { ok: true, status: 200, async json() {
+      return { ok: true, status: 'synced', entityKey: job.entityKey,
+        unitKey: job.unitKey, operationKey: job.operationKey,
+        idempotencyKey: job.idempotencyKey, classId: job.payload.classId,
+        studentId: job.payload.studentId, sessionNumber: job.payload.sessionNumber };
+    } };
+  } });
+  const completed = await processLearningJob({
+    pool, workerId: 'portal-test-2', job: retried, handler: recoveryHandler
+  });
+  assert.equal(completed.status, 'complete');
+  assert.equal(sent.studentRef, student.studentRef);
+  assert.equal(sent.commit, true);
+  const dashboard = await service.getTeacherDashboard({ assignmentId: published.assignmentId, reviewer });
+  const target = dashboard.students.find(row => row.studentRef === student.studentRef);
+  assert.equal(target.attendanceStatus, 'teacher_confirmed');
+  assert.equal(target.portalSync.status, 'complete');
+  assert.equal(target.submissionId, submission.receipt.submissionId);
+  const counts = await database.query(`SELECT
+    (SELECT count(*)::int FROM learning.submission) AS submissions,
+    (SELECT count(*)::int FROM learning.outbox_job WHERE job_type = 'sync_portal_attendance') AS portal_jobs;`);
+  assert.deepEqual(counts.rows[0], { submissions: 1, portal_jobs: 1 });
   await database.close();
 });
 

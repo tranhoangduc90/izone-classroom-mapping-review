@@ -115,3 +115,53 @@ test('xác nhận của giảng viên dùng attendance event, không giả làm 
   assert.equal(sent.submissionId, undefined);
   await assert.rejects(() => sync({ ...overrideJob, entityKey: 'student:wrong' }), LearningJobIdentityError);
 });
+
+test('mọi lớp định danh Portal sai đều dừng trước khi đánh dấu hoàn tất', async t => {
+  const mutations = [
+    ['studentRef trong payload', current => ({ ...current, payload: { ...current.payload, studentRef: '66666666-6666-4666-8666-666666666666' } })],
+    ['assignmentId trong payload', current => ({ ...current, payload: { ...current.payload, assignmentId: '66666666-6666-4666-8666-666666666666' } })],
+    ['submissionId trong payload', current => ({ ...current, payload: { ...current.payload, submissionId: '66666666-6666-4666-8666-666666666666' } })],
+    ['sessionNumber trong payload', current => ({ ...current, payload: { ...current.payload, sessionNumber: 3 } })],
+    ['idempotencyKey của job', current => ({ ...current, idempotencyKey: `${current.idempotencyKey}:wrong` })]
+  ];
+  for (const [name, mutate] of mutations) {
+    await t.test(name, async () => {
+      let calls = 0;
+      const sync = createLearningAttendanceSync({ config, fetchImpl: async () => { calls += 1; return response('synced'); } });
+      await assert.rejects(() => sync(mutate(job)), LearningJobIdentityError);
+      assert.equal(calls, 0, 'Không được gọi Portal khi job đã sai identity.');
+    });
+  }
+  for (const [name, override] of [
+    ['classId', { classId: '9999' }], ['studentId', { studentId: '9999' }],
+    ['sessionNumber', { sessionNumber: 3 }], ['entityKey', { entityKey: 'student:wrong' }],
+    ['unitKey', { unitKey: 'session:wrong' }], ['operationKey', { operationKey: 'operation:wrong' }],
+    ['idempotencyKey', { idempotencyKey: 'retry:wrong' }]
+  ]) {
+    await t.test(`phản hồi sai ${name}`, async () => {
+      const sync = createLearningAttendanceSync({ config, fetchImpl: async () => response('synced', override) });
+      await assert.rejects(() => sync(job), LearningJobIdentityError);
+    });
+  }
+});
+
+test('Portal lỗi HTTP, timeout, dữ liệu lỗi và payload không hợp lệ được phân loại rõ', async t => {
+  for (const status of [429, 500, 503]) {
+    await t.test(`HTTP ${status}`, async () => {
+      const sync = createLearningAttendanceSync({ config, fetchImpl: async () => ({ ok: false, status }) });
+      await assert.rejects(() => sync(job), error => error.code === `PORTAL_ATTENDANCE_HTTP_${status}`);
+    });
+  }
+  const timeout = createLearningAttendanceSync({ config, fetchImpl: async () => {
+    const error = new Error('timeout'); error.name = 'TimeoutError'; throw error;
+  } });
+  await assert.rejects(() => timeout(job), error => error.code === 'PORTAL_ATTENDANCE_TIMEOUT');
+  const invalidJson = createLearningAttendanceSync({ config, fetchImpl: async () => ({
+    ok: true, status: 200, async json() { throw new SyntaxError('invalid JSON'); }
+  }) });
+  await assert.rejects(() => invalidJson(job), error => error.code === 'PORTAL_ATTENDANCE_INVALID_RESPONSE');
+  let calls = 0;
+  const invalidPayload = createLearningAttendanceSync({ config, fetchImpl: async () => { calls += 1; return response('synced'); } });
+  await assert.rejects(() => invalidPayload({ ...job, payload: { ...payload, attendanceStatus: 'ABSENT' } }), LearningJobIdentityError);
+  assert.equal(calls, 0);
+});

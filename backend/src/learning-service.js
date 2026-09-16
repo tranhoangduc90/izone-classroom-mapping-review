@@ -235,24 +235,13 @@ export function createLearningService({ pool }) {
       return withTransaction(pool, async client => {
         const contextResult = await client.query(fetchLearningAttemptContextSql, [attemptToken]);
         const context = assertSingleRow(contextResult, 'ATTEMPT_NOT_FOUND', 'Không tìm thấy phiên đang làm.');
-        if (context.attempt_status !== 'active') {
-          throw new LearningError('ATTEMPT_NOT_ACTIVE', 'Phiếu này không còn ở trạng thái đang làm.', 409);
-        }
         if (context.definition_hash !== definitionHash) {
           throw new LearningError('FORM_VERSION_MISMATCH', 'Form đã thay đổi; hãy tải lại đúng phiên bản.', 409);
-        }
-        if (Number(draftRevision) < Number(context.draft_revision)) {
-          throw new LearningError('STALE_CHECKPOINT', 'Phần này cũ hơn draft đã lưu trên máy chủ.', 409);
         }
         const definition = parseFormDefinition(asObject(context.public_definition));
         const block = definition.blocks.find(item => item.blockId === blockId && item.checkpoint === checkpoint);
         if (!block) {
           throw new LearningError('CHECKPOINT_IDENTITY_MISMATCH', 'Phần nộp không thuộc đúng form.', 409);
-        }
-        const releaseResult = await client.query(fetchLearningBlockReleaseSql, [context.assignment_id, blockId]);
-        const release = assertSingleRow(releaseResult, 'BLOCK_RELEASE_MISSING', 'Phần này chưa được giảng viên cấu hình.', 409);
-        if (release.status !== 'open') {
-          throw new LearningError('BLOCK_NOT_OPEN', 'Phần này chưa được giảng viên mở hoặc đã đóng.', 409);
         }
         const validIds = new Set(block.items.map(item => item.itemVersionId));
         const blockResponses = Object.fromEntries(Object.entries(responses).filter(([id]) => validIds.has(id)));
@@ -275,6 +264,17 @@ export function createLearningService({ pool }) {
             submittedAt: existing.submitted_at,
             replayed: true
           };
+        }
+        if (context.attempt_status !== 'active') {
+          throw new LearningError('ATTEMPT_NOT_ACTIVE', 'Phiếu này không còn ở trạng thái đang làm.', 409);
+        }
+        if (Number(draftRevision) < Number(context.draft_revision)) {
+          throw new LearningError('STALE_CHECKPOINT', 'Phần này cũ hơn draft đã lưu trên máy chủ.', 409);
+        }
+        const releaseResult = await client.query(fetchLearningBlockReleaseSql, [context.assignment_id, blockId]);
+        const release = assertSingleRow(releaseResult, 'BLOCK_RELEASE_MISSING', 'Phần này chưa được giảng viên cấu hình.', 409);
+        if (release.status !== 'open') {
+          throw new LearningError('BLOCK_NOT_OPEN', 'Phần này chưa được giảng viên mở hoặc đã đóng.', 409);
         }
         const submittedAt = new Date().toISOString();
         const inserted = await client.query(insertLearningCheckpointSubmissionSql, [

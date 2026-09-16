@@ -1,0 +1,6 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260916.4-progress-log-checkpoint-retry
+    environment:
+      APP_VERSION: 1.8.8-k56-checkpoint-retry
+      BUILD_SHA: ${PROGRESS_LOG_CHECKPOINT_BUILD_SHA:?set PROGRESS_LOG_CHECKPOINT_BUILD_SHA}
