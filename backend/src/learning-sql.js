@@ -138,6 +138,7 @@ export const fetchLearningAttemptContextSql = `SELECT
   assignment.status AS assignment_status,
   assignment.closes_at,
   roster.student_name_snapshot AS student_name,
+  roster.erp_student_contact_id::text AS student_id,
   version.public_definition,
   grading.grader_version,
   grading.private_definition
@@ -466,6 +467,16 @@ saved_job AS (
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
 ),
+saved_attendance_job AS (
+  INSERT INTO learning.outbox_job (
+    job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+  )
+  SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
+  FROM saved_evidence
+  WHERE $18 = 'self_confirmed'
+  ON CONFLICT (idempotency_key) DO NOTHING
+  RETURNING id
+),
 completed_attempt AS (
   UPDATE learning.attempt
   SET status = 'submitted', submitted_at = $11::timestamptz, updated_at = now()
@@ -481,6 +492,7 @@ SELECT
   EXISTS (SELECT 1 FROM saved_attendance_event) AS attendance_event_saved,
   EXISTS (SELECT 1 FROM saved_evidence) AS evidence_saved,
   EXISTS (SELECT 1 FROM saved_job) AS outbox_saved,
+  EXISTS (SELECT 1 FROM saved_attendance_job) AS attendance_outbox_saved,
   EXISTS (SELECT 1 FROM completed_attempt) AS attempt_completed
 FROM saved_submission
 CROSS JOIN saved_grading_run;`;

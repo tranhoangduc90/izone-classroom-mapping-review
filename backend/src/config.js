@@ -16,7 +16,10 @@ const envSchema = z.object({
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1),
   ERP_SYNC_URL: z.string().url().optional().default(''),
   ERP_SYNC_SECRET: z.string().optional().default(''),
-  ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(10000).default(5000),
+  ERP_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(5000),
+  LEARNING_ATTENDANCE_SYNC_URL: z.string().url().optional().default(''),
+  LEARNING_ATTENDANCE_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(15000).default(7000),
+  LEARNING_ATTENDANCE_POLL_MS: z.coerce.number().int().min(500).max(60000).default(2000),
   MINI_TEST_SYNC_SECRET: z.string().optional().default(''),
   WRITING_TEST_SYNC_SECRET: z.string().optional().default(''),
   TERM_TEST_PUBLIC_API_BASE_URL: z.string().url().trim().optional().default(''),
@@ -30,6 +33,13 @@ const envSchema = z.object({
   }
   if (value.ERP_SYNC_SECRET && value.ERP_SYNC_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['ERP_SYNC_SECRET'], message: 'ERP_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+  }
+  if (value.LEARNING_ATTENDANCE_SYNC_URL && !value.ERP_SYNC_SECRET) {
+    context.addIssue({
+      code: 'custom',
+      path: ['LEARNING_ATTENDANCE_SYNC_URL'],
+      message: 'ERP_SYNC_SECRET là bắt buộc khi bật đồng bộ điểm danh Progress Log.'
+    });
   }
   if (value.MINI_TEST_SYNC_SECRET && value.MINI_TEST_SYNC_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['MINI_TEST_SYNC_SECRET'], message: 'MINI_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
@@ -73,6 +83,10 @@ export function loadConfig(env = process.env) {
     erpSyncUrl: parsed.ERP_SYNC_URL,
     erpSyncSecret: parsed.ERP_SYNC_SECRET,
     erpSyncTimeoutMs: parsed.ERP_SYNC_TIMEOUT_MS,
+    learningAttendanceSyncUrl: parsed.LEARNING_ATTENDANCE_SYNC_URL,
+    learningAttendanceSyncSecret: parsed.ERP_SYNC_SECRET,
+    learningAttendanceSyncTimeoutMs: parsed.LEARNING_ATTENDANCE_SYNC_TIMEOUT_MS,
+    learningAttendancePollMs: parsed.LEARNING_ATTENDANCE_POLL_MS,
     miniTestSyncSecret: parsed.MINI_TEST_SYNC_SECRET,
     writingTestSyncSecret: parsed.WRITING_TEST_SYNC_SECRET,
     termTestPublicApiBaseUrl: parsed.TERM_TEST_PUBLIC_API_BASE_URL.replace(/\/+$/, ''),

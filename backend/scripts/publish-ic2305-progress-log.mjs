@@ -11,6 +11,11 @@ import {
   buildIc2305EntranceGradingKey,
   IC2305_ENTRANCE_TEMPLATE
 } from '../src/learning-templates/ic2305-entrance-reading1-listening1.js';
+import {
+  buildIc2305Writing1Definition,
+  buildIc2305Writing1GradingKey,
+  IC2305_WRITING1_TEMPLATE
+} from '../src/learning-templates/ic2305-entrance-writing1.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
 import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
 
@@ -23,11 +28,28 @@ function option(name, fallback = '') {
 
 const apply = process.argv.includes('--apply');
 const classCode = option('class', 'IC2305').trim().toUpperCase();
-const sessionNumber = Number(option('session', '2'));
+const formCode = option('form', 'writing1').trim().toLowerCase();
+const selected = {
+  writing1: {
+    template: IC2305_WRITING1_TEMPLATE,
+    buildDefinition: buildIc2305Writing1Definition,
+    buildGradingKey: buildIc2305Writing1GradingKey,
+    defaultSession: 2
+  },
+  'reading1-listening1': {
+    template: IC2305_ENTRANCE_TEMPLATE,
+    buildDefinition: buildIc2305EntranceDefinition,
+    buildGradingKey: buildIc2305EntranceGradingKey,
+    defaultSession: 4
+  }
+}[formCode];
+if (!selected) throw new Error('FORM_CODE_NOT_SUPPORTED');
+const sessionNumber = Number(option('session', String(selected.defaultSession)));
 const creatorEmail = option('creator').trim().toLowerCase();
 const approverEmail = option('approver').trim().toLowerCase();
-const definition = buildIc2305EntranceDefinition();
-const gradingKey = buildIc2305EntranceGradingKey();
+const template = selected.template;
+const definition = selected.buildDefinition();
+const gradingKey = selected.buildGradingKey();
 const definitionHash = sha256(stableStringify(definition));
 const gradingHash = sha256(stableStringify(gradingKey));
 
@@ -37,7 +59,7 @@ if (!Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 100
 
 const plan = {
   mode: apply ? 'apply' : 'plan',
-  templateCode: IC2305_ENTRANCE_TEMPLATE.code,
+  templateCode: template.code,
   classCode,
   sessionNumber,
   formVersionId: definition.formVersionId,
@@ -62,9 +84,11 @@ const pool = new Pool({
   application_name: 'izone_publish_ic2305_progress_log'
 });
 const client = await pool.connect();
+let phase = 'begin';
 
 try {
   await client.query('BEGIN');
+  phase = 'accounts';
   const reviewerEmails = [...new Set([creatorEmail, approverEmail])];
   const accounts = await client.query(`SELECT email
     FROM mapping.reviewer_account
@@ -77,7 +101,7 @@ try {
       WHERE reviewer_email = $1
         AND course_code = $2
         AND can_self_approve_scored_forms = true
-        AND status = 'active';`, [creatorEmail, IC2305_ENTRANCE_TEMPLATE.courseCode]);
+        AND status = 'active';`, [creatorEmail, template.courseCode]);
     if (authority.rowCount !== 1) throw new Error('COURSE_LEAD_SELF_APPROVAL_NOT_GRANTED');
   }
 
@@ -92,18 +116,25 @@ try {
       );`, [classCode, creatorEmail]);
   if (classResult.rowCount !== 1) throw new Error('CLASS_NOT_FOUND_OR_CREATOR_NOT_ASSIGNED');
   const targetClass = classResult.rows[0];
+  phase = 'advisory_lock';
+  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0));`, [
+    `learning:publish:${definition.formVersionId}:${targetClass.class_id}:${sessionNumber}`
+  ]);
+  phase = 'roster';
   const roster = await client.query(fetchLearningRosterForClassSql, [targetClass.class_id]);
   if (!roster.rowCount) throw new Error('CLASS_ROSTER_EMPTY');
 
+  phase = 'template';
   await client.query(`INSERT INTO learning.form_template (
       id, organization_key, title, kind, created_by_email, status
     ) VALUES ($1::uuid, 'izone', $2, 'mixed', $3, 'active')
     ON CONFLICT (id) DO NOTHING;`, [
-    IC2305_ENTRANCE_TEMPLATE.templateId,
-    IC2305_ENTRANCE_TEMPLATE.title,
+    template.templateId,
+    template.title,
     creatorEmail
   ]);
 
+  phase = 'version';
   const existingVersion = await client.query(`SELECT definition_hash
     FROM learning.form_version WHERE id = $1::uuid;`, [definition.formVersionId]);
   if (existingVersion.rowCount && existingVersion.rows[0].definition_hash !== definitionHash) {
@@ -116,7 +147,7 @@ try {
       ) VALUES ($1::uuid, $2::uuid, 1, 'FormDefinitionV1', $3::jsonb, $4,
         'published', $5, $6, now());`, [
       definition.formVersionId,
-      IC2305_ENTRANCE_TEMPLATE.templateId,
+    template.templateId,
       JSON.stringify(definition),
       definitionHash,
       creatorEmail,
@@ -137,13 +168,14 @@ try {
     }
   }
 
+  phase = 'assignment';
   const existingAssignment = await client.query(`SELECT id::text AS assignment_id, public_token::text
     FROM learning.form_assignment
     WHERE form_version_id = $1::uuid
       AND erp_course_class_id = $2::bigint
       AND session_number = $3
       AND status IN ('draft', 'published', 'closed')
-    ORDER BY created_at DESC LIMIT 1 FOR UPDATE;`, [definition.formVersionId, targetClass.class_id, sessionNumber]);
+    ORDER BY created_at DESC LIMIT 1;`, [definition.formVersionId, targetClass.class_id, sessionNumber]);
 
   let assignment = existingAssignment.rows[0];
   if (!assignment) {
@@ -153,11 +185,11 @@ try {
       ) VALUES ($1::uuid, $2, $3::bigint, $4, $5, $6, 'published', $7)
       RETURNING id::text AS assignment_id, public_token::text;`, [
       definition.formVersionId,
-      IC2305_ENTRANCE_TEMPLATE.courseCode,
+      template.courseCode,
       targetClass.class_id,
       targetClass.class_name,
       sessionNumber,
-      IC2305_ENTRANCE_TEMPLATE.title,
+      template.title,
       creatorEmail
     ]);
     assignment = created.rows[0];
@@ -184,6 +216,7 @@ try {
     }
   }
 
+  phase = 'readback';
   const readback = await client.query(`SELECT assignment.id::text AS assignment_id,
       assignment.public_token::text AS public_token,
       assignment.class_name_snapshot AS class_name,
@@ -216,7 +249,7 @@ try {
   }, null, 2)}\n`);
 } catch (error) {
   await client.query('ROLLBACK');
-  process.stderr.write(`${error.code || error.message || 'PUBLISH_FAILED'}\n`);
+  process.stderr.write(`PUBLISH_FAILED_${phase}:${error.code || 'UNKNOWN'}\n`);
   process.exitCode = 1;
 } finally {
   client.release();

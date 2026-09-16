@@ -393,6 +393,9 @@ export function createLearningService({ pool }) {
         const operationKey = `grade:${submissionId}:v${quizResult.graderVersion}`;
         const attendanceStatus = completeness.complete ? 'self_confirmed' : 'pending_teacher';
         const attendanceReason = completeness.complete ? 'Nộp đủ mục bắt buộc.' : 'Phiếu còn thiếu mục bắt buộc.';
+        const portalAttendanceUnitKey = `portal-attendance:${context.assignment_id}:session:${context.session_number}`;
+        const portalAttendanceOperationKey = `portal-attendance:${submissionId}:v1`;
+        const portalAttendanceIdempotencyKey = `portal-attendance:${submissionId}:enqueue:v1`;
         const finalized = await client.query(finalizeLearningSubmissionSql, [
           submissionId,
           context.attempt_id,
@@ -439,6 +442,19 @@ export function createLearningService({ pool }) {
             submissionId,
             studentRef: context.student_ref,
             assignmentId: context.assignment_id
+          }),
+          portalAttendanceUnitKey,
+          portalAttendanceOperationKey,
+          portalAttendanceIdempotencyKey,
+          json({
+            schemaVersion: 'LearningPortalAttendanceJobV1',
+            submissionId,
+            assignmentId: context.assignment_id,
+            classId: context.class_id,
+            studentId: context.student_id,
+            studentRef: context.student_ref,
+            sessionNumber: Number(context.session_number),
+            attendanceStatus: 'PRESENT'
           })
         ]);
         const finalizedRow = assertSingleRow(finalized, 'SUBMISSION_NOT_SAVED', 'Không thể lưu bài nộp.', 500);
@@ -449,7 +465,8 @@ export function createLearningService({ pool }) {
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
           || !finalizedRow.attendance_event_saved
           || !finalizedRow.evidence_saved
-          || !finalizedRow.outbox_saved) {
+          || !finalizedRow.outbox_saved
+          || Boolean(finalizedRow.attendance_outbox_saved) !== completeness.complete) {
           throw new LearningError('SUBMISSION_WRITE_INCOMPLETE', 'Bài nộp chưa được ghi đủ dữ liệu liên quan.', 500);
         }
         return {

@@ -91,6 +91,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(migrationV2);
+  const attendanceOutboxMigration = await readFile(
+    new URL('../ops/learning-migrations/202609160003_portal_attendance_outbox.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(attendanceOutboxMigration);
   const authorityMigration = await readFile(
     new URL('../ops/learning-migrations/202609160001_course_content_authority.sql', import.meta.url),
     'utf8'
@@ -502,9 +507,21 @@ test('submit idempotent, draft cũ fail-closed và readback không đổi nhầm
     response_items: 2,
     grading_items: 2,
     evidence: 1,
-    jobs: 1,
+    jobs: 2,
     attendance_events: 1
   });
+  const queuedJobs = await database.query(`SELECT job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+    FROM learning.outbox_job ORDER BY job_type;`);
+  assert.deepEqual(queuedJobs.rows.map(row => row.job_type), ['analyze_submission', 'sync_portal_attendance']);
+  const attendanceJob = queuedJobs.rows.find(row => row.job_type === 'sync_portal_attendance');
+  assert.equal(attendanceJob.payload.submissionId, submissionInput.submissionId);
+  assert.equal(attendanceJob.payload.assignmentId, published.assignmentId);
+  assert.equal(attendanceJob.payload.studentRef, firstStudent.studentRef);
+  assert.equal(attendanceJob.payload.classId, '2139');
+  assert.equal(attendanceJob.payload.studentId, '9001');
+  assert.equal(attendanceJob.payload.sessionNumber, 3);
+  assert.equal(attendanceJob.entity_key, `student:${firstStudent.studentRef}`);
+  assert.equal(attendanceJob.unit_key, `portal-attendance:${published.assignmentId}:session:3`);
   await database.close();
 });
 

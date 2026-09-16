@@ -1,0 +1,9 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260916.2-progress-log-attendance
+    environment:
+      APP_VERSION: 1.8.6-k56-attendance
+      BUILD_SHA: ${PROGRESS_LOG_ATTENDANCE_BUILD_SHA:?set PROGRESS_LOG_ATTENDANCE_BUILD_SHA}
+      LEARNING_ATTENDANCE_SYNC_URL: https://n8n-ai.izone.edu.vn/webhook/dong-bo-diem-danh-progress-log
+      LEARNING_ATTENDANCE_SYNC_TIMEOUT_MS: 7000
+      LEARNING_ATTENDANCE_POLL_MS: 2000

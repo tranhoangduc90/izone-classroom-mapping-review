@@ -1,0 +1,314 @@
+{
+  "name": "Progress Log · Ghi điểm danh Portal",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dong-bo-diem-danh-progress-log",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        0
+      ],
+      "id": "511fa1a7-1a7a-4381-a82f-0eea6ef31422",
+      "name": "Nhận yêu cầu điểm danh",
+      "webhookId": "b852ad61-a0b4-4d67-9aa4-3f8789cd566f"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dữ liệu vào: header bí mật và identity kỹ thuật của một bài Progress Log.\n// Việc chính: xác thực nguồn gửi, kiểm tra ID và tự tính lại bốn lớp identity.\n// Kết quả: gói sạch để đọc đúng lớp, học viên và buổi trên Portal.\n// Khi lỗi: dừng trước khi gọi Portal; execution chỉ hiện mã lỗi chung.\n\nconst request = $input.first()?.json ?? {};\nconst headers = request.headers ?? {};\nconst supplied = String(headers['x-learning-attendance-sync'] ?? headers['X-Learning-Attendance-Sync'] ?? '');\nconst expectedSecret = String($vars.TERM_TEST_ERP_SYNC_SECRET ?? '');\nfunction sameSecret(left, right) {\n  if (!left || !right || left.length !== right.length) return false;\n  let difference = 0;\n  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);\n  return difference === 0;\n}\nif (!sameSecret(supplied, expectedSecret)) throw new Error('ATTENDANCE_SYNC_UNAUTHORIZED');\n\nconst body = request.body ?? {};\nconst uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nconst submissionId = String(body.submissionId ?? '').toLowerCase();\nconst assignmentId = String(body.assignmentId ?? '').toLowerCase();\nconst studentRef = String(body.studentRef ?? '').toLowerCase();\nconst classId = String(body.classId ?? '');\nconst studentId = String(body.studentId ?? '');\nconst sessionNumber = Number(body.sessionNumber);\nconst commit = body.commit === true;\nif (body.schemaVersion !== 'LearningPortalAttendanceJobV1' || body.attendanceStatus !== 'PRESENT') throw new Error('ATTENDANCE_SYNC_INVALID_SCHEMA');\nif (![submissionId, assignmentId, studentRef].every(value => uuidPattern.test(value))) throw new Error('ATTENDANCE_SYNC_INVALID_UUID');\nif (!/^\\d+$/.test(classId) || !/^\\d+$/.test(studentId) || !Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 100) throw new Error('ATTENDANCE_SYNC_INVALID_TARGET');\nconst identity = {\n  entityKey: `student:${studentRef}`,\n  unitKey: `portal-attendance:${assignmentId}:session:${sessionNumber}`,\n  operationKey: `portal-attendance:${submissionId}:v1`,\n  idempotencyKey: `portal-attendance:${submissionId}:enqueue:v1`\n};\nfor (const [key, value] of Object.entries(identity)) {\n  if (String(body[key] ?? '') !== value) throw new Error('ATTENDANCE_SYNC_IDENTITY_MISMATCH');\n}\nreturn [{ json: { submissionId, assignmentId, studentRef, classId, studentId, sessionNumber, commit, ...identity } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        0
+      ],
+      "id": "3f8ec62b-7dd9-4b5a-aa12-4f2f84d0b8b0",
+      "name": "Xác thực và khóa identity"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và khóa identity').first().json.classId }}/student-class-sessions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -420,
+        0
+      ],
+      "id": "c8dcf87e-8b79-4745-a6ba-b77714369050",
+      "name": "Đọc trạng thái lớp trên Portal",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "5t3dhy3tWIoPzmXc",
+          "name": "IZONE Keycloak Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dữ liệu vào: danh sách buổi và bản ghi học viên từ Portal.\n// Việc chính: tìm đúng buổi theo thứ tự thời gian, đọc trạng thái cũ và giữ nguyên bài tập/note.\n// Kết quả: chỉ cho phép ghi PRESENT khi ô điểm danh còn trống; có trạng thái khác thì chuyển GV xem.\n// Khi lỗi: dừng fail-closed, không ghi sang học viên hoặc buổi khác.\n\nconst identity = $('Xác thực và khóa identity').first().json;\nconst root = $input.first()?.json ?? {};\nconst rows = Array.isArray(root) ? root : Array.isArray(root.data) ? root.data : Array.isArray(root.data?.data) ? root.data.data : [];\nconst meta = root.meta ?? root.data?.meta ?? {};\nconst sessionsRaw = Array.isArray(meta.class_sessions) ? meta.class_sessions : Array.isArray(root.class_sessions) ? root.class_sessions : [];\nconst sessions = sessionsRaw.map(session => ({\n  ...session,\n  id: session.class_session_id ?? session.id,\n  number: Number(session.session_number ?? session.sessionNumber ?? session.order ?? session.ordinal),\n  startsAt: session.session_start_datetime ?? session.starts_at ?? session.start_datetime ?? ''\n})).filter(session => session.id !== undefined && session.id !== null);\nlet target = sessions.find(session => Number.isInteger(session.number) && session.number === identity.sessionNumber);\nif (!target) {\n  const ordered = [...sessions].sort((left, right) => String(left.startsAt).localeCompare(String(right.startsAt)));\n  target = ordered[identity.sessionNumber - 1];\n}\nif (!target) throw new Error('ATTENDANCE_SYNC_SESSION_NOT_FOUND');\nconst targetSessionId = String(target.id);\nconst current = rows.find(row => String(row.student_id) === identity.studentId && String(row.class_session_id) === targetSessionId) ?? null;\nconst currentStatus = current?.attendance_status === undefined || current?.attendance_status === null || current?.attendance_status === '' ? null : Number(current.attendance_status);\nlet status = 'preview';\nlet needsWrite = false;\nif (currentStatus === 1) status = 'already_present';\nelse if (currentStatus !== null) status = 'conflict';\nelse if (identity.commit) { status = 'pending_write'; needsWrite = true; }\nconst requestBody = { student_class_sessions: [{\n  student_id: Number(identity.studentId),\n  class_session_id: Number(targetSessionId),\n  attendance_status: 1,\n  homework_status: current?.homework_status ?? null,\n  note: current?.note ?? null\n}] };\nreturn [{ json: { ...identity, targetSessionId, status, needsWrite, requestBody } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        0
+      ],
+      "id": "b597030a-8278-4c82-9572-95b02458e3ae",
+      "name": "Chọn đúng buổi và quyết định"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d1b7a44-8088-4d59-935f-79d132a2e5ea",
+              "leftValue": "={{ $json.needsWrite }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        60,
+        0
+      ],
+      "id": "045799e6-2bd3-4266-b2c6-f8096f3a74b1",
+      "name": "Cần ghi điểm danh?"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và khóa identity').first().json.classId }}/student-class-sessions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Chọn đúng buổi và quyết định').first().json.requestBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        -100
+      ],
+      "id": "d91ab718-c9d2-4a10-9969-2640389c42f9",
+      "name": "Ghi có mặt vào Portal",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "5t3dhy3tWIoPzmXc",
+          "name": "IZONE Keycloak Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và khóa identity').first().json.classId }}/student-class-sessions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        -100
+      ],
+      "id": "a057a79c-590f-483c-af66-f66ca6a17843",
+      "name": "Đọc lại sau khi ghi",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "5t3dhy3tWIoPzmXc",
+          "name": "IZONE Keycloak Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dữ liệu vào: trạng thái Portal vừa đọc lại sau lệnh ghi.\n// Việc chính: đối chiếu lại đúng student_id + class_session_id và attendance_status = PRESENT.\n// Kết quả: chỉ trả synced khi Portal thực sự đã lưu đúng bản ghi.\n// Khi lỗi: ném lỗi để backend retry, không báo thành công giả.\n\nconst decision = $('Chọn đúng buổi và quyết định').first().json;\nconst root = $input.first()?.json ?? {};\nconst rows = Array.isArray(root) ? root : Array.isArray(root.data) ? root.data : Array.isArray(root.data?.data) ? root.data.data : [];\nconst saved = rows.find(row => String(row.student_id) === decision.studentId && String(row.class_session_id) === decision.targetSessionId);\nif (!saved || Number(saved.attendance_status) !== 1) throw new Error('ATTENDANCE_SYNC_READBACK_FAILED');\nreturn [{ json: { ...decision, status: 'synced', needsWrite: false, requestBody: undefined } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -100
+      ],
+      "id": "0aee0f45-a512-49d8-a4ca-b4401992a64d",
+      "name": "Xác nhận Portal đã lưu"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dữ liệu vào: quyết định cuối cùng hoặc kết quả readback.\n// Việc chính: loại requestBody và chỉ trả identity cùng trạng thái an toàn.\n// Kết quả: backend có thể fail-closed nếu bất kỳ ID nào không khớp.\n// Khi lỗi: workflow không tự suy đoán hay đổi identity.\n\nconst value = $input.first().json;\nreturn [{ json: {\n  ok: true,\n  status: value.status,\n  entityKey: value.entityKey,\n  unitKey: value.unitKey,\n  operationKey: value.operationKey,\n  idempotencyKey: value.idempotencyKey,\n  classId: value.classId,\n  studentId: value.studentId,\n  sessionNumber: value.sessionNumber\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        0
+      ],
+      "id": "025610f3-f862-4e8a-a071-31fa741c8f6a",
+      "name": "Chuẩn bị phản hồi an toàn"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1260,
+        0
+      ],
+      "id": "0e58bd65-8168-4bba-a925-72ece2768b46",
+      "name": "Trả kết quả cho Progress Log"
+    }
+  ],
+  "connections": {
+    "Nhận yêu cầu điểm danh": {
+      "main": [
+        [
+          {
+            "node": "Xác thực và khóa identity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Xác thực và khóa identity": {
+      "main": [
+        [
+          {
+            "node": "Đọc trạng thái lớp trên Portal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc trạng thái lớp trên Portal": {
+      "main": [
+        [
+          {
+            "node": "Chọn đúng buổi và quyết định",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chọn đúng buổi và quyết định": {
+      "main": [
+        [
+          {
+            "node": "Cần ghi điểm danh?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cần ghi điểm danh?": {
+      "main": [
+        [
+          {
+            "node": "Ghi có mặt vào Portal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Chuẩn bị phản hồi an toàn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ghi có mặt vào Portal": {
+      "main": [
+        [
+          {
+            "node": "Đọc lại sau khi ghi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc lại sau khi ghi": {
+      "main": [
+        [
+          {
+            "node": "Xác nhận Portal đã lưu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Xác nhận Portal đã lưu": {
+      "main": [
+        [
+          {
+            "node": "Chuẩn bị phản hồi an toàn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chuẩn bị phản hồi an toàn": {
+      "main": [
+        [
+          {
+            "node": "Trả kết quả cho Progress Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Ho_Chi_Minh",
+    "executionTimeout": 120
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": []
+}

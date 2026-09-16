@@ -1,0 +1,45 @@
+{
+  "name": "Progress Log · Ghi điểm danh Portal",
+  "source_mode": "single",
+  "identity": {
+    "scope": "per_item",
+    "entity_key": "studentId",
+    "unit_key": "sessionNumber",
+    "operation_key": "operationKey",
+    "idempotency_key": "idempotencyKey"
+  },
+  "stages": [
+    {
+      "name": "Xác thực và khóa identity",
+      "kind": "transform",
+      "preserves": ["submissionId", "assignmentId", "studentRef", "classId", "studentId", "sessionNumber", "operationKey", "idempotencyKey"]
+    },
+    {
+      "name": "Đọc và chọn đúng bản ghi Portal",
+      "kind": "async",
+      "preserves": ["submissionId", "assignmentId", "studentRef", "classId", "studentId", "sessionNumber", "operationKey", "idempotencyKey"]
+    },
+    {
+      "name": "Đọc lại sau khi ghi",
+      "kind": "async",
+      "preserves": ["submissionId", "assignmentId", "studentRef", "classId", "studentId", "sessionNumber", "operationKey", "idempotencyKey"]
+    }
+  ],
+  "side_effects": [
+    {
+      "name": "Ghi PRESENT đúng học viên và buổi",
+      "target_key": "studentId",
+      "guard": "fail_closed",
+      "readback": true
+    }
+  ],
+  "tests": [
+    "single",
+    "variable_cardinality",
+    "batch_interleaved",
+    "out_of_order",
+    "duplicate_retry",
+    "partial_failure",
+    "wrong_target_readback"
+  ]
+}
