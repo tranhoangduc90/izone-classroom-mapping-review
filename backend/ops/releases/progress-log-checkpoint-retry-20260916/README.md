@@ -26,4 +26,13 @@ Chỉ thay `/app/src/learning-service.js` trong image API. Không migration, kh�
 
 Chạy `bash /opt/izone-progress-log-checkpoint-retry-20260916/rollback.sh` trên VPS. Script chỉ bỏ overlay của release này và dựng lại API từ image nền. Nó không xóa dữ liệu nộp bài, điểm danh hoặc hàng đợi. Sau đó đọc lại health, image và số tổng dữ liệu.
 
-Giới hạn: phép thử hành vi checkpoint là test database cục bộ trên đúng module đã đóng gói; không gửi lại checkpoint của một học viên thật lên production. Portal thật và tải 1.000 người là các cổng nghiệm thu khác, không thuộc bản vá này.
+## Kiểm thử gửi lại bằng dữ liệu thật
+
+- Chọn một checkpoint đã lưu của học viên lớp IC2305, buổi 2, sau khi học viên đã nộp cả phiếu. Chỉ gửi lại đúng `attemptToken`, mã checkpoint, khóa chống trùng và nội dung cũ; nội dung lưu sẵn khớp hash. Không đưa danh tính hoặc câu trả lời ra khỏi VPS.
+- API production trả HTTP 201, `replayed=true` và đúng biên nhận/thời điểm đã lưu.
+- Đối chiếu ngay trước–sau: checkpoint 15, bài nộp 13, điểm danh 14, sự kiện điểm danh 11, job 22; đều không đổi. Checkpoint của đúng phiên vẫn chỉ có một bản; trạng thái phiên và hash bản ghi điểm danh cũng không đổi. Vì không sinh job mới, phép thử không kích hoạt gửi lại điểm danh lên Portal.
+- Đây là phép thử nhánh gửi lại **sau khi nộp cả phiếu**. Chưa thử đóng một phần đang mở của lớp thật, vì thao tác đó ảnh hưởng toàn lớp. Ca đóng phần đã được kiểm bằng test tự động.
+
+Mã nguồn bản phát hành đã được commit ở `c038ea9` và đẩy lên nhánh `feat/progress-log-portal-attendance-20260916` của repo backend; chưa gộp vào `main`.
+
+Giới hạn còn lại: việc đồng bộ điểm danh Portal thật và tải 1.000 người là các cổng nghiệm thu khác, không thuộc bản vá này.
