@@ -1,0 +1,6 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260916.1-ic2305
+    environment:
+      APP_VERSION: 1.8.5-k56-ic2305
+      BUILD_SHA: ${IC2305_BUILD_SHA:?set IC2305_BUILD_SHA}

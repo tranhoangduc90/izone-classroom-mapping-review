@@ -20,6 +20,7 @@ import {
   fetchLearningLibraryItemsSql,
   fetchLearningRosterForClassSql,
   fetchLearningTeacherDashboardSql,
+  fetchLearningTeacherLiveDraftsSql,
   fetchPublicLearningAssignmentSql,
   fetchStudentCourseJourneySql,
   findLearningCheckpointSubmissionSql,
@@ -62,6 +63,22 @@ function asObject(value) {
 function asArray(value) {
   if (!value) return [];
   return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+function teacherLiveStudent(value) {
+  const student = asObject(value);
+  const gradingResult = student.gradingResult ? asObject(student.gradingResult) : null;
+  return {
+    ...student,
+    gradingResult: gradingResult ? {
+      ...gradingResult,
+      items: asArray(gradingResult.items).map(item => {
+        const safe = { ...item };
+        delete safe.expectedAnswer;
+        return safe;
+      })
+    } : null
+  };
 }
 
 function assertSingleRow(result, code, message, httpStatus = 404) {
@@ -628,9 +645,30 @@ export function createLearningService({ pool }) {
         className: row.class_name,
         publicToken: row.public_token,
         status: row.status,
+        formVersionId: row.form_version_id,
+        definition: parseFormDefinition(asObject(row.public_definition)),
         blockReleases: asArray(row.block_releases),
         classInsights: asArray(row.class_insights),
         students: asArray(row.students)
+      };
+    },
+
+    async getTeacherLiveDrafts({ assignmentId, reviewer }) {
+      const result = await pool.query(fetchLearningTeacherLiveDraftsSql, [
+        assignmentId,
+        reviewer.email,
+        reviewer.canAccessAllClasses
+      ]);
+      const row = assertSingleRow(
+        result,
+        'ASSIGNMENT_ACCESS_DENIED',
+        'Không tìm thấy phiếu trong phạm vi được cấp quyền.',
+        404
+      );
+      return {
+        assignmentId: row.assignment_id,
+        generatedAt: row.generated_at,
+        students: asArray(row.students).map(teacherLiveStudent)
       };
     },
 

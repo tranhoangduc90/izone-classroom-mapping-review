@@ -48,6 +48,16 @@ function isAnswered(value) {
   return Boolean(String(value ?? '').trim());
 }
 
+function isCompleteAnswer(item, value) {
+  if (item.layoutType === 'numbered_short_texts') {
+    const expected = item.interactionConfig.responseCount;
+    return Array.isArray(value)
+      && value.length === expected
+      && value.every(entry => Boolean(String(entry).trim()));
+  }
+  return isAnswered(value);
+}
+
 function assertResponseIdentity(definition, responses) {
   const items = definition.blocks.flatMap(block => block.items);
   const itemById = new Map(items.map(item => [item.itemVersionId, item]));
@@ -60,7 +70,16 @@ function assertResponseIdentity(definition, responses) {
       throw error;
     }
     const value = responses[itemVersionId];
-    if (item.interactionType === 'number_score') {
+    if (item.layoutType === 'numbered_short_texts') {
+      const expected = item.interactionConfig.responseCount;
+      if (!Array.isArray(value) || value.length !== expected
+        || value.some(entry => typeof entry !== 'string')) {
+        const error = new Error('Nhóm câu trả lời không khớp số ô của biểu mẫu.');
+        error.code = 'NUMBERED_TEXT_GROUP_INVALID';
+        error.httpStatus = 400;
+        throw error;
+      }
+    } else if (item.interactionType === 'number_score') {
       const expectedTotal = item.interactionConfig.max;
       if (!value || typeof value !== 'object' || Array.isArray(value)
         || value.correct > value.total || value.total !== expectedTotal) {
@@ -69,6 +88,11 @@ function assertResponseIdentity(definition, responses) {
         error.httpStatus = 400;
         throw error;
       }
+    } else if (Array.isArray(value) && item.interactionType !== 'multi_choice_group') {
+      const error = new Error('Loại câu trả lời không khớp câu hỏi.');
+      error.code = 'RESPONSE_TYPE_MISMATCH';
+      error.httpStatus = 400;
+      throw error;
     } else if (value && typeof value === 'object' && !Array.isArray(value)) {
       const error = new Error('Loại câu trả lời không khớp câu hỏi.');
       error.code = 'RESPONSE_TYPE_MISMATCH';
@@ -247,7 +271,7 @@ export function evaluateCompleteness(definitionInput, responsesInput) {
   assertResponseIdentity(definition, responses);
   const missingItemVersionIds = definition.blocks
     .flatMap(block => block.items)
-    .filter(item => item.required && !isAnswered(responses[item.itemVersionId]))
+    .filter(item => item.required && !isCompleteAnswer(item, responses[item.itemVersionId]))
     .map(item => item.itemVersionId);
   return { complete: missingItemVersionIds.length === 0, missingItemVersionIds };
 }

@@ -91,6 +91,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(migrationV2);
+  const authorityMigration = await readFile(
+    new URL('../ops/learning-migrations/202609160001_course_content_authority.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(authorityMigration);
   const journeyMigration = await readFile(
     new URL('../ops/learning-migrations/202609150003_student_course_journey.sql', import.meta.url),
     'utf8'
@@ -274,6 +279,42 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
   await database.close();
 });
 
+test('dashboard live trả đúng snapshot theo assignment và không lộ sang lớp không được cấp quyền', async () => {
+  const { database, service } = await setupDatabase();
+  const seed = await readFile(
+    new URL('../ops/learning-migrations/202608290002_seed_progress_log_demo.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(seed);
+  const seedV2 = await readFile(
+    new URL('../ops/learning-migrations/202609150002_seed_progress_log_demo_v2.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(seedV2);
+
+  const live = await service.getTeacherLiveDrafts({
+    assignmentId: '20000000-0000-4000-8000-000000000301',
+    reviewer: { email: 'teacher@example.test', canAccessAllClasses: false }
+  });
+  assert.equal(live.assignmentId, '20000000-0000-4000-8000-000000000301');
+  assert.equal(live.students.length, 6);
+  assert.equal(new Set(live.students.map(student => student.studentRef)).size, 6);
+  const submitted = live.students.find(student => student.submissionId);
+  assert.ok(submitted);
+  assert.equal(Object.keys(submitted.finalResponses).length > 0, true);
+  assert.equal(Object.hasOwn(submitted, 'gradingResult'), true);
+  assert.equal(Object.hasOwn(submitted, 'attemptToken'), false);
+
+  await assert.rejects(
+    () => service.getTeacherLiveDrafts({
+      assignmentId: live.assignmentId,
+      reviewer: { email: 'unauthorized@example.test', canAccessAllClasses: false }
+    }),
+    error => error.code === 'ASSIGNMENT_ACCESS_DENIED' && error.httpStatus === 404
+  );
+  await database.close();
+});
+
 test('migration tạo đủ bảng lõi và không làm lộ grading key qua public assignment', async () => {
   const { database, service } = await setupDatabase();
   const published = await service.publishReflectionForm({
@@ -306,13 +347,14 @@ test('migration tạo đủ bảng lõi và không làm lộ grading key qua pub
   await database.close();
 });
 
-test('quiz có điểm không được người soạn tự duyệt phát hành', async () => {
+test('quiz có điểm chỉ cho tự duyệt khi lead có quyền đúng khóa', async () => {
   const { database } = await setupDatabase();
   await database.query(`INSERT INTO learning.form_template (id, title, kind, created_by_email)
     VALUES ('23000000-0000-4000-8000-000000000001', 'Quiz cần duyệt', 'quiz', 'author@example.test');`);
   const definition = {
     schemaVersion: 'FormDefinitionV1',
     formVersionId: '23000000-0000-4000-8000-000000000002',
+    courseCode: '56',
     title: 'Quiz cần duyệt',
     kind: 'quiz',
     answerReleasePolicy: 'hidden',
@@ -339,6 +381,38 @@ test('quiz có điểm không được người soạn tự duyệt phát hành'
     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
     'author@example.test'
   ]), /FORM_SECOND_APPROVAL_REQUIRED/);
+
+  await database.query(`INSERT INTO learning.course_content_authority (
+      reviewer_email, course_code, can_self_approve_scored_forms, grant_reference
+    ) VALUES ($1, '67', true, 'Lead của khóa khác không được dùng chéo');`, ['author@example.test']);
+  await assert.rejects(() => database.query(`INSERT INTO learning.form_version (
+      id, template_id, version, public_definition, definition_hash, status,
+      created_by_email, approved_by_email, published_at
+    ) VALUES ($1::uuid, $2::uuid, 1, $3::jsonb, $4, 'published', $5, $5, now());`, [
+    definition.formVersionId,
+    '23000000-0000-4000-8000-000000000001',
+    JSON.stringify(definition),
+    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'author@example.test'
+  ]), /FORM_SECOND_APPROVAL_REQUIRED/);
+
+  await database.query(`INSERT INTO learning.course_content_authority (
+      reviewer_email, course_code, can_self_approve_scored_forms, grant_reference
+    ) VALUES ($1, '56', true, 'Chủ hệ thống xác nhận lead khối 56');`, ['author@example.test']);
+  await database.query(`INSERT INTO learning.form_version (
+      id, template_id, version, public_definition, definition_hash, status,
+      created_by_email, approved_by_email, published_at
+    ) VALUES ($1::uuid, $2::uuid, 1, $3::jsonb, $4, 'published', $5, $5, now());`, [
+    definition.formVersionId,
+    '23000000-0000-4000-8000-000000000001',
+    JSON.stringify(definition),
+    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'author@example.test'
+  ]);
+  const published = await database.query(`SELECT status, approved_by_email
+    FROM learning.form_version WHERE id = $1::uuid;`, [definition.formVersionId]);
+  assert.equal(published.rows[0].status, 'published');
+  assert.equal(published.rows[0].approved_by_email, 'author@example.test');
   await database.close();
 });
 

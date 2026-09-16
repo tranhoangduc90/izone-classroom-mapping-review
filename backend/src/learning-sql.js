@@ -1012,6 +1012,9 @@ export const fetchLearningTeacherDashboardSql = `SELECT
   assignment.class_name_snapshot AS class_name,
   assignment.public_token::text AS public_token,
   assignment.status,
+  assignment.form_version_id::text AS form_version_id,
+  (SELECT version.public_definition FROM learning.form_version AS version
+    WHERE version.id = assignment.form_version_id) AS public_definition,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
       'blockId', release.block_id::text,
@@ -1115,6 +1118,76 @@ WHERE assignment.id = $1::uuid
     )
   )
 GROUP BY assignment.id;`;
+
+export const fetchLearningTeacherLiveDraftsSql = `WITH authorized_assignment AS (
+  SELECT assignment.id, assignment.form_version_id
+  FROM learning.form_assignment AS assignment
+  WHERE assignment.id = $1::uuid
+    AND (
+      $3::boolean
+      OR EXISTS (
+        SELECT 1
+        FROM mapping.reviewer_class_access AS access
+        WHERE access.reviewer_email = $2
+          AND access.erp_course_class_id = assignment.erp_course_class_id
+      )
+    )
+),
+roster_state AS (
+  SELECT
+    roster.assignment_id,
+    roster.student_ref,
+    roster.student_name_snapshot,
+    roster.display_discriminator,
+    attempt.id AS attempt_id,
+    attempt.status AS attempt_status,
+    attempt.draft_revision,
+    attempt.draft_updated_at,
+    attempt.draft,
+    submission.id AS submission_id,
+    submission.response_payload AS final_responses,
+    submission.submitted_at,
+    grading.result_json AS grading_result
+  FROM authorized_assignment AS assignment
+  JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id
+  LEFT JOIN LATERAL (
+    SELECT candidate.*
+    FROM learning.attempt AS candidate
+    WHERE candidate.assignment_id = roster.assignment_id
+      AND candidate.student_ref = roster.student_ref
+      AND candidate.status <> 'superseded'
+    ORDER BY candidate.created_at DESC, candidate.id DESC
+    LIMIT 1
+  ) AS attempt ON true
+  LEFT JOIN learning.submission AS submission ON submission.attempt_id = attempt.id
+  LEFT JOIN LATERAL (
+    SELECT run.result_json
+    FROM learning.grading_run AS run
+    WHERE run.submission_id = submission.id
+    ORDER BY run.created_at DESC, run.id DESC
+    LIMIT 1
+  ) AS grading ON true
+)
+SELECT
+  $1::uuid::text AS assignment_id,
+  now() AS generated_at,
+  COALESCE(jsonb_agg(jsonb_build_object(
+    'studentRef', roster_state.student_ref::text,
+    'name', roster_state.student_name_snapshot,
+    'discriminator', roster_state.display_discriminator,
+    'attemptId', roster_state.attempt_id::text,
+    'attemptStatus', roster_state.attempt_status,
+    'draftRevision', COALESCE(roster_state.draft_revision, 0),
+    'draftUpdatedAt', roster_state.draft_updated_at,
+    'draftResponses', COALESCE(roster_state.draft, '{}'::jsonb),
+    'submissionId', roster_state.submission_id::text,
+    'submittedAt', roster_state.submitted_at,
+    'finalResponses', COALESCE(roster_state.final_responses, '{}'::jsonb),
+    'gradingResult', roster_state.grading_result
+  ) ORDER BY roster_state.student_name_snapshot, roster_state.student_ref), '[]'::jsonb) AS students
+FROM authorized_assignment
+LEFT JOIN roster_state ON roster_state.assignment_id = authorized_assignment.id
+GROUP BY authorized_assignment.id;`;
 
 export const overrideLearningAttendanceSql = `WITH target AS (
   SELECT assignment.id, roster.student_ref

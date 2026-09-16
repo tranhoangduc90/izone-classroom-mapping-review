@@ -18,7 +18,7 @@ const draftSchema = z.object({
   definitionHash: z.string().regex(/^[0-9a-f]{64}$/),
   responses: z.record(uuidSchema, z.union([
     z.string().max(12_000),
-    z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+    z.array(z.string().max(2_000)).min(1).max(10),
     z.object({
       correct: z.number().int().min(0).max(10_000),
       total: z.number().int().min(1).max(10_000)
@@ -256,6 +256,14 @@ export function createLearningRouter({ pool, authenticate }) {
     const dashboard = await service.getTeacherDashboard({ assignmentId: input.assignment, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, dashboard });
+  }));
+
+  router.get('/teacher/live-drafts', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
+    if (!input) return;
+    const live = await service.getTeacherLiveDrafts({ assignmentId: input.assignment, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, live });
   }));
 
   router.post('/teacher/attendance/override', authenticate, asyncRoute(async (req, res) => {

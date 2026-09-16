@@ -11,7 +11,9 @@ const interactionConfigSchema = z.object({
   min: z.number().int().min(0).max(10_000).optional(),
   max: z.number().int().min(1).max(10_000).optional(),
   step: z.number().positive().max(1_000).optional(),
-  unit: z.string().trim().min(1).max(40).optional()
+  unit: z.string().trim().min(1).max(40).optional(),
+  responseCount: z.number().int().min(2).max(10).optional(),
+  responseLabels: z.array(z.string().trim().min(1).max(100)).min(2).max(10).optional()
 }).strict();
 
 export const interactionTypeSchema = z.enum([
@@ -69,6 +71,29 @@ export const formItemSchema = z.object({
       context.addIssue({ code: 'custom', path: ['graderType'], message: 'Kết quả học viên tự nhập chỉ là evidence, không phải điểm do hệ thống chấm.' });
     }
   }
+  if (item.layoutType === 'numbered_short_texts') {
+    const { responseCount, responseLabels } = item.interactionConfig;
+    if (item.interactionType !== 'short_text' || !Number.isInteger(responseCount)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['interactionConfig', 'responseCount'],
+        message: 'Nhóm ô đánh số phải là short_text và khai báo responseCount.'
+      });
+    }
+    if (responseLabels && responseLabels.length !== responseCount) {
+      context.addIssue({
+        code: 'custom',
+        path: ['interactionConfig', 'responseLabels'],
+        message: 'Số nhãn phải bằng số ô trả lời.'
+      });
+    }
+  } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels) {
+    context.addIssue({
+      code: 'custom',
+      path: ['interactionConfig'],
+      message: 'responseCount chỉ dùng cho layout numbered_short_texts.'
+    });
+  }
   if (item.graderType === 'unordered_group_slot' && !item.groupId) {
     context.addIssue({ code: 'custom', path: ['groupId'], message: 'Câu chọn TWO/THREE phải có groupId.' });
   }
@@ -91,8 +116,10 @@ const formBlockSchema = z.object({
 export const formDefinitionV1Schema = z.object({
   schemaVersion: z.literal('FormDefinitionV1'),
   formVersionId: uuidSchema,
+  courseCode: codeSchema.optional(),
   title: z.string().trim().min(1).max(200),
   kind: z.enum(['reflection', 'mixed', 'quiz']),
+  estimatedMinutes: z.number().int().min(1).max(120).optional(),
   answerReleasePolicy: z.enum(['hidden', 'immediate', 'teacher_release']).default('hidden'),
   blocks: z.array(formBlockSchema).min(1).max(20)
 }).strict().superRefine((definition, context) => {
@@ -162,7 +189,7 @@ export const scoreResponseSchema = z.object({
 
 export const responseValueSchema = z.union([
   z.string().max(12_000),
-  z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+  z.array(z.string().max(2_000)).min(1).max(10),
   scoreResponseSchema
 ]);
 
