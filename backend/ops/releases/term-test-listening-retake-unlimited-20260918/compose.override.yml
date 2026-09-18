@@ -1,0 +1,9 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260918.1-listening-retake-unlimited
+    build:
+      context: /opt/izone-listening-retake-unlimited-20260918
+      dockerfile: Dockerfile
+    environment:
+      APP_VERSION: 1.8.9-listening-retake-unlimited
+      BUILD_SHA: ${LISTENING_RETAKE_UNLIMITED_BUILD_SHA:?set LISTENING_RETAKE_UNLIMITED_BUILD_SHA}

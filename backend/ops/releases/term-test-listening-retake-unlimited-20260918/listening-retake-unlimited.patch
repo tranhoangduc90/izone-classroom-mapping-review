@@ -1,0 +1,115 @@
+diff --git a/src/app.js b/src/app.js
+--- a/src/app.js
++++ b/src/app.js
+@@ -23,6 +23,7 @@
+   findTermTestAttemptSlugSql,
+   findStudentForTermTestSql,
+   insertGrantedTermTestExamSessionSql,
++  renewUnstartedGrantedTermTestExamSessionSql,
+   insertProtectedListeningAttemptSql,
+   insertTermTestExamSessionSql,
+   insertListeningAttemptSql,
+@@ -373,35 +374,37 @@
+   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+ }
+~
+-const listeningRetakeGrantSchema = z.object({
+-  v: z.literal(1),
++const listeningRetakeGrantFields = {
+   purpose: z.literal('listening-retake'),
+   sessionToken: z.string().uuid(),
+   testSlug: testSlugSchema,
+   classCode: classCodeSchema,
+-  studentRef: z.string().uuid(),
+-  expiresAt: z.number().int().positive()
+-});
++  studentRef: z.string().uuid()
++};
++const listeningRetakeGrantSchema = z.discriminatedUnion('v', [
++  z.object({ v: z.literal(1), ...listeningRetakeGrantFields, expiresAt: z.number().int().positive() }).strict(),
++  z.object({ v: z.literal(2), ...listeningRetakeGrantFields }).strict()
++]);
+~
+ // Vé thi bù được ký bằng bí mật chỉ có trên máy chủ. Trình duyệt chỉ gửi vé;
+-// nếu chữ ký, lớp, học viên, bài thi hoặc hạn dùng sai thì không tạo phiên mới.
++// nếu chữ ký, lớp, học viên hoặc bài thi sai thì không tạo phiên mới.
+ function verifyListeningRetakeGrant(token, expected, secret, nowSeconds = Math.floor(Date.now() / 1000)) {
+   try {
+     if (!secret || typeof token !== 'string') return null;
+     const parts = token.split('.');
+     if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
++    const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
++    const parsed = listeningRetakeGrantSchema.safeParse(decoded);
++    if (!parsed.success) return null;
++    const grant = parsed.data;
+     const suppliedSignature = Buffer.from(parts[1], 'base64url');
+     const expectedSignature = crypto
+       .createHmac('sha256', secret)
+-      .update(`izone-listening-retake-v1:${parts[0]}`)
++      .update(`izone-listening-retake-v${grant.v}:${parts[0]}`)
+       .digest();
+     if (suppliedSignature.length !== expectedSignature.length
+       || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return null;
+-    const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+-    const parsed = listeningRetakeGrantSchema.safeParse(decoded);
+-    if (!parsed.success) return null;
+-    const grant = parsed.data;
+-    if (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60) return null;
++    if (grant.v === 1 && (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60)) return null;
+     if (grant.testSlug !== expected.testSlug
+       || grant.classCode !== expected.classCode
+       || grant.studentRef !== expected.studentRef) return null;
+@@ -883,6 +886,16 @@
+       ]);
+       session = resumed.rows[0] || null;
+     }
++    if (!session && retakeGrant) {
++      const renewed = await pool.query(renewUnstartedGrantedTermTestExamSessionSql, [
++        retakeGrant.sessionToken,
++        slug.data,
++        student.definition_version,
++        student.class_id,
++        student.student_id
++      ]);
++      session = renewed.rows[0] || null;
++    }
+     if (!session && !retakeGrant) {
+       const latestAttempt = await pool.query(findLatestTermTestAttemptForStudentSql, [
+         slug.data,
+diff --git a/src/sql.js b/src/sql.js
+--- a/src/sql.js
++++ b/src/sql.js
+@@ -529,6 +529,34 @@
+ FROM resolved
+ LIMIT 1;`;
+~
++// Chỉ mở lại phiên trong vé đã xác thực nếu học viên chưa bắt đầu nghe hoặc nộp bài.
++// Giữ nguyên UUID của lượt thi bù; đồng hồ 8 giờ của một bài đã bắt đầu không bị đặt lại.
++export const renewUnstartedGrantedTermTestExamSessionSql = `UPDATE assessment.term_test_exam_session
++SET
++  prepared_at = now(),
++  updated_at = now(),
++  superseded_at = NULL
++WHERE id = $1::uuid
++  AND test_slug = $2
++  AND definition_version = $3::int
++  AND erp_course_class_id = $4::bigint
++  AND erp_student_contact_id = $5::bigint
++  AND listening_started_at IS NULL
++  AND listening_submitted_at IS NULL
++  AND attempt_id IS NULL
++  AND prepared_at < now() - interval '8 hours'
++RETURNING
++  id::text AS exam_session_token,
++  test_slug,
++  prepared_at,
++  listening_started_at,
++  listening_deadline_at,
++  listening_draft,
++  listening_draft_revision,
++  listening_submitted_at,
++  attempt_id::text AS attempt_token,
++  now() AS server_now;`;
++
+ export const resumeTermTestExamSessionSql = `SELECT
+   id::text AS exam_session_token,
