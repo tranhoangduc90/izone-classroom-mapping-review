@@ -1,0 +1,15 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260920.1-teacher-session
+    build:
+      context: /opt/izone-teacher-session-20260920/backend
+      dockerfile: ops/releases/teacher-session-20260920/Dockerfile
+    environment:
+      APP_VERSION: 1.9.0-teacher-session
+      BUILD_SHA: ${TEACHER_SESSION_BUILD_SHA:?TEACHER_SESSION_BUILD_SHA is required}
+      TEACHER_SESSION_IDLE_DAYS: "90"
+      TEACHER_SESSION_ABSOLUTE_DAYS: "365"
+      TEACHER_SESSION_COOKIE_PATH: /mapping-api
+      TEACHER_SESSION_COOKIE_SECURE: "true"
+      TEACHER_SESSION_COOKIE_PARTITIONED: "true"
+      TEACHER_SESSION_COOKIE_SAME_SITE: None

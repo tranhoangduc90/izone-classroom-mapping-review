@@ -1,0 +1,6 @@
+{
+  "src/app.js": {
+    "before": "06b3c3e03f96e1613279c5e22d4543df205ac23c582fe0088e0c06b830f2cdad",
+    "after": "ea0e1da9532a6dff1e10e5883b36d929256dbee941d6bae69bcfdc903a1ac6e3"
+  }
+}

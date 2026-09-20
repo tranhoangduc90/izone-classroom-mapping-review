@@ -11,7 +11,7 @@ API này phục vụ web duyệt mapping mà không dùng execution của n8n. n
 - Lần đăng nhập đầu gắn email được cấp quyền với mã tài khoản Google ổn định (`sub`). Các lần sau phải đúng cùng tài khoản đó.
 - Chế độ mã dùng chung `legacy` chỉ dùng ngắn hạn khi chuyển hệ thống, không phải thiết kế vận hành lâu dài.
 
-Google ID token chỉ được giữ trong bộ nhớ tab trình duyệt và gửi trong header `Authorization`. API không dùng cookie, không lưu token và không ghi dữ liệu học viên vào log.
+Google ID token chỉ dùng một lần tại `POST /api/auth/session` để mở phiên. API cấp cookie `HttpOnly`, `Secure`, giới hạn theo path `/mapping-api`; PostgreSQL chỉ giữ mã băm token phiên. Phiên được gia hạn khi tiếp tục sử dụng, hết hạn sau 90 ngày không hoạt động hoặc tối đa 365 ngày, và bị thu hồi ngay khi đăng xuất. Các request ghi bằng cookie phải có origin hợp lệ và header `x-izone-csrf: 1`. API không ghi token hoặc dữ liệu học viên vào log.
 
 Dashboard kết quả Term Test dùng hai endpoint có cùng lớp xác thực:
 

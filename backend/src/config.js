@@ -13,6 +13,13 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().trim().optional().default(''),
   LEGACY_REVIEW_TOKEN: z.string().optional().default(''),
   ALLOWED_ORIGINS: z.string().min(1).default('https://tranhoangduc90.github.io'),
+  TEACHER_SESSION_IDLE_DAYS: z.coerce.number().int().min(1).max(180).default(90),
+  TEACHER_SESSION_ABSOLUTE_DAYS: z.coerce.number().int().min(1).max(730).default(365),
+  TEACHER_SESSION_COOKIE_NAME: z.string().regex(/^[A-Za-z0-9_]+$/).default('izone_teacher_session'),
+  TEACHER_SESSION_COOKIE_PATH: z.string().regex(/^\/[A-Za-z0-9_/-]*$/).default('/mapping-api'),
+  TEACHER_SESSION_COOKIE_SECURE: z.enum(['true', 'false']).optional(),
+  TEACHER_SESSION_COOKIE_PARTITIONED: z.enum(['true', 'false']).optional(),
+  TEACHER_SESSION_COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).optional(),
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1),
   ERP_SYNC_URL: z.string().url().optional().default(''),
   ERP_SYNC_SECRET: z.string().optional().default(''),
@@ -56,6 +63,9 @@ const envSchema = z.object({
   if (value.LEARNING_ENABLED && !value.LEARNING_DATABASE_URL) {
     context.addIssue({ code: 'custom', path: ['LEARNING_DATABASE_URL'], message: 'LEARNING_DATABASE_URL là bắt buộc khi bật Progress Log.' });
   }
+  if (value.TEACHER_SESSION_ABSOLUTE_DAYS < value.TEACHER_SESSION_IDLE_DAYS) {
+    context.addIssue({ code: 'custom', path: ['TEACHER_SESSION_ABSOLUTE_DAYS'], message: 'Hạn tuyệt đối phải lớn hơn hoặc bằng hạn nhàn rỗi.' });
+  }
 });
 
 export function loadConfig(env = process.env) {
@@ -65,6 +75,21 @@ export function loadConfig(env = process.env) {
   }
   if (parsed.AUTH_MODE === 'legacy' && parsed.LEGACY_REVIEW_TOKEN.length < 10) {
     throw new Error('LEGACY_REVIEW_TOKEN phải có ít nhất 10 ký tự khi AUTH_MODE=legacy.');
+  }
+
+  const teacherSessionCookieSecure = parsed.TEACHER_SESSION_COOKIE_SECURE
+    ? parsed.TEACHER_SESSION_COOKIE_SECURE === 'true'
+    : parsed.NODE_ENV === 'production';
+  const teacherSessionCookieSameSite = parsed.TEACHER_SESSION_COOKIE_SAME_SITE
+    || (teacherSessionCookieSecure ? 'none' : 'lax');
+  const teacherSessionCookiePartitioned = parsed.TEACHER_SESSION_COOKIE_PARTITIONED
+    ? parsed.TEACHER_SESSION_COOKIE_PARTITIONED === 'true'
+    : parsed.NODE_ENV === 'production';
+  if (teacherSessionCookieSameSite === 'none' && !teacherSessionCookieSecure) {
+    throw new Error('Cookie SameSite=None bắt buộc bật Secure.');
+  }
+  if (teacherSessionCookiePartitioned && !teacherSessionCookieSecure) {
+    throw new Error('Cookie Partitioned bắt buộc bật Secure.');
   }
 
   return {
@@ -79,6 +104,13 @@ export function loadConfig(env = process.env) {
     googleClientId: parsed.GOOGLE_CLIENT_ID,
     legacyReviewToken: parsed.LEGACY_REVIEW_TOKEN,
     allowedOrigins: new Set(parsed.ALLOWED_ORIGINS.split(',').map(value => value.trim()).filter(Boolean)),
+    teacherSessionIdleDays: parsed.TEACHER_SESSION_IDLE_DAYS,
+    teacherSessionAbsoluteDays: parsed.TEACHER_SESSION_ABSOLUTE_DAYS,
+    teacherSessionCookieName: parsed.TEACHER_SESSION_COOKIE_NAME,
+    teacherSessionCookiePath: parsed.TEACHER_SESSION_COOKIE_PATH,
+    teacherSessionCookieSecure,
+    teacherSessionCookiePartitioned,
+    teacherSessionCookieSameSite: teacherSessionCookieSameSite[0].toUpperCase() + teacherSessionCookieSameSite.slice(1),
     trustProxyHops: parsed.TRUST_PROXY_HOPS,
     erpSyncUrl: parsed.ERP_SYNC_URL,
     erpSyncSecret: parsed.ERP_SYNC_SECRET,

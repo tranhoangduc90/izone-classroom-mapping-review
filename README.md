@@ -4,7 +4,7 @@
 
 ## Cách sử dụng
 
-Mở trang GitHub Pages và đăng nhập bằng tài khoản Google đã được quản trị viên cấp quyền. Giảng viên không cần dùng cùng tên miền. Google ID token chỉ nằm trong bộ nhớ tab và không được lưu vào repo hoặc PostgreSQL.
+Mở trang GitHub Pages và đăng nhập bằng tài khoản Google đã được quản trị viên cấp quyền. Giảng viên không cần dùng cùng tên miền. Google ID token chỉ dùng một lần để mở phiên; sau đó trình duyệt dùng cookie `HttpOnly` do API cấp. PostgreSQL chỉ lưu mã băm của phiên, không lưu Google ID token.
 
 ## Kiến trúc được đề xuất
 
