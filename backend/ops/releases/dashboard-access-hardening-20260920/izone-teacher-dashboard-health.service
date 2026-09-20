@@ -1,0 +1,13 @@
+[Unit]
+Description=Kiểm quyền và dữ liệu dashboard giảng viên
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/izone-dashboard-access-hardening-20260920/backend/ops/releases/dashboard-access-hardening-20260920/run-teacher-dashboard-health.sh
+User=root
+Group=root
+UMask=0027
+TimeoutStartSec=180
+Nice=10

@@ -1,0 +1,9 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260920.2-dashboard-access
+    build:
+      context: /opt/izone-dashboard-access-hardening-20260920/backend
+      dockerfile: ops/releases/dashboard-access-hardening-20260920/Dockerfile
+    environment:
+      APP_VERSION: 1.10.0-dashboard-access
+      BUILD_SHA: ${DASHBOARD_ACCESS_BUILD_SHA:?DASHBOARD_ACCESS_BUILD_SHA is required}

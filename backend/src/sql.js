@@ -1,3 +1,5 @@
+import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+
 // Đọc các phiếu mà giảng viên được phép xem; mọi tham số đều truyền riêng khỏi câu SQL.
 export const listReviewsSql = `WITH input AS (
   SELECT
@@ -24,12 +26,10 @@ filtered AS (
     AND (input.requested_status = 'all' OR r.status = input.requested_status)
     AND (
       input.can_access_all_classes
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = input.reviewer_email
-          AND access.erp_course_class_id = r.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: 'input.reviewer_email',
+        classIdSql: 'r.erp_course_class_id'
+      })}
     )
 ),
 items AS (
@@ -96,12 +96,10 @@ target AS (
   WHERE r.public_id = input.review_id
     AND (
       input.can_access_all_classes
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = input.reviewer_email
-          AND access.erp_course_class_id = r.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: 'input.reviewer_email',
+        classIdSql: 'r.erp_course_class_id'
+      })}
     )
     AND (
       (r.status = 'pending_review' AND input.decision IN ('approve', 'reject', 'choose_another'))
@@ -1110,12 +1108,10 @@ export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
     course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
 ),
 active_tests AS (
   SELECT slug, title, version
@@ -1155,12 +1151,10 @@ authorized_classes AS (
   SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -1372,12 +1366,10 @@ authorized_classes AS (
   SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 latest_attempt AS (
   SELECT attempt.*
@@ -1468,12 +1460,10 @@ authorized_classes AS (
   SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 latest_attempt AS (
   SELECT attempt.*

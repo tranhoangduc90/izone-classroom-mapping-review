@@ -84,6 +84,12 @@ test('migration và hai câu SQL chính chạy được trên PostgreSQL trong R
   const migrationSql = await readFile(migrationUrl, 'utf8');
   await database.exec(migrationSql);
   await database.exec(migrationSql);
+  const assignmentMigration = await readFile(
+    new URL('../../docs/migrations/2026-08-06-teacher-class-assignments.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(assignmentMigration);
+  await database.exec(assignmentMigration);
 
   await database.exec(`
     INSERT INTO mapping.classroom_course_mapping (
@@ -143,6 +149,31 @@ test('migration và hai câu SQL chính chạy được trên PostgreSQL trong R
   `);
   assert.equal(auditResult.rows[0].event_count, 1);
   assert.equal(auditResult.rows[0].mapping_count, 1);
+
+  await database.exec(`
+    DELETE FROM mapping.reviewer_class_access
+    WHERE reviewer_email = 'teacher@gmail.com' AND erp_course_class_id = 2172;
+    INSERT INTO mapping.reviewer_class_assignment (reviewer_email, class_name)
+    VALUES ('teacher@gmail.com', '  ic2172  ');
+    INSERT INTO mapping.student_mapping_review (
+      erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot,
+      classroom_course_id, classroom_user_id, classroom_name_snapshot,
+      classroom_email_snapshot, ai_score, ai_reason
+    ) VALUES (
+      2172, 9002, 'Học viên ERP 2', 'classroom-course-2172', 'google-user-1',
+      'Học viên Google', 'student@example.com', 0.90, 'Kiểm fallback phân công.'
+    );
+  `);
+  const fallbackList = await database.query(listReviewsSql, [
+    null, 'pending_review', 'teacher@gmail.com', false
+  ]);
+  assert.equal(fallbackList.rows[0].response.items.length, 1);
+  const fallbackDecision = await database.query(writeDecisionSql, [
+    fallbackList.rows[0].response.items[0].id,
+    'reject', null, 'Kiểm phân công gốc.', 'teacher@gmail.com', false
+  ]);
+  assert.equal(fallbackDecision.rows[0].response.ok, true);
+  assert.equal(fallbackDecision.rows[0].response.status, 'rejected');
 
   await database.close();
 });

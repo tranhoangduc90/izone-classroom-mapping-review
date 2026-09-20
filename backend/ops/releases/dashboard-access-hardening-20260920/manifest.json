@@ -1,0 +1,10 @@
+{
+  "src/sql.js": {
+    "before": "b5ac78f7cc64852a85294ae506837b1899e5cd21031dedf43322de3f395b6111",
+    "after": "affae6b6df3cb9d86f6381a2248180b7325066e060dd852ff81b5f61cd128780"
+  },
+  "src/learning-sql.js": {
+    "before": "c40a16207d7a9357f140a51df68e83eae9140ab19015cf09c5c0d8b20a0814a0",
+    "after": "ec70dc9a3a820398355e85abe1b36f93f001511d1287b8a49e9c3924f0774db0"
+  }
+}

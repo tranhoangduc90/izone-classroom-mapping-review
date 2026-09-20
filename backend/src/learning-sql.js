@@ -1,3 +1,5 @@
+import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+
 // Mọi truy vấn dùng placeholder PostgreSQL; không ghép input học viên/giảng viên vào chuỗi SQL.
 
 export const fetchPublicLearningAssignmentSql = `SELECT
@@ -503,12 +505,10 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
     course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
 ),
 assignments AS (
   SELECT
@@ -558,12 +558,10 @@ FROM mapping.classroom_course_mapping AS course
 WHERE course.erp_course_class_id = $3::bigint
   AND (
     $2::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
   );`;
 
 export const fetchLearningLibraryItemsSql = `WITH requested AS (
@@ -720,11 +718,10 @@ export const updateLearningBlockReleaseSql = `WITH target AS (
     AND release.block_id = $2::uuid
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
   FOR UPDATE OF release
 ), replay AS (
@@ -770,11 +767,10 @@ export const markLearningReportDeliveredSql = `WITH target AS (
     AND report.status IN ('approved', 'published')
     AND (
       $7::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $6
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$6',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ), published AS (
   UPDATE learning.periodic_report AS report
@@ -810,11 +806,10 @@ export const upsertLearningTeacherHumanNoteSql = `WITH target AS (
     AND report.status IN ('ready_for_review', 'approved', 'published')
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ), saved AS (
   INSERT INTO learning.teacher_human_note (report_id, teacher_email, note_text, updated_at)
@@ -849,12 +844,10 @@ JOIN learning.form_assignment_roster AS roster
 WHERE assignment.id = $1::uuid
   AND (
     $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = assignment.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'assignment.erp_course_class_id'
+    })}
   );`;
 
 export const findLearningProgressAccessByOperationSql = `SELECT
@@ -1135,12 +1128,10 @@ LEFT JOIN LATERAL (
 WHERE assignment.id = $1::uuid
   AND (
     $3::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $2
-        AND access.erp_course_class_id = assignment.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$2',
+      classIdSql: 'assignment.erp_course_class_id'
+    })}
   )
 GROUP BY assignment.id;`;
 
@@ -1150,12 +1141,10 @@ export const fetchLearningTeacherLiveDraftsSql = `WITH authorized_assignment AS 
   WHERE assignment.id = $1::uuid
     AND (
       $3::boolean
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $2
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$2',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ),
 roster_state AS (
@@ -1228,12 +1217,10 @@ export const overrideLearningAttendanceSql = `WITH target AS (
     )
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ),
 previous AS (

@@ -7,6 +7,7 @@ import {
   fetchTermTestAttemptReviewSql,
   fetchTermTestResultSql,
   fetchTermTestTeacherAttemptReviewSql,
+  fetchTermTestTeacherWritingDetailSql,
   findLatestTermTestAttemptForStudentSql,
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
@@ -73,9 +74,14 @@ const mappingSchema = `
     erp_course_class_id BIGINT NOT NULL,
     PRIMARY KEY (reviewer_email, erp_course_class_id)
   );
+  CREATE TABLE mapping.reviewer_class_assignment (
+    reviewer_email TEXT NOT NULL,
+    class_name TEXT NOT NULL,
+    PRIMARY KEY (reviewer_email, class_name)
+  );
   GRANT USAGE ON SCHEMA mapping TO mapping_review_api;
   GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review,
-    mapping.reviewer_class_access TO mapping_review_api;
+    mapping.reviewer_class_access, mapping.reviewer_class_assignment TO mapping_review_api;
 `;
 
 test('migration và luồng Listening → Reading → Result chạy trên PostgreSQL trong RAM', async () => {
@@ -500,6 +506,48 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   ]);
   assert.equal(deniedResults.rows[0].authorized_class_count, 0);
   assert.deepEqual(deniedResults.rows[0].students, []);
+
+  // Mô phỏng đúng sự cố production: bản access vật hóa bị thiếu nhưng phân công gốc vẫn còn.
+  await database.exec(`RESET ROLE;
+    DELETE FROM mapping.reviewer_class_access
+    WHERE reviewer_email = 'teacher@gmail.com' AND erp_course_class_id = 2139;
+    INSERT INTO mapping.reviewer_class_assignment (reviewer_email, class_name)
+    VALUES ('teacher@gmail.com', '  ic2139  ');
+    SET ROLE mapping_review_api;`);
+
+  const assignmentOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
+  assert.deepEqual(assignmentOptions.rows[0].response.classes, [{ id: '2139', name: 'IC2139' }]);
+
+  const assignmentResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC2139', 'term-test-1', 'teacher@gmail.com', false
+  ]);
+  assert.equal(assignmentResults.rows[0].authorized_class_count, 1);
+  assert.equal(assignmentResults.rows[0].students.length, 2);
+
+  const assignmentWritingDetail = await database.query(fetchTermTestTeacherWritingDetailSql, [
+    'IC2139', 'term-test-1', 'teacher@gmail.com', false,
+    '00000000-0000-4000-8000-000000000001', 1
+  ]);
+  assert.equal(assignmentWritingDetail.rows[0].authorized_class_count, 1);
+
+  const assignmentAttemptReview = await database.query(fetchTermTestTeacherAttemptReviewSql, [
+    'IC2139', 'term-test-1', 'teacher@gmail.com', false,
+    '00000000-0000-4000-8000-000000000001'
+  ]);
+  assert.equal(assignmentAttemptReview.rows[0].authorized_class_count, 1);
+  assert.equal(assignmentAttemptReview.rows[0].student_name, 'Học viên thử nghiệm');
+
+  const assignmentMiniResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC2139', 'mini-test-lesson-5', 'teacher@gmail.com', false
+  ]);
+  assert.equal(assignmentMiniResults.rows[0].authorized_class_count, 1);
+  assert.ok(assignmentMiniResults.rows[0].students.length >= 2);
+
+  const wrongClassAssignment = await database.query(listTermTestTeacherResultsSql, [
+    'IC9999', 'term-test-1', 'teacher@gmail.com', false
+  ]);
+  assert.equal(wrongClassAssignment.rows[0].authorized_class_count, 0);
+  assert.deepEqual(wrongClassAssignment.rows[0].students, []);
 
   const duplicate = await database.query(insertListeningAttemptSql, [
     '00000000-0000-4000-8000-000000000002',

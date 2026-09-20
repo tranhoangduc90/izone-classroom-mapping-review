@@ -1,0 +1,11 @@
+[Unit]
+Description=Kiểm dashboard giảng viên mỗi giờ
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+Unit=izone-teacher-dashboard-health.service
+
+[Install]
+WantedBy=timers.target

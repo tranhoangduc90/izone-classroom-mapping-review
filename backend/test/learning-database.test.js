@@ -63,6 +63,11 @@ async function createV1Database() {
       erp_course_class_id BIGINT NOT NULL,
       PRIMARY KEY (reviewer_email, erp_course_class_id)
     );
+    CREATE TABLE mapping.reviewer_class_assignment (
+      reviewer_email TEXT NOT NULL,
+      class_name TEXT NOT NULL,
+      PRIMARY KEY (reviewer_email, class_name)
+    );
     CREATE TABLE mapping.reviewer_account (
       email TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'active'
@@ -74,7 +79,7 @@ async function createV1Database() {
       ('60000000-0000-4000-8000-000000000001', 2139, 9001, 'Học viên trùng tên'),
       ('60000000-0000-4000-8000-000000000002', 2139, 9002, 'Học viên trùng tên'),
       ('60000000-0000-4000-8000-000000000003', 2139, 9003, 'Học viên khác');
-    INSERT INTO mapping.reviewer_class_access VALUES ('teacher@example.test', 2139);
+    INSERT INTO mapping.reviewer_class_assignment VALUES ('teacher@example.test', '  ic2139  ');
     INSERT INTO mapping.reviewer_account VALUES ('teacher@example.test', 'active');
   `);
   const migration = await readFile(
