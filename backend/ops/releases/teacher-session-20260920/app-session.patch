@@ -25,7 +25,7 @@ diff --git a/src/app.js b/src/app.js
 @@ -1563,7 +1564,15 @@ export function createApp({
      return res.json({ ok: true, review: serializeAttemptReview(row, content) });
    }));
- 
+~
 -  const authenticate = createAuthMiddleware({ config, pool, verifyGoogleToken });
 +  const auth = createAuthService({ config, pool, verifyGoogleToken });
 +  const authenticate = auth.authenticate;
@@ -48,6 +48,6 @@ diff --git a/src/app.js b/src/app.js
 +    res.json({ ok: true, reviewer: req.reviewer });
 +  });
 +  app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
- 
+~
    app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, asyncRoute(async (req, res) => {
      const legacyOptions = deploymentProfile.teacherOptionsMode === 'legacy-access';
