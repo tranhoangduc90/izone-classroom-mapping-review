@@ -1,0 +1,10 @@
+{
+  "src/app.js": {
+    "before": "14a387232b8302fa3059ed96c5b082321a18b7720a2b3138b3493ef4f8e741bd",
+    "after": "5178b7e1eaf048f4bc47750ce152507caf94b4774e97904dafdd44d4c486fa8e"
+  },
+  "src/config.js": {
+    "before": "1e72ef40398a876a9fbef08f30dd8ea7601c6e0282a2682ab96380561eb9e809",
+    "after": "566db842934164acd8bdfd336210facb78de04a20b74dca6e50f5d4ee807b59e"
+  }
+}

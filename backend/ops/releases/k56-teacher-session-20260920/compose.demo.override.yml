@@ -1,0 +1,11 @@
+services:
+  k56-demo-api:
+    image: izone-k56-live-results:20260920.1-teacher-session
+    environment:
+      APP_VERSION: k56-demo-teacher-session-20260920.1
+      TEACHER_SESSION_IDLE_DAYS: "90"
+      TEACHER_SESSION_ABSOLUTE_DAYS: "365"
+      TEACHER_SESSION_COOKIE_PATH: /mapping-api-demo
+      TEACHER_SESSION_COOKIE_SECURE: "true"
+      TEACHER_SESSION_COOKIE_PARTITIONED: "true"
+      TEACHER_SESSION_COOKIE_SAME_SITE: none
