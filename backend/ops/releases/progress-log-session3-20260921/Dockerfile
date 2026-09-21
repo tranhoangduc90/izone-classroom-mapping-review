@@ -6,12 +6,7 @@ COPY src/learning-domain.js /tmp/learning-domain.js
 COPY src/learning-templates/ic2305-entrance-listening1-speaking2.js /tmp/ic2305-entrance-listening1-speaking2.js
 COPY scripts/publish-ic2305-progress-log.mjs /tmp/publish-ic2305-progress-log.mjs
 
-RUN sed -i 's/\r$//' \
-      /tmp/learning-contracts.js \
-      /tmp/learning-domain.js \
-      /tmp/ic2305-entrance-listening1-speaking2.js \
-      /tmp/publish-ic2305-progress-log.mjs \
-  && test "$(sha256sum /app/src/learning-contracts.js | cut -d' ' -f1)" = "58d26cb188941b5213df3dc7e62d751c08efffaba984786281bfeb525a721065" \
+RUN test "$(sha256sum /app/src/learning-contracts.js | cut -d' ' -f1)" = "58d26cb188941b5213df3dc7e62d751c08efffaba984786281bfeb525a721065" \
   && test "$(sha256sum /app/src/learning-domain.js | cut -d' ' -f1)" = "77b482c66f28ce223e639041786ba45edf5025fcc364bddf1cf87abe8a58847a" \
   && echo BASE_HASHES_OK \
   && test "$(sha256sum /tmp/learning-contracts.js | cut -d' ' -f1)" = "2a1133ed0d6f3e777fe4047de1534e744ebffec124fbc5046c51e682e63b76f7" \
