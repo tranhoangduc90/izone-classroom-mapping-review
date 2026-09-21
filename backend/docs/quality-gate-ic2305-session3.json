@@ -1,0 +1,161 @@
+{
+  "schema_version": 2,
+  "product": "Progress Log IC2305 buổi 3",
+  "change_id": "ic2305-session3-listening1-speaking2",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "personal_data"
+  ],
+  "requirements": [
+    {
+      "id": "REQ-CONTENT",
+      "statement": "Phiếu giữ đúng ba phần và tám câu logic của tài liệu nguồn.",
+      "test_ids": ["T-TEMPLATE", "T-UI"]
+    },
+    {
+      "id": "REQ-CONDITIONAL",
+      "statement": "Phương án Vấn đề khác chỉ yêu cầu nêu rõ khi được chọn.",
+      "test_ids": ["T-CONDITIONAL", "T-UI"]
+    },
+    {
+      "id": "REQ-DASHBOARD",
+      "statement": "Dashboard đọc đúng bản nháp và câu trả lời của form mới mà không lộ đáp án.",
+      "test_ids": ["T-DASHBOARD", "T-SECURITY"]
+    },
+    {
+      "id": "REQ-RESILIENCE",
+      "statement": "Autosave, checkpoint, nộp cuối và Portal giữ contract hiện hành.",
+      "test_ids": ["T-REGRESSION", "T-CONCURRENCY", "T-EXTERNAL", "T-ROLLBACK"]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-IDENTITY",
+      "statement": "Mọi câu trả lời giữ đúng form version, assignment, học viên và buổi.",
+      "test_ids": ["T-INVALID", "T-REGRESSION", "T-SECURITY"]
+    },
+    {
+      "id": "INV-ATTENDANCE",
+      "statement": "Checkpoint không tự điểm danh; chỉ nộp cuối đủ trường bắt buộc mới self_confirmed.",
+      "test_ids": ["T-LIFECYCLE", "T-CONDITIONAL", "T-CONCURRENCY"]
+    },
+    {
+      "id": "INV-PRIVATE-KEY",
+      "statement": "Đáp án chấm không nằm trong public definition hoặc Pages bundle.",
+      "test_ids": ["T-TEMPLATE", "T-SECURITY"]
+    },
+    {
+      "id": "INV-COMPATIBILITY",
+      "statement": "Buổi 2 và 4 cùng các luồng ghi nhớ, autosave và dashboard không bị regression.",
+      "test_ids": ["T-REGRESSION"]
+    }
+  ],
+  "tests": [
+    {"id": "T-TEMPLATE", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "learning-ic2305-session3-template.test.js: đúng 3 checkpoint, 8 câu logic, key B/C/B và không lộ expectedOptionId."},
+    {"id": "T-INVALID", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "Schema chặn dependency thiếu/ngược/sai option; route suite chặn payload, điểm và identity sai trước database."},
+    {"id": "T-LIFECYCLE", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Database suite xác nhận checkpoint không điểm danh; browser regression đi đủ ba phần rồi mới self_confirmed."},
+    {"id": "T-CONDITIONAL", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Backend bắt buộc OTHER và từ chối dữ liệu phụ stale; browser 8/8 xác nhận hiện, dấu *, bắt buộc và xóa draft khi đổi lựa chọn."},
+    {"id": "T-CONCURRENCY", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Full suite xác nhận submit idempotent, draft stale fail-closed, outbox lease đúng một lần, rate limit theo attempt và quiz 40 câu chỉ bốn lượt DB."},
+    {"id": "T-EXTERNAL", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "Full suite xác nhận Portal timeout/429/5xx được retry và không làm mất bài hoặc biên nhận."},
+    {"id": "T-ROLLBACK", "category": "rollback_recovery", "priority": "P1", "status": "passed", "evidence": "Không có production mutation; branch task tách biệt có thể revert hai commit. Test Portal lỗi rồi hồi phục giữ nguyên submission."},
+    {"id": "T-SECURITY", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Public definition và Pages bundle không chứa grading key; full suite giữ RLS/quyền lớp, chống tráo identity và không trả ERP ID/email."},
+    {"id": "T-REGRESSION", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Backend 152/152 và Pages Progress Log 18/18 đạt, 0 fail, 0 skip trên revision hiện tại."},
+    {"id": "T-UI", "category": "happy_path", "priority": "P1", "status": "passed", "evidence": "Browser regression tái chạy được đạt 8/8 assertion; kiểm 390/768/1440 px thủ công không tràn và đúng visual contract."},
+    {"id": "T-DASHBOARD", "category": "happy_path", "priority": "P1", "status": "passed", "evidence": "Database test dashboard live đúng assignment; browser cô lập hiển thị 3 phần, số câu gốc, draft OTHER và polling 8 giây."}
+  ],
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "AUTOSAVE-1",
+      "left": {"name": "forced_autosave_max_seconds", "value": 45},
+      "operator": ">",
+      "right": {"name": "idle_autosave_max_seconds", "value": 12},
+      "status": "passed",
+      "evidence": "Pages dùng idle 5–12 giây và forced 25–45 giây; full static suite đọc lại contract trên revision hiện tại."
+    },
+    {
+      "id": "LIVE-1",
+      "left": {"name": "dashboard_refresh_seconds", "value": 8},
+      "operator": "<",
+      "right": {"name": "forced_autosave_max_seconds", "value": 45},
+      "status": "passed",
+      "evidence": "Dashboard đọc sau mỗi autosave; không tuyên bố keystroke realtime."
+    }
+  ],
+  "mutations": [],
+  "verification_runs": [
+    {
+      "id": "backend-full-20260921",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
+      "captured_at": "2026-09-21T15:16:45+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 152,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Node test runner: 152 tests, 152 pass, 0 fail, 0 skipped."
+    },
+    {
+      "id": "pages-progress-log-full-20260921",
+      "scope": "full_suite",
+      "command": "node --test tests/progress-log-ic2305-demo.mjs tests/progress-log-memory.cjs tests/progress-log-session3-static.mjs tests/progress-log-static.mjs",
+      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
+      "captured_at": "2026-09-21T15:13:00+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Progress Log Node suite: 18 tests, 18 pass, 0 fail, 0 skipped."
+    },
+    {
+      "id": "pages-browser-20260921",
+      "scope": "behavioral",
+      "command": "node tests/run-memory-browser.cjs tests/progress-log-session3-ui.cjs http://127.0.0.1:4188/progress-log/index.html",
+      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
+      "captured_at": "2026-09-21T15:13:00+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Một hành trình browser đạt với 8 assertion người dùng và API bị cô lập hoàn toàn bằng mock."
+    },
+    {
+      "id": "backend-build-plan-20260921",
+      "scope": "build",
+      "command": "npm run check && node scripts/publish-ic2305-progress-log.mjs --form=listening1-speaking2 --class=IC2305 --session=3 --creator=<lead-k56> --approver=<lead-k56>",
+      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
+      "captured_at": "2026-09-21T15:17:00+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Syntax check đạt; publish plan trả đúng session 3, 3 block, 9 data item, 3 scored item và answer release hidden."
+    }
+  ],
+  "release": {
+    "target_environment": "local",
+    "decision": "ready",
+    "base_tree_revision": "pages:76da4821cab1fdc5f33ba7eb237b8f4b7ff67a51;backend:4d6f69fcd48bc532f34d4bf4ddbc1c058af035ac",
+    "current_tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
+    "production_authorized": false,
+    "rollback": "Revert hai commit task; chưa có mutation database hoặc production.",
+    "deployment_readback": "not_applicable",
+    "operational_observation": "Browser cô lập xác nhận hành trình học viên và dashboard bằng dữ liệu giả; không quan sát production trong turn này.",
+    "open_risks": [
+      {"severity": "P2", "summary": "Dependency qs 6.15.3 có một advisory DoS mức moderate đã tồn tại từ base; cần nâng riêng sau khi kiểm hồi quy Express."},
+      {"severity": "P2", "summary": "Chưa load test lại production cho buổi 3 vì chưa được phép phát hành; critical path nộp/Portal không thay đổi trong feature này."}
+    ]
+  }
+}
