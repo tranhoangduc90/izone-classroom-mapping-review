@@ -58,6 +58,18 @@ function isCompleteAnswer(item, value) {
   return isAnswered(value);
 }
 
+function isConditionallyVisible(item, responses) {
+  const dependencyId = item.interactionConfig?.visibleWhenItemVersionId;
+  if (!dependencyId) return true;
+  return responses[dependencyId] === item.interactionConfig.visibleWhenValue;
+}
+
+function isRequiredForResponses(item, responses) {
+  if (item.required) return true;
+  return item.interactionConfig?.requiredWhenVisible === true
+    && isConditionallyVisible(item, responses);
+}
+
 function assertResponseIdentity(definition, responses) {
   const items = definition.blocks.flatMap(block => block.items);
   const itemById = new Map(items.map(item => [item.itemVersionId, item]));
@@ -70,6 +82,12 @@ function assertResponseIdentity(definition, responses) {
       throw error;
     }
     const value = responses[itemVersionId];
+    if (!isConditionallyVisible(item, responses) && isAnswered(value)) {
+      const error = new Error('Câu trả lời phụ không còn phù hợp với lựa chọn hiện tại.');
+      error.code = 'CONDITIONAL_RESPONSE_NOT_APPLICABLE';
+      error.httpStatus = 400;
+      throw error;
+    }
     if (item.layoutType === 'numbered_short_texts') {
       const expected = item.interactionConfig.responseCount;
       if (!Array.isArray(value) || value.length !== expected
@@ -271,7 +289,8 @@ export function evaluateCompleteness(definitionInput, responsesInput) {
   assertResponseIdentity(definition, responses);
   const missingItemVersionIds = definition.blocks
     .flatMap(block => block.items)
-    .filter(item => item.required && !isCompleteAnswer(item, responses[item.itemVersionId]))
+    .filter(item => isRequiredForResponses(item, responses)
+      && !isCompleteAnswer(item, responses[item.itemVersionId]))
     .map(item => item.itemVersionId);
   return { complete: missingItemVersionIds.length === 0, missingItemVersionIds };
 }

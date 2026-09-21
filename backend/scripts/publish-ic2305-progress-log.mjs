@@ -16,6 +16,11 @@ import {
   buildIc2305Writing1GradingKey,
   IC2305_WRITING1_TEMPLATE
 } from '../src/learning-templates/ic2305-entrance-writing1.js';
+import {
+  buildIc2305Session3Definition,
+  buildIc2305Session3GradingKey,
+  IC2305_SESSION3_TEMPLATE
+} from '../src/learning-templates/ic2305-entrance-listening1-speaking2.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
 import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
 
@@ -35,6 +40,12 @@ const selected = {
     buildDefinition: buildIc2305Writing1Definition,
     buildGradingKey: buildIc2305Writing1GradingKey,
     defaultSession: 2
+  },
+  'listening1-speaking2': {
+    template: IC2305_SESSION3_TEMPLATE,
+    buildDefinition: buildIc2305Session3Definition,
+    buildGradingKey: buildIc2305Session3GradingKey,
+    defaultSession: 3
   },
   'reading1-listening1': {
     template: IC2305_ENTRANCE_TEMPLATE,

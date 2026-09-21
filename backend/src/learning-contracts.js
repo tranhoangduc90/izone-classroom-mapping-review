@@ -13,7 +13,12 @@ const interactionConfigSchema = z.object({
   step: z.number().positive().max(1_000).optional(),
   unit: z.string().trim().min(1).max(40).optional(),
   responseCount: z.number().int().min(2).max(10).optional(),
-  responseLabels: z.array(z.string().trim().min(1).max(100)).min(2).max(10).optional()
+  responseLabels: z.array(z.string().trim().min(1).max(100)).min(2).max(10).optional(),
+  beforeText: z.string().trim().min(1).max(500).optional(),
+  afterText: z.string().trim().min(1).max(500).optional(),
+  visibleWhenItemVersionId: uuidSchema.optional(),
+  visibleWhenValue: z.string().trim().min(1).max(80).optional(),
+  requiredWhenVisible: z.boolean().optional()
 }).strict();
 
 export const interactionTypeSchema = z.enum([
@@ -36,6 +41,7 @@ export const formItemSchema = z.object({
   itemFamilyId: uuidSchema,
   itemVersionId: uuidSchema,
   position: z.number().int().min(1).max(100),
+  displayNumber: z.string().trim().min(1).max(10).optional(),
   prompt: z.string().trim().min(1).max(2_000),
   helpText: z.string().trim().max(1_000).optional().default(''),
   interactionType: interactionTypeSchema,
@@ -94,6 +100,44 @@ export const formItemSchema = z.object({
       message: 'responseCount chỉ dùng cho layout numbered_short_texts.'
     });
   }
+  if (item.layoutType === 'reasoning_chain_completion') {
+    if (item.interactionType !== 'short_text'
+      || !item.interactionConfig.beforeText
+      || !item.interactionConfig.afterText) {
+      context.addIssue({
+        code: 'custom',
+        path: ['interactionConfig'],
+        message: 'Chuỗi lập luận cần short_text cùng beforeText và afterText.'
+      });
+    }
+  } else if (item.interactionConfig.beforeText || item.interactionConfig.afterText) {
+    context.addIssue({
+      code: 'custom',
+      path: ['interactionConfig'],
+      message: 'beforeText/afterText chỉ dùng cho reasoning_chain_completion.'
+    });
+  }
+  if (item.layoutType === 'conditional_other_text') {
+    if (!['short_text', 'long_text'].includes(item.interactionType)
+      || !item.interactionConfig.visibleWhenItemVersionId
+      || !item.interactionConfig.visibleWhenValue
+      || item.interactionConfig.requiredWhenVisible !== true
+      || item.required) {
+      context.addIssue({
+        code: 'custom',
+        path: ['interactionConfig'],
+        message: 'Ô nêu rõ cần điều kiện hiển thị, bắt buộc khi hiện và required=false.'
+      });
+    }
+  } else if (item.interactionConfig.visibleWhenItemVersionId
+    || item.interactionConfig.visibleWhenValue
+    || item.interactionConfig.requiredWhenVisible !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['interactionConfig'],
+      message: 'Điều kiện hiển thị chỉ dùng cho conditional_other_text.'
+    });
+  }
   if (item.graderType === 'unordered_group_slot' && !item.groupId) {
     context.addIssue({ code: 'custom', path: ['groupId'], message: 'Câu chọn TWO/THREE phải có groupId.' });
   }
@@ -138,6 +182,34 @@ export const formDefinitionV1Schema = z.object({
   const positions = items.map(item => item.position);
   if (new Set(positions).size !== positions.length) {
     context.addIssue({ code: 'custom', path: ['blocks'], message: 'Vị trí câu hỏi không được trùng.' });
+  }
+  const itemById = new Map(items.map(item => [item.itemVersionId, item]));
+  for (const item of items) {
+    const dependencyId = item.interactionConfig.visibleWhenItemVersionId;
+    if (!dependencyId) continue;
+    const dependency = itemById.get(dependencyId);
+    if (!dependency || dependency.interactionType !== 'single_choice') {
+      context.addIssue({
+        code: 'custom',
+        path: ['blocks'],
+        message: 'Điều kiện hiển thị phải tham chiếu một câu single_choice trong cùng form.'
+      });
+      continue;
+    }
+    if (dependency.position >= item.position) {
+      context.addIssue({
+        code: 'custom',
+        path: ['blocks'],
+        message: 'Câu điều khiển phải đứng trước ô phụ thuộc.'
+      });
+    }
+    if (!dependency.options.some(option => option.id === item.interactionConfig.visibleWhenValue)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['blocks'],
+        message: 'Giá trị điều kiện không thuộc lựa chọn của câu điều khiển.'
+      });
+    }
   }
 });
 
