@@ -1,0 +1,9 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260921.1-progress-log-session3
+    build:
+      context: /opt/izone-progress-log-session3-20260921/backend
+      dockerfile: ops/releases/progress-log-session3-20260921/Dockerfile
+    environment:
+      APP_VERSION: 1.11.0-progress-log-session3
+      BUILD_SHA: ${PROGRESS_LOG_SESSION3_BUILD_SHA:?PROGRESS_LOG_SESSION3_BUILD_SHA is required}
