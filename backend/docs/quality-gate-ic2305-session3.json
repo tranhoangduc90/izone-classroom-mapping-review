@@ -64,7 +64,7 @@
     {"id": "T-CONDITIONAL", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Backend bắt buộc OTHER và từ chối dữ liệu phụ stale; browser 8/8 xác nhận hiện, dấu *, bắt buộc và xóa draft khi đổi lựa chọn."},
     {"id": "T-CONCURRENCY", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Full suite xác nhận submit idempotent, draft stale fail-closed, outbox lease đúng một lần, rate limit theo attempt và quiz 40 câu chỉ bốn lượt DB."},
     {"id": "T-EXTERNAL", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "Full suite xác nhận Portal timeout/429/5xx được retry và không làm mất bài hoặc biên nhận."},
-    {"id": "T-ROLLBACK", "category": "rollback_recovery", "priority": "P1", "status": "passed", "evidence": "Không có production mutation; branch task tách biệt có thể revert hai commit. Test Portal lỗi rồi hồi phục giữ nguyên submission."},
+    {"id": "T-ROLLBACK", "category": "rollback_recovery", "priority": "P1", "status": "passed", "evidence": "Image nền 1.10.0-dashboard-access còn trên VPS; deploy script kiểm Compose và có nhánh rollback không xóa assignment hoặc bài làm. Test Portal lỗi rồi hồi phục giữ nguyên submission."},
     {"id": "T-SECURITY", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Public definition và Pages bundle không chứa grading key; full suite giữ RLS/quyền lớp, chống tráo identity và không trả ERP ID/email."},
     {"id": "T-REGRESSION", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Backend 152/152 và Pages Progress Log 18/18 đạt, 0 fail, 0 skip trên revision hiện tại."},
     {"id": "T-UI", "category": "happy_path", "priority": "P1", "status": "passed", "evidence": "Browser regression tái chạy được đạt 8/8 assertion; kiểm 390/768/1440 px thủ công không tràn và đúng visual contract."},
@@ -89,14 +89,36 @@
       "evidence": "Dashboard đọc sau mỗi autosave; không tuyên bố keystroke realtime."
     }
   ],
-  "mutations": [],
+  "mutations": [
+    {
+      "id": "MUT-PAGES-MAIN",
+      "target": "GitHub Pages main và trang Progress Log production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Workflow 35578977108 hoàn tất success cho runtime commit e12fbcc; live smoke đọc đúng asset revision session3-v1."
+    },
+    {
+      "id": "MUT-BACKEND-DEPLOY",
+      "target": "API mapping-review-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Public health/version trả healthy, profile k67, image SHA 509c7ac5; checker quyền và canary dashboard đều healthy."
+    },
+    {
+      "id": "MUT-ASSIGNMENT-PUBLISH",
+      "target": "Assignment IC2305 buổi 3 trong PostgreSQL production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Idempotent replay trả cùng assignment; đúng definition hash, 18 roster, 3 block mở, answer release hidden. Backup 244184998 byte đã qua pg_restore và checksum trùng bản E:."
+    }
+  ],
   "verification_runs": [
     {
       "id": "backend-full-20260921",
       "scope": "full_suite",
       "command": "npm test",
-      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
-      "captured_at": "2026-09-21T15:16:45+07:00",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:56:00+07:00",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 152,
@@ -108,8 +130,8 @@
       "id": "pages-progress-log-full-20260921",
       "scope": "full_suite",
       "command": "node --test tests/progress-log-ic2305-demo.mjs tests/progress-log-memory.cjs tests/progress-log-session3-static.mjs tests/progress-log-static.mjs",
-      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
-      "captured_at": "2026-09-21T15:13:00+07:00",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:54:00+07:00",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 18,
@@ -121,8 +143,8 @@
       "id": "pages-browser-20260921",
       "scope": "behavioral",
       "command": "node tests/run-memory-browser.cjs tests/progress-log-session3-ui.cjs http://127.0.0.1:4188/progress-log/index.html",
-      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
-      "captured_at": "2026-09-21T15:13:00+07:00",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:57:00+07:00",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 1,
@@ -134,28 +156,68 @@
       "id": "backend-build-plan-20260921",
       "scope": "build",
       "command": "npm run check && node scripts/publish-ic2305-progress-log.mjs --form=listening1-speaking2 --class=IC2305 --session=3 --creator=<lead-k56> --approver=<lead-k56>",
-      "tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
-      "captured_at": "2026-09-21T15:17:00+07:00",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:57:30+07:00",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 2,
       "failed": 0,
       "skipped": 0,
       "evidence": "Syntax check đạt; publish plan trả đúng session 3, 3 block, 9 data item, 3 scored item và answer release hidden."
+    },
+    {
+      "id": "production-backend-deploy-20260921",
+      "scope": "behavioral",
+      "command": "build-production.sh && deploy.sh --check && deploy.sh --deploy",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:47:09+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Image hash gate, Compose gate, health, checker quyền và teacher-dashboard canary đều đạt; API public trả 1.11.0-progress-log-session3."
+    },
+    {
+      "id": "production-assignment-readback-20260921",
+      "scope": "behavioral",
+      "command": "publish-ic2305-progress-log.mjs --form=listening1-speaking2 --class=IC2305 --session=3 --apply; lặp lại để kiểm idempotency",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:51:00+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Lần đầu tạo assignment, lần hai replayed=true và trả cùng ID/token; roster 18, openBlocks 3, hash chính xác."
+    },
+    {
+      "id": "production-student-live-smoke-20260921",
+      "scope": "behavioral",
+      "command": "LIVE_PROGRESS_LOG_URL=<fragment-token> node tests/progress-log-live-smoke.cjs",
+      "tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+      "captured_at": "2026-09-21T15:52:00+07:00",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Trình duyệt sạch mở đúng IC2305, BUỔI 3, tiêu đề mới và 18 học viên; 0 lỗi console, 0 request thất bại; không chọn tên hoặc tạo attempt."
     }
   ],
   "release": {
-    "target_environment": "local",
-    "decision": "ready",
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
     "base_tree_revision": "pages:76da4821cab1fdc5f33ba7eb237b8f4b7ff67a51;backend:4d6f69fcd48bc532f34d4bf4ddbc1c058af035ac",
-    "current_tree_revision": "pages:e12fbcc835075ef35662e90b9b065f647cd9ae25;backend:849e8e1c7afe2f95df16e695b9436a13c6c70dc5",
-    "production_authorized": false,
-    "rollback": "Revert hai commit task; chưa có mutation database hoặc production.",
-    "deployment_readback": "not_applicable",
-    "operational_observation": "Browser cô lập xác nhận hành trình học viên và dashboard bằng dữ liệu giả; không quan sát production trong turn này.",
+    "current_tree_revision": "pages:dca26aa8cc5c24243a798f510b6b093729cb7b97;backend:5360cdb526bc98e56e4aa999b742adc8820edf58",
+    "production_authorized": true,
+    "rollback": "Pages revert runtime commit bằng commit mới; backend chạy deploy.sh --rollback về 1.10.0; assignment chỉ đóng có audit, không xóa trực tiếp.",
+    "deployment_readback": "verified",
+    "operational_observation": "Phiếu học viên production đã tải đúng bằng trình duyệt sạch; API, quyền và dashboard canary healthy. Chưa quan sát màn dashboard thật bằng phiên Google của giảng viên sau khi assignment mới được tạo.",
     "open_risks": [
       {"severity": "P2", "summary": "Dependency qs 6.15.3 có một advisory DoS mức moderate đã tồn tại từ base; cần nâng riêng sau khi kiểm hồi quy Express."},
-      {"severity": "P2", "summary": "Chưa load test lại production cho buổi 3 vì chưa được phép phát hành; critical path nộp/Portal không thay đổi trong feature này."}
+      {"severity": "P2", "summary": "Không chạy tải phá hủy trên lớp thật trong đợt phát hành; critical path nộp/Portal không đổi và full regression concurrency đã đạt."},
+      {"severity": "P2", "summary": "Cần giảng viên đăng nhập dashboard thật một lần để xác nhận assignment buổi 3 xuất hiện đúng trong danh sách; backend canary và quyền lớp đã đạt."}
     ]
   }
 }
