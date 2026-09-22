@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "product": "Dashboard kết quả Term Test cho giảng viên và quản trị viên",
+  "change_id": "admin-term-test-access-20260922-backend",
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
+  "risk": "high",
+  "system_traits": ["authentication", "personal_data"],
+  "requirements": [
+    {
+      "id": "REQ-ADMIN-ACCESS",
+      "statement": "Quản trị viên được cấp quyền toàn cục xem được mọi lớp đã mapping và API nói rõ khi quyền xem đến từ vai trò quản trị.",
+      "test_ids": ["T-ADMIN", "T-REG", "T-SEC"]
+    },
+    {
+      "id": "REQ-TEACHER-SCOPE",
+      "statement": "Giảng viên thường chỉ xem được lớp đã được cấp quyền.",
+      "test_ids": ["T-TEACHER", "T-SEC"]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-NO-PII",
+      "statement": "Metadata quyền không trả email, ID Portal, ID ERP hoặc token cho giao diện.",
+      "test_ids": ["T-SEC"]
+    }
+  ],
+  "tests": [
+    {"id": "T-ADMIN", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Test xác thực RED/GREEN xác nhận role=admin tự có canAccessAllClasses; PGlite xác nhận admin thấy lớp không được phân công với accessMode=admin_override."},
+    {"id": "T-BAD", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "API trả 400 cho mã lớp chứa ký tự ngoài schema trước khi gọi database."},
+    {"id": "T-TEACHER", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "PGlite xác nhận tài khoản thường chỉ thấy lớp được phân công và accessMode=assigned_teacher."},
+    {"id": "T-SEC", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Regression xác nhận metadata lớp không chứa email; API vẫn chặn request chưa xác thực."},
+    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Cùng test database RED trên base vì thiếu accessMode, GREEN trên head; suite backend đạt 152/152."}
+  ],
+  "red_green": {
+    "red_on_base": {
+      "test_id": "T-REG",
+      "command": "node --test test/term-tests-database.test.js",
+      "tree_revision": "11b1c4930d7d8c17ea519e2fa0b802248386b56e",
+      "outcome": "failed",
+      "exit_code": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "evidence": "Assertion RED: accessMode thực tế undefined, mong đợi assigned_teacher."
+    },
+    "green_on_head": {
+      "test_id": "T-REG",
+      "command": "node --test test/term-tests-database.test.js",
+      "tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Regression database đạt và xác nhận cả assigned_teacher lẫn admin_override."
+    }
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [],
+  "mutations": [],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND-FULL",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
+      "captured_at": "2026-09-22T15:12:30+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 153,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Toàn bộ 153 test backend đạt; npm run check cũng đạt. Hai regression trước sửa lần lượt thất bại tại accessMode undefined và admin false !== true."
+    }
+  ],
+  "release": {
+    "target_environment": "production",
+    "decision": "not_ready",
+    "base_tree_revision": "11b1c4930d7d8c17ea519e2fa0b802248386b56e",
+    "current_tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
+    "production_authorized": false,
+    "rollback": "Khôi phục image backend trước phát hành; thay đổi không có migration database.",
+    "deployment_readback": "not_run",
+    "operational_observation": "Chưa quan sát production; chỉ kiểm chứng local/in-memory.",
+    "open_risks": [
+      {"severity": "P0", "summary": "Chưa được phép deploy backend production và chưa xác minh cờ can_access_all_classes của tài khoản quản trị trên production."}
+    ]
+  }
+}
