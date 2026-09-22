@@ -59,7 +59,15 @@
   },
   "coverage_exemptions": {},
   "cross_constraints": [],
-  "mutations": [],
+  "mutations": [
+    {
+      "id": "M-BACKEND-PRODUCTION",
+      "target": "mapping-review-api production container",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Container mới healthy, restart=0; ba mã băm nguồn khớp manifest; /health, /ready và /version cùng trả HTTP 200."
+    }
+  ],
   "verification_runs": [
     {
       "id": "V-BACKEND-FULL",
@@ -86,17 +94,30 @@
       "failed": 0,
       "skipped": 0,
       "evidence": "Patch chỉ áp khi ba mã băm production đầu vào khớp; ba mã băm đầu ra đều khớp và kiểm tra cú pháp đạt."
+    },
+    {
+      "id": "V-PRODUCTION-READBACK",
+      "scope": "behavioral",
+      "command": "Đọc container, endpoint và giao diện bằng phiên quản trị viên thật",
+      "tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
+      "captured_at": "2026-09-22T16:03:00+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Container healthy/restart=0, ba endpoint 200, không có dòng lỗi mới; phiên admin giữ URL IC2213 và tải đúng dữ liệu lớp."
     }
   ],
   "release": {
     "target_environment": "production",
-    "decision": "ready",
+    "decision": "verified",
     "base_tree_revision": "11b1c4930d7d8c17ea519e2fa0b802248386b56e",
     "current_tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
     "production_authorized": true,
     "rollback": "Khôi phục image backend trước phát hành; thay đổi không có migration database.",
-    "deployment_readback": "not_run",
-    "operational_observation": "Chưa quan sát sau deploy; gói phát hành đã được áp thử trên bản sao chính xác của production.",
+    "deployment_readback": "verified",
+    "operational_observation": "Image sha256:e4c1529826fa4b37769eccfd088e84cb057e773b797c3bf866957d1b17083413 chạy healthy/restart=0; source hashes khớp manifest; health/ready/version HTTP 200. Phiên quản trị viên thật mở đúng IC2213, URL không đổi và dashboard tải thành công; log mới không có dòng error/fatal/panic/unhandled.",
     "open_risks": []
   }
 }
