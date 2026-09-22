@@ -145,6 +145,35 @@ test('Google login chỉ cho tài khoản có trong allowlist và gắn Google s
   assert.deepEqual(pool.calls[1].params, [null, 'pending_review', 'teacher@gmail.com', false]);
 });
 
+test('vai trò admin luôn có quyền xem toàn bộ lớp dù cờ phụ chưa được bật', async () => {
+  const pool = makePool(async () => ({
+    rowCount: 1,
+    rows: [{
+      email: 'admin@example.test',
+      display_name: 'Quản trị viên thử nghiệm',
+      role: 'admin',
+      can_access_all_classes: false
+    }]
+  }));
+  const app = createApp({
+    config: makeConfig({ authMode: 'google', googleClientId: 'client-id.apps.googleusercontent.com' }),
+    pool,
+    verifyGoogleToken: async () => ({
+      sub: 'stable-admin-subject',
+      email: 'admin@example.test',
+      email_verified: true
+    })
+  });
+
+  const response = await request(app)
+    .get('/api/auth/me')
+    .set('Authorization', 'Bearer admin-token');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.reviewer.role, 'admin');
+  assert.equal(response.body.reviewer.canAccessAllClasses, true);
+});
+
 test('lỗi database khi xác thực được báo là lỗi hệ thống, không giả thành sai tài khoản', async () => {
   const pool = makePool(async () => {
     throw new Error('database unavailable');

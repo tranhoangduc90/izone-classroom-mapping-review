@@ -1107,7 +1107,13 @@ WHERE attempt.id = $1::uuid
 export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
-    course.erp_class_name_snapshot AS class_name
+    course.erp_class_name_snapshot AS class_name,
+    EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $1
+        AND access.erp_course_class_id = course.erp_course_class_id
+    ) AS is_assigned_teacher
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
     OR EXISTS (
@@ -1125,7 +1131,12 @@ active_tests AS (
 SELECT jsonb_build_object(
   'classes', COALESCE((
     SELECT jsonb_agg(
-      jsonb_build_object('id', class_id, 'name', class_name)
+      jsonb_build_object(
+        'id', class_id,
+        'name', class_name,
+        'accessMode', CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END,
+        'isAssignedTeacher', is_assigned_teacher
+      )
       ORDER BY class_name
     )
     FROM allowed_classes
@@ -1152,7 +1163,14 @@ target_classes AS (
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
 ),
 authorized_classes AS (
-  SELECT target.*
+  SELECT
+    target.*,
+    EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $3
+        AND access.erp_course_class_id = target.erp_course_class_id
+    ) AS is_assigned_teacher
   FROM target_classes AS target
   WHERE $4::boolean
     OR EXISTS (
@@ -1246,6 +1264,12 @@ SELECT
   (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
   (SELECT erp_course_class_id::text FROM authorized_classes LIMIT 1) AS class_id,
   (SELECT erp_class_name_snapshot FROM authorized_classes LIMIT 1) AS class_name,
+  (SELECT is_assigned_teacher FROM authorized_classes LIMIT 1) AS is_assigned_teacher,
+  (
+    SELECT CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END
+    FROM authorized_classes
+    LIMIT 1
+  ) AS access_mode,
   COALESCE((
     SELECT jsonb_agg(
       jsonb_build_object(

@@ -398,7 +398,16 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   const teacherOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', false]);
   assert.equal(teacherOptions.rows[0].response.classes.length, 1);
   assert.equal(teacherOptions.rows[0].response.classes[0].name, 'IC2139');
+  assert.equal(teacherOptions.rows[0].response.classes[0].accessMode, 'assigned_teacher');
+  assert.equal(teacherOptions.rows[0].response.classes[0].isAssignedTeacher, true);
   assert.equal(teacherOptions.rows[0].response.tests.length, 3);
+  assert.equal(JSON.stringify(teacherOptions.rows[0].response.classes).includes('teacher@gmail.com'), false);
+
+  const adminOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', true]);
+  const adminOnlyClass = adminOptions.rows[0].response.classes.find(item => item.name === 'IC9999');
+  assert.ok(adminOnlyClass, 'Quản trị viên phải thấy lớp không nằm trong phân công giảng viên.');
+  assert.equal(adminOnlyClass.accessMode, 'admin_override');
+  assert.equal(adminOnlyClass.isAssignedTeacher, false);
 
   const teacherResults = await database.query(listTermTestTeacherResultsSql, [
     'IC2139',
@@ -407,6 +416,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     false
   ]);
   assert.equal(teacherResults.rows[0].authorized_class_count, 1);
+  assert.equal(teacherResults.rows[0].access_mode, 'assigned_teacher');
+  assert.equal(teacherResults.rows[0].is_assigned_teacher, true);
   assert.equal(teacherResults.rows[0].students.length, 2);
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên trong roster riêng').status, 'completed');
   assert.equal(teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').status, 'not_started');
@@ -418,6 +429,16 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     teacherResults.rows[0].students.find(item => item.name === 'Học viên chưa làm').writing.status,
     'not_submitted'
   );
+
+  const adminResults = await database.query(listTermTestTeacherResultsSql, [
+    'IC9999',
+    'term-test-1',
+    'teacher@gmail.com',
+    true
+  ]);
+  assert.equal(adminResults.rows[0].authorized_class_count, 1);
+  assert.equal(adminResults.rows[0].access_mode, 'admin_override');
+  assert.equal(adminResults.rows[0].is_assigned_teacher, false);
 
   const teacherReview = await database.query(fetchTermTestTeacherAttemptReviewSql, [
     'IC2139',

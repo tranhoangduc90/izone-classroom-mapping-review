@@ -1530,7 +1530,12 @@ export function createApp({
       ok: true,
       reviewer: req.reviewer,
       test: { slug: row.test_slug, title: row.test_title, version: Number(row.definition_version) },
-      class: { id: row.class_id, name: row.class_name },
+      class: {
+        id: row.class_id,
+        name: row.class_name,
+        accessMode: row.access_mode,
+        isAssignedTeacher: Boolean(row.is_assigned_teacher)
+      },
       students: row.students || []
     });
   }));

@@ -313,6 +313,8 @@ test('dashboard giảng viên bắt buộc xác thực và truyền đúng phạ
       authorized_class_count: 1,
       class_id: '2139',
       class_name: 'IC2139',
+      access_mode: 'admin_override',
+      is_assigned_teacher: false,
       students: [{
         ref: '00000000-0000-4000-8000-000000000001',
         name: 'Học viên A',
@@ -329,11 +331,23 @@ test('dashboard giảng viên bắt buộc xác thực và truyền đúng phạ
   assert.equal(unauthorized.status, 401);
   assert.equal(pool.calls.length, 0);
 
+  const invalidClass = await request(app)
+    .get('/api/term-tests/teacher/results?class=IC2139%3Cscript%3E&test=term-test-2')
+    .set('x-review-token', 'a-valid-test-token');
+  assert.equal(invalidClass.status, 400);
+  assert.equal(pool.calls.length, 0);
+
   const response = await request(app)
     .get('/api/term-tests/teacher/results?class=ic2139&test=term-test-2')
     .set('x-review-token', 'a-valid-test-token');
   assert.equal(response.status, 200);
   assert.equal(response.body.students[0].result.summary.averageBand, 6.5);
+  assert.deepEqual(response.body.class, {
+    id: '2139',
+    name: 'IC2139',
+    accessMode: 'admin_override',
+    isAssignedTeacher: false
+  });
   assert.deepEqual(pool.calls[0].params, ['IC2139', 'term-test-2', 'legacy@mapping.local', true]);
   assert.equal(JSON.stringify(response.body).includes('attemptToken'), false);
 });

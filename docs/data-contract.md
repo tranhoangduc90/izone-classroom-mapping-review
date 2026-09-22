@@ -103,10 +103,10 @@ Các trang GitHub Pages giữ nguyên query `?class=<MÃ_LỚP>` và gọi API c
 
 ### Dashboard giảng viên
 
-Trang giảng viên bắt buộc gửi Google ID token trong header `Authorization` và chỉ đọc các lớp có trong `mapping.reviewer_class_access` của tài khoản đó:
+Trang giảng viên bắt buộc có phiên Google hợp lệ. Tài khoản thường chỉ đọc các lớp có trong `mapping.reviewer_class_access`; tài khoản có `role = admin` hoặc `can_access_all_classes = true` được đọc mọi lớp đã mapping:
 
-1. `GET /api/term-tests/teacher/options` trả danh sách lớp được phép xem và Term Test đang hoạt động.
-2. `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>` trả toàn bộ roster. Mỗi học viên có trạng thái `completed`, `incomplete` hoặc `not_started`; học viên đã hoàn thành có `combined_result` mới nhất để dựng tổng quan và màn hình cá nhân.
+1. `GET /api/term-tests/teacher/options` trả danh sách lớp được phép xem và Term Test đang hoạt động. Mỗi lớp có `isAssignedTeacher` và `accessMode`: `assigned_teacher` khi tài khoản được phân công trực tiếp, `admin_override` khi chỉ xem được nhờ quyền quản trị.
+2. `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>` trả toàn bộ roster và lặp lại metadata quyền trong đối tượng `class` để giao diện không phải tự suy đoán. Mỗi học viên có trạng thái `completed`, `incomplete` hoặc `not_started`; học viên đã hoàn thành có `combined_result` mới nhất để dựng tổng quan và màn hình cá nhân.
 
 Response không chứa ID ERP, email hay `attemptToken`. Học viên chưa hoàn thành không được trả đáp án hoặc điểm tạm thời.
 
