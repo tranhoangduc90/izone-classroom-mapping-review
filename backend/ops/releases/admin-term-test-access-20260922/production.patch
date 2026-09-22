@@ -1,0 +1,107 @@
+diff --git a/src/auth.js b/src/auth.js
+index ccecebf..af50eac 100644
+--- a/src/auth.js
++++ b/src/auth.js
+@@ -62,11 +62,12 @@ function tokenHash(token) {
+ }
+~
+ function reviewerFromAccount(account, fallbackName = '') {
++  const role = String(account.role || '').trim().toLowerCase();
+   return {
+     email: account.email,
+     displayName: account.display_name || fallbackName || account.email,
+-    role: account.role,
+-    canAccessAllClasses: Boolean(account.can_access_all_classes)
++    role,
++    canAccessAllClasses: role === 'admin' || Boolean(account.can_access_all_classes)
+   };
+ }
+~
+diff --git a/src/app.js b/src/app.js
+index ea0e1da..b3cc6eb 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1592,7 +1592,7 @@ export function createApp({
+     const legacyOptions = deploymentProfile.teacherOptionsMode === 'legacy-access';
+     const result = await pool.query(
+       legacyOptions ? listTermTestTeacherOptionsLegacySql : listTermTestTeacherOptionsSql,
+-      legacyOptions ? [req.reviewer.email, req.reviewer.canAccessAllClasses] : [req.reviewer.email]
++      [req.reviewer.email, req.reviewer.canAccessAllClasses]
+     );
+     const response = result.rows[0]?.response || { classes: [], tests: [] };
+     response.tests = Array.from(response.tests || []).map(test => ({
+@@ -1809,7 +1809,12 @@ export function createApp({
+         version: Number(row.definition_version),
+         ...getTestScoringMetadata(row.test_slug)
+       },
+-      class: { id: row.class_id, name: row.class_name },
++      class: {
++        id: row.class_id,
++        name: row.class_name,
++        accessMode: row.access_mode,
++        isAssignedTeacher: Boolean(row.is_assigned_teacher)
++      },
+       students: row.students || []
+     });
+   }));
+diff --git a/src/sql.js b/src/sql.js
+index affae6b..911a1db 100644
+--- a/src/sql.js
++++ b/src/sql.js
+@@ -1299,6 +1299,7 @@ allowed_classes AS (
+   SELECT
+     course.erp_course_class_id::text AS class_id,
+     course.erp_class_name_snapshot AS class_name,
++    access.portal_teacher_contact_id IS NOT NULL AS is_assigned_teacher,
+     COALESCE(access.class_started_at, metadata.class_started_at) AS class_started_at,
+     COALESCE(access.class_ended_at, metadata.class_ended_at) AS class_ended_at,
+     COALESCE(access.class_status_snapshot, metadata.class_status) AS class_status
+@@ -1309,7 +1310,8 @@ allowed_classes AS (
+    AND access.portal_teacher_contact_id IS NOT NULL
+   LEFT JOIN portal_class_metadata AS metadata
+     ON metadata.erp_course_class_id = course.erp_course_class_id
+-  WHERE access.portal_teacher_contact_id IS NOT NULL
++  WHERE $2::boolean
++    OR access.portal_teacher_contact_id IS NOT NULL
+     OR ${buildTeacherClassAccessPredicate({
+       reviewerEmailSql: '$1',
+       classIdSql: 'course.erp_course_class_id'
+@@ -1326,6 +1328,8 @@ SELECT jsonb_build_object(
+       jsonb_build_object(
+         'id', class_id,
+         'name', class_name,
++        'accessMode', CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END,
++        'isAssignedTeacher', is_assigned_teacher,
+         'status', class_status,
+         'startedAt', class_started_at,
+         'endedAt', class_ended_at
+@@ -1394,7 +1398,15 @@ target_classes AS (
+   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+ ),
+ authorized_classes AS (
+-  SELECT target.*
++  SELECT
++    target.*,
++    EXISTS (
++      SELECT 1
++      FROM mapping.reviewer_class_access AS access
++      WHERE access.reviewer_email = $3
++        AND access.erp_course_class_id = target.erp_course_class_id
++        AND access.portal_teacher_contact_id IS NOT NULL
++    ) AS is_assigned_teacher
+   FROM target_classes AS target
+   WHERE $4::boolean
+     OR ${buildTeacherClassAccessPredicate({
+@@ -1486,6 +1498,12 @@ SELECT
+   (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
+   (SELECT erp_course_class_id::text FROM authorized_classes LIMIT 1) AS class_id,
+   (SELECT erp_class_name_snapshot FROM authorized_classes LIMIT 1) AS class_name,
++  (SELECT is_assigned_teacher FROM authorized_classes LIMIT 1) AS is_assigned_teacher,
++  (
++    SELECT CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END
++    FROM authorized_classes
++    LIMIT 1
++  ) AS access_mode,
+   COALESCE((
+     SELECT jsonb_agg(
+       jsonb_build_object(

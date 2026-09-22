@@ -1,0 +1,14 @@
+{
+  "src/auth.js": {
+    "before": "ccecebfedebbf6cf1170991a1d5243ebbf91b98e5b9baf9b500c26764dcfe132",
+    "after": "af50eac4d39f0c0c4e9c5042e672b3fbd34d52a18e9f094072e0d8451858394b"
+  },
+  "src/app.js": {
+    "before": "ea0e1da9532a6dff1e10e5883b36d929256dbee941d6bae69bcfdc903a1ac6e3",
+    "after": "b3cc6eb54a1e9dee8c0896f41ac94f5751c5e54361c622c70f401615c90459d0"
+  },
+  "src/sql.js": {
+    "before": "affae6b6df3cb9d86f6381a2248180b7325066e060dd852ff81b5f61cd128780",
+    "after": "911a1db1e8e43168905b9d8551635118c42de88d51dbf04d55a33d0a00318c44"
+  }
+}

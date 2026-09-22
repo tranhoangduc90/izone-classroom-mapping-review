@@ -62,11 +62,12 @@ function tokenHash(token) {
 }
 
 function reviewerFromAccount(account, fallbackName = '') {
+  const role = String(account.role || '').trim().toLowerCase();
   return {
     email: account.email,
     displayName: account.display_name || fallbackName || account.email,
-    role: account.role,
-    canAccessAllClasses: Boolean(account.can_access_all_classes)
+    role,
+    canAccessAllClasses: role === 'admin' || Boolean(account.can_access_all_classes)
   };
 }
 

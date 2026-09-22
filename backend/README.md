@@ -7,7 +7,7 @@ API này phục vụ web duyệt mapping mà không dùng execution của n8n. n
 - Giảng viên đăng nhập bằng tài khoản Google bất kỳ; không cần cùng tên miền.
 - Email phải có trong `mapping.reviewer_account` và đang ở trạng thái `active`.
 - Quyền theo lớp nằm trong `mapping.reviewer_class_access`.
-- Tài khoản có `can_access_all_classes = true` được xem mọi lớp.
+- Tài khoản có `role = admin` luôn được xem mọi lớp. Cờ `can_access_all_classes = true` vẫn có thể cấp quyền toàn cục cho vai trò khác khi nghiệp vụ cần.
 - Lần đăng nhập đầu gắn email được cấp quyền với mã tài khoản Google ổn định (`sub`). Các lần sau phải đúng cùng tài khoản đó.
 - Chế độ mã dùng chung `legacy` chỉ dùng ngắn hạn khi chuyển hệ thống, không phải thiết kế vận hành lâu dài.
 
@@ -15,8 +15,8 @@ Google ID token chỉ dùng một lần tại `POST /api/auth/session` để m�
 
 Dashboard kết quả Term Test dùng hai endpoint có cùng lớp xác thực:
 
-- `GET /api/term-tests/teacher/options`: trả các lớp được phép xem và bài test đang hoạt động.
-- `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>`: trả roster cùng kết quả hoàn thành gần nhất; không trả ID ERP, email hay attempt token.
+- `GET /api/term-tests/teacher/options`: trả các lớp được phép xem, bài test đang hoạt động và metadata `accessMode`/`isAssignedTeacher`. Với admin, lớp không thuộc phân công có `accessMode = admin_override` để giao diện báo rõ đang dùng quyền quản trị.
+- `GET /api/term-tests/teacher/results?class=<MÃ_LỚP>&test=<MÃ_BÀI>`: trả roster, kết quả hoàn thành gần nhất và cùng metadata quyền trên đối tượng `class`; không trả ID ERP, email hay attempt token.
 
 ## Đồng bộ điểm Writing Test
 
