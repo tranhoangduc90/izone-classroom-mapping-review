@@ -36,7 +36,7 @@
     },
     {
       "id": "INV-ADMIN",
-      "statement": "Gói phát hành kế thừa image quyền admin hiện tại và không thay các file phân quyền.",
+      "statement": "Gói phát hành kế thừa image quyền admin hiện tại, chỉ thay server wiring và giữ nguyên module chấm/notifier đang chạy.",
       "test_ids": ["T-RELEASE"]
     }
   ],
@@ -45,7 +45,7 @@
     {"id": "T-WRAPPER", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Test xác nhận chỉ kick sau khi thao tác nghiệp vụ đã commit."},
     {"id": "T-CAPACITY", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Base nhận 6 job; head chỉ nhận 4, execution thứ hai nhận 0 và chỉ nhận thêm 1 sau khi trả suất."},
     {"id": "T-WORKFLOW-CONTRACT", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Bản workflow đã nghiệm thu giữ workerId theo execution, claim limit=1 và chặn jobs.length>1; workflow production được đọc lại active trước khi sửa local."},
-    {"id": "T-RELEASE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Test tĩnh xác nhận gói kế thừa image admin, chỉ COPY ba file hàng chấm và dùng tag image mới."},
+    {"id": "T-RELEASE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Test tĩnh xác nhận gói kế thừa image admin, chỉ COPY server wiring và dùng tag image mới; module chấm/notifier của image nền không bị ghi đè."},
     {"id": "T-FULL", "category": "regression", "priority": "P0", "status": "passed", "evidence": "npm test đạt 161/161, không skip."},
     {"id": "T-BAD-CONFIG", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "Test từ chối URL không phải HTTPS và cấu hình bí mật không hợp lệ."},
     {"id": "T-FALLBACK", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Test xác nhận lịch dự phòng đúng 300.000 ms, hàng trống không gọi webhook và close hủy timer."},
