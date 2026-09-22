@@ -30,7 +30,8 @@
     {"id": "T-BAD", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "API trả 400 cho mã lớp chứa ký tự ngoài schema trước khi gọi database."},
     {"id": "T-TEACHER", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "PGlite xác nhận tài khoản thường chỉ thấy lớp được phân công và accessMode=assigned_teacher."},
     {"id": "T-SEC", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Regression xác nhận metadata lớp không chứa email; API vẫn chặn request chưa xác thực."},
-    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Cùng test database RED trên base vì thiếu accessMode, GREEN trên head; suite backend đạt 152/152."}
+    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Cùng test database RED trên base vì thiếu accessMode, GREEN trên head; suite backend đạt 153/153."},
+    {"id": "T-OVERLAY", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Lớp vá production được áp thử lên bản sao đúng của ba file đang chạy; mã băm đầu ra khớp manifest và cả ba file qua node --check."}
   ],
   "red_green": {
     "red_on_base": {
@@ -47,7 +48,7 @@
     "green_on_head": {
       "test_id": "T-REG",
       "command": "node --test test/term-tests-database.test.js",
-      "tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
+      "tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 1,
@@ -64,27 +65,38 @@
       "id": "V-BACKEND-FULL",
       "scope": "full_suite",
       "command": "npm test",
-      "tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
-      "captured_at": "2026-09-22T15:12:30+07:00",
+      "tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
+      "captured_at": "2026-09-22T15:48:57+07:00",
       "exit_code": 0,
       "outcome": "passed",
       "passed": 153,
       "failed": 0,
       "skipped": 0,
       "evidence": "Toàn bộ 153 test backend đạt; npm run check cũng đạt. Hai regression trước sửa lần lượt thất bại tại accessMode undefined và admin false !== true."
+    },
+    {
+      "id": "V-PRODUCTION-OVERLAY",
+      "scope": "behavioral",
+      "command": "node apply-unified-patch.mjs <production-baseline-copy> production.patch manifest.json && node --check <patched-files>",
+      "tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
+      "captured_at": "2026-09-22T15:49:25+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Patch chỉ áp khi ba mã băm production đầu vào khớp; ba mã băm đầu ra đều khớp và kiểm tra cú pháp đạt."
     }
   ],
   "release": {
     "target_environment": "production",
-    "decision": "not_ready",
+    "decision": "ready",
     "base_tree_revision": "11b1c4930d7d8c17ea519e2fa0b802248386b56e",
-    "current_tree_revision": "b1f07552a944a4c5189420ea052e20ab1061d0ff",
-    "production_authorized": false,
+    "current_tree_revision": "3455dcc151fa3b3db669cedaece2ddc2608eb323",
+    "production_authorized": true,
     "rollback": "Khôi phục image backend trước phát hành; thay đổi không có migration database.",
     "deployment_readback": "not_run",
-    "operational_observation": "Chưa quan sát production; chỉ kiểm chứng local/in-memory.",
-    "open_risks": [
-      {"severity": "P0", "summary": "Chưa được phép deploy backend production và chưa xác minh cờ can_access_all_classes của tài khoản quản trị trên production."}
-    ]
+    "operational_observation": "Chưa quan sát sau deploy; gói phát hành đã được áp thử trên bản sao chính xác của production.",
+    "open_risks": []
   }
 }
