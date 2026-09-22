@@ -68,7 +68,7 @@
     "green_on_head": {
       "test_id": "T-NOTIFIER",
       "command": "node --test test/term-test-writing-notifier.test.js",
-      "tree_revision": "content-sha256:3ff5a1e6f535a98b018e864532c3b5703b450792e10a73809b6b3fd6e7bb631f",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
       "outcome": "passed",
       "exit_code": 0,
       "passed": 6,
@@ -88,13 +88,35 @@
       "evidence": "Workflow claim limit=1; test capacity xác nhận global cap=4."
     }
   ],
-  "mutations": [],
+  "mutations": [
+    {
+      "id": "M-BACKEND-PRODUCTION",
+      "target": "mapping-review-api production container",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image izone-term-test-backend:20260923.1-writing-webhook-4 chạy healthy, restart=0; /health, /ready và /version cùng trả HTTP 200; mã băm server, grading và notifier khớp ứng viên đã thử."
+    },
+    {
+      "id": "M-N8N-WORKFLOWS",
+      "target": "Webhook nhận bài và lịch quét dự phòng Writing Term Test",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Cả hai workflow được đọc lại active=true với chính sách lưu execution hợp lệ; webhook 2320112, child 2320114 và lịch 2320185 đều success."
+    },
+    {
+      "id": "M-CRASHED-LEASE-RECOVERY",
+      "target": "Hai lease thuộc execution 2319408 và 2319443 đã crash",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Chỉ hai job đã đối chiếu execution crash được đưa về retry_wait qua API xác thực; sau xử lý cả hai job và hai run đều complete, final ready."
+    }
+  ],
   "verification_runs": [
     {
       "id": "V-FOCUSED",
       "scope": "focused",
       "command": "node --test test/term-test-writing-notifier.test.js test/term-test-writing-capacity.test.js test/term-test-writing-release-package.test.js",
-      "tree_revision": "content-sha256:3ff5a1e6f535a98b018e864532c3b5703b450792e10a73809b6b3fd6e7bb631f",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
       "captured_at": "2026-09-22T23:37:21.7448044+07:00",
       "exit_code": 0,
       "outcome": "passed",
@@ -107,7 +129,7 @@
       "id": "V-CHECK",
       "scope": "lint",
       "command": "npm run check",
-      "tree_revision": "content-sha256:3ff5a1e6f535a98b018e864532c3b5703b450792e10a73809b6b3fd6e7bb631f",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
       "captured_at": "2026-09-22T23:37:21.7448044+07:00",
       "exit_code": 0,
       "outcome": "passed",
@@ -120,7 +142,7 @@
       "id": "V-FULL",
       "scope": "full_suite",
       "command": "npm test",
-      "tree_revision": "content-sha256:3ff5a1e6f535a98b018e864532c3b5703b450792e10a73809b6b3fd6e7bb631f",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
       "captured_at": "2026-09-22T23:37:21.7448044+07:00",
       "exit_code": 0,
       "outcome": "passed",
@@ -128,21 +150,30 @@
       "failed": 0,
       "skipped": 0,
       "evidence": "Full suite đạt 161/161 trên source ứng viên."
+    },
+    {
+      "id": "V-PRODUCTION-READBACK",
+      "scope": "behavioral",
+      "command": "Đọc container, workflow execution và trạng thái hàng chờ trong database sau phát hành",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "captured_at": "2026-09-23T00:42:09+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Container healthy/restart=0; hai workflow active; webhook, child và lịch dự phòng success; hàng chờ có 257 complete, active=0, pending=0; IC2181 Term Test 2 có 11 lượt ready."
     }
   ],
   "release": {
     "target_environment": "production",
-    "decision": "not_ready",
+    "decision": "verified",
     "base_tree_revision": "8677443f9ce2be6bc7427de1427689f629dd69fd",
-    "current_tree_revision": "content-sha256:3ff5a1e6f535a98b018e864532c3b5703b450792e10a73809b6b3fd6e7bb631f",
-    "production_authorized": false,
+    "current_tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+    "production_authorized": true,
     "rollback": "Khôi phục image izone-term-test-backend:20260922.1-admin-access; không đổi database hoặc xóa job.",
-    "deployment_readback": "not_started",
-    "operational_observation": "Chưa thay đổi production; chờ cổng phát hành và xác nhận riêng.",
-    "open_risks": [
-      "Cần dựng và thử image ứng viên ở cổng tạm trên VPS.",
-      "Cần xác nhận hàng processing trống và không có lớp đang thi trước cutover.",
-      "Cần cấu hình hai biến TERM_TEST_NOTIFY_* từ vùng bí mật, không ghi vào Git."
-    ]
+    "deployment_readback": "verified",
+    "operational_observation": "Image mới chạy healthy/restart=0. Webhook nhận bài và lịch quét dự phòng đều active; execution production cuối cùng success. Hàng chờ đã thoát toàn bộ job treo và về active=0, pending=0. IC2181 Term Test 2 có 11/11 lượt ready.",
+    "open_risks": []
   }
 }
