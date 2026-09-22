@@ -1,0 +1,6 @@
+services:
+  mapping-review-api:
+    image: izone-term-test-backend:20260922.2-writing-webhook-4
+    build:
+      context: .
+      dockerfile: ops/releases/term-test-writing-webhook-4-20260922/Dockerfile
