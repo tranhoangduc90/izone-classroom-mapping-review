@@ -1,0 +1,179 @@
+{
+  "schema_version": 2,
+  "product": "Hàng chấm Writing Term Test",
+  "change_id": "term-test-writing-webhook-4-20260922",
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
+  "risk": "high",
+  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "personal_data"],
+  "requirements": [
+    {
+      "id": "REQ-IMMEDIATE",
+      "statement": "Bài Writing đã lưu đánh thức workflow ngay mà không cần đợi lịch năm phút.",
+      "test_ids": ["T-NOTIFIER", "T-WRAPPER", "T-RELEASE"]
+    },
+    {
+      "id": "REQ-CAPACITY",
+      "statement": "Toàn hệ thống giữ tối đa bốn job processing và mỗi execution chỉ nhận một job.",
+      "test_ids": ["T-CAPACITY", "T-WORKFLOW-CONTRACT"]
+    },
+    {
+      "id": "REQ-FALLBACK",
+      "statement": "Webhook lỗi không làm mất job và có kiểm dự phòng năm phút.",
+      "test_ids": ["T-FALLBACK", "T-WEBHOOK-FAILURE", "T-ROLLBACK"]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-IDENTITY",
+      "statement": "jobId, runKey, workerId và idempotency không bị đổi hoặc nối nhầm giữa các execution.",
+      "test_ids": ["T-CAPACITY", "T-FULL"]
+    },
+    {
+      "id": "INV-NO-PII",
+      "statement": "Envelope webhook không chứa bài làm hoặc dữ liệu định danh học viên.",
+      "test_ids": ["T-PRIVACY"]
+    },
+    {
+      "id": "INV-ADMIN",
+      "statement": "Gói phát hành kế thừa image quyền admin hiện tại, chỉ thay server wiring và giữ nguyên module chấm/notifier đang chạy.",
+      "test_ids": ["T-RELEASE"]
+    }
+  ],
+  "tests": [
+    {"id": "T-NOTIFIER", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Cùng test thất bại trên base vì thiếu module notifier và đạt trên head."},
+    {"id": "T-WRAPPER", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Test xác nhận chỉ kick sau khi thao tác nghiệp vụ đã commit."},
+    {"id": "T-CAPACITY", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Base nhận 6 job; head chỉ nhận 4, execution thứ hai nhận 0 và chỉ nhận thêm 1 sau khi trả suất."},
+    {"id": "T-WORKFLOW-CONTRACT", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "Bản workflow đã nghiệm thu giữ workerId theo execution, claim limit=1 và chặn jobs.length>1; workflow production được đọc lại active trước khi sửa local."},
+    {"id": "T-RELEASE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Test tĩnh xác nhận gói kế thừa image admin, chỉ COPY server wiring và dùng tag image mới; module chấm/notifier của image nền không bị ghi đè."},
+    {"id": "T-FULL", "category": "regression", "priority": "P0", "status": "passed", "evidence": "npm test đạt 161/161, không skip."},
+    {"id": "T-BAD-CONFIG", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "Test từ chối URL không phải HTTPS và cấu hình bí mật không hợp lệ."},
+    {"id": "T-FALLBACK", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Test xác nhận lịch dự phòng đúng 300.000 ms, hàng trống không gọi webhook và close hủy timer."},
+    {"id": "T-WEBHOOK-FAILURE", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "HTTP 503 chỉ tạo log mã an toàn và hẹn thử lại 30 giây; job nằm trong database."},
+    {"id": "T-ROLLBACK", "category": "rollback_recovery", "priority": "P0", "status": "passed", "evidence": "Thao tác nghiệp vụ bị rollback không gửi tín hiệu; hoàn tác production chỉ đổi lại image, không sửa database."},
+    {"id": "T-PRIVACY", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Test xác nhận body webhook chính xác chỉ có kind=term_test_writing_ready; không có bài, token hoặc danh tính học viên."}
+  ],
+  "red_green": {
+    "red_on_base": {
+      "test_id": "T-NOTIFIER",
+      "command": "$env:BACKEND_UNDER_TEST='<base>/backend'; node --test test/term-test-writing-notifier.test.js",
+      "tree_revision": "8677443f9ce2be6bc7427de1427689f629dd69fd",
+      "outcome": "failed",
+      "exit_code": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "evidence": "ERR_MODULE_NOT_FOUND: base chưa có src/term-test-writing-notifier.js."
+    },
+    "green_on_head": {
+      "test_id": "T-NOTIFIER",
+      "command": "node --test test/term-test-writing-notifier.test.js",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Sáu ca notifier đạt trên head, gồm commit/rollback, fallback, lỗi HTTP và payload riêng tư."
+    }
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "X-WORKFLOW-LIMIT",
+      "left": {"label": "Số job tối đa một execution nhận", "value": 1},
+      "operator": "<=",
+      "right": {"label": "Số job processing tối đa toàn hệ thống", "value": 4},
+      "status": "passed",
+      "evidence": "Workflow claim limit=1; test capacity xác nhận global cap=4."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-BACKEND-PRODUCTION",
+      "target": "mapping-review-api production container",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image izone-term-test-backend:20260923.1-writing-webhook-4 chạy healthy, restart=0; /health, /ready và /version cùng trả HTTP 200; mã băm server, grading và notifier khớp ứng viên đã thử."
+    },
+    {
+      "id": "M-N8N-WORKFLOWS",
+      "target": "Webhook nhận bài và lịch quét dự phòng Writing Term Test",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Cả hai workflow được đọc lại active=true với chính sách lưu execution hợp lệ; webhook 2320112, child 2320114 và lịch 2320185 đều success."
+    },
+    {
+      "id": "M-CRASHED-LEASE-RECOVERY",
+      "target": "Hai lease thuộc execution 2319408 và 2319443 đã crash",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Chỉ hai job đã đối chiếu execution crash được đưa về retry_wait qua API xác thực; sau xử lý cả hai job và hai run đều complete, final ready."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-FOCUSED",
+      "scope": "focused",
+      "command": "node --test test/term-test-writing-notifier.test.js test/term-test-writing-capacity.test.js test/term-test-writing-release-package.test.js",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "captured_at": "2026-09-22T23:37:21.7448044+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Tám ca tập trung đạt."
+    },
+    {
+      "id": "V-CHECK",
+      "scope": "lint",
+      "command": "npm run check",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "captured_at": "2026-09-22T23:37:21.7448044+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Toàn bộ file source, gồm notifier mới, qua node --check."
+    },
+    {
+      "id": "V-FULL",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "captured_at": "2026-09-22T23:37:21.7448044+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 161,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Full suite đạt 161/161 trên source ứng viên."
+    },
+    {
+      "id": "V-PRODUCTION-READBACK",
+      "scope": "behavioral",
+      "command": "Đọc container, workflow execution và trạng thái hàng chờ trong database sau phát hành",
+      "tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+      "captured_at": "2026-09-23T00:42:09+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Container healthy/restart=0; hai workflow active; webhook, child và lịch dự phòng success; hàng chờ có 257 complete, active=0, pending=0; IC2181 Term Test 2 có 11 lượt ready."
+    }
+  ],
+  "release": {
+    "target_environment": "production",
+    "decision": "verified",
+    "base_tree_revision": "8677443f9ce2be6bc7427de1427689f629dd69fd",
+    "current_tree_revision": "2fe0ad5b73f6a551f94f3056b93adefae3008db1",
+    "production_authorized": true,
+    "rollback": "Khôi phục image izone-term-test-backend:20260922.1-admin-access; không đổi database hoặc xóa job.",
+    "deployment_readback": "verified",
+    "operational_observation": "Image mới chạy healthy/restart=0. Webhook nhận bài và lịch quét dự phòng đều active; execution production cuối cùng success. Hàng chờ đã thoát toàn bộ job treo và về active=0, pending=0. IC2181 Term Test 2 có 11/11 lượt ready.",
+    "open_risks": []
+  }
+}

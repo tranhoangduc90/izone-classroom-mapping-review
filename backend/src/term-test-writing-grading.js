@@ -384,23 +384,39 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_WORKER', 'Mã tiến trình không hợp lệ.', 400);
     }
     return inTransaction(pool, async client => {
+      // Khóa chỉ tồn tại trong transaction cấp việc để mọi webhook cùng giữ một giới hạn toàn hệ thống.
+      // Dữ liệu vào là số việc đang giữ lease; kết quả là tối đa bốn job processing trên toàn bộ lớp.
+      // Khi đã đủ bốn suất, worker nhận mảng rỗng và bài vẫn nằm nguyên trong hàng chờ.
+      await client.query('SELECT pg_advisory_xact_lock(67092026);');
+      const capacity = await client.query(`SELECT count(*)::int AS active
+        FROM assessment.term_test_writing_grading_job
+        WHERE status='processing' AND lease_until>now();`);
+      const available = Math.max(0, 4 - Number(capacity.rows[0].active));
+      if (available === 0) return [];
       const claimed = await client.query(`WITH candidates AS (
-        SELECT job.id
+        SELECT job.id,
+          CASE
+            WHEN job.job_type = 'dispatch'
+              AND grading_run.run_key ~ '^term-test-[12](:|-)'
+            THEN interval '180 minutes'
+            ELSE interval '10 minutes'
+          END AS lease_duration
         FROM assessment.term_test_writing_grading_job AS job
+        JOIN assessment.term_test_writing_grading_run AS grading_run ON grading_run.id = job.run_id
         WHERE (
           job.status IN ('queued', 'retry_wait')
           OR (job.status = 'processing' AND job.lease_until < now())
         )
           AND job.next_attempt_at <= now()
-        ORDER BY job.next_attempt_at, job.created_at
-        FOR UPDATE SKIP LOCKED
+        ORDER BY CASE WHEN job.job_type='collect' THEN 0 ELSE 1 END, job.next_attempt_at, job.created_at
+        FOR UPDATE OF job SKIP LOCKED
         LIMIT $2
       ), updated AS (
         UPDATE assessment.term_test_writing_grading_job AS job
         SET status = 'processing',
             worker_id = $1,
             leased_at = now(),
-            lease_until = now() + interval '10 minutes',
+            lease_until = now() + candidates.lease_duration,
             attempt_count = attempt_count + 1,
             updated_at = now()
         FROM candidates
@@ -421,7 +437,7 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         run.lark_record_id
       FROM updated
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = updated.run_id
-      ORDER BY updated.created_at;`, [safeWorkerId, safeLimit]);
+      ORDER BY updated.created_at;`, [safeWorkerId, Math.min(safeLimit, available)]);
       return claimed.rows.map(row => ({
         jobId: row.job_id,
         jobType: row.job_type,

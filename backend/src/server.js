@@ -4,6 +4,7 @@ import { createDatabasePool, createLearningDatabasePool } from './db.js';
 import { createErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
+import { createTermTestWritingNotifier, withTermTestWritingNotifications } from './term-test-writing-notifier.js';
 import { createLearningAttendanceSync } from './learning-attendance-sync.js';
 import { startLearningAttendanceWorker } from './learning-attendance-worker.js';
 
@@ -18,9 +19,17 @@ const termTestAssetService = config.termTestAssetDir
       sessionSecret: config.termTestSessionSecret
     })
   : null;
-const termTestWritingGradingService = config.writingTestSyncSecret
-  ? createTermTestWritingGradingService({ pool, syncErpGrades })
-  : null;
+const writingNotifier = createTermTestWritingNotifier({
+  pool,
+  url: process.env.TERM_TEST_NOTIFY_URL || '',
+  secret: process.env.TERM_TEST_NOTIFY_SECRET || ''
+});
+const termTestWritingGradingService = withTermTestWritingNotifications(
+  config.writingTestSyncSecret
+    ? createTermTestWritingGradingService({ pool, syncErpGrades })
+    : null,
+  writingNotifier
+);
 const learningAttendanceSync = createLearningAttendanceSync({ config });
 const app = createApp({
   config,
@@ -33,6 +42,7 @@ const app = createApp({
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Mapping review API đang lắng nghe tại cổng ${config.port}.`);
+  writingNotifier.kick();
 });
 const learningAttendanceWorker = startLearningAttendanceWorker({
   pool: learningPool,
@@ -45,6 +55,7 @@ server.headersTimeout = 16_000;
 server.keepAliveTimeout = 5_000;
 
 async function shutdown(signal) {
+  writingNotifier.close();
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   server.close(async () => {
     await learningAttendanceWorker.stop();
