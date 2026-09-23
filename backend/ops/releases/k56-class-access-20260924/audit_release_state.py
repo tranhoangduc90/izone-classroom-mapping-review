@@ -33,8 +33,15 @@ try {
   const access = meta.access_exists ? (await db.query(`SELECT test_slug, enabled,
     count(*)::int AS rows FROM assessment.term_test_class_access
     GROUP BY test_slug, enabled ORDER BY test_slug, enabled`)).rows : [];
+  const importColumns = (await db.query(`SELECT table_schema, table_name,
+    column_name, data_type, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE (table_schema, table_name) IN (
+      ('mapping', 'classroom_course_mapping'),
+      ('assessment', 'term_test_roster'))
+    ORDER BY table_schema, table_name, ordinal_position`)).rows;
   process.stdout.write(JSON.stringify({database: meta.database,
-    accessExists: meta.access_exists, access, definitions, hashes}));
+    accessExists: meta.access_exists, access, definitions, hashes, importColumns}));
 } finally { await db.end(); }
 """
 
@@ -82,7 +89,8 @@ def main():
                       "accessExists": metadata["accessExists"],
                       "access": metadata["access"],
                       "definitions": metadata["definitions"],
-                      "sourceHashes": metadata["hashes"]}, ensure_ascii=False))
+                      "sourceHashes": metadata["hashes"],
+                      "importColumns": metadata["importColumns"]}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

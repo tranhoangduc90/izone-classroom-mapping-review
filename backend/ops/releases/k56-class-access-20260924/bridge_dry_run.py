@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 import json
 import sys
+from uuid import UUID, uuid4
 
 TEST_SLUGS = ("term-test-1-k56", "term-test-2-k56", "mini-test-k56")
 SOURCE_SCRIPT = r"""
@@ -40,7 +41,18 @@ try {
     WHERE upper(member.erp_class_name_snapshot) = ANY(latest.class_names)
       AND member.sync_run_id = latest.id AND member.source_state = 'active'
       AND member.registration_status = 'on_going'`)).rows;
-  process.stdout.write(JSON.stringify({database: name, runs, mappings, members}));
+  const memberCounts = (await db.query(`WITH latest AS (
+    SELECT id, class_names FROM mapping.sync_run
+    WHERE source = 'n8n_k56_erp_ongoing' ORDER BY id DESC LIMIT 1)
+    SELECT count(*)::int AS snapshot_rows,
+      count(*) FILTER (WHERE member.source_state = 'active')::int AS active_rows,
+      count(*) FILTER (WHERE member.source_state = 'active'
+        AND member.registration_status = 'on_going')::int AS eligible_rows
+    FROM mapping.erp_class_membership_snapshot AS member, latest
+    WHERE member.sync_run_id = latest.id
+      AND upper(member.erp_class_name_snapshot) = ANY(latest.class_names)`)).rows[0];
+  process.stdout.write(JSON.stringify({database: name, runs, mappings, members,
+    memberCounts}));
 } finally { await db.end(); }
 """
 TARGET_SCRIPT = r"""
@@ -106,6 +118,12 @@ def plan_diff(source, target, now=None):
     require(set(by_code) == set(codes), "MISSING_CLASS_MAPPING")
     members = source.get("members") or []
     require(members, "EMPTY_ELIGIBLE_ROSTER")
+    source_counts = source.get("memberCounts") or {}
+    require(run["row_count"] == source_counts.get("snapshot_rows")
+            and isinstance(source_counts.get("active_rows"), int)
+            and source_counts["active_rows"] >= source_counts.get("eligible_rows", -1)
+            and source_counts["snapshot_rows"] >= source_counts["active_rows"],
+            "SOURCE_SNAPSHOT_COUNT_MISMATCH")
     member_by_key, counts = {}, Counter()
     for item in members:
         key = (item["class_id"], item["contact_id"])
@@ -120,6 +138,8 @@ def plan_diff(source, target, now=None):
         require(key not in member_by_key, "DUPLICATE_MEMBER")
         member_by_key[key] = item
         counts[item["class_id"]] += 1
+    require(len(member_by_key) == source_counts["eligible_rows"],
+            "SOURCE_MEMBER_COUNT_MISMATCH")
     require(all(counts[class_id] > 0 for class_id in by_id), "EMPTY_CLASS_ROSTER")
     target_by_id, target_by_code = {}, {}
     for item in target.get("mappings") or []:
@@ -167,6 +187,47 @@ def plan_diff(source, target, now=None):
             "productionWrites": 0}
 
 
+def prepare_import_payload(source, target, now=None, uuid_factory=uuid4):
+    """Lập hàng mới trong RAM; không ghi và không xuất hồ sơ lên stdout."""
+    summary = plan_diff(source, target, now)
+    existing_classes = {row["class_id"] for row in target.get("mappings") or []}
+    existing_roster = {
+        (row["test_slug"], row["class_id"], row["contact_id"])
+        for row in target.get("roster") or []
+    }
+    refs = {(row["test_slug"], row["student_ref"])
+            for row in target.get("roster") or []}
+    mappings = [
+        {"class_id": row["class_id"], "class_code": row["class_code"]}
+        for row in sorted(source["mappings"], key=lambda item: int(item["class_id"]))
+        if row["class_id"] not in existing_classes
+    ]
+    members = sorted(source["members"],
+                     key=lambda item: (int(item["class_id"]), int(item["contact_id"])))
+    roster = []
+    for slug in TEST_SLUGS:
+        for member in members:
+            key = (slug, member["class_id"], member["contact_id"])
+            if key in existing_roster:
+                continue
+            try:
+                student_ref = str(UUID(str(uuid_factory())))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise SnapshotError("INVALID_NEW_STUDENT_REF") from exc
+            require((slug, student_ref) not in refs, "DUPLICATE_NEW_STUDENT_REF")
+            refs.add((slug, student_ref))
+            roster.append({"test_slug": slug, "class_id": member["class_id"],
+                           "contact_id": member["contact_id"],
+                           "student_ref": student_ref,
+                           "student_name": member["student_name"]})
+    require(len(mappings) == summary["classMappingsToAdd"]
+            and len(roster) == summary["rosterRowsToAdd"], "IMPORT_PAYLOAD_COUNT_MISMATCH")
+    return {"syncRunId": summary["syncRunId"], "summary": summary,
+            "expectedMappings": target.get("mappings") or [],
+            "expectedRoster": target.get("roster") or [],
+            "newMappings": mappings, "newRoster": roster}
+
+
 def remote_select(client, container, script):
     """Thực thi SELECT qua SSH; tuyệt đối không in response nhạy cảm."""
     stdin, stdout, stderr = client.exec_command(
@@ -197,9 +258,20 @@ def main():
                    password=password, timeout=15, auth_timeout=15)
     try:
         source = remote_select(client, "mapping-review-api", SOURCE_SCRIPT)
-        target = remote_select(client, "izone-k56-ic2264-api", TARGET_SCRIPT)
+        target = (None if "--audit-counts" in sys.argv else
+                  remote_select(client, "izone-k56-ic2264-api", TARGET_SCRIPT))
     finally:
         client.close()
+    if "--audit-counts" in sys.argv:
+        run = (source.get("runs") or [{}])[0]
+        print(json.dumps({"toolOutcome": "success", "businessOutcome": "read_only_counts",
+                          "runRowCount": run.get("row_count"),
+                          "snapshotRows": (source.get("memberCounts") or {}).get("snapshot_rows"),
+                          "activeRows": (source.get("memberCounts") or {}).get("active_rows"),
+                          "eligibleMemberRows": len(source.get("members") or []),
+                          "classCount": len(run.get("class_names") or []),
+                          "productionWrites": 0}, ensure_ascii=False))
+        return
     print(json.dumps(plan_diff(source, target), ensure_ascii=False))
 
 

@@ -39,6 +39,7 @@ def fixture():
              "student_name": "Học viên giả B", "registration_status": "on_going",
              "source_state": "active", "sync_run_id": "102"},
         ],
+        "memberCounts": {"snapshot_rows": 2, "active_rows": 2, "eligible_rows": 2},
     }
     target = {
         "database": "izone_mapping_k56_ic2264",
@@ -100,7 +101,22 @@ class BridgeDryRunTest(unittest.TestCase):
         self.fail_code(source, target, "EMPTY_ELIGIBLE_ROSTER")
         source, target = fixture()
         source["members"].pop()
-        self.fail_code(source, target, "EMPTY_CLASS_ROSTER")
+        self.fail_code(source, target, "SOURCE_MEMBER_COUNT_MISMATCH")
+
+    def test_missing_one_member_or_incorrect_run_total_fail_closed(self):
+        source, target = fixture()
+        source["runs"][0]["row_count"] = 3
+        self.fail_code(source, target, "SOURCE_SNAPSHOT_COUNT_MISMATCH")
+        source, target = fixture()
+        source["members"].pop()
+        self.fail_code(source, target, "SOURCE_MEMBER_COUNT_MISMATCH")
+
+    def test_run_total_may_include_students_not_ongoing(self):
+        source, target = fixture()
+        source["runs"][0]["row_count"] = 3
+        source["memberCounts"] = {"snapshot_rows": 3, "active_rows": 3,
+                                  "eligible_rows": 2}
+        self.assertEqual(bridge.plan_diff(source, target, NOW)["eligibleStudents"], 2)
 
     def test_stale_failed_or_degraded_run_fail_closed(self):
         source, target = fixture()
@@ -154,6 +170,50 @@ class BridgeDryRunTest(unittest.TestCase):
         result = bridge.plan_diff(source, target, NOW)
         self.assertEqual(result["targetRosterRowsOutsideCurrentScope"], 1)
         self.assertEqual(result["productionWrites"], 0)
+
+    def test_import_payload_uses_class_and_contact_ids_not_classroom_or_name(self):
+        source, target = fixture()
+        payload = bridge.prepare_import_payload(source, target, NOW)
+        self.assertEqual(payload["syncRunId"], "102")
+        self.assertEqual(payload["newMappings"],
+                         [{"class_id": "2322", "class_code": "IC2322"}])
+        self.assertEqual({(row["test_slug"], row["class_id"], row["contact_id"])
+                          for row in payload["newRoster"]},
+                         {(slug, "2322", "202") for slug in bridge.TEST_SLUGS})
+        self.assertEqual(len({row["student_ref"] for row in payload["newRoster"]}), 3)
+        self.assertNotIn("classroom_course_id", str(payload["newMappings"]))
+        self.assertEqual(payload["expectedRoster"], target["roster"])
+        self.assertEqual(payload["summary"]["productionWrites"], 0)
+
+    def test_import_payload_preserves_existing_refs_on_rerun(self):
+        source, target = fixture()
+        old_refs = {(row["test_slug"], row["class_id"], row["contact_id"]):
+                    row["student_ref"] for row in target["roster"]}
+        payload = bridge.prepare_import_payload(source, target, NOW)
+        target["mappings"].extend(payload["newMappings"])
+        target["roster"].extend(payload["newRoster"])
+        rerun = bridge.prepare_import_payload(source, target, NOW)
+        self.assertEqual(rerun["newMappings"], [])
+        self.assertEqual(rerun["newRoster"], [])
+        self.assertEqual({key: row["student_ref"] for row in target["roster"]
+                          if (key := (row["test_slug"], row["class_id"],
+                                      row["contact_id"])) in old_refs}, old_refs)
+
+    def test_import_payload_is_order_independent_and_rejects_ref_collision(self):
+        source, target = fixture()
+        first = bridge.prepare_import_payload(source, target, NOW)
+        source["mappings"].reverse()
+        source["members"].reverse()
+        second = bridge.prepare_import_payload(source, target, NOW)
+        self.assertEqual([(row["test_slug"], row["class_id"], row["contact_id"])
+                          for row in first["newRoster"]],
+                         [(row["test_slug"], row["class_id"], row["contact_id"])
+                          for row in second["newRoster"]])
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "DUPLICATE_NEW_STUDENT_REF"):
+            bridge.prepare_import_payload(
+                source, target, NOW,
+                uuid_factory=lambda: "00000000-0000-4000-8000-000000000001")
 
 
 if __name__ == "__main__":
