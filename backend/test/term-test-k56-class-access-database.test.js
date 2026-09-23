@@ -202,12 +202,16 @@ test('migration eligibility chạy lại không bật học viên đã rời l�
     await database.exec(migration);
     assert.equal((await database.query(`SELECT is_eligible FROM assessment.term_test_roster`))
       .rows[0].is_eligible, true);
+    await database.query(`INSERT INTO assessment.k56_roster_sync_checkpoint
+      (source_name, last_sync_run_id) VALUES ('n8n_k56_erp_ongoing', 102)`);
     await database.exec(`UPDATE assessment.term_test_roster SET is_eligible = false`);
     await database.exec(migration);
     const after = (await database.query(`SELECT student_ref::text AS ref, is_eligible
       FROM assessment.term_test_roster`)).rows;
     assert.deepEqual(after, [{ ref: '00000000-0000-4000-8000-000000000001',
       is_eligible: false }]);
+    assert.equal((await database.query(`SELECT last_sync_run_id::text AS run_id
+      FROM assessment.k56_roster_sync_checkpoint`)).rows[0].run_id, '102');
   } finally { await database.close(); }
 });
 

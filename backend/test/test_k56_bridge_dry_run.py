@@ -310,6 +310,42 @@ class BridgeDryRunTest(unittest.TestCase):
                                     "ELIGIBILITY_COLUMN_NOT_READY"):
             bridge.plan_eligibility_diff(source, target, NOW)
 
+    def test_reconcile_payload_requires_review_for_student_departure(self):
+        source, target = fixture()
+        source["members"].append({"class_id": "1252", "class_code": "IC2264",
+                                  "contact_id": "303", "student_name": "Học viên giả C",
+                                  "registration_status": "on_going",
+                                  "source_state": "active", "sync_run_id": "102"})
+        source["runs"][0]["row_count"] = 3
+        source["memberCounts"] = {"snapshot_rows": 3, "active_rows": 3,
+                                  "eligible_rows": 3}
+        ready_target(source, target)
+        clean = bridge.prepare_reconcile_payload(source, target, now=NOW)
+        self.assertFalse(clean["diff"]["manualReviewRequired"])
+        source["members"].pop()
+        source["memberCounts"]["eligible_rows"] = 2
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "DEACTIVATION_REQUIRES_RUN_REVIEW"):
+            bridge.prepare_reconcile_payload(source, target, now=NOW)
+        approved = bridge.prepare_reconcile_payload(source, target,
+                                                    reviewed_run_id="102", now=NOW)
+        self.assertEqual(approved["diff"]["rosterRowsToDeactivate"], 3)
+        self.assertEqual(len(approved["expectedRoster"]), 9)
+        self.assertEqual(approved["reviewedSyncRunId"], "102")
+
+    def test_reconcile_payload_waits_for_import_of_new_roster(self):
+        source, target = fixture()
+        target["accessExists"] = True
+        target["access"] = []
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "NEW_ROWS_REQUIRE_IMPORT_FIRST"):
+            bridge.prepare_reconcile_payload(source, target, now=NOW)
+        ready_target(source, target)
+        target["access"].pop()
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "ACCESS_ROWS_REQUIRE_ENABLE_FIRST"):
+            bridge.prepare_reconcile_payload(source, target, now=NOW)
+
 
 if __name__ == "__main__":
     unittest.main()

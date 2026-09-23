@@ -297,6 +297,40 @@ def plan_eligibility_diff(source, target, now=None):
             "productionWrites": 0}
 
 
+def prepare_reconcile_payload(source, target, reviewed_run_id=None, now=None):
+    """Lập dữ liệu đối soát B6 trong RAM; cần duyệt riêng khi có người/lớp rời phạm vi."""
+    summary = plan_diff(source, target, now)
+    diff = plan_eligibility_diff(source, target, now)
+    require(summary["classMappingsToAdd"] == 0 and summary["rosterRowsToAdd"] == 0,
+            "NEW_ROWS_REQUIRE_IMPORT_FIRST")
+    access_keys = {(row["test_slug"], row["class_id"])
+                   for row in target["access"]}
+    require(all((slug, row["class_id"]) in access_keys
+                for slug in TEST_SLUGS for row in source["mappings"]),
+            "ACCESS_ROWS_REQUIRE_ENABLE_FIRST")
+    if diff["manualReviewRequired"]:
+        require(str(reviewed_run_id) == summary["syncRunId"],
+                "DEACTIVATION_REQUIRES_RUN_REVIEW")
+    return {
+        "syncRunId": summary["syncRunId"],
+        "sourceSummary": summary,
+        "diff": diff,
+        "reviewedSyncRunId": str(reviewed_run_id) if reviewed_run_id is not None else None,
+        "scopeClasses": [
+            {"class_id": row["class_id"], "class_code": row["class_code"]}
+            for row in sorted(source["mappings"], key=lambda item: int(item["class_id"]))
+        ],
+        "eligibleMembers": [
+            {"class_id": row["class_id"], "contact_id": row["contact_id"]}
+            for row in sorted(source["members"],
+                              key=lambda item: (int(item["class_id"]),
+                                                int(item["contact_id"])))
+        ],
+        "expectedRoster": target["roster"],
+        "expectedAccess": target["access"],
+    }
+
+
 def remote_select(client, container, script):
     """Thực thi SELECT qua SSH; tuyệt đối không in response nhạy cảm."""
     stdin, stdout, stderr = client.exec_command(
