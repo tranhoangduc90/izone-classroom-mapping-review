@@ -263,8 +263,17 @@ export const listTermTestRosterSql = `WITH definition AS (
 ),
 target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
-  FROM mapping.classroom_course_mapping
-  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+  FROM mapping.classroom_course_mapping AS course
+  WHERE upper(trim(course.erp_class_name_snapshot)) = upper(trim($1))
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_class_access AS access
+        WHERE access.test_slug = $2
+          AND access.erp_course_class_id = course.erp_course_class_id
+          AND access.enabled = true
+      )
+    )
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -323,8 +332,17 @@ export const registerTemporaryTermTestStudentSql = `WITH definition AS (
 ),
 target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
-  FROM mapping.classroom_course_mapping
-  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+  FROM mapping.classroom_course_mapping AS course
+  WHERE upper(trim(course.erp_class_name_snapshot)) = upper(trim($1))
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_class_access AS access
+        WHERE access.test_slug = $2
+          AND access.erp_course_class_id = course.erp_course_class_id
+          AND access.enabled = true
+      )
+    )
 ),
 registered AS (
   INSERT INTO assessment.term_test_temporary_student (
@@ -372,8 +390,17 @@ FROM assessment.reset_demo_term_test_student($1, $2, $3::uuid);`;
 // Xác minh học viên thuộc roster riêng; nếu lớp chưa có roster riêng thì dùng matching database.
 export const findStudentForTermTestSql = `WITH target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
-  FROM mapping.classroom_course_mapping
-  WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+  FROM mapping.classroom_course_mapping AS course
+  WHERE upper(trim(course.erp_class_name_snapshot)) = upper(trim($1))
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_class_access AS access
+        WHERE access.test_slug = $2
+          AND access.erp_course_class_id = course.erp_course_class_id
+          AND access.enabled = true
+      )
+    )
 ),
 roster_mode AS (
   SELECT EXISTS (

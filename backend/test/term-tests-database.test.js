@@ -153,6 +153,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(writingRevisionMigration);
   await database.exec(writingRevisionMigration);
+  const k56ClassAccessMigration = await readFile(
+    new URL('../ops/migrations/202609240001_term_test_k56_class_access.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(k56ClassAccessMigration);
+  await database.exec(k56ClassAccessMigration);
 
   const section = makeSection();
   await database.exec(`
