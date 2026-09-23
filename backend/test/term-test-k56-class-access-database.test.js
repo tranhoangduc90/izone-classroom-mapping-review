@@ -91,6 +91,13 @@ test('K56 chỉ mở đúng cặp lớp–đề đã được duyệt trên cả
       GRANT SELECT, INSERT, UPDATE ON assessment.term_test_temporary_student TO mapping_review_api;
       GRANT USAGE ON ALL SEQUENCES IN SCHEMA assessment TO mapping_review_api;
     `);
+    const beforeEligibilityMigration = await database.query(listTermTestRosterSql,
+      ['IC2264', 'term-test-1-k56']);
+    assert.equal(Number(beforeEligibilityMigration.rows[0]?.class_count), 0);
+    const eligibilityMigration = await readFile(new URL(
+      '../ops/migrations/202609240002_term_test_k56_roster_eligibility.sql', import.meta.url),
+    'utf8');
+    await database.exec(eligibilityMigration);
     await database.exec('SET ROLE mapping_review_api;');
 
     const deniedRoster = await database.query(listTermTestRosterSql, ['IC2180', 'term-test-1-k56']);
@@ -146,9 +153,62 @@ test('K56 chỉ mở đúng cặp lớp–đề đã được duyệt trên cả
       'IC2207', 'term-test-1', '00000000-0000-4000-8000-000000000003'
     ]);
     assert.equal(legacyStudent.rows.length, 1);
+
+    await database.exec('RESET ROLE;');
+    await database.exec(`UPDATE assessment.term_test_roster SET is_eligible = false
+      WHERE erp_course_class_id = 1252`);
+    await database.exec('SET ROLE mapping_review_api;');
+    const departedRoster = await database.query(listTermTestRosterSql,
+      ['IC2264', 'term-test-1-k56']);
+    assert.equal(Number(departedRoster.rows[0]?.class_count), 0);
+    assert.deepEqual(departedRoster.rows[0]?.students, []);
+    const departedStudent = await database.query(findStudentForTermTestSql, [
+      'IC2264', 'term-test-1-k56', '00000000-0000-4000-8000-000000000001'
+    ]);
+    assert.equal(departedStudent.rows.length, 0);
+    const departedMini = await database.query(registerTemporaryTermTestStudentSql, [
+      'IC2264', 'mini-test-k56', 'T03', 'Học viên thử', 'học viên thử'
+    ]);
+    assert.equal(Number(departedMini.rows[0]?.class_count), 0);
+    const preservedHistoricalRoster = await database.query(`SELECT student_ref::text AS ref
+      FROM assessment.term_test_roster WHERE erp_course_class_id = 1252`);
+    assert.equal(preservedHistoricalRoster.rows.length, 2);
+    assert.ok(preservedHistoricalRoster.rows.some(row =>
+      row.ref === '00000000-0000-4000-8000-000000000001'));
   } finally {
     await database.close();
   }
+});
+
+test('migration eligibility chạy lại không bật học viên đã rời lớp', async () => {
+  const database = new PGlite();
+  try {
+    await database.exec(`
+      CREATE SCHEMA assessment;
+      CREATE TABLE assessment.term_test_roster (
+        test_slug TEXT NOT NULL,
+        erp_course_class_id BIGINT NOT NULL,
+        erp_student_contact_id BIGINT NOT NULL,
+        student_ref UUID NOT NULL,
+        student_name_snapshot TEXT NOT NULL
+      );
+      INSERT INTO assessment.term_test_roster VALUES
+        ('term-test-1-k56', 1252, 1,
+         '00000000-0000-4000-8000-000000000001', 'Học viên giả');
+    `);
+    const migration = await readFile(new URL(
+      '../ops/migrations/202609240002_term_test_k56_roster_eligibility.sql', import.meta.url),
+    'utf8');
+    await database.exec(migration);
+    assert.equal((await database.query(`SELECT is_eligible FROM assessment.term_test_roster`))
+      .rows[0].is_eligible, true);
+    await database.exec(`UPDATE assessment.term_test_roster SET is_eligible = false`);
+    await database.exec(migration);
+    const after = (await database.query(`SELECT student_ref::text AS ref, is_eligible
+      FROM assessment.term_test_roster`)).rows;
+    assert.deepEqual(after, [{ ref: '00000000-0000-4000-8000-000000000001',
+      is_eligible: false }]);
+  } finally { await database.close(); }
 });
 
 // Dữ liệu vào: một lớp pilot đang phục vụ và một lớp K56 chưa được duyệt.

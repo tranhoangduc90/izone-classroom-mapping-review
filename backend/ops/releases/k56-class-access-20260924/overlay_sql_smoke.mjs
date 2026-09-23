@@ -85,6 +85,8 @@ try {
       ('mini-test-k56', 2322, 2, '00000000-0000-4000-8000-000000000022', 'Người giả B'),
       ('term-test-1', 2207, 4, '00000000-0000-4000-8000-000000000004', 'Người giả D');
   `);
+  await database.exec(`ALTER TABLE assessment.term_test_roster
+    ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT true`);
   let passed = 0;
   const roster = async (classCode, slug) =>
     (await database.query(sql.listTermTestRosterSql, [classCode, slug])).rows[0];

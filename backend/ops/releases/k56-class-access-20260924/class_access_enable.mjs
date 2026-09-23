@@ -101,7 +101,8 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
       student_ref::text AS student_ref
       FROM assessment.term_test_roster
       WHERE test_slug = ANY($1::text[])
-        AND erp_course_class_id = ANY($2::bigint[])`,
+        AND erp_course_class_id = ANY($2::bigint[])
+        AND is_eligible = true`,
     [SLUGS, [...classes.keys()]])).rows;
     const expectedRoster = new Set();
     for (const slug of SLUGS) {

@@ -120,6 +120,10 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
     INSERT INTO assessment.term_test_roster VALUES
       ('term-test-2-k56', 2264, 9001, '00000000-0000-4000-8000-000000000001', 'Học viên mẫu A'),
       ('term-test-2-k56', 2265, 9002, '00000000-0000-4000-8000-000000000002', 'Học viên mẫu B');
+    ALTER TABLE assessment.term_test_roster
+      ADD COLUMN is_eligible BOOLEAN NOT NULL DEFAULT true;
+    UPDATE assessment.term_test_roster SET is_eligible = false
+      WHERE erp_course_class_id = 2265;
   `);
 
   const teacher = await database.query(listTermTestTeacherOptionsLegacySql, ['teacher@example.test', false]);
@@ -142,6 +146,7 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
   ]);
   assert.equal(assignedResults.rows[0].authorized_class_count, 1);
   assert.equal(assignedResults.rows[0].access_mode, 'assigned_teacher');
+  assert.equal(assignedResults.rows[0].students?.length, 1);
   const deniedResults = await database.query(listTermTestTeacherResultsLegacySql, [
     'IC2264', 'term-test-2-k56', 'other-teacher@example.test', false
   ]);

@@ -280,6 +280,8 @@ target_classes AS (
         SELECT 1 FROM assessment.term_test_roster AS roster
         WHERE roster.test_slug = $2
           AND roster.erp_course_class_id = course.erp_course_class_id
+          AND (right($2, 4) <> '-k56'
+            OR COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false))
       )
     )
 ),
@@ -300,6 +302,8 @@ students AS (
   JOIN target_classes AS target
     ON target.erp_course_class_id = roster.erp_course_class_id
   WHERE roster.test_slug = $2
+    AND (right($2, 4) <> '-k56'
+      OR COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false))
 
   UNION ALL
 
@@ -358,6 +362,8 @@ target_classes AS (
         SELECT 1 FROM assessment.term_test_roster AS roster
         WHERE roster.test_slug = $2
           AND roster.erp_course_class_id = course.erp_course_class_id
+          AND (right($2, 4) <> '-k56'
+            OR COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false))
       )
     )
 ),
@@ -424,6 +430,8 @@ export const findStudentForTermTestSql = `WITH target_classes AS (
         SELECT 1 FROM assessment.term_test_roster AS roster
         WHERE roster.test_slug = $2
           AND roster.erp_course_class_id = course.erp_course_class_id
+          AND (right($2, 4) <> '-k56'
+            OR COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false))
       )
     )
 ),
@@ -446,6 +454,8 @@ eligible_student AS (
     ON target.erp_course_class_id = roster.erp_course_class_id
   WHERE roster.test_slug = $2
     AND roster.student_ref = $3::uuid
+    AND (right($2, 4) <> '-k56'
+      OR COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false))
 
   UNION ALL
 

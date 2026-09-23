@@ -48,11 +48,27 @@ def fixture():
         "roster": [
             {"test_slug": slug, "class_id": "1252", "contact_id": "101",
              "student_name": "Học viên giả A",
+             "is_eligible": True,
              "student_ref": f"00000000-0000-4000-8000-{index:012d}"}
             for index, slug in enumerate(bridge.TEST_SLUGS, start=1)
         ],
     }
     return source, target
+
+
+def ready_target(source, target):
+    # Dữ liệu vào: fixture nguồn/đích tổng hợp, không có hồ sơ thật.
+    # Việc chính: mô phỏng B3–B5 đã hoàn tất để kiểm drift B6.
+    # Kết quả: đích trong RAM có roster và quyền ba đề; không ghi database.
+    additions = bridge.prepare_import_payload(source, target, NOW)
+    target["mappings"].extend(additions["newMappings"])
+    target["roster"].extend({**row, "is_eligible": True}
+                            for row in additions["newRoster"])
+    target["accessExists"] = True
+    target["access"] = [
+        {"test_slug": slug, "class_id": mapping["class_id"], "enabled": True}
+        for slug in bridge.TEST_SLUGS for mapping in source["mappings"]
+    ]
 
 
 class BridgeDryRunTest(unittest.TestCase):
@@ -228,7 +244,8 @@ class BridgeDryRunTest(unittest.TestCase):
             bridge.prepare_access_payload(source, target, NOW)
         additions = bridge.prepare_import_payload(source, target, NOW)
         target["mappings"].extend(additions["newMappings"])
-        target["roster"].extend(additions["newRoster"])
+        target["roster"].extend({**row, "is_eligible": True}
+                                for row in additions["newRoster"])
         access = bridge.prepare_access_payload(source, target, NOW)
         self.assertEqual(len(access["scopeClasses"]), 2)
         self.assertEqual(len(access["eligibleMembers"]), 2)
@@ -239,6 +256,59 @@ class BridgeDryRunTest(unittest.TestCase):
         with self.assertRaisesRegex(bridge.SnapshotError,
                                     "ROSTER_NOT_READY_FOR_ACCESS"):
             bridge.prepare_access_payload(source, target, NOW)
+
+    def test_access_payload_keeps_inactive_historical_roster_out_of_scope(self):
+        source, target = fixture()
+        target["accessExists"] = True
+        target["access"] = [{"test_slug": slug, "class_id": "1252", "enabled": True}
+                            for slug in bridge.TEST_SLUGS]
+        additions = bridge.prepare_import_payload(source, target, NOW)
+        target["mappings"].extend(additions["newMappings"])
+        target["roster"].extend({**row, "is_eligible": True}
+                                for row in additions["newRoster"])
+        target["roster"].append({"test_slug": bridge.TEST_SLUGS[0],
+                                 "class_id": "9999", "contact_id": "999",
+                                 "student_name": "Học viên lịch sử giả",
+                                 "student_ref": "00000000-0000-4000-8000-000000000099",
+                                 "is_eligible": False})
+        access = bridge.prepare_access_payload(source, target, NOW)
+        self.assertEqual(len(access["expectedRosterRefs"]), 6)
+        target["roster"][0]["is_eligible"] = False
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "ROSTER_ELIGIBILITY_NOT_RECONCILED"):
+            bridge.prepare_access_payload(source, target, NOW)
+
+    def test_eligibility_diff_reports_departure_without_deleting_history(self):
+        source, target = fixture()
+        source["members"].append({"class_id": "1252", "class_code": "IC2264",
+                                  "contact_id": "303", "student_name": "Học viên giả C",
+                                  "registration_status": "on_going",
+                                  "source_state": "active", "sync_run_id": "102"})
+        source["runs"][0]["row_count"] = 3
+        source["memberCounts"] = {"snapshot_rows": 3, "active_rows": 3,
+                                  "eligible_rows": 3}
+        ready_target(source, target)
+        clean = bridge.plan_eligibility_diff(source, target, NOW)
+        self.assertEqual(clean["rosterRowsToDeactivate"], 0)
+        self.assertFalse(clean["manualReviewRequired"])
+        source["members"].pop()
+        source["memberCounts"]["eligible_rows"] = 2
+        drift = bridge.plan_eligibility_diff(source, target, NOW)
+        self.assertEqual(drift["rosterRowsToDeactivate"], 3)
+        self.assertTrue(drift["manualReviewRequired"])
+        self.assertEqual(len(target["roster"]), 9)
+        self.assertNotIn("Học viên", str(drift))
+
+    def test_eligibility_diff_requires_gate_and_migrated_column(self):
+        source, target = fixture()
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "CLASS_ACCESS_GATE_NOT_INSTALLED"):
+            bridge.plan_eligibility_diff(source, target, NOW)
+        target["accessExists"] = True
+        target["roster"][0].pop("is_eligible")
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "ELIGIBILITY_COLUMN_NOT_READY"):
+            bridge.plan_eligibility_diff(source, target, NOW)
 
 
 if __name__ == "__main__":

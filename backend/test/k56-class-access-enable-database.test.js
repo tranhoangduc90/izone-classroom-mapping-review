@@ -46,6 +46,7 @@ async function setup({ missingRoster = false, outsideEnabled = false } = {}) {
       erp_course_class_id BIGINT NOT NULL,
       erp_student_contact_id BIGINT NOT NULL,
       student_ref UUID NOT NULL,
+      is_eligible BOOLEAN NOT NULL DEFAULT true,
       PRIMARY KEY (test_slug, erp_course_class_id, erp_student_contact_id)
     );
     CREATE TABLE assessment.term_test_class_access (
@@ -131,6 +132,21 @@ test('UUID bài đã đổi sau import thì không bật quyền', async () => {
     await assert.rejects(enableK56ClassAccess(testDatabase(db), input(), 'pglite_test'),
       /ACCESS_ROSTER_NOT_RECONCILED/);
     assert.equal((await accessRows(db)).length, 3);
+  } finally { await db.close(); }
+});
+
+test('hàng lịch sử không đủ điều kiện được giữ nhưng không tính vào quyền mới', async () => {
+  const db = await setup();
+  try {
+    await db.query(`INSERT INTO assessment.term_test_roster
+      (test_slug, erp_course_class_id, erp_student_contact_id, student_ref, is_eligible)
+      VALUES ($1, 2322, 999, '00000000-0000-4000-9000-000000000099', false)`,
+    [slugs[0]]);
+    const result = await enableK56ClassAccess(testDatabase(db), input(), 'pglite_test');
+    assert.equal(result.enabledClassTestPairs, 6);
+    assert.equal((await db.query(`SELECT count(*)::int AS count
+      FROM assessment.term_test_roster WHERE erp_student_contact_id = 999`))
+      .rows[0].count, 1);
   } finally { await db.close(); }
 });
 

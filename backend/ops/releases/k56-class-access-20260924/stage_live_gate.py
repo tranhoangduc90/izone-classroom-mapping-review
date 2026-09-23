@@ -32,6 +32,7 @@ TEST_MIGRATIONS = (
     "202609230001_term_test_writing_draft_revision.sql",
     "202609230002_term_test_listening_checkpoint.sql",
     "202609240001_term_test_k56_class_access.sql",
+    "202609240002_term_test_k56_roster_eligibility.sql",
 )
 BROADER_TESTS = (
     "api.test.js", "term-tests.test.js", "term-test-writing-grading.test.js",
@@ -127,7 +128,6 @@ def run_stage():
     summary, candidates = try_overlay(controls, return_candidates=True)
     if any(row["status"] != "compatible" for row in summary.values()):
         raise RuntimeError("LIVE_OVERLAY_CONFLICT")
-    sql_smoke = smoke_sql(candidates["src/sql.js"])
     selected_tests = TESTS + (("production-profiles.test.js",)
                               if "--profile-tests" in sys.argv else ())
     if "--broader-tests" in sys.argv:
@@ -166,6 +166,7 @@ def run_stage():
                 if not destination.exists():
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(original, destination)
+        sql_smoke = smoke_sql((stage_root / "src" / "sql.js").read_text(encoding="utf-8"))
         for name in selected_tests:
             original = (BACKEND / "test" / name).read_text(encoding="utf-8")
             if "--compat-k56-live" in sys.argv and name == "term-tests-database.test.js":

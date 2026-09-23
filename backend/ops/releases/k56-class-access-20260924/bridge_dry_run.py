@@ -71,8 +71,10 @@ try {
   const roster = (await db.query(`SELECT test_slug,
     erp_course_class_id::text AS class_id,
     erp_student_contact_id::text AS contact_id,
-    student_name_snapshot AS student_name, student_ref::text AS student_ref
-    FROM assessment.term_test_roster WHERE test_slug = ANY($1::text[])`, [slugs])).rows;
+    student_name_snapshot AS student_name, student_ref::text AS student_ref,
+    COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false) AS is_eligible
+    FROM assessment.term_test_roster AS roster
+    WHERE test_slug = ANY($1::text[])`, [slugs])).rows;
   const definitions = (await db.query(`SELECT slug, is_active
     FROM assessment.test_definition WHERE slug = ANY($1::text[])`, [slugs])).rows;
   const accessExists = (await db.query(`SELECT
@@ -239,9 +241,13 @@ def prepare_access_payload(source, target, now=None):
     summary = plan_diff(source, target, now)
     require(target.get("accessExists") is True, "CLASS_ACCESS_GATE_NOT_INSTALLED")
     require(summary["classMappingsToAdd"] == 0
-            and summary["rosterRowsToAdd"] == 0
-            and summary["targetRosterRowsOutsideCurrentScope"] == 0,
+            and summary["rosterRowsToAdd"] == 0,
             "ROSTER_NOT_READY_FOR_ACCESS")
+    eligible_keys = {(row["class_id"], row["contact_id"])
+                     for row in source["members"]}
+    require(all(row.get("is_eligible") is ((row["class_id"], row["contact_id"])
+                                            in eligible_keys)
+                for row in target["roster"]), "ROSTER_ELIGIBILITY_NOT_RECONCILED")
     classes = sorted(source["mappings"], key=lambda row: int(row["class_id"]))
     members = sorted(source["members"],
                      key=lambda row: (int(row["class_id"]), int(row["contact_id"])))
@@ -253,9 +259,42 @@ def prepare_access_payload(source, target, now=None):
             "expectedRosterRefs": [
                 {"test_slug": row["test_slug"], "class_id": row["class_id"],
                  "contact_id": row["contact_id"], "student_ref": row["student_ref"]}
-                for row in target["roster"]
+                for row in target["roster"] if row["is_eligible"]
             ],
             "expectedAccess": target.get("access") or []}
+
+
+def plan_eligibility_diff(source, target, now=None):
+    """Chỉ đếm drift sau migration; học viên nghỉ vẫn giữ roster lịch sử."""
+    summary = plan_diff(source, target, now)
+    require(target.get("accessExists") is True, "CLASS_ACCESS_GATE_NOT_INSTALLED")
+    current = {(row["class_id"], row["contact_id"])
+               for row in source["members"]}
+    scope_classes = {row["class_id"] for row in source["mappings"]}
+    require(all(type(row.get("is_eligible")) is bool for row in target["roster"]),
+            "ELIGIBILITY_COLUMN_NOT_READY")
+    to_activate = sum(not row["is_eligible"]
+                      for row in target["roster"]
+                      if (row["class_id"], row["contact_id"]) in current)
+    to_deactivate = sum(row["is_eligible"]
+                        for row in target["roster"]
+                        if (row["class_id"], row["contact_id"]) not in current)
+    enabled_pairs = {(row["test_slug"], row["class_id"])
+                     for row in target.get("access") or [] if row["enabled"]}
+    wanted_pairs = {(slug, class_id) for slug in TEST_SLUGS
+                    for class_id in scope_classes}
+    return {"toolOutcome": "success", "businessOutcome": "read_only_eligibility_diff",
+            "syncRunId": summary["syncRunId"],
+            "classCount": summary["classCount"],
+            "eligibleStudents": summary["eligibleStudents"],
+            "newClassMappings": summary["classMappingsToAdd"],
+            "newRosterRows": summary["rosterRowsToAdd"],
+            "rosterRowsToActivate": to_activate,
+            "rosterRowsToDeactivate": to_deactivate,
+            "classTestPairsToEnable": len(wanted_pairs - enabled_pairs),
+            "classTestPairsToDisable": len(enabled_pairs - wanted_pairs),
+            "manualReviewRequired": bool(to_deactivate or enabled_pairs - wanted_pairs),
+            "productionWrites": 0}
 
 
 def remote_select(client, container, script):
@@ -301,6 +340,9 @@ def main():
                           "eligibleMemberRows": len(source.get("members") or []),
                           "classCount": len(run.get("class_names") or []),
                           "productionWrites": 0}, ensure_ascii=False))
+        return
+    if "--audit-eligibility" in sys.argv:
+        print(json.dumps(plan_eligibility_diff(source, target), ensure_ascii=False))
         return
     print(json.dumps(plan_diff(source, target), ensure_ascii=False))
 
