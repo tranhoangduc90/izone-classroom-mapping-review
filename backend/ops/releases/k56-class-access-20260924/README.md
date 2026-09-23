@@ -2,6 +2,10 @@
 
 Trạng thái: **chỉ có trên branch thử, chưa chạy migration hoặc phát hành production**.
 
+Kiểm production chỉ đọc ngày 24/09 sau lượt xem trước: image K56 đang chạy vẫn là `izone-k56-live-results:20260920.1-teacher-session` (ID bắt đầu `2a00b0bf`), `healthy`, restart `0`, database đúng `izone_mapping_k56_ic2264`, ba định nghĩa đề K56 active và **chưa có** bảng quyền lớp–đề. Công cụ `audit_release_state.py` đọc hash ba file có cổng quyền trong container; hash của `src/sql.js` production khác branch hiện tại. Vì vậy **không** đưa cả branch thành image mới theo kiểu ghi đè: trước B3 phải dựng lớp vá hẹp từ đúng source đang chạy, so hash trước/sau và kiểm thử lại. Lệnh kiểm: `python backend/ops/releases/k56-class-access-20260924/audit_release_state.py`.
+
+Lệnh đối soát chỉ đọc `python backend/ops/releases/k56-class-access-20260924/bridge_dry_run.py` đã trả nguồn 102 với 29 lớp/447 học viên, cần thêm 28 mapping lớp và 1.305 hàng roster; 36 hàng cũ được giữ. Chưa nhập hàng nào và chưa mở lớp nào.
+
 Kiểm topology chỉ đọc ngày 24/09: API mapping chung dùng database `mapping_db` qua `mapping-postgres` trên mạng `mapping-api-net`; API K56 dùng database `izone_mapping_k56_ic2264` qua `k56-demo-db` trên mạng `izone-k56-demo_default`. Không có kết nối trực tiếp giữa hai API. Để giữ cô lập, bước nhập roster nên là snapshot một chiều có điều kiện, không đổi `DATABASE_URL` của backend K56 sang database chung và không mở thêm mạng Docker chỉ để đọc roster.
 
 ## Người dùng sẽ thấy gì
