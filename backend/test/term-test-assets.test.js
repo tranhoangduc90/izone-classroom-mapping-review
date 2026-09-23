@@ -22,6 +22,53 @@ function makeResponse() {
   };
 }
 
+test('ba đề K56 giữ nguyên khả năng đọc và thời gian từ bản backend đang chạy', () => {
+  const service = createTermTestAssetService({
+    assetDir: '/unused-in-metadata-test',
+    sessionSecret: 'test-secret-with-at-least-thirty-two-characters'
+  });
+  for (const [slug, listeningDurationSeconds, readingDurationMinutes, writingDurationMinutes] of [
+    ['term-test-1-k56', 1848, 40, 55],
+    ['term-test-2-k56', 1824, 60, 30],
+    ['mini-test-k56', 446, 20, 15]
+  ]) {
+    assert.equal(service.supports(slug), true, slug);
+    assert.deepEqual(service.getTiming(slug), {
+      listeningDurationSeconds,
+      listeningReviewSeconds: 0,
+      listeningTotalSeconds: listeningDurationSeconds,
+      readingDurationMinutes,
+      writingDurationMinutes
+    });
+  }
+  assert.equal(service.supports('khong-co-de'), false);
+});
+
+test('backend đọc đúng đề Writing K56 từ kho riêng, không tráo slug', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'izone-k56-term-assets-'));
+  try {
+    for (const slug of ['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56']) {
+      const target = path.join(root, slug);
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, 'content.json'), JSON.stringify({
+        baseTestSlug: slug,
+        writing: { tasks: [{ id: 'task1', prompt: 'Đề thử không có dữ liệu học viên.' }] }
+      }), 'utf8');
+    }
+    const service = createTermTestAssetService({
+      assetDir: root,
+      sessionSecret: 'test-secret-with-at-least-thirty-two-characters'
+    });
+    for (const slug of ['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56']) {
+      const content = await service.getContent(slug);
+      assert.equal(content.baseTestSlug, slug);
+      assert.equal(content.writing.tasks[0].id, 'task1');
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('audio phòng chờ được mã hóa riêng theo phiên và chỉ khóa đúng phiên mới giải được', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'izone-term-assets-'));
   const target = path.join(root, 'term-test-2');
