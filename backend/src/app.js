@@ -39,7 +39,7 @@ import {
   upsertMiniTestResultSql,
   writeDecisionSql
 } from './sql.js';
-import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from './term-tests.js';
+import { buildCombinedResult, buildListeningResult, getTestScoringMetadata, gradeSection, parseStoredTest } from './term-tests.js';
 import { buildErpGradePayload } from './erp-sync.js';
 import { buildMiniTestResult } from './mini-tests.js';
 import { createWritingTestService, WritingTestError } from './writing-tests.js';
@@ -67,7 +67,7 @@ const decisionSchema = z.object({
 });
 
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
-const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
+const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*(?:-k56)?|mini-test-[a-z0-9-]+)$/);
 const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
 const temporaryStudentRegistrationSchema = z.object({
   classCode: classCodeSchema,
@@ -79,11 +79,11 @@ const temporaryStudentRegistrationSchema = z.object({
     .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,15}$/))
 });
 const answersSchema = z.record(
-  z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),
+  z.string().regex(/^(?:(?:[1-9]|[1-3][0-9]|40)|32[ab])$/),
   z.string().max(120)
 ).superRefine((answers, context) => {
-  if (Object.keys(answers).length > 40) {
-    context.addIssue({ code: 'custom', message: 'Mỗi phần chỉ nhận tối đa 40 câu.' });
+  if (Object.keys(answers).length > 41) {
+    context.addIssue({ code: 'custom', message: 'Mỗi phần chỉ nhận tối đa 41 ô trả lời.' });
   }
 });
 const listeningSubmissionSchema = z.object({
@@ -553,7 +553,12 @@ export function createApp({
     }
     return res.json({
       ok: true,
-      test: { slug: row.test_slug, title: row.test_title, version: Number(row.definition_version) },
+      test: {
+        slug: row.test_slug,
+        title: row.test_title,
+        version: Number(row.definition_version),
+        ...getTestScoringMetadata(row.test_slug)
+      },
       class: { id: row.class_id, name: row.class_name },
       students: row.students || []
     });
@@ -994,7 +999,8 @@ export function createApp({
       const listeningResult = gradeSection(
         testDefinition.listening_definition,
         effectiveAnswers,
-        testDefinition.listening_band_adjustment
+        testDefinition.listening_band_adjustment,
+        testDefinition.scoreMode
       );
       const inserted = await pool.query(insertProtectedListeningAttemptSql, [
         parsed.data.clientSubmissionId,
@@ -1041,7 +1047,8 @@ export function createApp({
     const listeningResult = gradeSection(
       testDefinition.listening_definition,
       parsed.data.answers,
-      testDefinition.listening_band_adjustment
+      testDefinition.listening_band_adjustment,
+      testDefinition.scoreMode
     );
     const insertResult = await pool.query(insertListeningAttemptSql, [
       parsed.data.clientSubmissionId,
@@ -1176,7 +1183,7 @@ export function createApp({
       serverRevision: attempt.reading_draft_revision
     });
     const effectiveAnswers = selectedSubmission.answers;
-    const readingResult = gradeSection(testDefinition.reading_definition, effectiveAnswers, 0);
+    const readingResult = gradeSection(testDefinition.reading_definition, effectiveAnswers, 0, testDefinition.scoreMode);
     const combinedResult = buildCombinedResult(testDefinition, listeningResult, readingResult);
     const completeResult = await pool.query(completeReadingAttemptSql, [
       parsed.data.attemptToken,

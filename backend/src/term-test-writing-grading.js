@@ -273,14 +273,20 @@ async function refreshFinal(client, attemptId) {
   }
   const task1 = runsResult.rows.find(row => Number(row.task_number) === 1);
   const task2 = runsResult.rows.find(row => Number(row.task_number) === 2);
-  if (!task2 || (runsResult.rows.length > 1 && !task1)) {
+  let task1Only = false;
+  if (task1 && !task2 && runsResult.rows.length === 1) {
+    const attempt = await client.query('SELECT test_slug FROM assessment.term_test_attempt WHERE id = $1::uuid;', [attemptId]);
+    task1Only = attempt.rows[0]?.test_slug === 'term-test-2-k56';
+  }
+  // K56 Term Test 2 chỉ có Task 1; các bài còn lại vẫn giữ yêu cầu Task 2 như trước.
+  if ((!task2 && !task1Only) || (runsResult.rows.length > 1 && !task1)) {
     await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
       attempt_id, grading_version, status
     ) VALUES ($1::uuid, $2, 'waiting')
     ON CONFLICT (attempt_id) DO NOTHING;`, [attemptId, GRADING_VERSION]);
     return null;
   }
-  const writingScore = task1
+  const writingScore = task1Only ? validateBand(task1.task_score, 'Task 1') : task1
     ? calculateTermTestWritingOverall(task1.task_score, task2.task_score)
     : validateBand(task2.task_score, 'Task 2');
   await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
@@ -300,9 +306,9 @@ async function refreshFinal(client, attemptId) {
     attemptId,
     GRADING_VERSION,
     task1?.id || null,
-    task2.id,
+    task2?.id || null,
     task1?.task_score ?? null,
-    task2.task_score,
+    task2?.task_score ?? null,
     writingScore
   ]);
   return writingScore;

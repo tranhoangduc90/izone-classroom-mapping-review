@@ -1,6 +1,19 @@
 import { z } from 'zod';
 
 const answerKeySchema = z.string().trim().max(120);
+const compoundAnswerSchema = z.object({
+  keys: z.array(z.string().regex(/^[1-9][0-9]*[a-z]$/)).min(2).max(4),
+  accepted: z.record(z.string(), z.array(answerKeySchema).min(1).max(12))
+}).superRefine((compound, context) => {
+  if (new Set(compound.keys).size !== compound.keys.length) {
+    context.addIssue({ code: 'custom', path: ['keys'], message: 'Mã ô của câu ghép không được trùng.' });
+  }
+  for (const key of compound.keys) {
+    if (!compound.accepted[key]) {
+      context.addIssue({ code: 'custom', path: ['accepted', key], message: `Thiếu đáp án cho ô ${key}.` });
+    }
+  }
+});
 const pairGroupSchema = z.object({
   numbers: z.array(z.number().int().min(1).max(40)).min(2),
   expected: z.array(answerKeySchema).min(2)
@@ -9,7 +22,8 @@ const questionSchema = z.object({
   number: z.number().int().min(1).max(40),
   type: z.string().trim().min(1).max(160),
   accepted: z.array(answerKeySchema).default([]),
-  pairGroup: z.string().trim().min(1).max(40).nullable().optional()
+  pairGroup: z.string().trim().min(1).max(40).nullable().optional(),
+  compound: compoundAnswerSchema.optional()
 });
 const sectionSchema = z.object({
   questions: z.array(questionSchema).min(1).max(40),
@@ -48,6 +62,24 @@ const storedTestSchema = z.object({
   listening_definition: sectionSchema,
   reading_definition: sectionSchema
 });
+
+// Dữ liệu vào là loại bài thi; kết quả quy định thang điểm và Task Writing hợp lệ.
+// Lớp không hợp lệ vẫn bị chặn ở roster/database, không suy quyền thi từ metadata này.
+export function getTestScoringMetadata(testSlug) {
+  if (testSlug === 'mini-test-k56') {
+    return { scoreMode: 'raw', sectionTotals: { listening: 10, reading: 13 }, writingTasks: [2], writingScoreMode: 'paragraph', writingLabel: 'Đoạn văn' };
+  }
+  if (testSlug === 'term-test-2-k56') {
+    return { scoreMode: 'raw', sectionTotals: { listening: 40, reading: 40 }, writingTasks: [1] };
+  }
+  if (testSlug === 'term-test-1-k56') {
+    return { scoreMode: 'raw', sectionTotals: { listening: 40, reading: 26 }, writingTasks: [2] };
+  }
+  if (testSlug === 'mini-test-lesson-5') {
+    return { scoreMode: 'band', sectionTotals: { listening: 20, reading: 13 }, writingTasks: [] };
+  }
+  return { scoreMode: 'band', sectionTotals: { listening: 40, reading: 40 }, writingTasks: testSlug === 'term-test-1' ? [2] : [1, 2] };
+}
 
 const spellingCanonical = new Map([
   ['color', 'colour'],
@@ -122,10 +154,11 @@ function buildPairItems(section, answers) {
 }
 
 export function parseStoredTest(row) {
-  return storedTestSchema.parse(row);
+  const parsed = storedTestSchema.parse(row);
+  return { ...parsed, ...getTestScoringMetadata(parsed.test_slug) };
 }
 
-export function gradeSection(sectionInput, answersInput, bandAdjustment = 0) {
+export function gradeSection(sectionInput, answersInput, bandAdjustment = 0, scoreMode = 'band') {
   const section = sectionSchema.parse(sectionInput);
   const answers = answersInput || {};
   const pairItems = buildPairItems(section, answers);
@@ -136,17 +169,30 @@ export function gradeSection(sectionInput, answersInput, bandAdjustment = 0) {
 
   for (const question of [...section.questions].sort((left, right) => left.number - right.number)) {
     const rawAnswer = clean(answers[String(question.number)]);
+    const compoundValues = question.compound
+      ? question.compound.keys.map(key => ({
+        key,
+        value: clean(answers[key]),
+        correct: question.compound.accepted[key].some(expected => normalize(answers[key]) === normalize(expected))
+      }))
+      : null;
     const pairItem = question.pairGroup
       ? pairItems.get(`${question.pairGroup}:${question.number}`)
       : null;
-    const isCorrect = pairItem
-      ? pairItem.correct
-      : question.accepted.some(expected => normalize(rawAnswer) === normalize(expected));
-    const isAnswered = pairItem ? pairItem.answered : Boolean(normalize(rawAnswer));
-    const studentAnswer = pairItem ? pairItem.studentAnswer : rawAnswer;
-    const correctAnswer = pairItem
-      ? pairItem.correctAnswer
-      : question.accepted.map(clean).join(' / ');
+    const isCorrect = compoundValues
+      ? compoundValues.every(item => item.correct)
+      : pairItem
+        ? pairItem.correct
+        : question.accepted.some(expected => normalize(rawAnswer) === normalize(expected));
+    const isAnswered = compoundValues
+      ? compoundValues.every(item => Boolean(normalize(item.value)))
+      : pairItem ? pairItem.answered : Boolean(normalize(rawAnswer));
+    const studentAnswer = compoundValues
+      ? compoundValues.map(item => item.value).filter(Boolean).join(' / ')
+      : pairItem ? pairItem.studentAnswer : rawAnswer;
+    const correctAnswer = compoundValues
+      ? question.compound.keys.map(key => question.compound.accepted[key].map(clean).join(' / ')).join(' + ')
+      : pairItem ? pairItem.correctAnswer : question.accepted.map(clean).join(' / ');
 
     if (isCorrect) correct += 1;
     if (isAnswered) answered += 1;
@@ -165,19 +211,23 @@ export function gradeSection(sectionInput, answersInput, bandAdjustment = 0) {
 
   const converted = Math.round(correct * 40 / section.questions.length);
   const baseBand = ieltsBand(converted);
-  return {
+  const result = {
     correct,
     total: section.questions.length,
     answered,
-    converted,
-    baseBand,
-    adjustment: Number(bandAdjustment || 0),
-    band: applyBandAdjustment(baseBand, bandAdjustment),
     details,
     typeStats: [...typeStats.values()].map(item => ({
       ...item,
       percentage: item.total ? item.correct / item.total : 0
     }))
+  };
+  if (scoreMode === 'raw') return result;
+  return {
+    ...result,
+    converted,
+    baseBand,
+    adjustment: Number(bandAdjustment || 0),
+    band: applyBandAdjustment(baseBand, bandAdjustment)
   };
 }
 
@@ -210,7 +260,8 @@ function buildResult(test, listening, reading = null) {
   }));
   const totalCorrect = sections.reduce((sum, section) => sum + section.correct, 0);
   const totalQuestions = sections.reduce((sum, section) => sum + section.total, 0);
-  const averageBand = reading
+  const scoring = getTestScoringMetadata(test.test_slug);
+  const averageBand = scoring.scoreMode === 'band' && reading
     && [listening.band, reading.band].every(band => typeof band === 'number' && Number.isFinite(band))
     ? Number(((listening.band + reading.band) / 2).toFixed(2))
     : null;
@@ -218,6 +269,7 @@ function buildResult(test, listening, reading = null) {
     testSlug: test.test_slug,
     testTitle: test.test_title,
     definitionVersion: test.definition_version,
+    ...scoring,
     listening,
     reading,
     summary: {

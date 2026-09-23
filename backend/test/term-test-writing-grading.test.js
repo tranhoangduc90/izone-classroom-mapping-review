@@ -246,6 +246,46 @@ test('Term Test 1 chỉ có Task 2 vẫn chấm xong, hiện điểm và đồng
   await database.close();
 });
 
+test('Term Test 2 K56 chỉ có Task 1 vẫn hoàn tất đúng lượt, không đòi Task 2', async () => {
+  const database = await makeDatabase();
+  const attemptToken = '00000000-0000-4000-8000-000000000212';
+  await database.query(`INSERT INTO assessment.term_test_attempt (
+    id, test_slug, erp_course_class_id, erp_student_contact_id,
+    class_name_snapshot, student_name_snapshot, completed_at, writing_submitted_at
+  ) VALUES ($1::uuid, 'term-test-2-k56', 1252, 9012, 'IC2264', 'Học viên thử nghiệm', now(), now());`, [attemptToken]);
+  const service = createTermTestWritingGradingService({ pool: database });
+  const submission = {
+    attemptToken,
+    testSlug: 'term-test-2-k56',
+    task1: 'Bài Task 1 K56',
+    task2: '',
+    taskDefinitions: [{ id: 'task1', prompt: 'Đề Task 1 K56' }]
+  };
+  await service.ensureSubmission(submission);
+  await service.ensureSubmission({ ...submission, task1: 'Nội dung gửi lại không được ghi đè' });
+  const [dispatch] = await service.claimJobs({ workerId: 'k56-dispatch', limit: 2 });
+  assert.equal(dispatch.taskNumber, 1);
+  await service.completeDispatch({ jobId: dispatch.jobId, workerId: 'k56-dispatch', sourceRecordId: 'k56-task-1' });
+  await database.query(`UPDATE assessment.term_test_writing_grading_job SET next_attempt_at = now() WHERE job_type = 'collect';`);
+  const [collect] = await service.claimJobs({ workerId: 'k56-collect', limit: 2 });
+  const completed = await service.completeResult({
+    jobId: collect.jobId,
+    workerId: 'k56-collect',
+    runKey: collect.runKey,
+    sourceRecordId: 'k56-task-1',
+    result: { taskScore: 6.5, criteria: criteria(1, [6.5, 6.5, 6.5, 6.5]), report: 'Báo cáo Task 1' }
+  });
+  assert.equal(completed.grading.ready, true);
+  assert.equal(completed.grading.task1Score, 6.5);
+  assert.equal(completed.grading.task2Score, null);
+  assert.equal(completed.grading.writingScore, 6.5);
+  assert.deepEqual(completed.grading.taskStates, { task1: 'complete' });
+  const runs = await database.query(`SELECT count(*)::int AS count, min(essay_text) AS essay FROM assessment.term_test_writing_grading_run;`);
+  assert.equal(runs.rows[0].count, 1);
+  assert.equal(runs.rows[0].essay, 'Bài Task 1 K56');
+  await database.close();
+});
+
 test('Portal lỗi tạm thời thì điểm Writing vẫn sẵn sàng và việc ghi điểm được đưa lại vào hàng chờ', async () => {
   const database = await makeDatabase();
   const attemptToken = '00000000-0000-4000-8000-000000000205';
