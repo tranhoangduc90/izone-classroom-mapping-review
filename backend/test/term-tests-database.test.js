@@ -15,6 +15,7 @@ import {
   insertTermTestExamSessionSql,
   insertListeningAttemptSql,
   listTermTestTeacherOptionsSql,
+  listTermTestTeacherOptionsLegacySql,
   listTermTestTeacherResultsSql,
   listTermTestRosterSql,
   registerTemporaryTermTestStudentSql,
@@ -71,11 +72,19 @@ const mappingSchema = `
   CREATE TABLE mapping.reviewer_class_access (
     reviewer_email TEXT NOT NULL,
     erp_course_class_id BIGINT NOT NULL,
+    portal_teacher_contact_id BIGINT,
+    class_status_snapshot TEXT,
+    class_started_at TIMESTAMPTZ,
+    class_ended_at TIMESTAMPTZ,
     PRIMARY KEY (reviewer_email, erp_course_class_id)
+  );
+  CREATE TABLE mapping.reviewer_class_assignment (
+    reviewer_email TEXT NOT NULL,
+    class_name TEXT NOT NULL
   );
   GRANT USAGE ON SCHEMA mapping TO mapping_review_api;
   GRANT SELECT ON mapping.classroom_course_mapping, mapping.student_mapping_review,
-    mapping.reviewer_class_access TO mapping_review_api;
+    mapping.reviewer_class_access, mapping.reviewer_class_assignment TO mapping_review_api;
 `;
 
 test('migration và luồng Listening → Reading → Result chạy trên PostgreSQL trong RAM', async () => {
@@ -109,6 +118,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(examControlsMigration);
   await database.exec(examControlsMigration);
+  const listeningCheckpointMigration = await readFile(
+    new URL('../ops/migrations/202609230002_term_test_listening_checkpoint.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(listeningCheckpointMigration);
+  await database.exec(listeningCheckpointMigration);
   const demoResetMigration = await readFile(
     new URL('../../docs/migrations/2026-08-21-demo-term-test-reset.sql', import.meta.url),
     'utf8'
@@ -157,8 +172,9 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
       '00000000-0000-4000-8000-000000000005'
     );
     INSERT INTO mapping.reviewer_account (email) VALUES ('teacher@gmail.com');
-    INSERT INTO mapping.reviewer_class_access (reviewer_email, erp_course_class_id)
-    VALUES ('teacher@gmail.com', 2139);
+    INSERT INTO mapping.reviewer_class_access (
+      reviewer_email, erp_course_class_id, portal_teacher_contact_id, class_status_snapshot
+    ) VALUES ('teacher@gmail.com', 2139, 11, 'on_going');
   `);
   await database.query(`
     INSERT INTO assessment.test_definition (
@@ -412,7 +428,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   assert.equal(teacherOptions.rows[0].response.tests.length, 3);
   assert.equal(JSON.stringify(teacherOptions.rows[0].response.classes).includes('teacher@gmail.com'), false);
 
-  const adminOptions = await database.query(listTermTestTeacherOptionsSql, ['teacher@gmail.com', true]);
+  const adminOptions = await database.query(listTermTestTeacherOptionsLegacySql, ['teacher@gmail.com', true]);
   const adminOnlyClass = adminOptions.rows[0].response.classes.find(item => item.name === 'IC9999');
   assert.ok(adminOnlyClass, 'Quản trị viên phải thấy lớp không nằm trong phân công giảng viên.');
   assert.equal(adminOnlyClass.accessMode, 'admin_override');

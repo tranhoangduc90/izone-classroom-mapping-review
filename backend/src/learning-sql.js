@@ -1,3 +1,5 @@
+import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+
 // Mọi truy vấn dùng placeholder PostgreSQL; không ghép input học viên/giảng viên vào chuỗi SQL.
 
 export const fetchPublicLearningAssignmentSql = `SELECT
@@ -138,6 +140,7 @@ export const fetchLearningAttemptContextSql = `SELECT
   assignment.status AS assignment_status,
   assignment.closes_at,
   roster.student_name_snapshot AS student_name,
+  roster.erp_student_contact_id::text AS student_id,
   version.public_definition,
   grading.grader_version,
   grading.private_definition
@@ -466,6 +469,16 @@ saved_job AS (
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
 ),
+saved_attendance_job AS (
+  INSERT INTO learning.outbox_job (
+    job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+  )
+  SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
+  FROM saved_evidence
+  WHERE $18 = 'self_confirmed'
+  ON CONFLICT (idempotency_key) DO NOTHING
+  RETURNING id
+),
 completed_attempt AS (
   UPDATE learning.attempt
   SET status = 'submitted', submitted_at = $11::timestamptz, updated_at = now()
@@ -481,6 +494,7 @@ SELECT
   EXISTS (SELECT 1 FROM saved_attendance_event) AS attendance_event_saved,
   EXISTS (SELECT 1 FROM saved_evidence) AS evidence_saved,
   EXISTS (SELECT 1 FROM saved_job) AS outbox_saved,
+  EXISTS (SELECT 1 FROM saved_attendance_job) AS attendance_outbox_saved,
   EXISTS (SELECT 1 FROM completed_attempt) AS attempt_completed
 FROM saved_submission
 CROSS JOIN saved_grading_run;`;
@@ -491,12 +505,10 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
     course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
 ),
 assignments AS (
   SELECT
@@ -546,12 +558,10 @@ FROM mapping.classroom_course_mapping AS course
 WHERE course.erp_course_class_id = $3::bigint
   AND (
     $2::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
   );`;
 
 export const fetchLearningLibraryItemsSql = `WITH requested AS (
@@ -613,6 +623,11 @@ ORDER BY student_name, student_ref;`;
 export const insertLearningFormTemplateSql = `INSERT INTO learning.form_template (
   title, kind, created_by_email
 ) VALUES ($1, 'reflection', $2)
+RETURNING id::text AS template_id;`;
+
+export const insertLearningQuizFormTemplateSql = `INSERT INTO learning.form_template (
+  title, kind, created_by_email
+) VALUES ($1, 'quiz', $2)
 RETURNING id::text AS template_id;`;
 
 export const insertLearningFormVersionSql = `INSERT INTO learning.form_version (
@@ -708,11 +723,10 @@ export const updateLearningBlockReleaseSql = `WITH target AS (
     AND release.block_id = $2::uuid
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
   FOR UPDATE OF release
 ), replay AS (
@@ -758,18 +772,25 @@ export const markLearningReportDeliveredSql = `WITH target AS (
     AND report.status IN ('approved', 'published')
     AND (
       $7::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $6
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$6',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
+), published AS (
+  UPDATE learning.periodic_report AS report
+  SET status = 'published',
+      published_at = COALESCE(report.published_at, now()),
+      updated_at = now()
+  FROM target
+  WHERE report.id = target.id
+  RETURNING report.id, report.student_ref
 ), inserted AS (
   INSERT INTO learning.report_delivery (
     report_id, student_ref, channel, status, operation_key, idempotency_key,
     sent_by_email, attempted_at, sent_at
   )
-  SELECT id, student_ref, 'manual', 'sent', $5, $4, $6, now(), now() FROM target
+  SELECT id, student_ref, 'manual', 'sent', $5, $4, $6, now(), now() FROM published
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING report_id, student_ref, channel, status, sent_by_email, sent_at
 )
@@ -790,11 +811,10 @@ export const upsertLearningTeacherHumanNoteSql = `WITH target AS (
     AND report.status IN ('ready_for_review', 'approved', 'published')
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ), saved AS (
   INSERT INTO learning.teacher_human_note (report_id, teacher_email, note_text, updated_at)
@@ -817,6 +837,184 @@ export const upsertLearningTeacherHumanNoteSql = `WITH target AS (
 SELECT saved.report_id::text, saved.teacher_email, saved.note_text, saved.updated_at
 FROM saved JOIN approved ON approved.id = saved.report_id;`;
 
+export const authorizeLearningProgressLinkTargetSql = `SELECT
+  assignment.erp_course_class_id::text AS class_id,
+  assignment.class_name_snapshot AS class_name,
+  roster.student_ref::text AS student_ref,
+  roster.student_name_snapshot AS student_name
+FROM learning.form_assignment AS assignment
+JOIN learning.form_assignment_roster AS roster
+  ON roster.assignment_id = assignment.id
+  AND roster.student_ref = $2::uuid
+WHERE assignment.id = $1::uuid
+  AND (
+    $4::boolean
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'assignment.erp_course_class_id'
+    })}
+  );`;
+
+export const findLearningProgressAccessByOperationSql = `SELECT
+  id::text,
+  erp_course_class_id::text AS class_id,
+  student_ref::text,
+  token_hash,
+  status,
+  expires_at,
+  operation_key
+FROM learning.student_progress_access
+WHERE operation_key = $1;`;
+
+export const revokeLearningProgressAccessSql = `UPDATE learning.student_progress_access
+  SET status = 'revoked', revoked_at = now(), updated_at = now()
+  WHERE erp_course_class_id = $1::bigint
+    AND student_ref = $2::uuid
+    AND status = 'active';`;
+
+export const rotateLearningProgressAccessSql = `INSERT INTO learning.student_progress_access (
+    id, erp_course_class_id, student_ref, token_hash, status, expires_at,
+    created_by_email, operation_key, idempotency_key
+  ) VALUES (
+    $1::uuid, $2::bigint, $3::uuid, $4, 'active', $5::timestamptz,
+    $6, $7, $8
+  )
+  RETURNING
+  id::text,
+  erp_course_class_id::text AS class_id,
+  student_ref::text,
+  status,
+  expires_at,
+  created_at;`;
+
+export const fetchStudentCourseJourneySql = `WITH access AS (
+  SELECT erp_course_class_id, student_ref, expires_at
+  FROM learning.student_progress_access
+  WHERE token_hash = $1
+    AND status = 'active'
+    AND expires_at > now()
+), identity_snapshot AS (
+  SELECT
+    access.erp_course_class_id,
+    access.student_ref,
+    access.expires_at,
+    roster.student_name_snapshot AS student_name,
+    assignment.class_name_snapshot AS class_name
+  FROM access
+  JOIN LATERAL (
+    SELECT candidate.*
+    FROM learning.form_assignment AS candidate
+    JOIN learning.form_assignment_roster AS candidate_roster
+      ON candidate_roster.assignment_id = candidate.id
+      AND candidate_roster.student_ref = access.student_ref
+    WHERE candidate.erp_course_class_id = access.erp_course_class_id
+    ORDER BY candidate.session_number DESC, candidate.created_at DESC
+    LIMIT 1
+  ) AS assignment ON true
+  JOIN learning.form_assignment_roster AS roster
+    ON roster.assignment_id = assignment.id
+    AND roster.student_ref = access.student_ref
+), session_rows AS (
+  SELECT
+    assignment.id,
+    assignment.session_number,
+    assignment.title,
+    assignment.status AS assignment_status,
+    student_status.attempt_status,
+    student_status.completeness,
+    student_status.grading_status,
+    student_status.submitted_at,
+    student_status.attendance_status,
+    COALESCE(evidence.evidence_count, 0) AS evidence_count,
+    COALESCE(evidence.source_systems, '[]'::jsonb) AS evidence_sources,
+    CASE WHEN after_report.id IS NULL THEN NULL ELSE jsonb_build_object(
+      'reportId', after_report.id::text,
+      'fromSessionNumber', after_report.from_session_number,
+      'toSessionNumber', after_report.to_session_number,
+      'systemOutput', after_report.system_output,
+      'systemMarkdown', after_report.system_markdown,
+      'humanNote', after_report.note_text,
+      'publishedAt', after_report.published_at
+    ) END AS after_session_report
+  FROM access
+  JOIN learning.form_assignment AS assignment
+    ON assignment.erp_course_class_id = access.erp_course_class_id
+  JOIN learning.form_assignment_roster AS roster
+    ON roster.assignment_id = assignment.id
+    AND roster.student_ref = access.student_ref
+  LEFT JOIN learning.assignment_student_status AS student_status
+    ON student_status.assignment_id = assignment.id
+    AND student_status.student_ref = access.student_ref
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*)::integer AS evidence_count,
+      jsonb_agg(DISTINCT event.source_system) AS source_systems
+    FROM learning.evidence_event AS event
+    WHERE event.erp_course_class_id = access.erp_course_class_id
+      AND event.student_ref = access.student_ref
+      AND event.session_number = assignment.session_number
+      AND event.visibility = 'student_visible'
+  ) AS evidence ON true
+  LEFT JOIN LATERAL (
+    SELECT report.*, note.note_text
+    FROM learning.periodic_report AS report
+    LEFT JOIN learning.teacher_human_note AS note ON note.report_id = report.id
+    WHERE report.erp_course_class_id = access.erp_course_class_id
+      AND report.student_ref = access.student_ref
+      AND report.report_kind = 'after_session'
+      AND report.assignment_id = assignment.id
+      AND report.status = 'published'
+    ORDER BY report.published_at DESC, report.id DESC
+    LIMIT 1
+  ) AS after_report ON true
+  WHERE assignment.status IN ('published', 'closed')
+), sessions AS (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'assignmentId', id::text,
+    'sessionNumber', session_number,
+    'title', title,
+    'assignmentStatus', assignment_status,
+    'attemptStatus', attempt_status,
+    'completeness', completeness,
+    'gradingStatus', grading_status,
+    'submittedAt', submitted_at,
+    'attendanceStatus', attendance_status,
+    'evidenceCount', evidence_count,
+    'evidenceSources', evidence_sources,
+    'afterSessionReport', after_session_report
+  ) ORDER BY session_number, id), '[]'::jsonb) AS items
+  FROM session_rows
+), reports AS (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'reportId', report.id::text,
+    'reportKind', report.report_kind,
+    'fromSessionNumber', report.from_session_number,
+    'toSessionNumber', report.to_session_number,
+    'systemOutput', report.system_output,
+    'systemMarkdown', report.system_markdown,
+    'humanNote', note.note_text,
+    'publishedAt', report.published_at
+  ) ORDER BY report.to_session_number, report.published_at, report.id), '[]'::jsonb) AS items
+  FROM access
+  JOIN learning.periodic_report AS report
+    ON report.erp_course_class_id = access.erp_course_class_id
+    AND report.student_ref = access.student_ref
+    AND report.report_kind = 'periodic'
+    AND report.status = 'published'
+  LEFT JOIN learning.teacher_human_note AS note ON note.report_id = report.id
+)
+SELECT
+  identity_snapshot.student_ref::text AS student_ref,
+  identity_snapshot.student_name,
+  identity_snapshot.erp_course_class_id::text AS class_id,
+  identity_snapshot.class_name,
+  identity_snapshot.expires_at,
+  sessions.items AS sessions,
+  reports.items AS reports
+FROM identity_snapshot
+CROSS JOIN sessions
+CROSS JOIN reports;`;
+
 export const fetchLearningTeacherDashboardSql = `SELECT
   assignment.id::text AS assignment_id,
   assignment.title,
@@ -824,6 +1022,9 @@ export const fetchLearningTeacherDashboardSql = `SELECT
   assignment.class_name_snapshot AS class_name,
   assignment.public_token::text AS public_token,
   assignment.status,
+  assignment.form_version_id::text AS form_version_id,
+  (SELECT version.public_definition FROM learning.form_version AS version
+    WHERE version.id = assignment.form_version_id) AS public_definition,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
       'blockId', release.block_id::text,
@@ -862,6 +1063,19 @@ export const fetchLearningTeacherDashboardSql = `SELECT
       'attendanceStatus', status.attendance_status,
       'attendanceReason', status.attendance_reason,
       'decidedBy', status.decided_by_email,
+      'portalSync', CASE WHEN status.attendance_status IN ('self_confirmed', 'teacher_confirmed') THEN (
+        SELECT jsonb_build_object(
+          'status', job.status,
+          'updatedAt', job.updated_at,
+          'lastErrorCode', job.last_error_code
+        )
+        FROM learning.outbox_job AS job
+        WHERE job.job_type = 'sync_portal_attendance'
+          AND job.entity_key = 'student:' || status.student_ref::text
+          AND job.unit_key = 'portal-attendance:' || assignment.id::text || ':session:' || assignment.session_number::text
+        ORDER BY job.created_at DESC, job.id DESC
+        LIMIT 1
+      ) ELSE NULL END,
       'checkpoints', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           'blockId', checkpoint.block_id::text,
@@ -919,30 +1133,99 @@ LEFT JOIN LATERAL (
 WHERE assignment.id = $1::uuid
   AND (
     $3::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $2
-        AND access.erp_course_class_id = assignment.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$2',
+      classIdSql: 'assignment.erp_course_class_id'
+    })}
   )
 GROUP BY assignment.id;`;
 
+export const fetchLearningTeacherLiveDraftsSql = `WITH authorized_assignment AS (
+  SELECT assignment.id, assignment.form_version_id
+  FROM learning.form_assignment AS assignment
+  WHERE assignment.id = $1::uuid
+    AND (
+      $3::boolean
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$2',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
+    )
+),
+roster_state AS (
+  SELECT
+    roster.assignment_id,
+    roster.student_ref,
+    roster.student_name_snapshot,
+    roster.display_discriminator,
+    attempt.id AS attempt_id,
+    attempt.status AS attempt_status,
+    attempt.draft_revision,
+    attempt.draft_updated_at,
+    attempt.draft,
+    submission.id AS submission_id,
+    submission.response_payload AS final_responses,
+    submission.submitted_at,
+    grading.result_json AS grading_result
+  FROM authorized_assignment AS assignment
+  JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id
+  LEFT JOIN LATERAL (
+    SELECT candidate.*
+    FROM learning.attempt AS candidate
+    WHERE candidate.assignment_id = roster.assignment_id
+      AND candidate.student_ref = roster.student_ref
+      AND candidate.status <> 'superseded'
+    ORDER BY candidate.created_at DESC, candidate.id DESC
+    LIMIT 1
+  ) AS attempt ON true
+  LEFT JOIN learning.submission AS submission ON submission.attempt_id = attempt.id
+  LEFT JOIN LATERAL (
+    SELECT run.result_json
+    FROM learning.grading_run AS run
+    WHERE run.submission_id = submission.id
+    ORDER BY run.created_at DESC, run.id DESC
+    LIMIT 1
+  ) AS grading ON true
+)
+SELECT
+  $1::uuid::text AS assignment_id,
+  now() AS generated_at,
+  COALESCE(jsonb_agg(jsonb_build_object(
+    'studentRef', roster_state.student_ref::text,
+    'name', roster_state.student_name_snapshot,
+    'discriminator', roster_state.display_discriminator,
+    'attemptId', roster_state.attempt_id::text,
+    'attemptStatus', roster_state.attempt_status,
+    'draftRevision', COALESCE(roster_state.draft_revision, 0),
+    'draftUpdatedAt', roster_state.draft_updated_at,
+    'draftResponses', COALESCE(roster_state.draft, '{}'::jsonb),
+    'submissionId', roster_state.submission_id::text,
+    'submittedAt', roster_state.submitted_at,
+    'finalResponses', COALESCE(roster_state.final_responses, '{}'::jsonb),
+    'gradingResult', roster_state.grading_result
+  ) ORDER BY roster_state.student_name_snapshot, roster_state.student_ref), '[]'::jsonb) AS students
+FROM authorized_assignment
+LEFT JOIN roster_state ON roster_state.assignment_id = authorized_assignment.id
+GROUP BY authorized_assignment.id;`;
+
 export const overrideLearningAttendanceSql = `WITH target AS (
-  SELECT assignment.id, roster.student_ref
+  SELECT assignment.id, assignment.erp_course_class_id, assignment.session_number,
+    roster.student_ref, roster.erp_student_contact_id
   FROM learning.form_assignment AS assignment
   JOIN learning.form_assignment_roster AS roster
     ON roster.assignment_id = assignment.id
     AND roster.student_ref = $2::uuid
   WHERE assignment.id = $1::uuid
+    AND NOT EXISTS (
+      SELECT 1 FROM learning.attendance_event
+      WHERE operation_key = $7
+    )
     AND (
       $6::boolean
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $5
-          AND access.erp_course_class_id = assignment.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: '$5',
+        classIdSql: 'assignment.erp_course_class_id'
+      })}
     )
 ),
 previous AS (
@@ -979,7 +1262,48 @@ event AS (
     updated.decided_by_email,
     $7
   FROM updated
+  ON CONFLICT (operation_key) DO NOTHING
+  RETURNING id, assignment_id, student_ref
+),
+portal_job AS (
+  INSERT INTO learning.outbox_job (
+    job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+  )
+  SELECT
+    'sync_portal_attendance',
+    'student:' || event.student_ref::text,
+    'portal-attendance:' || event.assignment_id::text || ':session:' || target.session_number::text,
+    'portal-attendance-override:' || event.id::text || ':v1',
+    'portal-attendance-override:' || event.id::text || ':enqueue:v1',
+    jsonb_build_object(
+      'schemaVersion', 'LearningPortalAttendanceOverrideJobV1',
+      'attendanceEventId', event.id::text,
+      'assignmentId', event.assignment_id::text,
+      'classId', target.erp_course_class_id::text,
+      'studentId', target.erp_student_contact_id::text,
+      'studentRef', event.student_ref::text,
+      'sessionNumber', target.session_number,
+      'attendanceStatus', 'PRESENT'
+    )
+  FROM event
+  JOIN target ON target.id = event.assignment_id AND target.student_ref = event.student_ref
+  WHERE $3 = 'teacher_confirmed'
+  ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
+),
+replayed AS (
+  SELECT record.assignment_id, record.student_ref, record.status,
+    record.current_reason, record.decided_by_email, record.decided_at,
+    old_event.id AS event_id
+  FROM learning.attendance_event AS old_event
+  JOIN learning.attendance_record AS record
+    ON record.assignment_id = old_event.assignment_id
+    AND record.student_ref = old_event.student_ref
+  WHERE old_event.operation_key = $7
+    AND old_event.assignment_id = $1::uuid
+    AND old_event.student_ref = $2::uuid
+    AND old_event.new_status = $3
+    AND record.status = old_event.new_status
 )
 SELECT
   updated.assignment_id::text AS assignment_id,
@@ -987,5 +1311,17 @@ SELECT
   updated.status,
   updated.current_reason,
   updated.decided_by_email,
-  updated.decided_at
-FROM updated;`;
+  updated.decided_at,
+  EXISTS (SELECT 1 FROM portal_job) AS portal_sync_queued,
+  false AS replayed
+FROM updated
+UNION ALL
+SELECT replayed.assignment_id::text, replayed.student_ref::text,
+  replayed.status, replayed.current_reason, replayed.decided_by_email,
+  replayed.decided_at,
+  EXISTS (
+    SELECT 1 FROM learning.outbox_job AS job
+    WHERE job.operation_key = 'portal-attendance-override:' || replayed.event_id::text || ':v1'
+  ), true
+FROM replayed
+WHERE NOT EXISTS (SELECT 1 FROM updated);`;

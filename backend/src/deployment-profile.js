@@ -11,8 +11,7 @@ const PROFILES = Object.freeze({
     teacherOptionsMode: 'portal-metadata',
     planningEnabled: true,
     listeningRetakeEnabled: true,
-    writingNotifierEnabled: false,
-    resultStreamEnabled: false
+    writingNotifierEnabled: true
   }),
   'k56-ic2264': Object.freeze({
     name: 'k56-ic2264',
@@ -22,8 +21,7 @@ const PROFILES = Object.freeze({
     teacherOptionsMode: 'legacy-access',
     planningEnabled: false,
     listeningRetakeEnabled: false,
-    writingNotifierEnabled: true,
-    resultStreamEnabled: true
+    writingNotifierEnabled: true
   }),
   'k56-demo': Object.freeze({
     name: 'k56-demo',
@@ -33,8 +31,7 @@ const PROFILES = Object.freeze({
     teacherOptionsMode: 'legacy-access',
     planningEnabled: false,
     listeningRetakeEnabled: false,
-    writingNotifierEnabled: true,
-    resultStreamEnabled: true
+    writingNotifierEnabled: true
   })
 });
 

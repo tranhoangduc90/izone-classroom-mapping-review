@@ -8,12 +8,14 @@ import { isK56TestSlug, profileForConfig } from './deployment-profile.js';
 import { isK56PortalPilot } from './k56-portal-pilot.js';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
+import { createTermTestResultEvents } from './term-test-result-events.js';
 import {
   checkpointTermTestListeningAudioSql,
   completeReadingAttemptSql,
   fetchTermTestAttemptReviewSql,
   fetchTermTestResultSql,
   findTermTestExamSessionAssetSql,
+  findTermTestAttemptEventSlugSql,
   findTermTestListeningSubmissionSql,
   findAttemptForReadingSql,
   findActiveTermTestAttemptForStudentSql,
@@ -21,6 +23,7 @@ import {
   findTermTestAttemptSlugSql,
   findStudentForTermTestSql,
   insertGrantedTermTestExamSessionSql,
+  renewUnstartedGrantedTermTestExamSessionSql,
   insertProtectedListeningAttemptSql,
   insertTermTestExamSessionSql,
   insertListeningAttemptSql,
@@ -371,35 +374,37 @@ function hasValidSharedSecret(supplied, expected) {
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-const listeningRetakeGrantSchema = z.object({
-  v: z.literal(1),
+const listeningRetakeGrantFields = {
   purpose: z.literal('listening-retake'),
   sessionToken: z.string().uuid(),
   testSlug: testSlugSchema,
   classCode: classCodeSchema,
-  studentRef: z.string().uuid(),
-  expiresAt: z.number().int().positive()
-});
+  studentRef: z.string().uuid()
+};
+const listeningRetakeGrantSchema = z.discriminatedUnion('v', [
+  z.object({ v: z.literal(1), ...listeningRetakeGrantFields, expiresAt: z.number().int().positive() }).strict(),
+  z.object({ v: z.literal(2), ...listeningRetakeGrantFields }).strict()
+]);
 
 // Vé thi bù được ký bằng bí mật chỉ có trên máy chủ. Trình duyệt chỉ gửi vé;
-// nếu chữ ký, lớp, học viên, bài thi hoặc hạn dùng sai thì không tạo phiên mới.
+// nếu chữ ký, lớp, học viên hoặc bài thi sai thì không tạo phiên mới.
 function verifyListeningRetakeGrant(token, expected, secret, nowSeconds = Math.floor(Date.now() / 1000)) {
   try {
     if (!secret || typeof token !== 'string') return null;
     const parts = token.split('.');
     if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-    const suppliedSignature = Buffer.from(parts[1], 'base64url');
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(`izone-listening-retake-v1:${parts[0]}`)
-      .digest();
-    if (suppliedSignature.length !== expectedSignature.length
-      || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return null;
     const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
     const parsed = listeningRetakeGrantSchema.safeParse(decoded);
     if (!parsed.success) return null;
     const grant = parsed.data;
-    if (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60) return null;
+    const suppliedSignature = Buffer.from(parts[1], 'base64url');
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(`izone-listening-retake-v${grant.v}:${parts[0]}`)
+      .digest();
+    if (suppliedSignature.length !== expectedSignature.length
+      || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return null;
+    if (grant.v === 1 && (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60)) return null;
     if (grant.testSlug !== expected.testSlug
       || grant.classCode !== expected.classCode
       || grant.studentRef !== expected.studentRef) return null;
@@ -486,6 +491,7 @@ export function createApp({
 }) {
   const app = express();
   const deploymentProfile = profileForConfig(config);
+  const resultEvents = termTestResultEvents || createTermTestResultEvents();
   const writingTests = writingTestService ?? createWritingTestService({ pool });
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops);
@@ -730,7 +736,7 @@ export function createApp({
     }
     const token = parsed.data.attemptToken || parsed.data.examSessionToken;
     const tokenResult = parsed.data.attemptToken
-      ? await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken])
+      ? await pool.query(findTermTestAttemptEventSlugSql, [parsed.data.attemptToken])
       : await pool.query(findTermTestExamSessionAssetSql, [parsed.data.examSessionToken, slug.data]);
     const storedSlug = String(tokenResult.rows[0]?.test_slug || '');
     if (tokenResult.rowCount !== 1 || storedSlug !== slug.data) {
@@ -880,6 +886,16 @@ export function createApp({
         student.student_id
       ]);
       session = resumed.rows[0] || null;
+    }
+    if (!session && retakeGrant) {
+      const renewed = await pool.query(renewUnstartedGrantedTermTestExamSessionSql, [
+        retakeGrant.sessionToken,
+        slug.data,
+        student.definition_version,
+        student.class_id,
+        student.student_id
+      ]);
+      session = renewed.rows[0] || null;
     }
     if (!session && !retakeGrant) {
       const latestAttempt = await pool.query(findLatestTermTestAttemptForStudentSql, [
@@ -1463,12 +1479,8 @@ export function createApp({
   }));
 
   app.post('/api/term-tests/result/stream', testReadLimiter, asyncRoute(async (req, res) => {
-    if (!deploymentProfile.resultStreamEnabled || !termTestResultEvents) {
-      return res.status(404).json({
-        ok: false,
-        error: 'RESULT_STREAM_NOT_FOUND',
-        message: 'Kênh cập nhật này không được bật.'
-      });
+    if (deploymentProfile.name !== 'k67') {
+      return res.status(404).json({ ok: false, error: 'RESULT_STREAM_NOT_FOUND', message: 'Kênh cập nhật này không được bật.' });
     }
     const parsed = resultRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1478,8 +1490,9 @@ export function createApp({
     if (result.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
     }
-    const grading = await ensureTermTestWritingGrading(result.rows[0]);
-    const subscription = termTestResultEvents.subscribe({
+    const row = result.rows[0];
+    const grading = await ensureTermTestWritingGrading(row);
+    const subscription = resultEvents.subscribe({
       attemptToken: parsed.data.attemptToken,
       req,
       res,
@@ -1579,7 +1592,7 @@ export function createApp({
     const legacyOptions = deploymentProfile.teacherOptionsMode === 'legacy-access';
     const result = await pool.query(
       legacyOptions ? listTermTestTeacherOptionsLegacySql : listTermTestTeacherOptionsSql,
-      legacyOptions ? [req.reviewer.email, req.reviewer.canAccessAllClasses] : [req.reviewer.email]
+      [req.reviewer.email, req.reviewer.canAccessAllClasses]
     );
     const response = result.rows[0]?.response || { classes: [], tests: [] };
     response.tests = Array.from(response.tests || []).map(test => ({

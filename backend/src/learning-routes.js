@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import express from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
@@ -17,7 +18,7 @@ const draftSchema = z.object({
   definitionHash: z.string().regex(/^[0-9a-f]{64}$/),
   responses: z.record(uuidSchema, z.union([
     z.string().max(12_000),
-    z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+    z.array(z.string().max(2_000)).min(1).max(10),
     z.object({
       correct: z.number().int().min(0).max(10_000),
       total: z.number().int().min(1).max(10_000)
@@ -42,6 +43,9 @@ const submitSchema = z.object({
   responses: draftSchema.shape.responses
 }).strict();
 const resultSchema = z.object({ attemptToken: uuidSchema }).strict();
+const studentJourneySchema = z.object({
+  accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/)
+}).strict();
 const publishReflectionSchema = z.object({
   title: z.string().trim().min(3).max(200),
   courseCode: z.string().trim().max(80).optional().default(''),
@@ -53,7 +57,21 @@ const publishReflectionSchema = z.object({
     libraryItemId: uuidSchema,
     checkpoint: z.number().int().min(1).max(3),
     required: z.boolean().default(true)
-  }).strict()).min(2).max(6)
+  }).strict()).min(2).max(20)
+}).strict().superRefine((value, context) => {
+  if (value.opensAt && value.closesAt && new Date(value.closesAt) <= new Date(value.opensAt)) {
+    context.addIssue({ code: 'custom', path: ['closesAt'], message: 'Thời gian đóng phải sau thời gian mở.' });
+  }
+});
+const publishQuizSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  courseCode: z.string().trim().max(80).optional().default(''),
+  classId: z.string().regex(/^\d+$/),
+  sessionNumber: z.number().int().min(1).max(100),
+  opensAt: z.iso.datetime().nullable().optional(),
+  closesAt: z.iso.datetime().nullable().optional(),
+  definition: z.record(z.string(), z.unknown()),
+  gradingKey: z.record(z.string(), z.unknown())
 }).strict().superRefine((value, context) => {
   if (value.opensAt && value.closesAt && new Date(value.closesAt) <= new Date(value.opensAt)) {
     context.addIssue({ code: 'custom', path: ['closesAt'], message: 'Thời gian đóng phải sau thời gian mở.' });
@@ -84,6 +102,13 @@ const teacherHumanNoteSchema = z.object({
   assignmentId: uuidSchema,
   studentRef: uuidSchema,
   noteText: z.string().trim().min(1).max(500)
+}).strict();
+const studentProgressLinkSchema = z.object({
+  assignmentId: uuidSchema,
+  studentRef: uuidSchema,
+  accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/),
+  expiresInDays: z.number().int().min(1).max(365).default(90),
+  operationId: uuidSchema
 }).strict();
 
 function asyncRoute(handler) {
@@ -145,6 +170,18 @@ export function createLearningRouter({ pool, authenticate }) {
     keyGenerator: attemptRateKey,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Phiếu đang được nộp lại quá nhiều lần; hãy chờ một chút.' }
   });
+  const journeyLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    keyGenerator: req => {
+      const accessToken = String(req.body?.accessToken || '');
+      if (!accessToken) return `journey-ip:${ipKeyGenerator(req.ip)}`;
+      return `journey:${createHash('sha256').update(accessToken, 'utf8').digest('hex')}`;
+    },
+    message: { ok: false, error: 'RATE_LIMITED', message: 'Link đang được mở quá nhiều lần; hãy chờ một phút.' }
+  });
 
   router.use(coarseLimiter);
 
@@ -196,6 +233,14 @@ export function createLearningRouter({ pool, authenticate }) {
     return res.json({ ok: true, ...result });
   }));
 
+  router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
+    const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
+    if (!input) return;
+    const journey = await service.getStudentCourseJourney(input);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, journey });
+  }));
+
   router.get('/teacher/options', authenticate, asyncRoute(async (req, res) => {
     const options = await service.listTeacherOptions({
       email: req.reviewer.email,
@@ -219,12 +264,28 @@ export function createLearningRouter({ pool, authenticate }) {
     return res.status(201).json({ ok: true, published });
   }));
 
+  router.post('/teacher/quiz-forms/publish', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(publishQuizSchema, req.body, res, 'INVALID_QUIZ_FORM');
+    if (!input) return;
+    const published = await service.publishQuizForm({ ...input, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json({ ok: true, published });
+  }));
+
   router.get('/teacher/dashboard', authenticate, asyncRoute(async (req, res) => {
     const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
     if (!input) return;
     const dashboard = await service.getTeacherDashboard({ assignmentId: input.assignment, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, dashboard });
+  }));
+
+  router.get('/teacher/live-drafts', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
+    if (!input) return;
+    const live = await service.getTeacherLiveDrafts({ assignmentId: input.assignment, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, live });
   }));
 
   router.post('/teacher/attendance/override', authenticate, asyncRoute(async (req, res) => {
@@ -261,6 +322,14 @@ export function createLearningRouter({ pool, authenticate }) {
     const note = await service.saveTeacherHumanNote({ ...input, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, note });
+  }));
+
+  router.post('/teacher/student-progress-links', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(studentProgressLinkSchema, req.body, res, 'INVALID_PROGRESS_LINK_REQUEST');
+    if (!input) return;
+    const link = await service.createStudentProgressLink({ ...input, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json({ ok: true, link });
   }));
 
   router.use((error, _req, res, next) => {

@@ -63,6 +63,10 @@ async function createV1Database() {
       erp_course_class_id BIGINT NOT NULL,
       PRIMARY KEY (reviewer_email, erp_course_class_id)
     );
+    CREATE TABLE mapping.reviewer_class_assignment (
+      reviewer_email TEXT NOT NULL,
+      class_name TEXT NOT NULL
+    );
     CREATE TABLE mapping.reviewer_account (
       email TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'active'

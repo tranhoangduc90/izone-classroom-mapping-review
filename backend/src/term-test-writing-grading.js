@@ -540,7 +540,12 @@ export function createTermTestWritingGradingService({
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_TYPE_MISMATCH', 'Kết quả không khớp lượt chấm.', 409);
       }
       if (job.status === 'complete') {
-        return { status: 'duplicate', grading: await readStatus(client, job.attempt_id), portalSyncRequired: false };
+        return {
+          status: 'duplicate',
+          grading: await readStatus(client, job.attempt_id),
+          portalSyncRequired: false,
+          attemptId: job.attempt_id
+        };
       }
       if (job.status !== 'processing' || job.worker_id !== workerId) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc thu kết quả không thuộc tiến trình này.', 409);
@@ -613,7 +618,7 @@ export function createTermTestWritingGradingService({
       try {
         await onResultStored({ attemptId: stored.attemptId, grading: stored.grading });
       } catch (error) {
-        // Tín hiệu SSE chỉ giúp hiển thị sớm; kết quả đã lưu và polling vẫn là đường dự phòng.
+        // Việc báo cho trình duyệt chỉ là tăng tốc; lỗi tại đây không được làm hỏng kết quả đã lưu.
         logger.warn?.(`Không thể báo kết quả Writing đã sẵn sàng: ${error?.name || 'Error'} ${error?.code || ''}`.trim());
       }
     }

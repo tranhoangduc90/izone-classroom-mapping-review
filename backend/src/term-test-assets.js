@@ -5,33 +5,6 @@ import path from 'node:path';
 const AUDIO_MAGIC = Buffer.from('IZTT1', 'ascii');
 const SESSION_KEY_INFO = Buffer.from('izone-term-test-session-audio-v1', 'utf8');
 const ASSETS = Object.freeze({
-  'term-test-1-k56': Object.freeze({
-    content: 'term-test-1-k56/content.json',
-    audio: 'term-test-1-k56/listening-audio.mp3',
-    preview: 'term-test-1-k56/listening-preview-30s.mp3',
-    listeningDurationSeconds: 1848,
-    listeningReviewSeconds: 0,
-    readingDurationMinutes: 40,
-    writingDurationMinutes: 55
-  }),
-  'term-test-2-k56': Object.freeze({
-    content: 'term-test-2-k56/content.json',
-    audio: 'term-test-2-k56/listening-audio.mp3',
-    preview: 'term-test-2-k56/listening-preview-30s.mp3',
-    listeningDurationSeconds: 1824,
-    listeningReviewSeconds: 0,
-    readingDurationMinutes: 60,
-    writingDurationMinutes: 30
-  }),
-  'mini-test-k56': Object.freeze({
-    content: 'mini-test-k56/content.json',
-    audio: 'mini-test-k56/listening-audio.mp3',
-    preview: 'mini-test-k56/listening-preview-30s.mp3',
-    listeningDurationSeconds: 446,
-    listeningReviewSeconds: 0,
-    readingDurationMinutes: 20,
-    writingDurationMinutes: 15
-  }),
   'term-test-1': Object.freeze({
     content: 'term-test-1/content.json',
     audio: 'term-test-1/listening-audio.mp3',

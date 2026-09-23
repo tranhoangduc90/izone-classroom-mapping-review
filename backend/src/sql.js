@@ -1,3 +1,5 @@
+import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+
 // Đọc các phiếu mà giảng viên được phép xem; mọi tham số đều truyền riêng khỏi câu SQL.
 export const listReviewsSql = `WITH input AS (
   SELECT
@@ -24,12 +26,10 @@ filtered AS (
     AND (input.requested_status = 'all' OR r.status = input.requested_status)
     AND (
       input.can_access_all_classes
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = input.reviewer_email
-          AND access.erp_course_class_id = r.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: 'input.reviewer_email',
+        classIdSql: 'r.erp_course_class_id'
+      })}
     )
 ),
 items AS (
@@ -96,12 +96,10 @@ target AS (
   WHERE r.public_id = input.review_id
     AND (
       input.can_access_all_classes
-      OR EXISTS (
-        SELECT 1
-        FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = input.reviewer_email
-          AND access.erp_course_class_id = r.erp_course_class_id
-      )
+      OR ${buildTeacherClassAccessPredicate({
+        reviewerEmailSql: 'input.reviewer_email',
+        classIdSql: 'r.erp_course_class_id'
+      })}
     )
     AND (
       (r.status = 'pending_review' AND input.decision IN ('approve', 'reject', 'choose_another'))
@@ -528,6 +526,34 @@ SELECT
   now() AS server_now
 FROM resolved
 LIMIT 1;`;
+
+// Chỉ mở lại phiên trong vé đã xác thực nếu học viên chưa bắt đầu nghe hoặc nộp bài.
+// Giữ nguyên UUID của lượt thi bù; đồng hồ 8 giờ của một bài đã bắt đầu không bị đặt lại.
+export const renewUnstartedGrantedTermTestExamSessionSql = `UPDATE assessment.term_test_exam_session
+SET
+  prepared_at = now(),
+  updated_at = now(),
+  superseded_at = NULL
+WHERE id = $1::uuid
+  AND test_slug = $2
+  AND definition_version = $3::int
+  AND erp_course_class_id = $4::bigint
+  AND erp_student_contact_id = $5::bigint
+  AND listening_started_at IS NULL
+  AND listening_submitted_at IS NULL
+  AND attempt_id IS NULL
+  AND prepared_at < now() - interval '8 hours'
+RETURNING
+  id::text AS exam_session_token,
+  test_slug,
+  prepared_at,
+  listening_started_at,
+  listening_deadline_at,
+  listening_draft,
+  listening_draft_revision,
+  listening_submitted_at,
+  attempt_id::text AS attempt_token,
+  now() AS server_now;`;
 
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
@@ -1191,6 +1217,12 @@ WHERE id = $1::uuid
   AND completed_at IS NOT NULL
 LIMIT 1;`;
 
+export const findTermTestAttemptEventSlugSql = `SELECT test_slug
+FROM assessment.term_test_attempt
+WHERE id = $1::uuid
+  AND superseded_at IS NULL
+LIMIT 1;`;
+
 export const fetchTermTestResultSql = `SELECT
   attempt.id::text AS attempt_token,
   attempt.test_slug,
@@ -1267,16 +1299,23 @@ allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
     course.erp_class_name_snapshot AS class_name,
+    access.portal_teacher_contact_id IS NOT NULL AS is_assigned_teacher,
     COALESCE(access.class_started_at, metadata.class_started_at) AS class_started_at,
     COALESCE(access.class_ended_at, metadata.class_ended_at) AS class_ended_at,
     COALESCE(access.class_status_snapshot, metadata.class_status) AS class_status
   FROM mapping.classroom_course_mapping AS course
-  JOIN mapping.reviewer_class_access AS access
+  LEFT JOIN mapping.reviewer_class_access AS access
     ON access.reviewer_email = $1
    AND access.erp_course_class_id = course.erp_course_class_id
    AND access.portal_teacher_contact_id IS NOT NULL
   LEFT JOIN portal_class_metadata AS metadata
     ON metadata.erp_course_class_id = course.erp_course_class_id
+  WHERE $2::boolean
+    OR access.portal_teacher_contact_id IS NOT NULL
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
 ),
 active_tests AS (
   SELECT slug, title, version
@@ -1289,6 +1328,8 @@ SELECT jsonb_build_object(
       jsonb_build_object(
         'id', class_id,
         'name', class_name,
+        'accessMode', CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END,
+        'isAssignedTeacher', is_assigned_teacher,
         'status', class_status,
         'startedAt', class_started_at,
         'endedAt', class_ended_at
@@ -1314,15 +1355,19 @@ SELECT jsonb_build_object(
 export const listTermTestTeacherOptionsLegacySql = `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
-    course.erp_class_name_snapshot AS class_name
-  FROM mapping.classroom_course_mapping AS course
-  WHERE $2::boolean
-    OR EXISTS (
+    course.erp_class_name_snapshot AS class_name,
+    EXISTS (
       SELECT 1
       FROM mapping.reviewer_class_access AS access
       WHERE access.reviewer_email = $1
         AND access.erp_course_class_id = course.erp_course_class_id
-    )
+    ) AS is_assigned_teacher
+  FROM mapping.classroom_course_mapping AS course
+  WHERE $2::boolean
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })}
 ),
 active_tests AS (
   SELECT slug, title, version
@@ -1332,7 +1377,12 @@ active_tests AS (
 SELECT jsonb_build_object(
   'classes', COALESCE((
     SELECT jsonb_agg(
-      jsonb_build_object('id', class_id, 'name', class_name)
+        jsonb_build_object(
+          'id', class_id,
+          'name', class_name,
+          'accessMode', CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END,
+          'isAssignedTeacher', is_assigned_teacher
+        )
       ORDER BY class_name
     )
     FROM allowed_classes
@@ -1359,15 +1409,21 @@ target_classes AS (
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
 ),
 authorized_classes AS (
-  SELECT target.*
-  FROM target_classes AS target
-  WHERE $4::boolean
-    OR EXISTS (
+  SELECT
+    target.*,
+    EXISTS (
       SELECT 1
       FROM mapping.reviewer_class_access AS access
       WHERE access.reviewer_email = $3
         AND access.erp_course_class_id = target.erp_course_class_id
-    )
+        AND access.portal_teacher_contact_id IS NOT NULL
+    ) AS is_assigned_teacher
+  FROM target_classes AS target
+  WHERE $4::boolean
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -1453,6 +1509,12 @@ SELECT
   (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
   (SELECT erp_course_class_id::text FROM authorized_classes LIMIT 1) AS class_id,
   (SELECT erp_class_name_snapshot FROM authorized_classes LIMIT 1) AS class_name,
+  (SELECT is_assigned_teacher FROM authorized_classes LIMIT 1) AS is_assigned_teacher,
+  (
+    SELECT CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END
+    FROM authorized_classes
+    LIMIT 1
+  ) AS access_mode,
   COALESCE((
     SELECT jsonb_agg(
       jsonb_build_object(
@@ -1579,12 +1641,10 @@ authorized_classes AS (
   SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 latest_attempt AS (
   SELECT attempt.*
@@ -1675,12 +1735,10 @@ authorized_classes AS (
   SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
-    OR EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    )
+    OR ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })}
 ),
 latest_attempt AS (
   SELECT attempt.*

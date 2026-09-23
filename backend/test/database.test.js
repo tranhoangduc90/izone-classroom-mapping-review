@@ -73,6 +73,11 @@ const schemaBeforeMigration = `
     note TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
+
+  CREATE TABLE mapping.reviewer_class_assignment (
+    reviewer_email TEXT NOT NULL,
+    class_name TEXT NOT NULL
+  );
 `;
 
 test('migration và hai câu SQL chính chạy được trên PostgreSQL trong RAM', async () => {
