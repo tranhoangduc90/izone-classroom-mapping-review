@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import crypto, { createHash } from 'node:crypto';
-import { buildK56PortalGrades, isK56PortalPilot } from './k56-portal-pilot.js';
+import { buildK56PortalGrades, isK56PortalAttempt } from './k56-portal-pilot.js';
 
 const syncResponseSchema = z.object({
   ok: z.literal(true),
@@ -29,6 +29,23 @@ function syncFingerprint(payload) {
 function isTimeoutError(error) {
   return ['AbortError', 'TimeoutError'].includes(String(error?.name || ''))
     || /timeout|timed out/i.test(String(error?.message || ''));
+}
+
+async function isK56ClassTestGranted(pool, payload) {
+  if (!pool) return false;
+  const result = await pool.query(`SELECT EXISTS (
+    SELECT 1
+    FROM assessment.term_test_class_access AS access
+    JOIN mapping.classroom_course_mapping AS course
+      ON course.erp_course_class_id = access.erp_course_class_id
+    JOIN assessment.test_definition AS definition
+      ON definition.slug = access.test_slug
+     AND definition.is_active = true
+    WHERE access.test_slug = $1
+      AND access.erp_course_class_id = $2::bigint
+      AND access.enabled = true
+  ) AS allowed;`, [payload.testSlug, payload.classId]);
+  return result.rows[0]?.allowed === true;
 }
 
 async function claimK56SyncState(pool, payload, fingerprint) {
@@ -113,11 +130,13 @@ export function createErpGradeSync({ config, pool = null, fetchImpl = globalThis
     const isK56 = String(payload.testSlug).endsWith('-k56');
     if (config.k56PortalPilotEnabled && !isK56) return { status: 'disabled' };
     if (isK56) {
-      if (!config.k56PortalPilotEnabled || !isK56PortalPilot({
+      if (!config.k56PortalPilotEnabled || !isK56PortalAttempt({
         test_slug: payload.testSlug,
         class_id: payload.classId,
         student_id: payload.studentId
       }) || !Object.keys(payload.grades || {}).length) return { status: 'disabled' };
+      // Chỉ gửi khi database xác nhận đúng cặp lớp–đề đang được mở; lỗi DB không được suy là có quyền.
+      if (!await isK56ClassTestGranted(pool, payload)) return { status: 'disabled' };
 
       const fingerprint = syncFingerprint(payload);
       const claim = await claimK56SyncState(pool, payload, fingerprint);

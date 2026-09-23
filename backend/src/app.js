@@ -5,7 +5,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { isK56TestSlug, profileForConfig } from './deployment-profile.js';
-import { isK56PortalPilot } from './k56-portal-pilot.js';
+import { isK56PortalAttempt } from './k56-portal-pilot.js';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
 import { createTermTestResultEvents } from './term-test-result-events.js';
@@ -434,20 +434,20 @@ function serializeTermTestWriting(row, grading = null) {
 
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingScore = null) {
   const testSlug = String(attempt?.test_slug || attempt?.slug || combinedResult?.testSlug || '');
-  const k56Pilot = isK56PortalPilot(attempt);
-  if (!/^term-test-[1-9][0-9]*$/.test(testSlug) && !k56Pilot) return 'not_applicable';
+  const k56Attempt = isK56PortalAttempt(attempt);
+  if (!/^term-test-[1-9][0-9]*$/.test(testSlug) && !k56Attempt) return 'not_applicable';
   if (String(attempt?.class_name || '').trim().toUpperCase() === 'CODEXDEMO806') return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult, { writing: writingScore });
     const syncResult = await syncErpGrades(payload);
-    if (k56Pilot) {
+    if (k56Attempt) {
       if (syncResult?.status === 'disabled') return 'not_applicable';
       if (['synced', 'processing', 'failed_response', 'unknown'].includes(syncResult?.status)) return syncResult.status;
       return 'unknown';
     }
     return 'synced';
   } catch (error) {
-    if (k56Pilot) {
+    if (k56Attempt) {
       console.error(`ERP grade sync internal_error type=${error?.name || 'Error'} code=${error?.code || 'UNEXPECTED'}`);
       return 'unknown';
     }

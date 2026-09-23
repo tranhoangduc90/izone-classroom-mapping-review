@@ -1,16 +1,24 @@
 import { ieltsBand } from './term-tests.js';
 
-// Pilot khóa 56: chỉ IC2264. Mini Test dùng metadata riêng trên Portal.
+// Dữ liệu vào: slug K56 và ID kỹ thuật của lớp/học viên trong ERP.
+// Việc chính: kiểm hình dạng đích; quyền mở lớp–đề được kiểm riêng trong database trước khi gửi.
+// Kết quả: đúng ba loại bài K56 có thể tạo điểm, không phụ thuộc ID lớp pilot.
+// Khi lỗi: không tạo payload ghi Portal; caller báo trạng thái cần kiểm tra.
 export const K56_PORTAL_TESTS = Object.freeze({
   'term-test-1-k56': { listening: 40, reading: 26, writing: 9 },
   'term-test-2-k56': { listening: 40, reading: 40, writing: 9 },
   'mini-test-k56': { listening: 10, reading: 13 }
 });
 
-export function isK56PortalPilot(attempt) {
+function isSafePositiveId(value) {
+  const text = String(value ?? '');
+  return /^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(Number(text));
+}
+
+export function isK56PortalAttempt(attempt) {
   return Object.hasOwn(K56_PORTAL_TESTS, String(attempt?.test_slug || attempt?.slug || ''))
-    && String(attempt?.class_id) === '1252'
-    && /^[1-9][0-9]*$/.test(String(attempt?.student_id || ''));
+    && isSafePositiveId(attempt?.class_id)
+    && isSafePositiveId(attempt?.student_id);
 }
 
 function numericBand(value) {
@@ -20,7 +28,7 @@ function numericBand(value) {
 }
 
 export function buildK56PortalGrades(attempt, result, extraGrades = {}) {
-  if (!isK56PortalPilot(attempt)) return {};
+  if (!isK56PortalAttempt(attempt)) return {};
   const testSlug = attempt.test_slug || attempt.slug;
   const limits = K56_PORTAL_TESTS[testSlug];
   const usesBand = testSlug === 'term-test-2-k56';

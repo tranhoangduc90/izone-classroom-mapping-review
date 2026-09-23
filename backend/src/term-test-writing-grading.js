@@ -6,7 +6,7 @@
 
 import crypto from 'node:crypto';
 import { buildErpGradePayload } from './erp-sync.js';
-import { isK56PortalPilot } from './k56-portal-pilot.js';
+import { isK56PortalAttempt } from './k56-portal-pilot.js';
 
 const GRADING_VERSION = 1;
 export const MAX_WRITING_GRADING_CLAIM_LIMIT = 4;
@@ -649,19 +649,19 @@ export function createTermTestWritingGradingService({
     const attempt = attemptResult.rows[0];
     const isDemo = String(attempt.class_name || '').trim().toUpperCase() === 'CODEXDEMO806';
     let portalSyncStatus = 'not_applicable';
-    const k56Pilot = isK56PortalPilot(attempt);
-    if (!isDemo && (/^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || '')) || k56Pilot)) {
+    const k56Attempt = isK56PortalAttempt(attempt);
+    if (!isDemo && (/^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || '')) || k56Attempt)) {
       try {
         const syncResult = await syncErpGrades(buildErpGradePayload(
           attempt,
           attempt.combined_result,
           { writing: stored.grading.writingScore }
         ));
-        portalSyncStatus = k56Pilot && ['synced', 'processing', 'failed_response', 'unknown'].includes(syncResult?.status)
+        portalSyncStatus = k56Attempt && ['synced', 'processing', 'failed_response', 'unknown'].includes(syncResult?.status)
           ? syncResult.status
           : syncResult?.status === 'synced' ? 'synced' : 'not_applicable';
       } catch (error) {
-        if (k56Pilot) {
+        if (k56Attempt) {
           // Portal K56 có thể đã ghi trước khi kết nối lỗi; không được tự gửi lại mù.
           console.error(`Writing Portal sync internal_error type=${error?.name || 'Error'} code=${error?.code || 'UNEXPECTED'}`);
           portalSyncStatus = 'unknown';

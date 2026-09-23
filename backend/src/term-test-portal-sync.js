@@ -15,7 +15,18 @@ WHERE attempt.id = $1::uuid
     )
     OR (
       attempt.test_slug ~ '^term-test-[1-9][0-9]*-k56$'
-      AND attempt.erp_course_class_id = 1252
+      AND EXISTS (
+        SELECT 1
+        FROM assessment.term_test_class_access AS access
+        JOIN mapping.classroom_course_mapping AS course
+          ON course.erp_course_class_id = access.erp_course_class_id
+        JOIN assessment.test_definition AS definition
+          ON definition.slug = access.test_slug
+         AND definition.is_active = true
+        WHERE access.test_slug = attempt.test_slug
+          AND access.erp_course_class_id = attempt.erp_course_class_id
+          AND access.enabled = true
+      )
     )
   )
 ON CONFLICT (attempt_id) DO UPDATE

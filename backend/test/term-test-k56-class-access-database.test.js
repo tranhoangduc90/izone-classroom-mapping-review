@@ -65,11 +65,12 @@ test('K56 chỉ mở đúng cặp lớp–đề đã được duyệt trên cả
         UNIQUE (test_slug, erp_course_class_id, temporary_code_normalized)
       );
       INSERT INTO mapping.classroom_course_mapping VALUES
-        (1252, 'IC2264'), (1165, 'IC2180'), (2207, 'IC2207');
+        (1252, 'IC2264'), (1165, 'IC2180'), (2207, 'IC2207'), (2322, 'IC2322');
       INSERT INTO mapping.student_mapping_review VALUES
         ('00000000-0000-4000-8000-000000000001', 1252, 1, 'K56 được duyệt', 'pending_review'),
         ('00000000-0000-4000-8000-000000000002', 1165, 2, 'K56 chưa duyệt', 'pending_review'),
-        ('00000000-0000-4000-8000-000000000003', 2207, 3, 'K67', 'pending_review');
+        ('00000000-0000-4000-8000-000000000003', 2207, 3, 'K67', 'pending_review'),
+        ('00000000-0000-4000-8000-000000000004', 2322, 4, 'K56 chưa nhập roster', 'pending_review');
       INSERT INTO assessment.test_definition (slug, title, version) VALUES
         ('term-test-1-k56', 'Term K56', 1),
         ('term-test-2-k56', 'Term 2 K56', 1),
@@ -77,7 +78,12 @@ test('K56 chỉ mở đúng cặp lớp–đề đã được duyệt trên cả
         ('term-test-1', 'Term K67', 1);
       INSERT INTO assessment.term_test_class_access VALUES
         ('term-test-1-k56', 1252, true),
-        ('mini-test-k56', 1252, true);
+        ('mini-test-k56', 1252, true),
+        ('term-test-1-k56', 2322, true),
+        ('mini-test-k56', 2322, true);
+      INSERT INTO assessment.term_test_roster VALUES
+        ('term-test-1-k56', 1252, 1, '00000000-0000-4000-8000-000000000001', 'K56 được duyệt'),
+        ('mini-test-k56', 1252, 1, '00000000-0000-4000-8000-000000000011', 'K56 được duyệt');
       GRANT USAGE ON SCHEMA mapping, assessment TO mapping_review_api;
       GRANT SELECT ON ALL TABLES IN SCHEMA mapping TO mapping_review_api;
       GRANT SELECT ON assessment.test_definition, assessment.term_test_roster TO mapping_review_api;
@@ -101,6 +107,19 @@ test('K56 chỉ mở đúng cặp lớp–đề đã được duyệt trên cả
     ]);
     assert.equal(Number(deniedMini.rows[0]?.class_count), 0);
     assert.equal(deniedMini.rows[0]?.student_ref, null);
+
+    const missingRoster = await database.query(listTermTestRosterSql, ['IC2322', 'term-test-1-k56']);
+    assert.equal(Number(missingRoster.rows[0]?.class_count), 0);
+    assert.deepEqual(missingRoster.rows[0]?.students, []);
+    const missingRosterStudent = await database.query(findStudentForTermTestSql, [
+      'IC2322', 'term-test-1-k56', '00000000-0000-4000-8000-000000000004'
+    ]);
+    assert.equal(missingRosterStudent.rows.length, 0);
+    const missingMiniRoster = await database.query(registerTemporaryTermTestStudentSql, [
+      'IC2322', 'mini-test-k56', 'T02', 'Học viên thử', 'học viên thử'
+    ]);
+    assert.equal(Number(missingMiniRoster.rows[0]?.class_count), 0);
+    assert.equal(missingMiniRoster.rows[0]?.student_ref, null);
 
     const approvedRoster = await database.query(listTermTestRosterSql, ['IC2264', 'term-test-1-k56']);
     assert.equal(Number(approvedRoster.rows[0]?.class_count), 1);

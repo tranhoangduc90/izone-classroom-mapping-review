@@ -274,6 +274,14 @@ target_classes AS (
           AND access.enabled = true
       )
     )
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_roster AS roster
+        WHERE roster.test_slug = $2
+          AND roster.erp_course_class_id = course.erp_course_class_id
+      )
+    )
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -303,6 +311,7 @@ students AS (
     ON target.erp_course_class_id = review.erp_course_class_id
   CROSS JOIN roster_mode
   WHERE roster_mode.has_curated_roster = false
+    AND right($2, 4) <> '-k56'
     AND review.status <> 'superseded'
 )
 SELECT
@@ -341,6 +350,14 @@ target_classes AS (
         WHERE access.test_slug = $2
           AND access.erp_course_class_id = course.erp_course_class_id
           AND access.enabled = true
+      )
+    )
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_roster AS roster
+        WHERE roster.test_slug = $2
+          AND roster.erp_course_class_id = course.erp_course_class_id
       )
     )
 ),
@@ -401,6 +418,14 @@ export const findStudentForTermTestSql = `WITH target_classes AS (
           AND access.enabled = true
       )
     )
+    AND (
+      right($2, 4) <> '-k56'
+      OR EXISTS (
+        SELECT 1 FROM assessment.term_test_roster AS roster
+        WHERE roster.test_slug = $2
+          AND roster.erp_course_class_id = course.erp_course_class_id
+      )
+    )
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -433,6 +458,7 @@ eligible_student AS (
     ON target.erp_course_class_id = review.erp_course_class_id
   CROSS JOIN roster_mode
   WHERE roster_mode.has_curated_roster = false
+    AND right($2, 4) <> '-k56'
     AND review.public_id = $3::uuid
     AND review.status <> 'superseded'
 
