@@ -35,6 +35,16 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
       reviewer_email TEXT NOT NULL,
       class_name TEXT NOT NULL
     );
+    CREATE TABLE mapping.reviewer_account (
+      email TEXT PRIMARY KEY,
+      display_name TEXT,
+      role TEXT NOT NULL,
+      can_access_all_classes BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'active',
+      google_subject TEXT,
+      last_login_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ
+    );
     CREATE TABLE assessment.test_definition (
       slug TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -101,6 +111,9 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
       (2264, 'IC2264'), (2265, 'IC2265');
     INSERT INTO mapping.reviewer_class_access VALUES
       ('teacher@example.test', 2264);
+    INSERT INTO mapping.reviewer_account (email, display_name, role) VALUES
+      ('teacher@example.test', 'Giảng viên mẫu', 'teacher'),
+      ('admin@example.test', 'Quản trị viên mẫu', 'admin');
     INSERT INTO assessment.test_definition VALUES
       ('term-test-2-k56', 'Term Test 2 khóa 56', 1, true),
       ('term-test-2', 'Term Test 2', 1, true);
@@ -159,6 +172,40 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
   assert.equal(response.body.class.name, 'IC2265');
   assert.equal(response.body.class.accessMode, 'admin_override');
   assert.deepEqual(response.body.students.map(item => item.ref), ['00000000-0000-4000-8000-000000000002']);
+
+  const googleApp = createApp({
+    pool: {
+      // PGlite trả rows nhưng không trả rowCount như pg; mô phỏng đúng hợp đồng pool của production.
+      async query(sql, params) {
+        const result = await database.query(sql, params);
+        return { ...result, rowCount: result.rows.length };
+      }
+    },
+    config: { ...config, authMode: 'google', googleClientId: 'client-for-test' },
+    verifyGoogleToken: async token => ({
+      email: token === 'admin-test' ? 'admin@example.test' : 'teacher@example.test',
+      sub: token === 'admin-test' ? 'admin-subject-test' : 'teacher-subject-test',
+      email_verified: true
+    }),
+    logger: { info() {}, error() {} }
+  });
+  const teacherOwn = await request(googleApp)
+    .get('/api/term-tests/teacher/results?class=IC2264&test=term-test-2-k56')
+    .set('Authorization', 'Bearer teacher-test');
+  assert.equal(teacherOwn.status, 200, JSON.stringify(teacherOwn.body));
+  assert.equal(teacherOwn.body.class.accessMode, 'assigned_teacher');
+  assert.deepEqual(teacherOwn.body.students.map(item => item.ref), ['00000000-0000-4000-8000-000000000001']);
+  const teacherOther = await request(googleApp)
+    .get('/api/term-tests/teacher/results?class=IC2265&test=term-test-2-k56')
+    .set('Authorization', 'Bearer teacher-test');
+  assert.equal(teacherOther.status, 403);
+  assert.equal(teacherOther.body.error, 'ACCESS_DENIED');
+  const adminOther = await request(googleApp)
+    .get('/api/term-tests/teacher/results?class=IC2265&test=term-test-2-k56')
+    .set('Authorization', 'Bearer admin-test');
+  assert.equal(adminOther.status, 200);
+  assert.equal(adminOther.body.class.accessMode, 'admin_override');
+  assert.equal(adminOther.body.class.isAssignedTeacher, false);
 
   // Cùng source chạy profile API chính sau khi có đúng metadata Portal của schema ấy.
   await database.exec(`
