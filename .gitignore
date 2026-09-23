@@ -6,3 +6,5 @@ node_modules/
 _backups/
 .playwright-cli/
 backend/private-assets/
+__pycache__/
+*.pyc

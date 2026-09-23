@@ -1,6 +1,8 @@
 # Đưa snapshot K56 từ mapping chung vào kho bài thi riêng
 
-Trạng thái 24/09/2026: **chưa triển khai tuyến chuyển dữ liệu hoặc mở lớp mới**. Nguồn chung đã đối soát 29 lớp/447 học viên `on_going`; kho bài thi K56 chỉ có IC2264, 28 lớp còn thiếu. Hai kho PostgreSQL và hai API ở hai mạng Docker khác nhau; không đổi `DATABASE_URL` hoặc nối mạng production chỉ để giải quyết việc này.
+Trạng thái 24/09/2026: **B1/B2 đã có công cụ xem trước chỉ đọc; chưa nhập roster hoặc mở lớp mới**. Nguồn chung đã đối soát 29 lớp/447 học viên `on_going`; kho bài thi K56 chỉ có IC2264, 28 lớp còn thiếu. Hai kho PostgreSQL và hai API ở hai mạng Docker khác nhau; không đổi `DATABASE_URL` hoặc nối mạng production chỉ để giải quyết việc này.
+
+Lệnh xem trước trên máy Đức: `python backend/ops/releases/k56-class-access-20260924/bridge_dry_run.py`. Công cụ lấy thông tin kết nối từ container đang chạy qua SSH, chỉ thực thi `SELECT`, giữ hồ sơ học viên trong RAM và chỉ in số đếm. Lượt live `sync_run_id=102` trả 29 lớp, 447 học viên, ba đề, 28 mapping lớp cần thêm, 1.305 hàng roster cần thêm, 36 hàng roster cũ cần giữ, 0 tên cũ đổi, 0 hàng cũ ngoài phạm vi và 2 lớp chưa ghép Classroom; **productionWrites=0**. Đây là kết quả xem trước, không phải bằng chứng đã mở bài cho 28 lớp.
 
 ## Kết quả cần đạt
 
@@ -26,8 +28,8 @@ Hai contract định danh kèm theo tách đích ghi roster (`identity-contract.
 
 | ID | Đầu vào → đầu ra | Điều kiện đóng |
 | --- | --- | --- |
-| B1 | Snapshot chung mới nhất → gói đọc trong bộ nhớ, có khóa/lượt nguồn | Chặn nguồn cũ, rỗng, giảm bất thường, mã/ID mâu thuẫn; test 0/1/N lớp, trùng và đảo thứ tự. |
-| B2 | Gói B1 → kế hoạch ghi K56 `dry-run` | Chỉ đếm thêm/sửa/giữ, không chứa tên/email trong output; chứng minh giữ UUID của IC2264 và bài đã nộp. |
+| B1 — đã làm | Snapshot chung mới nhất → gói đọc trong bộ nhớ, có khóa/lượt nguồn | Công cụ chặn nguồn cũ/rỗng, nguồn giảm bất thường, mã/ID mâu thuẫn, sai database; 9 regression fixture đạt. |
+| B2 — đã làm | Gói B1 → kế hoạch ghi K56 `dry-run` | Chỉ xuất số đếm, không chứa tên/email/UUID; đọc live giữ 36 UUID theo từng đề và không ghi production. |
 | B3 | Migration cổng quyền + image backend có cổng quyền → kho K56 vẫn chỉ mở IC2264 | Staging và full suite đạt; readback production đúng ba hàng quyền IC2264, lớp khác đóng. Không nhập roster trước B3. |
 | B4 | B1/B2 sau khi B3 đạt → nhập một chiều theo giao dịch | Backup hai kho và image; đọc lại 29 lớp, 447 học viên `on_going` cho mỗi đề, UUID cũ nguyên vẹn; lỗi một lớp không báo xanh cả lô. |
 | B5 | Roster B4 + phạm vi ERP mới nhất → bật cặp lớp–đề | Đúng 29 × 3 cặp `enabled`, lớp ngoài phạm vi đóng; smoke HTTP đủ ba đề/K56 và K67 không đổi. |
@@ -47,4 +49,4 @@ Quan hệ phụ thuộc: `B1 → B2`; `B2` và `B3` phải cùng xong trước `
 
 Review Focus: nhầm ID học viên; mở lớp trước khi có gate; mất UUID bài cũ; snapshot cũ/thiếu được báo thành công; rollback image làm lớp mở ngoài ý muốn.
 
-Lệnh nền hiện tại: `npm test` trong `backend/` đạt 178/178; `npm run check` đạt; `python tools/writing-benchmark/audit-k56-cohort-readiness.py` hiện trả `not_ready`, 1/29 mapping, 1/29 roster theo đề, bảng quyền chưa có. Sau B4/B5, cùng lệnh audit phải trả `ready` với 29/29, 447 lượt đang học và ba đề đủ quyền. Trước mỗi release còn phải chạy full suite trên commit cuối, quality-gate checker của lát backend, HTTP smoke K56/K67 và đối chiếu số lượng/UUID ở database đích.
+Lệnh nền hiện tại: 9 test Python của tuyến xem trước đạt; `npm test` trong `backend/` đạt 178/178; `npm run check` đạt; `python tools/writing-benchmark/audit-k56-cohort-readiness.py` hiện trả `not_ready`, 1/29 mapping, 1/29 roster theo đề, bảng quyền chưa có. Sau B4/B5, cùng lệnh audit phải trả `ready` với 29/29, 447 lượt đang học và ba đề đủ quyền. Trước mỗi release còn phải chạy full suite trên commit cuối, quality-gate checker của lát backend, HTTP smoke K56/K67 và đối chiếu số lượng/UUID ở database đích.
