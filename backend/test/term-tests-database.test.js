@@ -132,6 +132,12 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
   );
   await database.exec(submissionReliabilityMigration);
   await database.exec(submissionReliabilityMigration);
+  const writingRevisionMigration = await readFile(
+    new URL('../ops/migrations/202609230001_term_test_writing_draft_revision.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(writingRevisionMigration);
+  await database.exec(writingRevisionMigration);
 
   const section = makeSection();
   await database.exec(`
@@ -359,7 +365,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     'Bản nháp Task 1',
     'Bản nháp Task 2',
     'draft',
-    40
+    40,
+    1
   ]);
   assert.equal(draft.rows[0].writing_task_1, 'Bản nháp Task 1');
   assert.equal(Boolean(draft.rows[0].writing_started_at), true);
@@ -370,7 +377,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     'Bài nộp Task 1',
     'Bài nộp Task 2',
     'submit',
-    40
+    40,
+    1
   ]);
   assert.equal(Boolean(submittedWriting.rows[0].writing_submitted_at), true);
 
@@ -379,7 +387,8 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     'Không được ghi đè Task 1',
     'Không được ghi đè Task 2',
     'submit',
-    40
+    40,
+    1
   ]);
   assert.equal(duplicateWriting.rows[0].writing_task_1, 'Bài nộp Task 1');
   assert.equal(duplicateWriting.rows[0].writing_task_2, 'Bài nộp Task 2');
@@ -664,7 +673,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     JSON.stringify(protectedCombined)
   ]);
   const protectedWritingDraft = await database.query(saveTermTestWritingSql, [
-    protectedAttemptToken, 'Task 1 đúng hạn', 'Task 2 đúng hạn', 'draft', 40
+    protectedAttemptToken, 'Task 1 đúng hạn', 'Task 2 đúng hạn', 'draft', 40, 1
   ]);
   assert.equal(protectedWritingDraft.rows[0].writing_task_1, 'Task 1 đúng hạn');
   await database.query(
@@ -672,7 +681,7 @@ test('migration và luồng Listening → Reading → Result chạy trên Postgr
     [protectedAttemptToken]
   );
   const lateWritingSubmit = await database.query(saveTermTestWritingSql, [
-    protectedAttemptToken, 'Task 1 sửa muộn', 'Task 2 sửa muộn', 'submit', 40
+    protectedAttemptToken, 'Task 1 sửa muộn', 'Task 2 sửa muộn', 'submit', 40, 2
   ]);
   assert.equal(lateWritingSubmit.rows[0].writing_task_1, 'Task 1 đúng hạn');
   assert.equal(lateWritingSubmit.rows[0].writing_task_2, 'Task 2 đúng hạn');

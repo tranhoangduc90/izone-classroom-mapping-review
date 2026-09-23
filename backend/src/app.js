@@ -1,11 +1,15 @@
 import crypto from 'node:crypto';
 import express from 'express';
-import { rateLimit } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import { z } from 'zod';
+import { registerTermTestPlanning } from './term-test-planning.js';
+import { isK56TestSlug, profileForConfig } from './deployment-profile.js';
+import { isK56PortalPilot } from './k56-portal-pilot.js';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
 import {
+  checkpointTermTestListeningAudioSql,
   completeReadingAttemptSql,
   fetchTermTestAttemptReviewSql,
   fetchTermTestResultSql,
@@ -16,11 +20,13 @@ import {
   findLatestTermTestAttemptForStudentSql,
   findTermTestAttemptSlugSql,
   findStudentForTermTestSql,
+  insertGrantedTermTestExamSessionSql,
   insertProtectedListeningAttemptSql,
   insertTermTestExamSessionSql,
   insertListeningAttemptSql,
   findStudentForMiniTestSql,
   listReviewsSql,
+  listTermTestTeacherOptionsLegacySql,
   listTermTestTeacherOptionsSql,
   listTermTestTeacherResultsSql,
   fetchTermTestTeacherAttemptReviewSql,
@@ -46,6 +52,7 @@ import { createWritingTestService, WritingTestError } from './writing-tests.js';
 import {
   buildTermTestWritingImageToken,
   decodeTermTestWritingImageDataUrl,
+  MAX_WRITING_GRADING_CLAIM_LIMIT,
   TermTestWritingGradingError,
   verifyTermTestWritingImageToken
 } from './term-test-writing-grading.js';
@@ -66,8 +73,9 @@ const decisionSchema = z.object({
   }
 });
 
-const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
-const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*(?:-k56)?|mini-test-[a-z0-9-]+)$/);
+// Nhận mã lớp thực tế như CS.070626; vẫn giới hạn ký tự/độ dài trước khi truy vấn có tham số.
+const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
+const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*(?:-k[1-9][0-9]*)?|mini-test-[a-z0-9-]+)$/);
 const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
 const temporaryStudentRegistrationSchema = z.object({
   classCode: classCodeSchema,
@@ -101,18 +109,34 @@ const readingSubmissionSchema = z.object({
 });
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
 const demoResetSchema = z.object({
-  classCode: z.literal('CODEXDEMO806'),
-  testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5']),
+  classCode: z.enum(['CODEXDEMO806', 'CODEXDEMO56']),
+  testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'term-test-1-k56', 'term-test-2-k56', 'mini-test-k56']),
   studentRef: z.string().uuid(),
   confirmation: z.literal('RESET_DEMO_STUDENT')
+}).refine(value => (
+  value.classCode === 'CODEXDEMO56'
+    ? isK56TestSlug(value.testSlug)
+    : !isK56TestSlug(value.testSlug)
+), {
+  message: 'Mã lớp demo không khớp bài test.',
+  path: ['testSlug']
 });
 const examSessionPrepareSchema = z.object({
   classCode: classCodeSchema,
   studentRef: z.string().uuid(),
   examSessionToken: z.string().uuid().optional(),
+  retakeGrant: z.string().trim().min(80).max(2048).optional(),
   legacyElapsedSeconds: z.number().int().min(0).max(7200).optional().default(0)
 });
-const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid() });
+const examSessionStartSchema = z.object({
+  examSessionToken: z.string().uuid(),
+  heardSeconds: z.number().min(0).max(7200).optional()
+});
+const audioProgressSchema = z.object({
+  examSessionToken: z.string().uuid(),
+  heardSeconds: z.number().min(0).max(7200),
+  state: z.enum(['playing', 'pause', 'waiting', 'stalled', 'recovered', 'pagehide'])
+});
 const attemptResumeSchema = z.object({
   classCode: classCodeSchema,
   studentRef: z.string().uuid(),
@@ -155,6 +179,7 @@ const termTestClientEventSchema = z.object({
 });
 const writingSubmissionSchema = z.object({
   attemptToken: z.string().uuid(),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   action: z.enum(['start', 'draft', 'submit']),
   task1: z.string().max(12_000),
   task2: z.string().max(12_000)
@@ -162,7 +187,9 @@ const writingSubmissionSchema = z.object({
 const writingGradingWorkerSchema = z.string().trim().regex(/^[A-Za-z0-9_.:-]{3,100}$/);
 const writingGradingClaimSchema = z.object({
   workerId: writingGradingWorkerSchema,
-  limit: z.number().int().min(1).max(10).optional().default(4)
+  limit: z.number().int().min(1).max(MAX_WRITING_GRADING_CLAIM_LIMIT)
+    .optional().default(MAX_WRITING_GRADING_CLAIM_LIMIT),
+  testSlug: testSlugSchema.optional()
 });
 const writingGradingImageParamsSchema = z.object({ jobId: z.string().uuid() });
 const writingGradingImageQuerySchema = z.object({ token: z.string().regex(/^[0-9a-f]{64}$/i) });
@@ -344,6 +371,44 @@ function hasValidSharedSecret(supplied, expected) {
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+const listeningRetakeGrantSchema = z.object({
+  v: z.literal(1),
+  purpose: z.literal('listening-retake'),
+  sessionToken: z.string().uuid(),
+  testSlug: testSlugSchema,
+  classCode: classCodeSchema,
+  studentRef: z.string().uuid(),
+  expiresAt: z.number().int().positive()
+});
+
+// Vé thi bù được ký bằng bí mật chỉ có trên máy chủ. Trình duyệt chỉ gửi vé;
+// nếu chữ ký, lớp, học viên, bài thi hoặc hạn dùng sai thì không tạo phiên mới.
+function verifyListeningRetakeGrant(token, expected, secret, nowSeconds = Math.floor(Date.now() / 1000)) {
+  try {
+    if (!secret || typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+    const suppliedSignature = Buffer.from(parts[1], 'base64url');
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(`izone-listening-retake-v1:${parts[0]}`)
+      .digest();
+    if (suppliedSignature.length !== expectedSignature.length
+      || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) return null;
+    const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    const parsed = listeningRetakeGrantSchema.safeParse(decoded);
+    if (!parsed.success) return null;
+    const grant = parsed.data;
+    if (grant.expiresAt <= nowSeconds || grant.expiresAt > nowSeconds + 31 * 24 * 60 * 60) return null;
+    if (grant.testSlug !== expected.testSlug
+      || grant.classCode !== expected.classCode
+      || grant.studentRef !== expected.studentRef) return null;
+    return grant;
+  } catch {
+    return null;
+  }
+}
+
 function serializeTermTestWriting(row, grading = null) {
   return {
     task1: String(row?.writing_task_1 || ''),
@@ -355,19 +420,31 @@ function serializeTermTestWriting(row, grading = null) {
     timedOut: Boolean(row?.writing_timed_out),
     updatedAt: row?.writing_updated_at || null,
     submittedAt: row?.writing_submitted_at || null,
+    revision: Number(row?.writing_draft_revision) || 0,
+    accepted: row?.accepted === undefined ? true : Boolean(row.accepted),
     grading
   };
 }
 
 async function trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingScore = null) {
   const testSlug = String(attempt?.test_slug || attempt?.slug || combinedResult?.testSlug || '');
-  if (!/^term-test-[1-9][0-9]*$/.test(testSlug)) return 'not_applicable';
+  const k56Pilot = isK56PortalPilot(attempt);
+  if (!/^term-test-[1-9][0-9]*$/.test(testSlug) && !k56Pilot) return 'not_applicable';
   if (String(attempt?.class_name || '').trim().toUpperCase() === 'CODEXDEMO806') return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult, { writing: writingScore });
-    await syncErpGrades(payload);
+    const syncResult = await syncErpGrades(payload);
+    if (k56Pilot) {
+      if (syncResult?.status === 'disabled') return 'not_applicable';
+      if (['synced', 'processing', 'failed_response', 'unknown'].includes(syncResult?.status)) return syncResult.status;
+      return 'unknown';
+    }
     return 'synced';
   } catch (error) {
+    if (k56Pilot) {
+      console.error(`ERP grade sync internal_error type=${error?.name || 'Error'} code=${error?.code || 'UNEXPECTED'}`);
+      return 'unknown';
+    }
     // Không chặn học viên xem kết quả; lần mở kết quả tiếp theo sẽ tự thử lại.
     console.error(`ERP grade sync failed type=${error?.name || 'Error'}`);
     return 'pending';
@@ -400,12 +477,15 @@ export function createApp({
   learningPool = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
+  termTestPortalSyncService = null,
   writingTestService,
   termTestWritingGradingService = null,
   termTestAssetService = null,
+  termTestResultEvents = null,
   logger = console
 }) {
   const app = express();
+  const deploymentProfile = profileForConfig(config);
   const writingTests = writingTestService ?? createWritingTestService({ pool });
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops);
@@ -416,7 +496,7 @@ export function createApp({
     limit: 900,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    skip: req => req.path.startsWith('/api/learning'),
+    skip: req => req.path.startsWith('/api/learning') || req.path.startsWith('/api/term-tests'),
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   }));
   app.use(express.json({ limit: '768kb', strict: true }));
@@ -440,7 +520,25 @@ export function createApp({
       ...details
     }));
   }
-  app.get('/health', (_req, res) => res.json({ ok: true, build }));
+
+  async function requestPortalSync(attempt, combinedResult, writingScore = null) {
+    if (termTestPortalSyncService) {
+      return termTestPortalSyncService.enqueue({
+        attemptToken: String(attempt?.attempt_token || ''),
+        writingScore
+      });
+    }
+    // Nhánh tương thích chỉ dùng khi chưa cấu hình worker, chẳng hạn trong bộ test cũ.
+    return trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingScore);
+  }
+
+  async function readPortalSyncStatus(attempt, combinedResult, writingScore = null) {
+    if (termTestPortalSyncService) {
+      return termTestPortalSyncService.getStatus(String(attempt?.attempt_token || ''));
+    }
+    return trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingScore);
+  }
+  app.get('/health', (_req, res) => res.json({ ok: true, build, deploymentProfile: deploymentProfile.name }));
 
   async function ensureTermTestWritingGrading(row) {
     if (!termTestWritingGradingService || !row?.writing_submitted_at) return null;
@@ -518,23 +616,39 @@ export function createApp({
     res.json({ ok: true, build });
   }));
 
+  function termTestRequestToken(req) {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    return body.examSessionToken || body.attemptToken || body.clientSubmissionId || '';
+  }
+
+  function termTestRateKey(req) {
+    const token = String(termTestRequestToken(req) || '').trim();
+    if (token) {
+      return `token:${crypto.createHash('sha256').update(token).digest('hex').slice(0, 24)}`;
+    }
+    return `ip:${ipKeyGenerator(req.ip)}`;
+  }
+
   const testReadLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 240,
+    limit: req => termTestRequestToken(req) ? 240 : 2_000,
+    keyGenerator: termTestRateKey,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   });
   const testWriteLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 120,
+    limit: req => termTestRequestToken(req) ? 20 : 2_000,
+    keyGenerator: termTestRateKey,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều lượt gửi; vui lòng chờ một phút.' }
   });
   const testDraftLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 600,
+    limit: req => termTestRequestToken(req) ? 120 : 5_000,
+    keyGenerator: termTestRateKey,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
@@ -675,7 +789,11 @@ export function createApp({
 
   app.post('/api/term-tests/demo/reset', testWriteLimiter, asyncRoute(async (req, res) => {
     const parsed = demoResetSchema.safeParse(req.body);
-    if (!parsed.success) {
+    const profileMismatch = parsed.success && (
+      (isK56TestSlug(parsed.data.testSlug) && deploymentProfile.name !== 'k56-demo')
+      || (!isK56TestSlug(parsed.data.testSlug) && deploymentProfile.family === 'k56')
+    );
+    if (!parsed.success || profileMismatch) {
       return res.status(400).json({
         ok: false,
         error: 'INVALID_DEMO_RESET',
@@ -730,6 +848,19 @@ export function createApp({
     if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu chuẩn bị bài thi không hợp lệ.' });
     }
+    if (parsed.data.retakeGrant && !deploymentProfile.listeningRetakeEnabled) {
+      return res.status(403).json({ ok: false, error: 'LISTENING_RETAKE_DISABLED', message: 'Profile này không mở quyền thi lại Listening.' });
+    }
+    const retakeGrant = parsed.data.retakeGrant
+      ? verifyListeningRetakeGrant(parsed.data.retakeGrant, {
+        testSlug: slug.data,
+        classCode: parsed.data.classCode,
+        studentRef: parsed.data.studentRef
+      }, config.termTestSessionSecret)
+      : null;
+    if (parsed.data.retakeGrant && !retakeGrant) {
+      return res.status(403).json({ ok: false, error: 'INVALID_RETAKE_GRANT', message: 'Liên kết thi bù không hợp lệ hoặc đã hết hạn.' });
+    }
     const studentResult = await pool.query(findStudentForTermTestSql, [
       parsed.data.classCode,
       slug.data,
@@ -740,16 +871,17 @@ export function createApp({
     }
     const student = studentResult.rows[0];
     let session = null;
-    if (parsed.data.examSessionToken) {
+    const requestedSessionToken = retakeGrant?.sessionToken || parsed.data.examSessionToken;
+    if (requestedSessionToken) {
       const resumed = await pool.query(resumeTermTestExamSessionSql, [
-        parsed.data.examSessionToken,
+        requestedSessionToken,
         slug.data,
         student.class_id,
         student.student_id
       ]);
       session = resumed.rows[0] || null;
     }
-    if (!session) {
+    if (!session && !retakeGrant) {
       const latestAttempt = await pool.query(findLatestTermTestAttemptForStudentSql, [
         slug.data,
         student.definition_version,
@@ -781,16 +913,30 @@ export function createApp({
         student.class_id,
         student.student_id
       ]);
-      const inserted = await pool.query(insertTermTestExamSessionSql, [
-        slug.data,
-        student.definition_version,
-        student.class_id,
-        student.class_name,
-        student.student_id,
-        student.student_name,
-        parsed.data.legacyElapsedSeconds
-      ]);
+      const inserted = retakeGrant
+        ? await pool.query(insertGrantedTermTestExamSessionSql, [
+          retakeGrant.sessionToken,
+          slug.data,
+          student.definition_version,
+          student.class_id,
+          student.class_name,
+          student.student_id,
+          student.student_name,
+          parsed.data.legacyElapsedSeconds
+        ])
+        : await pool.query(insertTermTestExamSessionSql, [
+          slug.data,
+          student.definition_version,
+          student.class_id,
+          student.class_name,
+          student.student_id,
+          student.student_name,
+          parsed.data.legacyElapsedSeconds
+        ]);
       session = inserted.rows[0];
+    }
+    if (!session) {
+      return res.status(409).json({ ok: false, error: 'RETAKE_SESSION_UNAVAILABLE', message: 'Chưa thể mở lượt thi bù này. Hãy dùng lại đúng liên kết hoặc liên hệ giáo viên.' });
     }
     return res.status(201).json({
       ok: true,
@@ -909,7 +1055,28 @@ export function createApp({
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
     }
-    const session = started.rows[0];
+    let session = started.rows[0];
+    const heardSeconds = parsed.data.heardSeconds
+      ?? (Number(session.listening_audio_checkpoint_seconds) || 0);
+    const recovered = await pool.query(checkpointTermTestListeningAudioSql, [
+      parsed.data.examSessionToken,
+      slug.data,
+      heardSeconds,
+      'resume',
+      900
+    ]);
+    if (recovered.rowCount === 1) {
+      session = { ...session, ...recovered.rows[0] };
+      if (Number(session.granted_recovery_seconds) > 0) {
+        logTermTestEvent('audio_recovered', slug.data, parsed.data.examSessionToken, {
+          section: 'listening',
+          source: 'session_start',
+          heardSeconds: Number(session.listening_audio_checkpoint_seconds) || 0,
+          grantedRecoverySeconds: Number(session.granted_recovery_seconds) || 0,
+          totalRecoverySeconds: Number(session.listening_recovery_seconds) || 0
+        });
+      }
+    }
     const content = await termTestAssetService.getContent(slug.data);
     const audioKey = termTestAssetService.getSessionAudioKey(slug.data, parsed.data.examSessionToken);
     return res.json({
@@ -918,6 +1085,8 @@ export function createApp({
       studentName: session.student_name,
       listeningStartedAt: session.listening_started_at,
       listeningDeadlineAt: session.listening_deadline_at,
+      listeningResumeAtSeconds: Number(session.listening_audio_checkpoint_seconds) || 0,
+      listeningRecoverySeconds: Number(session.listening_recovery_seconds) || 0,
       serverNow: session.server_now,
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
@@ -925,6 +1094,41 @@ export function createApp({
       audioEnvelope: { magic: 'IZTT1', ivBytes: 12, tagBytes: 16 },
       timing,
       content
+    });
+  }));
+
+  app.post('/api/term-tests/:testSlug/session/audio-progress', testDraftLimiter, asyncRoute(async (req, res) => {
+    const slug = testSlugSchema.safeParse(req.params.testSlug);
+    const parsed = audioProgressSchema.safeParse(req.body);
+    if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
+      return res.status(400).json({ ok: false, error: 'INVALID_AUDIO_PROGRESS', message: 'Mốc nghe audio không hợp lệ.' });
+    }
+    const saved = await pool.query(checkpointTermTestListeningAudioSql, [
+      parsed.data.examSessionToken,
+      slug.data,
+      parsed.data.heardSeconds,
+      parsed.data.state,
+      900
+    ]);
+    if (saved.rowCount !== 1) {
+      return res.status(409).json({ ok: false, error: 'AUDIO_PROGRESS_LOCKED', message: 'Phiên Listening đã kết thúc hoặc không còn hợp lệ.' });
+    }
+    const row = saved.rows[0];
+    if (parsed.data.state !== 'playing' || Number(row.granted_recovery_seconds) > 0) {
+      logTermTestEvent('audio_' + parsed.data.state, slug.data, parsed.data.examSessionToken, {
+        section: 'listening',
+        heardSeconds: Number(row.listening_audio_checkpoint_seconds) || 0,
+        grantedRecoverySeconds: Number(row.granted_recovery_seconds) || 0,
+        totalRecoverySeconds: Number(row.listening_recovery_seconds) || 0
+      });
+    }
+    return res.json({
+      ok: true,
+      listeningDeadlineAt: row.listening_deadline_at,
+      listeningResumeAtSeconds: Number(row.listening_audio_checkpoint_seconds) || 0,
+      grantedRecoverySeconds: Number(row.granted_recovery_seconds) || 0,
+      listeningRecoverySeconds: Number(row.listening_recovery_seconds) || 0,
+      serverNow: row.server_now
     });
   }));
 
@@ -1021,7 +1225,7 @@ export function createApp({
         timedOut: Boolean(session.listening_timed_out),
         snapshotSource: selectedSubmission.source
       });
-      const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
+      const portalSyncStatus = await requestPortalSync(attempt, result);
       return res.status(201).json({
         ok: true,
         attemptToken: attempt.attempt_token,
@@ -1072,7 +1276,7 @@ export function createApp({
       answeredCount: Number(attempt.listening_result?.answered) || 0,
       resumedActiveAttempt: Boolean(attempt.resumed_active_attempt)
     });
-    const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, result);
+    const portalSyncStatus = await requestPortalSync(attempt, result);
     return res.status(201).json({
       ok: true,
       attemptToken: attempt.attempt_token,
@@ -1159,7 +1363,7 @@ export function createApp({
     }
     const attempt = attemptResult.rows[0];
     if (attempt.completed_at && attempt.combined_result) {
-      const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, attempt.combined_result);
+      const portalSyncStatus = await requestPortalSync(attempt, attempt.combined_result);
       return res.json({
         ok: true,
         attemptToken: attempt.attempt_token,
@@ -1200,7 +1404,7 @@ export function createApp({
       timedOut: Boolean(attempt.reading_timed_out),
       snapshotSource: selectedSubmission.source
     });
-    const portalSyncStatus = await trySyncErpGrades(syncErpGrades, attempt, storedCombinedResult);
+    const portalSyncStatus = await requestPortalSync(attempt, storedCombinedResult);
     return res.json({
       ok: true,
       attemptToken: parsed.data.attemptToken,
@@ -1210,6 +1414,10 @@ export function createApp({
       next: 'result'
     });
   }));
+
+  if (deploymentProfile.planningEnabled) {
+    registerTermTestPlanning(app, { pool, limiter: testDraftLimiter });
+  }
 
   app.post('/api/term-tests/writing', testDraftLimiter, asyncRoute(async (req, res) => {
     const parsed = writingSubmissionSchema.safeParse(req.body);
@@ -1226,13 +1434,22 @@ export function createApp({
       parsed.data.task1,
       parsed.data.task2,
       parsed.data.action,
-      writingMinutes || 60
+      writingMinutes || 60,
+      parsed.data.revision
     ]);
     if (saved.rowCount !== 1) {
       return res.status(404).json({
         ok: false,
         error: 'WRITING_ATTEMPT_NOT_FOUND',
         message: 'Chưa tìm thấy lượt Reading đã hoàn thành để lưu Writing.'
+      });
+    }
+    if (parsed.data.action === 'submit' && saved.rows[0].accepted === false) {
+      return res.status(409).json({
+        ok: false,
+        error: 'WRITING_STALE_REVISION',
+        message: 'Bản Writing trên hệ thống mới hơn. Hãy tải lại bản mới trước khi nộp.',
+        writing: serializeTermTestWriting(saved.rows[0])
       });
     }
     const grading = parsed.data.action === 'submit'
@@ -1243,6 +1460,39 @@ export function createApp({
       attemptToken: saved.rows[0].attempt_token,
       writing: serializeTermTestWriting(saved.rows[0], grading)
     });
+  }));
+
+  app.post('/api/term-tests/result/stream', testReadLimiter, asyncRoute(async (req, res) => {
+    if (!deploymentProfile.resultStreamEnabled || !termTestResultEvents) {
+      return res.status(404).json({
+        ok: false,
+        error: 'RESULT_STREAM_NOT_FOUND',
+        message: 'Kênh cập nhật này không được bật.'
+      });
+    }
+    const parsed = resultRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
+    }
+    const result = await pool.query(fetchTermTestResultSql, [parsed.data.attemptToken]);
+    if (result.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
+    }
+    const grading = await ensureTermTestWritingGrading(result.rows[0]);
+    const subscription = termTestResultEvents.subscribe({
+      attemptToken: parsed.data.attemptToken,
+      req,
+      res,
+      ready: Boolean(grading?.ready)
+    });
+    if (!subscription.accepted) {
+      return res.status(503).json({
+        ok: false,
+        error: 'RESULT_STREAM_BUSY',
+        message: 'Kênh cập nhật đang bận; trang sẽ tự kiểm tra kết quả theo cách dự phòng.'
+      });
+    }
+    return undefined;
   }));
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
@@ -1257,8 +1507,7 @@ export function createApp({
     const row = result.rows[0];
     const termTestResult = row.combined_result || buildListeningResult(row, row.listening_result);
     const grading = await ensureTermTestWritingGrading(row);
-    const portalSyncStatus = await trySyncErpGrades(
-      syncErpGrades,
+    const portalSyncStatus = await readPortalSyncStatus(
       row,
       termTestResult,
       grading?.ready ? grading.writingScore : null
@@ -1327,11 +1576,16 @@ export function createApp({
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
   app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, asyncRoute(async (req, res) => {
-    const result = await pool.query(listTermTestTeacherOptionsSql, [
-      req.reviewer.email,
-      req.reviewer.canAccessAllClasses
-    ]);
+    const legacyOptions = deploymentProfile.teacherOptionsMode === 'legacy-access';
+    const result = await pool.query(
+      legacyOptions ? listTermTestTeacherOptionsLegacySql : listTermTestTeacherOptionsSql,
+      legacyOptions ? [req.reviewer.email, req.reviewer.canAccessAllClasses] : [req.reviewer.email]
+    );
     const response = result.rows[0]?.response || { classes: [], tests: [] };
+    response.tests = Array.from(response.tests || []).map(test => ({
+      ...test,
+      ...getTestScoringMetadata(test.slug)
+    }));
     return res.json({ ok: true, reviewer: req.reviewer, ...response });
   }));
 
@@ -1536,7 +1790,12 @@ export function createApp({
     return res.json({
       ok: true,
       reviewer: req.reviewer,
-      test: { slug: row.test_slug, title: row.test_title, version: Number(row.definition_version) },
+      test: {
+        slug: row.test_slug,
+        title: row.test_title,
+        version: Number(row.definition_version),
+        ...getTestScoringMetadata(row.test_slug)
+      },
       class: {
         id: row.class_id,
         name: row.class_name,

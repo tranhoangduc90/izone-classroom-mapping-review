@@ -484,6 +484,51 @@ FROM resolved
 ORDER BY match_priority
 LIMIT 1;`;
 
+// Dữ liệu vào: UUID phiên nằm trong vé thi bù đã được backend xác thực.
+// Việc chính: tạo đúng một phiên mới theo UUID đó hoặc lấy lại chính phiên đã tạo khi trình duyệt gửi lại.
+// Kết quả: lượt thi bù không nối vào kết quả Term Test cũ và không thể nhân bản chỉ bằng cách tải lại trang.
+// Khi lỗi/xung đột: không trả phiên khác; API dừng an toàn và yêu cầu dùng lại đúng liên kết.
+export const insertGrantedTermTestExamSessionSql = `WITH inserted AS (
+  INSERT INTO assessment.term_test_exam_session (
+    id,
+    test_slug,
+    definition_version,
+    erp_course_class_id,
+    class_name_snapshot,
+    erp_student_contact_id,
+    student_name_snapshot,
+    listening_resume_offset_seconds
+  ) VALUES ($1::uuid, $2, $3::int, $4::bigint, $5, $6::bigint, $7, $8::int)
+  ON CONFLICT DO NOTHING
+  RETURNING *
+), resolved AS (
+  SELECT inserted.*
+  FROM inserted
+  UNION ALL
+  SELECT existing.*
+  FROM assessment.term_test_exam_session AS existing
+  WHERE existing.id = $1::uuid
+    AND existing.test_slug = $2
+    AND existing.definition_version = $3::int
+    AND existing.erp_course_class_id = $4::bigint
+    AND existing.erp_student_contact_id = $6::bigint
+    AND existing.superseded_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM inserted)
+)
+SELECT
+  id::text AS exam_session_token,
+  test_slug,
+  prepared_at,
+  listening_started_at,
+  listening_deadline_at,
+  listening_draft,
+  listening_draft_revision,
+  listening_submitted_at,
+  attempt_id::text AS attempt_token,
+  now() AS server_now
+FROM resolved
+LIMIT 1;`;
+
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
   test_slug,
@@ -622,6 +667,11 @@ SET
     listening_deadline_at,
     now() + make_interval(secs => ($3::double precision - listening_resume_offset_seconds::double precision))
   ),
+  listening_audio_checkpoint_seconds = greatest(
+    listening_audio_checkpoint_seconds,
+    listening_resume_offset_seconds::double precision
+  ),
+  listening_audio_checkpoint_at = coalesce(listening_audio_checkpoint_at, now()),
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
@@ -633,9 +683,92 @@ RETURNING
   student_name_snapshot AS student_name,
   listening_started_at,
   listening_deadline_at,
+  listening_audio_checkpoint_seconds,
+  listening_audio_checkpoint_at,
+  listening_audio_state,
+  listening_recovery_seconds,
   listening_submitted_at,
   attempt_id::text AS attempt_token,
   now() AS server_now;`;
+
+// Dữ liệu vào: vị trí audio thực tế và trạng thái phát do trình duyệt báo cho đúng phiên Listening.
+// Việc chính: lưu mốc nghe tăng dần; khi audio phát lại/vào lại, chỉ cộng phần thời gian thật sự không tiến lên.
+// Kết quả: refresh tiếp tục từ mốc đã nghe và deadline được bù có giới hạn, không thể cộng lặp cùng một khoảng nghỉ.
+// Khi lỗi: không cập nhật phiên đã nộp/bị thay thế; API trả lỗi để giao diện tiếp tục dùng bản lưu cục bộ.
+export const checkpointTermTestListeningAudioSql = `WITH target AS (
+  SELECT
+    id,
+    listening_audio_checkpoint_seconds,
+    listening_audio_checkpoint_at,
+    listening_audio_state,
+    listening_recovery_seconds,
+    greatest(
+      0,
+      extract(epoch FROM (now() - coalesce(listening_audio_checkpoint_at, now())))
+    ) AS checkpoint_age_seconds,
+    greatest(
+      0,
+      extract(epoch FROM (now() - listening_started_at)) - listening_recovery_seconds + 3
+    ) AS maximum_allowed_checkpoint
+  FROM assessment.term_test_exam_session
+  WHERE id = $1::uuid
+    AND test_slug = $2
+    AND listening_started_at IS NOT NULL
+    AND listening_submitted_at IS NULL
+    AND superseded_at IS NULL
+    AND prepared_at >= now() - interval '8 hours'
+  FOR UPDATE
+), normalized AS (
+  SELECT
+    target.*,
+    least($3::double precision, maximum_allowed_checkpoint) AS accepted_checkpoint,
+    greatest(
+      0,
+      least($3::double precision, maximum_allowed_checkpoint) - listening_audio_checkpoint_seconds
+    ) AS played_since_checkpoint
+  FROM target
+), calculated AS (
+  SELECT
+    normalized.*,
+    CASE
+      WHEN $4 IN ('recovered', 'resume') THEN least(
+        greatest(0, $5::int - listening_recovery_seconds),
+        greatest(0, floor(checkpoint_age_seconds - played_since_checkpoint))::int
+      )
+      ELSE 0
+    END AS granted_recovery_seconds
+  FROM normalized
+), updated AS (
+  UPDATE assessment.term_test_exam_session AS session
+  SET
+    listening_audio_checkpoint_seconds = greatest(
+      session.listening_audio_checkpoint_seconds,
+      calculated.accepted_checkpoint
+    ),
+    listening_audio_checkpoint_at = CASE
+      WHEN $4 IN ('pause', 'waiting', 'stalled', 'pagehide')
+        THEN least(now(), coalesce(session.listening_audio_checkpoint_at, now())
+          + make_interval(secs => calculated.played_since_checkpoint::double precision))
+      ELSE now()
+    END,
+    listening_audio_state = CASE WHEN $4 IN ('recovered', 'resume') THEN 'playing' ELSE $4 END,
+    listening_recovery_seconds = session.listening_recovery_seconds + calculated.granted_recovery_seconds,
+    listening_deadline_at = session.listening_deadline_at
+      + make_interval(secs => calculated.granted_recovery_seconds::double precision),
+    updated_at = now()
+  FROM calculated
+  WHERE session.id = calculated.id
+  RETURNING
+    session.id::text AS exam_session_token,
+    session.listening_deadline_at,
+    session.listening_audio_checkpoint_seconds,
+    session.listening_audio_checkpoint_at,
+    session.listening_audio_state,
+    session.listening_recovery_seconds,
+    calculated.granted_recovery_seconds,
+    now() AS server_now
+)
+SELECT * FROM updated;`;
 
 export const saveTermTestListeningDraftSql = `WITH updated AS (
   UPDATE assessment.term_test_exam_session
@@ -990,20 +1123,24 @@ SELECT id::text AS attempt_token, completed_at, combined_result
 FROM resolved
 LIMIT 1;`;
 
-// Lưu nguyên văn Writing theo attempt token; sau khi nộp thì payload gửi lại không được sửa bài đã chốt.
+// Lưu nguyên văn Writing theo attempt token; revision cũ không được ghi đè bản mới hơn.
 export const saveTermTestWritingSql = `WITH updated AS (
   UPDATE assessment.term_test_attempt
   SET
     writing_task_1 = CASE
-      WHEN writing_deadline_at IS NULL OR now() <= writing_deadline_at THEN $2
+      WHEN $4 <> 'start' AND (writing_deadline_at IS NULL OR now() <= writing_deadline_at) THEN $2
       ELSE writing_task_1
     END,
     writing_task_2 = CASE
-      WHEN writing_deadline_at IS NULL OR now() <= writing_deadline_at THEN $3
+      WHEN $4 <> 'start' AND (writing_deadline_at IS NULL OR now() <= writing_deadline_at) THEN $3
       ELSE writing_task_2
     END,
     writing_started_at = coalesce(writing_started_at, now()),
     writing_deadline_at = coalesce(writing_deadline_at, now() + make_interval(mins => $5::int)),
+    writing_draft_revision = CASE
+      WHEN $4 = 'start' THEN writing_draft_revision
+      ELSE greatest(writing_draft_revision, $6::bigint)
+    END,
     writing_updated_at = now(),
     writing_submitted_at = CASE
       WHEN $4 = 'submit' THEN coalesce(writing_submitted_at, now())
@@ -1013,12 +1150,17 @@ export const saveTermTestWritingSql = `WITH updated AS (
   WHERE id = $1::uuid
     AND completed_at IS NOT NULL
     AND writing_submitted_at IS NULL
-  RETURNING *
+    AND (
+      $4 = 'start'
+      OR ($4 = 'draft' AND $6::bigint > writing_draft_revision)
+      OR ($4 = 'submit' AND $6::bigint >= writing_draft_revision)
+    )
+  RETURNING *, true AS accepted
 ),
 resolved AS (
   SELECT * FROM updated
   UNION ALL
-  SELECT existing.*
+  SELECT existing.*, false AS accepted
   FROM assessment.term_test_attempt AS existing
   WHERE existing.id = $1::uuid
     AND existing.completed_at IS NOT NULL
@@ -1029,10 +1171,12 @@ SELECT
   test_slug,
   writing_task_1,
   writing_task_2,
+  writing_draft_revision,
   writing_started_at,
   writing_deadline_at,
   writing_updated_at,
   writing_submitted_at,
+  accepted,
   now() AS server_now,
   CASE
     WHEN writing_deadline_at IS NULL THEN false
@@ -1063,6 +1207,7 @@ export const fetchTermTestResultSql = `SELECT
   attempt.completed_at,
   attempt.writing_task_1,
   attempt.writing_task_2,
+  attempt.writing_draft_revision,
   attempt.writing_started_at,
   attempt.writing_deadline_at,
   attempt.writing_updated_at,
@@ -1104,16 +1249,72 @@ WHERE attempt.id = $1::uuid
   );`;
 
 // Danh sách lớp và bài test chỉ gồm phạm vi mà giảng viên đã được cấp quyền.
-export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
+// Ngày/trạng thái lấy từ snapshot Portal để giao diện xếp lớp mới nhất trước.
+export const listTermTestTeacherOptionsSql = `WITH portal_class_metadata AS (
+  SELECT
+    erp_course_class_id,
+    max(class_started_at) AS class_started_at,
+    max(class_ended_at) AS class_ended_at,
+    CASE
+      WHEN bool_or(class_status_snapshot = 'on_going') THEN 'on_going'
+      ELSE max(class_status_snapshot)
+    END AS class_status
+  FROM mapping.reviewer_class_access
+  WHERE portal_teacher_contact_id IS NOT NULL
+  GROUP BY erp_course_class_id
+),
+allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
     course.erp_class_name_snapshot AS class_name,
-    EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    ) AS is_assigned_teacher
+    COALESCE(access.class_started_at, metadata.class_started_at) AS class_started_at,
+    COALESCE(access.class_ended_at, metadata.class_ended_at) AS class_ended_at,
+    COALESCE(access.class_status_snapshot, metadata.class_status) AS class_status
+  FROM mapping.classroom_course_mapping AS course
+  JOIN mapping.reviewer_class_access AS access
+    ON access.reviewer_email = $1
+   AND access.erp_course_class_id = course.erp_course_class_id
+   AND access.portal_teacher_contact_id IS NOT NULL
+  LEFT JOIN portal_class_metadata AS metadata
+    ON metadata.erp_course_class_id = course.erp_course_class_id
+),
+active_tests AS (
+  SELECT slug, title, version
+  FROM assessment.test_definition
+  WHERE is_active = true
+)
+SELECT jsonb_build_object(
+  'classes', COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'id', class_id,
+        'name', class_name,
+        'status', class_status,
+        'startedAt', class_started_at,
+        'endedAt', class_ended_at
+      )
+      ORDER BY
+        class_started_at DESC NULLS LAST,
+        class_ended_at DESC NULLS LAST,
+        class_name DESC
+    )
+    FROM allowed_classes
+  ), '[]'::jsonb),
+  'tests', COALESCE((
+    SELECT jsonb_agg(
+      jsonb_build_object('slug', slug, 'title', title, 'version', version)
+      ORDER BY slug
+    )
+    FROM active_tests
+  ), '[]'::jsonb)
+) AS response;`;
+
+// Profile K56 giữ quyền legacy: quản trị viên có thể xem toàn bộ lớp; giáo viên chỉ xem lớp được cấp.
+// Query tách riêng để K67 vẫn bắt buộc metadata phân công Portal như trước.
+export const listTermTestTeacherOptionsLegacySql = `WITH allowed_classes AS (
+  SELECT
+    course.erp_course_class_id::text AS class_id,
+    course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
     OR EXISTS (
@@ -1131,12 +1332,7 @@ active_tests AS (
 SELECT jsonb_build_object(
   'classes', COALESCE((
     SELECT jsonb_agg(
-      jsonb_build_object(
-        'id', class_id,
-        'name', class_name,
-        'accessMode', CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END,
-        'isAssignedTeacher', is_assigned_teacher
-      )
+      jsonb_build_object('id', class_id, 'name', class_name)
       ORDER BY class_name
     )
     FROM allowed_classes
@@ -1163,14 +1359,7 @@ target_classes AS (
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
 ),
 authorized_classes AS (
-  SELECT
-    target.*,
-    EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-    ) AS is_assigned_teacher
+  SELECT target.*
   FROM target_classes AS target
   WHERE $4::boolean
     OR EXISTS (
@@ -1264,12 +1453,6 @@ SELECT
   (SELECT count(*)::int FROM authorized_classes) AS authorized_class_count,
   (SELECT erp_course_class_id::text FROM authorized_classes LIMIT 1) AS class_id,
   (SELECT erp_class_name_snapshot FROM authorized_classes LIMIT 1) AS class_name,
-  (SELECT is_assigned_teacher FROM authorized_classes LIMIT 1) AS is_assigned_teacher,
-  (
-    SELECT CASE WHEN is_assigned_teacher THEN 'assigned_teacher' ELSE 'admin_override' END
-    FROM authorized_classes
-    LIMIT 1
-  ) AS access_mode,
   COALESCE((
     SELECT jsonb_agg(
       jsonb_build_object(

@@ -11,17 +11,10 @@ export const notificationStatusSql = `SELECT
   now() AS server_now
 FROM assessment.term_test_writing_grading_job;`;
 
-export function createTermTestWritingNotifier({
-  pool,
-  url,
-  secret,
-  fetchImpl = fetch,
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-  setRecurringTimer = setInterval,
-  clearRecurringTimer = clearInterval,
-  log = message => console.error(message)
-}) {
+export function createTermTestWritingNotifier({ pool, url, secret, fetchImpl = fetch,
+  setTimer = setTimeout, clearTimer = clearTimeout,
+  setRecurringTimer = setInterval, clearRecurringTimer = clearInterval,
+  log = message => console.error(message) }) {
   const enabled = Boolean(url);
   if (enabled && (new URL(url).protocol !== 'https:' || String(secret || '').length < 32)) {
     throw new Error('TERM_TEST_NOTIFY_CONFIG_INVALID');
@@ -32,9 +25,6 @@ export function createTermTestWritingNotifier({
   let pending = false;
   let closed = false;
   let lastSendAt = 0;
-
-  // Lịch này chỉ đọc trạng thái hàng chờ và đánh thức lại workflow nếu một tín hiệu trước đó bị lỡ.
-  // Khi lỗi, người vận hành chỉ thấy mã sự kiện và số giây thử lại; log không chứa bài hay danh tính.
   const fallbackTimer = enabled ? setRecurringTimer(() => {
     if (closed) return;
     log(JSON.stringify({ event: 'term_test_fallback_sweep', intervalSeconds: 300 }));
@@ -77,11 +67,8 @@ export function createTermTestWritingNotifier({
       const slots = Math.max(0, 4 - Number(row.active));
       const count = Math.min(slots, Number(row.due));
       const serverNow = new Date(row.server_now).getTime();
-      if (!Number.isFinite(serverNow) || !Number.isInteger(count) || count < 0) {
-        throw new Error('STATUS_INVALID');
-      }
+      if (!Number.isFinite(serverNow) || !Number.isInteger(count) || count < 0) throw new Error('STATUS_INVALID');
       if (count > 0) {
-        // Gộp các lần nộp sát nhau; tối đa một đợt đánh thức mỗi hai giây.
         const cooldown = 2000 - (Date.now() - lastSendAt);
         if (cooldown > 0) {
           schedule(cooldown);

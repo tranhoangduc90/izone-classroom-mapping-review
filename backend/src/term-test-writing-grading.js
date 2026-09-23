@@ -6,8 +6,10 @@
 
 import crypto from 'node:crypto';
 import { buildErpGradePayload } from './erp-sync.js';
+import { isK56PortalPilot } from './k56-portal-pilot.js';
 
 const GRADING_VERSION = 1;
+export const MAX_WRITING_GRADING_CLAIM_LIMIT = 4;
 const TASK_CRITERIA = Object.freeze({
   1: Object.freeze(['TA', 'CC', 'LR', 'GRA']),
   2: Object.freeze(['TR', 'CC', 'LR', 'GRA'])
@@ -278,7 +280,6 @@ async function refreshFinal(client, attemptId) {
     const attempt = await client.query('SELECT test_slug FROM assessment.term_test_attempt WHERE id = $1::uuid;', [attemptId]);
     task1Only = attempt.rows[0]?.test_slug === 'term-test-2-k56';
   }
-  // K56 Term Test 2 chỉ có Task 1; các bài còn lại vẫn giữ yêu cầu Task 2 như trước.
   if ((!task2 && !task1Only) || (runsResult.rows.length > 1 && !task1)) {
     await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
       attempt_id, grading_version, status
@@ -314,7 +315,12 @@ async function refreshFinal(client, attemptId) {
   return writingScore;
 }
 
-export function createTermTestWritingGradingService({ pool, syncErpGrades = null }) {
+export function createTermTestWritingGradingService({
+  pool,
+  syncErpGrades = null,
+  onResultStored = null,
+  logger = console
+}) {
   async function ensureSubmission({ attemptToken, testSlug, task1, task2, taskDefinitions }) {
     return inTransaction(pool, async client => {
       const attemptResult = await client.query(`SELECT id::text, test_slug
@@ -383,40 +389,52 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     });
   }
 
-  async function claimJobs({ workerId, limit = 4 }) {
+  async function claimJobs({ workerId, limit = MAX_WRITING_GRADING_CLAIM_LIMIT, testSlug = null }) {
     const safeWorkerId = cleanText(workerId, 100).trim();
-    const safeLimit = Math.max(1, Math.min(10, Number(limit) || 4));
+    const safeLimit = Math.max(
+      1,
+      Math.min(MAX_WRITING_GRADING_CLAIM_LIMIT, Number(limit) || MAX_WRITING_GRADING_CLAIM_LIMIT)
+    );
+    const safeTestSlug = testSlug ? cleanText(testSlug, 100).trim() : null;
     if (!/^[A-Za-z0-9_.:-]{3,100}$/.test(safeWorkerId)) {
       throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_WORKER', 'Mã tiến trình không hợp lệ.', 400);
     }
+    if (safeTestSlug && !/^(?:term-test-[1-9][0-9]*(?:-k[1-9][0-9]*)?|mini-test-[a-z0-9-]+)$/.test(safeTestSlug)) {
+      throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_TEST_SLUG', 'Mã bài thi lọc việc chấm không hợp lệ.', 400);
+    }
     return inTransaction(pool, async client => {
-      // Khóa chỉ tồn tại trong transaction cấp việc để mọi webhook cùng giữ một giới hạn toàn hệ thống.
-      // Dữ liệu vào là số việc đang giữ lease; kết quả là tối đa bốn job processing trên toàn bộ lớp.
-      // Khi đã đủ bốn suất, worker nhận mảng rỗng và bài vẫn nằm nguyên trong hàng chờ.
-      await client.query('SELECT pg_advisory_xact_lock(67092026);');
-      const capacity = await client.query(`SELECT count(*)::int AS active
+      // Tuần tự hóa riêng thao tác giao việc để hai tiến trình không cùng chiếm một chỗ trống.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('term_test_writing_grading_claim'))");
+      // Term Test 1/2 chấm đủ chuyên môn và có thể nhận hai việc trong một lượt gọi.
+      // Giữ việc đủ lâu để không nhận lại bài đang chấm; việc thu kết quả và test khác vẫn giữ 10 phút.
+      const claimed = await client.query(`WITH capacity AS (
+        SELECT GREATEST(
+          0,
+          $3::integer - count(*)::integer
+        ) AS available_slots
         FROM assessment.term_test_writing_grading_job
-        WHERE status='processing' AND lease_until>now();`);
-      const available = Math.max(0, 4 - Number(capacity.rows[0].active));
-      if (available === 0) return [];
-      const claimed = await client.query(`WITH candidates AS (
+        WHERE status = 'processing'
+          AND lease_until > now()
+      ), candidates AS (
         SELECT job.id,
           CASE
             WHEN job.job_type = 'dispatch'
-              AND grading_run.run_key ~ '^term-test-[12](:|-)'
+              AND (grading_run.run_key ~ '^term-test-[12](:|-)' )
             THEN interval '180 minutes'
             ELSE interval '10 minutes'
           END AS lease_duration
         FROM assessment.term_test_writing_grading_job AS job
         JOIN assessment.term_test_writing_grading_run AS grading_run ON grading_run.id = job.run_id
+        JOIN assessment.term_test_attempt AS candidate_attempt ON candidate_attempt.id = grading_run.attempt_id
         WHERE (
           job.status IN ('queued', 'retry_wait')
           OR (job.status = 'processing' AND job.lease_until < now())
         )
           AND job.next_attempt_at <= now()
-        ORDER BY CASE WHEN job.job_type='collect' THEN 0 ELSE 1 END, job.next_attempt_at, job.created_at
+          AND ($4::text IS NULL OR candidate_attempt.test_slug = $4)
+        ORDER BY job.next_attempt_at, job.created_at
         FOR UPDATE OF job SKIP LOCKED
-        LIMIT $2
+        LIMIT LEAST($2, (SELECT available_slots FROM capacity))
       ), updated AS (
         UPDATE assessment.term_test_writing_grading_job AS job
         SET status = 'processing',
@@ -440,16 +458,24 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         run.prompt_image_url,
         run.essay_text,
         run.word_count,
-        run.lark_record_id
+        run.lark_record_id,
+        attempt.test_slug
       FROM updated
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = updated.run_id
-      ORDER BY updated.created_at;`, [safeWorkerId, Math.min(safeLimit, available)]);
+      JOIN assessment.term_test_attempt AS attempt ON attempt.id = run.attempt_id
+      ORDER BY updated.created_at;`, [
+        safeWorkerId,
+        safeLimit,
+        MAX_WRITING_GRADING_CLAIM_LIMIT,
+        safeTestSlug
+      ]);
       return claimed.rows.map(row => ({
         jobId: row.job_id,
         jobType: row.job_type,
         attemptCount: Number(row.attempt_count),
         maxAttempts: Number(row.max_attempts),
         runKey: row.run_key,
+        testSlug: row.test_slug,
         taskNumber: Number(row.task_number),
         prompt: row.job_type === 'dispatch' ? row.prompt_text : '',
         imageUrl: row.job_type === 'dispatch' ? (row.prompt_image_url || '') : '',
@@ -583,6 +609,15 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       };
     });
 
+    if (stored.grading?.ready && stored.attemptId && typeof onResultStored === 'function') {
+      try {
+        await onResultStored({ attemptId: stored.attemptId, grading: stored.grading });
+      } catch (error) {
+        // Tín hiệu SSE chỉ giúp hiển thị sớm; kết quả đã lưu và polling vẫn là đường dự phòng.
+        logger.warn?.(`Không thể báo kết quả Writing đã sẵn sàng: ${error?.name || 'Error'} ${error?.code || ''}`.trim());
+      }
+    }
+
     if (!stored.portalSyncRequired) {
       return { status: stored.status, grading: stored.grading, portalSyncStatus: 'not_applicable' };
     }
@@ -609,15 +644,23 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     const attempt = attemptResult.rows[0];
     const isDemo = String(attempt.class_name || '').trim().toUpperCase() === 'CODEXDEMO806';
     let portalSyncStatus = 'not_applicable';
-    if (!isDemo && /^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || ''))) {
+    const k56Pilot = isK56PortalPilot(attempt);
+    if (!isDemo && (/^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || '')) || k56Pilot)) {
       try {
         const syncResult = await syncErpGrades(buildErpGradePayload(
           attempt,
           attempt.combined_result,
           { writing: stored.grading.writingScore }
         ));
-        portalSyncStatus = syncResult?.status === 'synced' ? 'synced' : 'not_applicable';
-      } catch {
+        portalSyncStatus = k56Pilot && ['synced', 'processing', 'failed_response', 'unknown'].includes(syncResult?.status)
+          ? syncResult.status
+          : syncResult?.status === 'synced' ? 'synced' : 'not_applicable';
+      } catch (error) {
+        if (k56Pilot) {
+          // Portal K56 có thể đã ghi trước khi kết nối lỗi; không được tự gửi lại mù.
+          console.error(`Writing Portal sync internal_error type=${error?.name || 'Error'} code=${error?.code || 'UNEXPECTED'}`);
+          portalSyncStatus = 'unknown';
+        } else {
         // Giữ job ở trạng thái processing để n8n gọi /fail và đưa lại vào hàng chờ.
         // Kết quả chấm đã được lưu; chỉ riêng bước ghi Portal sẽ tự thử lại.
         throw new TermTestWritingGradingError(
@@ -625,6 +668,7 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           'Portal đang bận; hệ thống sẽ tự thử ghi lại điểm Writing.',
           503
         );
+        }
       }
     }
 

@@ -63,8 +63,6 @@ const storedTestSchema = z.object({
   reading_definition: sectionSchema
 });
 
-// Dữ liệu vào là loại bài thi; kết quả quy định thang điểm và Task Writing hợp lệ.
-// Lớp không hợp lệ vẫn bị chặn ở roster/database, không suy quyền thi từ metadata này.
 export function getTestScoringMetadata(testSlug) {
   if (testSlug === 'mini-test-k56') {
     return { scoreMode: 'raw', sectionTotals: { listening: 10, reading: 13 }, writingTasks: [2], writingScoreMode: 'paragraph', writingLabel: 'Đoạn văn' };
@@ -118,7 +116,7 @@ function normalize(value) {
   return spellingCanonical.get(normalized) || normalized;
 }
 
-function ieltsBand(correct) {
+export function ieltsBand(correct) {
   const row = bandTable.find(item => correct >= item.min && correct <= item.max);
   return row ? row.band : '<2.5';
 }
@@ -192,7 +190,9 @@ export function gradeSection(sectionInput, answersInput, bandAdjustment = 0, sco
       : pairItem ? pairItem.studentAnswer : rawAnswer;
     const correctAnswer = compoundValues
       ? question.compound.keys.map(key => question.compound.accepted[key].map(clean).join(' / ')).join(' + ')
-      : pairItem ? pairItem.correctAnswer : question.accepted.map(clean).join(' / ');
+      : pairItem
+        ? pairItem.correctAnswer
+        : question.accepted.map(clean).join(' / ');
 
     if (isCorrect) correct += 1;
     if (isAnswered) answered += 1;

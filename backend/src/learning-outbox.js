@@ -13,7 +13,6 @@ const claimJobsSql = `WITH candidates AS (
   SELECT id
   FROM learning.outbox_job
   WHERE status IN ('queued', 'retry_wait')
-    AND ($4::text[] IS NULL OR job_type = ANY($4::text[]))
     AND next_attempt_at <= now()
     AND (lease_until IS NULL OR lease_until < now())
   ORDER BY next_attempt_at, created_at
@@ -104,10 +103,9 @@ export function retryDelayMs(attemptCount) {
   return Math.min(15 * 60_000, 2 ** (safeAttempt - 1) * 5_000);
 }
 
-export async function claimLearningJobs({ pool, workerId, limit = 10, leaseSeconds = 120, jobTypes = null }) {
+export async function claimLearningJobs({ pool, workerId, limit = 10, leaseSeconds = 120 }) {
   return withTransaction(pool, async client => {
-    const normalizedJobTypes = Array.isArray(jobTypes) && jobTypes.length ? [...new Set(jobTypes)] : null;
-    const result = await client.query(claimJobsSql, [workerId, limit, leaseSeconds, normalizedJobTypes]);
+    const result = await client.query(claimJobsSql, [workerId, limit, leaseSeconds]);
     return result.rows.map(normalizeJob);
   });
 }
@@ -142,10 +140,8 @@ export async function processLearningJob({ pool, workerId, job, handler }) {
   }
 }
 
-export async function runLearningJobBatch({
-  pool, workerId, handler, limit = 10, leaseSeconds = 120, jobTypes = null
-}) {
-  const jobs = await claimLearningJobs({ pool, workerId, limit, leaseSeconds, jobTypes });
+export async function runLearningJobBatch({ pool, workerId, handler, limit = 10, leaseSeconds = 120 }) {
+  const jobs = await claimLearningJobs({ pool, workerId, limit, leaseSeconds });
   const results = [];
   for (const job of jobs) {
     results.push(await processLearningJob({ pool, workerId, job, handler }));

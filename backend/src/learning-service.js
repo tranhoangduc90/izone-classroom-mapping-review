@@ -12,7 +12,6 @@ import {
 import { parseFormDefinition, parseFormGradingKey, parseResponses } from './learning-contracts.js';
 import {
   authorizeLearningClassSql,
-  authorizeLearningProgressLinkTargetSql,
   fetchAssignmentStudentSql,
   fetchLearningBlockReleaseSql,
   fetchLearningAttemptContextSql,
@@ -20,11 +19,8 @@ import {
   fetchLearningLibraryItemsSql,
   fetchLearningRosterForClassSql,
   fetchLearningTeacherDashboardSql,
-  fetchLearningTeacherLiveDraftsSql,
   fetchPublicLearningAssignmentSql,
-  fetchStudentCourseJourneySql,
   findLearningCheckpointSubmissionSql,
-  findLearningProgressAccessByOperationSql,
   findLearningSubmissionSql,
   insertLearningAssignmentBlockReleaseSql,
   insertLearningAssignmentRosterSql,
@@ -39,8 +35,6 @@ import {
   listLearningTeacherOptionsSql,
   markLearningReportDeliveredSql,
   overrideLearningAttendanceSql,
-  revokeLearningProgressAccessSql,
-  rotateLearningProgressAccessSql,
   saveLearningDraftSql,
   updateLearningBlockReleaseSql,
   upsertLearningTeacherHumanNoteSql
@@ -63,22 +57,6 @@ function asObject(value) {
 function asArray(value) {
   if (!value) return [];
   return typeof value === 'string' ? JSON.parse(value) : value;
-}
-
-function teacherLiveStudent(value) {
-  const student = asObject(value);
-  const gradingResult = student.gradingResult ? asObject(student.gradingResult) : null;
-  return {
-    ...student,
-    gradingResult: gradingResult ? {
-      ...gradingResult,
-      items: asArray(gradingResult.items).map(item => {
-        const safe = { ...item };
-        delete safe.expectedAnswer;
-        return safe;
-      })
-    } : null
-  };
 }
 
 function assertSingleRow(result, code, message, httpStatus = 404) {
@@ -111,27 +89,6 @@ function publicAssignment(row) {
 
 function internalResultFromRow(row) {
   return asObject(row.result_json);
-}
-
-function buildStudentCourseJourney(row) {
-  const sessions = asArray(row.sessions);
-  const reports = asArray(row.reports);
-  const attendedStatuses = new Set(['self_confirmed', 'teacher_confirmed']);
-  return {
-    schemaVersion: 'StudentCourseJourneyV1',
-    student: { studentRef: row.student_ref, name: row.student_name },
-    class: { classId: row.class_id, name: row.class_name },
-    access: { expiresAt: row.expires_at },
-    summary: {
-      totalSessions: sessions.length,
-      submittedComplete: sessions.filter(item => item.completeness === 'complete').length,
-      attendedSessions: sessions.filter(item => attendedStatuses.has(item.attendanceStatus)).length,
-      availableReports: reports.length
-    },
-    latestReport: reports.at(-1) || null,
-    sessions,
-    reports
-  };
 }
 
 export function createLearningService({ pool }) {
@@ -235,13 +192,24 @@ export function createLearningService({ pool }) {
       return withTransaction(pool, async client => {
         const contextResult = await client.query(fetchLearningAttemptContextSql, [attemptToken]);
         const context = assertSingleRow(contextResult, 'ATTEMPT_NOT_FOUND', 'Không tìm thấy phiên đang làm.');
+        if (context.attempt_status !== 'active') {
+          throw new LearningError('ATTEMPT_NOT_ACTIVE', 'Phiếu này không còn ở trạng thái đang làm.', 409);
+        }
         if (context.definition_hash !== definitionHash) {
           throw new LearningError('FORM_VERSION_MISMATCH', 'Form đã thay đổi; hãy tải lại đúng phiên bản.', 409);
+        }
+        if (Number(draftRevision) < Number(context.draft_revision)) {
+          throw new LearningError('STALE_CHECKPOINT', 'Phần này cũ hơn draft đã lưu trên máy chủ.', 409);
         }
         const definition = parseFormDefinition(asObject(context.public_definition));
         const block = definition.blocks.find(item => item.blockId === blockId && item.checkpoint === checkpoint);
         if (!block) {
           throw new LearningError('CHECKPOINT_IDENTITY_MISMATCH', 'Phần nộp không thuộc đúng form.', 409);
+        }
+        const releaseResult = await client.query(fetchLearningBlockReleaseSql, [context.assignment_id, blockId]);
+        const release = assertSingleRow(releaseResult, 'BLOCK_RELEASE_MISSING', 'Phần này chưa được giảng viên cấu hình.', 409);
+        if (release.status !== 'open') {
+          throw new LearningError('BLOCK_NOT_OPEN', 'Phần này chưa được giảng viên mở hoặc đã đóng.', 409);
         }
         const validIds = new Set(block.items.map(item => item.itemVersionId));
         const blockResponses = Object.fromEntries(Object.entries(responses).filter(([id]) => validIds.has(id)));
@@ -264,17 +232,6 @@ export function createLearningService({ pool }) {
             submittedAt: existing.submitted_at,
             replayed: true
           };
-        }
-        if (context.attempt_status !== 'active') {
-          throw new LearningError('ATTEMPT_NOT_ACTIVE', 'Phiếu này không còn ở trạng thái đang làm.', 409);
-        }
-        if (Number(draftRevision) < Number(context.draft_revision)) {
-          throw new LearningError('STALE_CHECKPOINT', 'Phần này cũ hơn draft đã lưu trên máy chủ.', 409);
-        }
-        const releaseResult = await client.query(fetchLearningBlockReleaseSql, [context.assignment_id, blockId]);
-        const release = assertSingleRow(releaseResult, 'BLOCK_RELEASE_MISSING', 'Phần này chưa được giảng viên cấu hình.', 409);
-        if (release.status !== 'open') {
-          throw new LearningError('BLOCK_NOT_OPEN', 'Phần này chưa được giảng viên mở hoặc đã đóng.', 409);
         }
         const submittedAt = new Date().toISOString();
         const inserted = await client.query(insertLearningCheckpointSubmissionSql, [
@@ -393,9 +350,6 @@ export function createLearningService({ pool }) {
         const operationKey = `grade:${submissionId}:v${quizResult.graderVersion}`;
         const attendanceStatus = completeness.complete ? 'self_confirmed' : 'pending_teacher';
         const attendanceReason = completeness.complete ? 'Nộp đủ mục bắt buộc.' : 'Phiếu còn thiếu mục bắt buộc.';
-        const portalAttendanceUnitKey = `portal-attendance:${context.assignment_id}:session:${context.session_number}`;
-        const portalAttendanceOperationKey = `portal-attendance:${submissionId}:v1`;
-        const portalAttendanceIdempotencyKey = `portal-attendance:${submissionId}:enqueue:v1`;
         const finalized = await client.query(finalizeLearningSubmissionSql, [
           submissionId,
           context.attempt_id,
@@ -442,19 +396,6 @@ export function createLearningService({ pool }) {
             submissionId,
             studentRef: context.student_ref,
             assignmentId: context.assignment_id
-          }),
-          portalAttendanceUnitKey,
-          portalAttendanceOperationKey,
-          portalAttendanceIdempotencyKey,
-          json({
-            schemaVersion: 'LearningPortalAttendanceJobV1',
-            submissionId,
-            assignmentId: context.assignment_id,
-            classId: context.class_id,
-            studentId: context.student_id,
-            studentRef: context.student_ref,
-            sessionNumber: Number(context.session_number),
-            attendanceStatus: 'PRESENT'
           })
         ]);
         const finalizedRow = assertSingleRow(finalized, 'SUBMISSION_NOT_SAVED', 'Không thể lưu bài nộp.', 500);
@@ -465,8 +406,7 @@ export function createLearningService({ pool }) {
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
           || !finalizedRow.attendance_event_saved
           || !finalizedRow.evidence_saved
-          || !finalizedRow.outbox_saved
-          || Boolean(finalizedRow.attendance_outbox_saved) !== completeness.complete) {
+          || !finalizedRow.outbox_saved) {
           throw new LearningError('SUBMISSION_WRITE_INCOMPLETE', 'Bài nộp chưa được ghi đủ dữ liệu liên quan.', 500);
         }
         return {
@@ -484,17 +424,6 @@ export function createLearningService({ pool }) {
         receipt: asObject(row.receipt),
         result: buildStudentQuizResult(internalResultFromRow(row), asObject(row.public_definition))
       };
-    },
-
-    async getStudentCourseJourney({ accessToken }) {
-      const result = await pool.query(fetchStudentCourseJourneySql, [sha256(accessToken)]);
-      const row = assertSingleRow(
-        result,
-        'PROGRESS_LINK_INVALID',
-        'Link hành trình không hợp lệ, đã hết hạn hoặc đã được thay thế.',
-        404
-      );
-      return buildStudentCourseJourney(row);
     },
 
     async listTeacherOptions({ email, canAccessAllClasses }) {
@@ -662,118 +591,10 @@ export function createLearningService({ pool }) {
         className: row.class_name,
         publicToken: row.public_token,
         status: row.status,
-        formVersionId: row.form_version_id,
-        definition: parseFormDefinition(asObject(row.public_definition)),
         blockReleases: asArray(row.block_releases),
         classInsights: asArray(row.class_insights),
         students: asArray(row.students)
       };
-    },
-
-    async getTeacherLiveDrafts({ assignmentId, reviewer }) {
-      const result = await pool.query(fetchLearningTeacherLiveDraftsSql, [
-        assignmentId,
-        reviewer.email,
-        reviewer.canAccessAllClasses
-      ]);
-      const row = assertSingleRow(
-        result,
-        'ASSIGNMENT_ACCESS_DENIED',
-        'Không tìm thấy phiếu trong phạm vi được cấp quyền.',
-        404
-      );
-      return {
-        assignmentId: row.assignment_id,
-        generatedAt: row.generated_at,
-        students: asArray(row.students).map(teacherLiveStudent)
-      };
-    },
-
-    async createStudentProgressLink({ assignmentId, studentRef, accessToken, expiresInDays,
-      reviewer, operationId }) {
-      const tokenHash = sha256(accessToken);
-      const operationKey = `student-progress-link:${operationId}`;
-      const idempotencyKey = `${operationKey}:write`;
-      const expiresAt = new Date(Date.now() + (expiresInDays * 86_400_000)).toISOString();
-      return withTransaction(pool, async client => {
-        const targetResult = await client.query(authorizeLearningProgressLinkTargetSql, [
-          assignmentId,
-          studentRef,
-          reviewer.email,
-          reviewer.canAccessAllClasses
-        ]);
-        const target = assertSingleRow(
-          targetResult,
-          'STUDENT_PROGRESS_ACCESS_DENIED',
-          'Không tìm thấy học viên trong lớp bạn được phân công.',
-          403
-        );
-
-        const existingResult = await client.query(findLearningProgressAccessByOperationSql, [operationKey]);
-        if (existingResult.rowCount) {
-          const existing = existingResult.rows[0];
-          if (existing.class_id !== target.class_id
-            || existing.student_ref !== target.student_ref
-            || existing.token_hash !== tokenHash) {
-            throw new LearningError(
-              'PROGRESS_LINK_IDEMPOTENCY_CONFLICT',
-              'Mã thao tác đã được dùng cho một link khác.',
-              409
-            );
-          }
-          return {
-            accessId: existing.id,
-            accessToken,
-            studentRef: existing.student_ref,
-            studentName: target.student_name,
-            classId: existing.class_id,
-            className: target.class_name,
-            status: existing.status,
-            expiresAt: existing.expires_at,
-            replayed: true
-          };
-        }
-
-        const accessId = crypto.randomUUID();
-        await client.query(revokeLearningProgressAccessSql, [target.class_id, target.student_ref]);
-        const savedResult = await client.query(rotateLearningProgressAccessSql, [
-          accessId,
-          target.class_id,
-          target.student_ref,
-          tokenHash,
-          expiresAt,
-          reviewer.email,
-          operationKey,
-          idempotencyKey
-        ]);
-        assertSingleRow(savedResult, 'PROGRESS_LINK_NOT_CREATED', 'Không tạo được link hành trình.', 500);
-
-        const readbackResult = await client.query(findLearningProgressAccessByOperationSql, [operationKey]);
-        const readback = assertSingleRow(
-          readbackResult,
-          'PROGRESS_LINK_READBACK_FAILED',
-          'Không xác nhận được link vừa tạo.',
-          500
-        );
-        if (readback.id !== accessId
-          || readback.class_id !== target.class_id
-          || readback.student_ref !== target.student_ref
-          || readback.token_hash !== tokenHash
-          || readback.status !== 'active') {
-          throw new LearningError('PROGRESS_LINK_IDENTITY_MISMATCH', 'Link vừa tạo không khớp học viên.', 500);
-        }
-        return {
-          accessId,
-          accessToken,
-          studentRef: target.student_ref,
-          studentName: target.student_name,
-          classId: target.class_id,
-          className: target.class_name,
-          status: readback.status,
-          expiresAt: readback.expires_at,
-          replayed: false
-        };
-      });
     },
 
     async overrideAttendance({ assignmentId, studentRef, status, reason, reviewer, operationKey }) {
@@ -793,9 +614,7 @@ export function createLearningService({ pool }) {
         status: row.status,
         reason: row.current_reason,
         decidedBy: row.decided_by_email,
-        decidedAt: row.decided_at,
-        portalSyncQueued: row.portal_sync_queued,
-        replayed: row.replayed
+        decidedAt: row.decided_at
       };
     },
 
