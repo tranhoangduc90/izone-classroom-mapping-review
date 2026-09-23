@@ -1,0 +1,83 @@
+{
+  "schema_version": 3,
+  "product": "Mở bài Term và Mini Test cho mọi lớp khóa 56 đang học",
+  "change_id": "k56-class-access-and-roster-20260924",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": ["stateful", "external_side_effects", "personal_data"],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Đụng hai kho production, quyền mở bài và dữ liệu học viên.",
+    "user": "Học viên, giảng viên và admin lớp khóa 56",
+    "problem": "Kho bài thi chỉ có IC2264 dù ERP có 29 lớp đang học.",
+    "outcome": "Đúng 29 lớp thấy ba đề K56, roster đúng lớp và bài cũ nguyên vẹn.",
+    "out_of_scope": ["Không ghép Classroom bằng tên", "Không đổi prompt, điểm hoặc bài đã nộp", "Không mở lớp lịch sử"],
+    "plain_language_summary": "Đưa danh sách lớp đang học sang kho bài thi, kiểm lại rồi mới mở đề theo từng lớp."
+  },
+  "change_package": {
+    "proposal": "Dùng snapshot ERP K56 đã đối soát; dựng cổng quyền trước khi nhập roster và mở bài.",
+    "behavior_baseline": "Kho K56 có IC2264, chưa có bảng quyền lớp–đề và chưa có tuyến nhập roster một chiều.",
+    "deltas": [
+      {"id": "D-GATE", "operation": "ADDED", "behavior": "Lớp chưa bật quyền không thể vào đề dù đã có mapping.", "test_ids": ["T-GATE", "T-PROD"]},
+      {"id": "D-IMPORT", "operation": "ADDED", "behavior": "Nhập lớp và học viên đang học theo khóa ERP, giữ UUID cũ và không tự duyệt Classroom.", "test_ids": ["T-IMPORT", "T-LINEAGE", "T-ROLL"]},
+      {"id": "D-ENABLE", "operation": "ADDED", "behavior": "Bật đúng ba đề cho 29 lớp sau đối soát roster.", "test_ids": ["T-PROD"]},
+      {"id": "D-CONTINUE", "operation": "ADDED", "behavior": "Lượt đồng bộ sau không nhân đôi hàng hoặc mở lớp ngoài phạm vi.", "test_ids": ["T-RETRY", "T-PROD"]}
+    ],
+    "archive_status": "active"
+  },
+  "requirements": [
+    {"id": "R-SCOPE", "statement": "Chỉ lớp K56 on_going trên ERP được mở ba bài K56.", "test_ids": ["T-LINEAGE", "T-GATE", "T-PROD"]},
+    {"id": "R-ROSTER", "statement": "Roster của mỗi đề đúng ID lớp và học viên, bảo toàn bài cũ.", "test_ids": ["T-IMPORT", "T-ROLL", "T-PROD"]},
+    {"id": "R-CONTINUE", "statement": "Đồng bộ các lượt nguồn sau an toàn và quan sát được.", "test_ids": ["T-RETRY", "T-PROD"]}
+  ],
+  "invariants": [
+    {"id": "I-GATE-FIRST", "statement": "Không nhập roster mới trước khi image cổng quyền đã chạy và fail-closed.", "test_ids": ["T-GATE", "T-PROD"]},
+    {"id": "I-IDENTITY", "statement": "Mỗi hàng theo đề–ID lớp–ID học viên; không dùng tên hoặc thứ tự.", "test_ids": ["T-LINEAGE", "T-IMPORT"]},
+    {"id": "I-OLD-REF", "statement": "UUID bài cũ theo từng đề không đổi; dữ liệu ngoài phạm vi không bị sửa.", "test_ids": ["T-IMPORT", "T-ROLL", "T-PROD"]},
+    {"id": "I-PRIVACY", "statement": "Không ghi hồ sơ học viên vào Git, report hoặc stdout.", "test_ids": ["T-SEC", "T-PROD"]}
+  ],
+  "tests": [
+    {"id": "T-IMPORT", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "9 test PostgreSQL trong RAM: thêm lớp/roster, bảo toàn UUID và Classroom pending_review."},
+    {"id": "T-LINEAGE", "category": "invalid_input", "priority": "P0", "status": "passed", "evidence": "14 fixture Python; live SELECT xác nhận row_count=510 toàn snapshot và 447 on_going; chặn thiếu một hàng."},
+    {"id": "T-TIME", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Fixture chặn lượt nguồn quá 36 giờ, lỗi và giảm số lớp/dòng bất thường."},
+    {"id": "T-RETRY", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Fixture và PostgreSQL trong RAM: đảo thứ tự, chạy lại không nhân đôi/đổi UUID."},
+    {"id": "T-PART", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "Lỗi ở giữa lô rollback mapping và roster; đích đổi sau preview bị chặn."},
+    {"id": "T-ROLL", "category": "rollback_recovery", "priority": "P0", "status": "passed", "evidence": "Test PostgreSQL trong RAM xác nhận lỗi giữa lô giữ nguyên cả hai bảng; rollback image production chưa thử."},
+    {"id": "T-SEC", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Dry-run live chỉ xuất số đếm; lớp thiếu Classroom không được tự duyệt."},
+    {"id": "T-GATE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Ứng viên ghép source live: 187/187 test backend và 10/10 ca SQL, không skip; chưa là image deployed."},
+    {"id": "T-PROD", "category": "happy_path", "priority": "P0", "status": "not_run", "evidence": "Chờ quyền phát hành, migration/image, backup, roster/access readback và HTTP smoke K56/K67."}
+  ],
+  "task_graph": {
+    "plan_revision": "k56-mapping-bridge-v1",
+    "tasks": [
+      {"id": "B1", "result": "Snapshot nguồn mới nhất được đối soát.", "depends_on": [], "consumes": ["mapping_db"], "produces": ["validated-snapshot"], "contract": "Chỉ nhận 29 lớp đang học và 447 học viên đủ điều kiện của lượt mới nhất.", "test_ids": ["T-LINEAGE", "T-TIME"], "evidence_required": ["Fixture và live dry-run"], "decision_inputs": ["ERP K56 ongoing là nguồn chuẩn"], "affected_future_tasks": ["B2", "B4", "B5"], "status": "done", "plan_revision": "k56-mapping-bridge-v1"},
+      {"id": "B2", "result": "Diff chỉ xuất số đếm.", "depends_on": ["B1"], "consumes": ["validated-snapshot", "K56 target"], "produces": ["dry-run-counts"], "contract": "Không ghi production hoặc xuất PII.", "test_ids": ["T-LINEAGE", "T-SEC"], "evidence_required": ["Live SELECT"], "decision_inputs": ["Giữ hai database riêng"], "affected_future_tasks": ["B4"], "status": "done", "plan_revision": "k56-mapping-bridge-v1"},
+      {"id": "B3", "result": "Image cổng quyền chạy trên K56 trước khi nhập lớp mới.", "depends_on": ["B2"], "consumes": ["candidate source", "migration"], "produces": ["gate-live-readback"], "contract": "Lớp chưa duyệt đóng và IC2264 vẫn dùng được.", "test_ids": ["T-GATE", "T-PROD"], "evidence_required": ["Exact image, backup và HTTP smoke"], "decision_inputs": ["Cổng quyền trước roster"], "affected_future_tasks": ["B4", "B5", "B6"], "status": "in_progress", "plan_revision": "k56-mapping-bridge-v1"},
+      {"id": "B4", "result": "29 lớp/447 học viên được nhập mỗi đề mà không đổi UUID cũ.", "depends_on": ["B3"], "consumes": ["validated-snapshot", "gate-live-readback"], "produces": ["target-roster-readback"], "contract": "Một giao dịch, sai nguồn hoặc đích thì rollback.", "test_ids": ["T-IMPORT", "T-PART", "T-PROD"], "evidence_required": ["Backup, transaction và readback 29×3"], "decision_inputs": ["Snapshot một chiều"], "affected_future_tasks": ["B5", "B6"], "status": "in_progress", "plan_revision": "k56-mapping-bridge-v1"},
+      {"id": "B5", "result": "Chỉ 29 lớp on_going mở đúng ba đề K56.", "depends_on": ["B4"], "consumes": ["target-roster-readback"], "produces": ["access-readback"], "contract": "Bật quyền theo cặp đề–lớp, ngoài phạm vi đóng.", "test_ids": ["T-GATE", "T-PROD"], "evidence_required": ["87 hàng quyền và HTTP smoke"], "decision_inputs": ["ERP ongoing đủ điều kiện"], "affected_future_tasks": ["B6"], "status": "planned", "plan_revision": "k56-mapping-bridge-v1"},
+      {"id": "B6", "result": "Lượt kế tiếp tiếp tục đúng và có cảnh báo/rollback.", "depends_on": ["B5"], "consumes": ["access-readback", "new sync run"], "produces": ["ongoing-observation"], "contract": "Không nhân đôi hoặc tự mở lớp rời phạm vi.", "test_ids": ["T-RETRY", "T-PROD"], "evidence_required": ["Rerun live và readback"], "decision_inputs": ["Chỉ lên lịch sau khi thử rollback"], "affected_future_tasks": [], "status": "planned", "plan_revision": "k56-mapping-bridge-v1"}
+    ]
+  },
+  "risk_register": {
+    "assessment": "FAIL",
+    "risks": [
+      {"id": "R-OLD-IMAGE", "description": "Image cũ có thể mở lớp ngay khi nhập mapping mới.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Người triển khai", "mitigation": "Không nhập trước B3; image exact-source và HTTP fail-closed phải readback.", "test_ids": ["T-GATE", "T-PROD"]},
+      {"id": "R-WRONG-STUDENT", "description": "Bài/roster có thể gắn sai học viên khi chuyển giữa hai kho.", "probability": 1, "impact": 3, "score": 3, "severity": "P2", "status": "mitigated", "owner": "Người triển khai", "mitigation": "Khóa đề–ID lớp–ID học viên và readback mỗi hàng.", "test_ids": ["T-LINEAGE", "T-IMPORT"]}
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {"id": "FRESHNESS", "left": {"name": "source_max_age_seconds", "value": 129600}, "operator": ">", "right": {"name": "source_schedule_seconds", "value": 86400}, "status": "passed", "evidence": "Chặn snapshot quá 36 giờ; lịch nguồn mỗi 24 giờ."}
+  ],
+  "mutations": [],
+  "verification_runs": [
+    {"id": "V-PY", "scope": "behavioral", "command": "python -m unittest discover -s backend/test -p 'test_k56*py' -q", "tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a", "captured_at": "2026-09-23T23:00:00Z", "exit_code": 0, "outcome": "passed", "passed": 18, "failed": 0, "skipped": 0, "evidence": "14 fixture snapshot/import và 4 fixture cổng quyền."},
+    {"id": "V-FULL", "scope": "full_suite", "command": "npm test", "tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a", "captured_at": "2026-09-23T23:00:00Z", "exit_code": 0, "outcome": "passed", "passed": 187, "failed": 0, "skipped": 0, "evidence": "Backend 187/187; 9 ca mới dùng PostgreSQL trong RAM."},
+    {"id": "V-STAGE", "scope": "full_suite", "command": "python backend/ops/releases/k56-class-access-20260924/stage_live_gate.py --unified-candidate --full-suite", "tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a", "captured_at": "2026-09-23T23:00:00Z", "exit_code": 0, "outcome": "passed", "passed": 187, "failed": 0, "skipped": 0, "evidence": "Source live ghép hợp nhất: 187/187 và SQL smoke 10/10; không ghi production."}
+  ],
+  "convergence": {"status": "gaps", "tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a", "gaps": ["B3 image/migration/readback", "B4 nhập live", "B5 bật 87 cặp quyền", "B6 đồng bộ tiếp"], "unrequested_work": [], "evidence": "Đối chiếu kế hoạch với code cho thấy mới hoàn tất B1/B2 và lõi local B4."},
+  "context_handoff": {"summary": "Nguồn 29 lớp/447 học viên đã đối soát; lõi nhập một chiều qua test local, production chưa thay đổi.", "decisions": ["ERP on_going là nguồn phạm vi", "Giữ database K56 riêng", "Cổng quyền phải đi trước roster"], "completed": ["B1", "B2"], "next_step": "Đóng B3 trên image thật và backup trước mọi thao tác nhập.", "open_risks": ["Image cũ có thể mở lớp sau khi nhập mapping", "IC2322/IC2326 chưa ghép Classroom"], "tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a"},
+  "release": {"target_environment": "production", "decision": "not_ready", "base_tree_revision": "ded7ae1a61d81697b9637158428a518d9a3b9dec", "current_tree_revision": "ae40f1615915b19042c103f803d6a557c1e69c4a", "production_authorized": false, "rollback": "Chưa thay đổi production. Khi phát hành phải giữ image cổng quyền hoặc cô lập endpoint trước rollback.", "deployment_readback": "not_run", "operational_observation": "Chỉ có SELECT và test local.", "open_risks": [{"severity": "P1", "summary": "B3 chưa triển khai; không được nhập mapping/roster mới."}]}
+}
