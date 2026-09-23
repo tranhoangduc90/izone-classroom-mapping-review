@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -100,9 +101,10 @@ def changed_hunks(commit, path):
     return hunks
 
 
-def try_overlay(data):
+def try_overlay(data, return_candidates=False):
     """Áp hunk đúng một vị trí vào bản sao RAM; xung đột thì dừng an toàn."""
     result = {}
+    candidates = {}
     for path, raw in data.items():
         value = raw.decode("utf-8")
         original_hash = hashlib.sha256(raw).hexdigest()
@@ -161,6 +163,30 @@ def try_overlay(data):
                         "syntaxValid": syntax_valid,
                         "status": "compatible" if conflict is None else "conflict",
                         "conflict": conflict}
+        if conflict is None:
+            candidates[path] = value
+    return (result, candidates) if return_candidates else result
+
+
+def smoke_sql(code):
+    """Chạy ba SQL đã ghép trên PostgreSQL RAM; không chuyển hồ sơ học viên."""
+    exports = {}
+    for name in ("listTermTestRosterSql", "findStudentForTermTestSql",
+                 "registerTemporaryTermTestStudentSql"):
+        match = re.search(rf"export const {name} = `([\s\S]*?)`;", code)
+        if match is None:
+            raise RuntimeError("OVERLAY_SQL_EXPORT_MISSING")
+        exports[name] = match.group(1)
+    script = Path(__file__).with_name("overlay_sql_smoke.mjs")
+    backend = Path(__file__).parents[3]
+    process = subprocess.run(["node", str(script)], cwd=backend,
+                             input=json.dumps(exports).encode("utf-8"),
+                             capture_output=True, timeout=30)
+    if process.returncode != 0:
+        raise RuntimeError("OVERLAY_SQL_SMOKE_FAILED")
+    result = json.loads(process.stdout.decode("utf-8"))
+    if result.get("toolOutcome") != "success" or result.get("passed") != 10:
+        raise RuntimeError("OVERLAY_SQL_SMOKE_INVALID")
     return result
 
 
@@ -169,11 +195,15 @@ def main():
     # Việc chính: thử ghép từng hunk trong RAM, không ghi file/VPS.
     # Kết quả: chỉ hash/số hunk/xung đột; không in source code.
     files = read_live_files()
-    result = try_overlay(files)
+    result, candidates = try_overlay(files, return_candidates=True)
+    smoke = None
+    if all(row["status"] == "compatible" for row in result.values()):
+        smoke = smoke_sql(candidates["src/sql.js"])
     print(json.dumps({"toolOutcome": "success", "businessOutcome":
                       "compatible" if all(row["status"] == "compatible"
                                           for row in result.values()) else "conflict",
-                      "productionWrites": 0, "files": result}, ensure_ascii=False))
+                      "productionWrites": 0, "sqlSmoke": smoke,
+                      "files": result}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

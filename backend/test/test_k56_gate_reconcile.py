@@ -53,6 +53,14 @@ class GateReconcileTest(unittest.TestCase):
         self.assertIsNone(row["candidateHash"])
         self.assertNotIn("unknownPermissionMarker", str(row))
 
+    def test_sql_smoke_runs_on_exact_gate_candidate(self):
+        base = {path: git_blob("5b11f81^", path) for path in reconcile.FILES}
+        result, candidates = reconcile.try_overlay(base, return_candidates=True)
+        self.assertEqual(result["src/sql.js"]["status"], "compatible")
+        smoke = reconcile.smoke_sql(candidates["src/sql.js"])
+        self.assertEqual(smoke["passed"], 10)
+        self.assertEqual(smoke["productionWrites"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
