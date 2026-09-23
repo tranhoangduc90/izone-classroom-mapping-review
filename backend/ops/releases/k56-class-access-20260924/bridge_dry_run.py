@@ -75,7 +75,13 @@ try {
     FROM assessment.term_test_roster WHERE test_slug = ANY($1::text[])`, [slugs])).rows;
   const definitions = (await db.query(`SELECT slug, is_active
     FROM assessment.test_definition WHERE slug = ANY($1::text[])`, [slugs])).rows;
-  process.stdout.write(JSON.stringify({database: name, mappings, roster, definitions}));
+  const accessExists = (await db.query(`SELECT
+    to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0].exists;
+  const access = accessExists ? (await db.query(`SELECT test_slug,
+    erp_course_class_id::text AS class_id, enabled
+    FROM assessment.term_test_class_access`)).rows : [];
+  process.stdout.write(JSON.stringify({database: name, mappings, roster, definitions,
+    accessExists, access}));
 } finally { await db.end(); }
 """
 
@@ -226,6 +232,30 @@ def prepare_import_payload(source, target, now=None, uuid_factory=uuid4):
             "expectedMappings": target.get("mappings") or [],
             "expectedRoster": target.get("roster") or [],
             "newMappings": mappings, "newRoster": roster}
+
+
+def prepare_access_payload(source, target, now=None):
+    """Chỉ lập phạm vi quyền khi toàn bộ roster đã nhập và cổng quyền tồn tại."""
+    summary = plan_diff(source, target, now)
+    require(target.get("accessExists") is True, "CLASS_ACCESS_GATE_NOT_INSTALLED")
+    require(summary["classMappingsToAdd"] == 0
+            and summary["rosterRowsToAdd"] == 0
+            and summary["targetRosterRowsOutsideCurrentScope"] == 0,
+            "ROSTER_NOT_READY_FOR_ACCESS")
+    classes = sorted(source["mappings"], key=lambda row: int(row["class_id"]))
+    members = sorted(source["members"],
+                     key=lambda row: (int(row["class_id"]), int(row["contact_id"])))
+    return {"syncRunId": summary["syncRunId"], "summary": summary,
+            "scopeClasses": [{"class_id": row["class_id"], "class_code": row["class_code"]}
+                             for row in classes],
+            "eligibleMembers": [{"class_id": row["class_id"],
+                                 "contact_id": row["contact_id"]} for row in members],
+            "expectedRosterRefs": [
+                {"test_slug": row["test_slug"], "class_id": row["class_id"],
+                 "contact_id": row["contact_id"], "student_ref": row["student_ref"]}
+                for row in target["roster"]
+            ],
+            "expectedAccess": target.get("access") or []}
 
 
 def remote_select(client, container, script):

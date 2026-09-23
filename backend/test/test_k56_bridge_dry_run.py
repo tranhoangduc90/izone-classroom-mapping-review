@@ -215,6 +215,31 @@ class BridgeDryRunTest(unittest.TestCase):
                 source, target, NOW,
                 uuid_factory=lambda: "00000000-0000-4000-8000-000000000001")
 
+    def test_access_payload_waits_for_gate_and_complete_roster(self):
+        source, target = fixture()
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "CLASS_ACCESS_GATE_NOT_INSTALLED"):
+            bridge.prepare_access_payload(source, target, NOW)
+        target["accessExists"] = True
+        target["access"] = [{"test_slug": slug, "class_id": "1252", "enabled": True}
+                            for slug in bridge.TEST_SLUGS]
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "ROSTER_NOT_READY_FOR_ACCESS"):
+            bridge.prepare_access_payload(source, target, NOW)
+        additions = bridge.prepare_import_payload(source, target, NOW)
+        target["mappings"].extend(additions["newMappings"])
+        target["roster"].extend(additions["newRoster"])
+        access = bridge.prepare_access_payload(source, target, NOW)
+        self.assertEqual(len(access["scopeClasses"]), 2)
+        self.assertEqual(len(access["eligibleMembers"]), 2)
+        self.assertEqual(len(access["expectedRosterRefs"]), 6)
+        self.assertEqual(len(access["expectedAccess"]), 3)
+        self.assertNotIn("Học viên", str(access))
+        target["roster"].pop()
+        with self.assertRaisesRegex(bridge.SnapshotError,
+                                    "ROSTER_NOT_READY_FOR_ACCESS"):
+            bridge.prepare_access_payload(source, target, NOW)
+
 
 if __name__ == "__main__":
     unittest.main()
