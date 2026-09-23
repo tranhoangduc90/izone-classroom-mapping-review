@@ -1,0 +1,59 @@
+{
+  "name": "Bật quyền mở từng lớp và đề K56 sau đối soát roster",
+  "source_mode": "batch",
+  "identity": {
+    "scope": "per_item",
+    "entity_key": "class_test_key",
+    "unit_key": "test_slug",
+    "operation_key": "sync_run_id",
+    "idempotency_key": "class_test_key"
+  },
+  "stages": [
+    {
+      "name": "Tạo cặp lớp và đề từ phạm vi K56",
+      "kind": "fan_out",
+      "preserves": [
+        "class_test_key",
+        "test_slug",
+        "sync_run_id"
+      ]
+    },
+    {
+      "name": "Gom số học viên đã đọc lại theo lớp và đề",
+      "kind": "aggregate",
+      "preserves": [
+        "class_test_key",
+        "sync_run_id"
+      ],
+      "group_by": [
+        "class_test_key",
+        "sync_run_id"
+      ]
+    },
+    {
+      "name": "Chặn cặp thiếu roster hoặc ngoài phạm vi ERP",
+      "kind": "filter",
+      "preserves": [
+        "class_test_key",
+        "sync_run_id"
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "name": "Bật đúng cặp lớp và đề đã kiểm",
+      "target_key": "class_test_key",
+      "guard": "fail_closed",
+      "readback": true
+    }
+  ],
+  "tests": [
+    "single",
+    "variable_cardinality",
+    "batch_interleaved",
+    "out_of_order",
+    "duplicate_retry",
+    "partial_failure",
+    "wrong_target_readback"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "name": "Chuyển roster khóa 56 từ mapping chung sang kho bài thi riêng",
+  "source_mode": "batch",
+  "identity": {
+    "scope": "per_item",
+    "entity_key": "roster_row_key",
+    "unit_key": "test_slug",
+    "operation_key": "sync_run_id",
+    "idempotency_key": "roster_row_key"
+  },
+  "stages": [
+    {
+      "name": "Tách ba đề và tạo khóa roster_row_key từ slug, lớp, contact",
+      "kind": "fan_out",
+      "preserves": [
+        "roster_row_key",
+        "test_slug",
+        "sync_run_id"
+      ]
+    },
+    {
+      "name": "Chỉ giữ lớp đang học và học viên on_going",
+      "kind": "filter",
+      "preserves": [
+        "roster_row_key",
+        "test_slug",
+        "sync_run_id"
+      ]
+    },
+    {
+      "name": "So với roster và UUID đã có",
+      "kind": "join",
+      "preserves": [
+        "roster_row_key",
+        "test_slug",
+        "sync_run_id"
+      ],
+      "join_on": [
+        "roster_row_key"
+      ]
+    },
+    {
+      "name": "Đối soát số lớp và học viên từng đề",
+      "kind": "aggregate",
+      "preserves": [
+        "roster_row_key",
+        "sync_run_id"
+      ],
+      "group_by": [
+        "roster_row_key",
+        "sync_run_id"
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "name": "Ghi roster vào kho bài thi K56",
+      "target_key": "roster_row_key",
+      "guard": "fail_closed",
+      "readback": true
+    }
+  ],
+  "tests": [
+    "single",
+    "variable_cardinality",
+    "batch_interleaved",
+    "out_of_order",
+    "duplicate_retry",
+    "partial_failure",
+    "wrong_target_readback"
+  ]
+}

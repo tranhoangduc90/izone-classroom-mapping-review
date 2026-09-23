@@ -18,6 +18,8 @@ Phạm vi chưa làm: không thay prompt/model chấm Writing, không di chuyể
 
 Mỗi lượt chuyển có `sync_run_id` nguồn; chạy lại cùng lượt không được nhân đôi roster hoặc đổi UUID. Không dùng tên, email hay thứ tự dòng làm khóa. Không đưa hồ sơ học viên vào Git, log hoặc báo cáo.
 
+Hai contract định danh kèm theo tách đích ghi roster (`identity-contract.json`, khóa `roster_row_key = test_slug:class_id:contact_id`) khỏi đích bật quyền (`identity-contract-access.json`, khóa `class_test_key = test_slug:class_id`). Checker contract đã đạt; cảnh báo về `test_slug` sinh ở bước tách phải được đóng bằng fixture duy nhất theo từng khóa khi xây tuyến thực tế.
+
 ## Các lát thực hiện
 
 | ID | Đầu vào → đầu ra | Điều kiện đóng |
