@@ -8,7 +8,7 @@ IC2264 vẫn mở đúng ba đề K56 hiện tại. Theo phạm vi Đức đã c
 
 ## Điều kiện trước khi phát hành
 
-1. Chụp backup/snapshot database và image hiện hành; xác nhận không có migration cùng tên đã chạy.
+1. Chụp backup/snapshot database và image hiện hành; xác nhận đúng database K56 riêng `izone_mapping_k56_ic2264` và không có migration cùng tên đã chạy. Nếu lỡ trỏ sang database API chính, dừng trước mọi câu ghi.
 2. Đọc lại mapping IC2264 (`erp_course_class_id = 1252`), ba định nghĩa đề K56 active và danh sách ERP `on_going` tại thời điểm triển khai. Audit chỉ đọc ngày 24/09 thấy 29 lớp/447 đăng ký active; backend chỉ có mapping và roster của IC2264, bảng quyền chưa tồn tại. Nếu snapshot mới khác hoặc có mã lớp–ID mâu thuẫn, dừng để đối soát.
 3. Chạy migration `202609240001_term_test_k56_class_access.sql` **trước** image backend mới; migration không sửa bài nộp, roster hoặc điểm.
 4. Dùng quyền API đọc lại đúng ba hàng IC2264 `enabled = true`, không có hàng lớp khác. Nếu không đúng, không đổi image.
