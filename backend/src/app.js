@@ -31,6 +31,7 @@ import {
   listReviewsSql,
   listTermTestTeacherOptionsLegacySql,
   listTermTestTeacherOptionsSql,
+  listTermTestTeacherResultsLegacySql,
   listTermTestTeacherResultsSql,
   fetchTermTestTeacherAttemptReviewSql,
   fetchTermTestTeacherWritingDetailSql,
@@ -1784,7 +1785,8 @@ export function createApp({
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Tên lớp hoặc mã bài test không hợp lệ.' });
     }
-    const result = await pool.query(listTermTestTeacherResultsSql, [
+    const legacyResults = deploymentProfile.teacherOptionsMode === 'legacy-access';
+    const result = await pool.query(legacyResults ? listTermTestTeacherResultsLegacySql : listTermTestTeacherResultsSql, [
       parsed.data.class,
       parsed.data.test,
       req.reviewer.email,

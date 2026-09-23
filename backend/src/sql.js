@@ -1356,12 +1356,10 @@ export const listTermTestTeacherOptionsLegacySql = `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
     course.erp_class_name_snapshot AS class_name,
-    EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $1
-        AND access.erp_course_class_id = course.erp_course_class_id
-    ) AS is_assigned_teacher
+    ${buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$1',
+      classIdSql: 'course.erp_course_class_id'
+    })} AS is_assigned_teacher
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
     OR ${buildTeacherClassAccessPredicate({
@@ -1396,8 +1394,24 @@ SELECT jsonb_build_object(
   ), '[]'::jsonb)
 ) AS response;`;
 
-// Trả kết quả mới nhất đã hoàn thành của từng học viên; nếu chưa có thì giữ trạng thái để tổng quan không bỏ sót học viên.
-export const listTermTestTeacherResultsSql = `WITH definition AS (
+// Dữ liệu vào: lớp, bài test và quyền của người xem theo từng profile production.
+// Việc chính: K56 đọc phân công lớp cũ, K67 đọc metadata Portal mà không làm K56 lỗi thiếu cột.
+// Kết quả: SQL trả đúng một lớp và học viên của lớp đó; quyền sai bị chặn ở API.
+// Khi lỗi: database báo lỗi để API không trả kết quả không chắc chắn.
+function buildTermTestTeacherResultsSql({ legacyAccess }) {
+  const isAssignedTeacherSql = legacyAccess
+    ? buildTeacherClassAccessPredicate({
+      reviewerEmailSql: '$3',
+      classIdSql: 'target.erp_course_class_id'
+    })
+    : `EXISTS (
+      SELECT 1
+      FROM mapping.reviewer_class_access AS access
+      WHERE access.reviewer_email = $3
+        AND access.erp_course_class_id = target.erp_course_class_id
+        AND access.portal_teacher_contact_id IS NOT NULL
+    )`;
+  return `WITH definition AS (
   SELECT slug, title, version
   FROM assessment.test_definition
   WHERE slug = $2
@@ -1411,13 +1425,7 @@ target_classes AS (
 authorized_classes AS (
   SELECT
     target.*,
-    EXISTS (
-      SELECT 1
-      FROM mapping.reviewer_class_access AS access
-      WHERE access.reviewer_email = $3
-        AND access.erp_course_class_id = target.erp_course_class_id
-        AND access.portal_teacher_contact_id IS NOT NULL
-    ) AS is_assigned_teacher
+    ${isAssignedTeacherSql} AS is_assigned_teacher
   FROM target_classes AS target
   WHERE $4::boolean
     OR ${buildTeacherClassAccessPredicate({
@@ -1623,6 +1631,10 @@ SELECT
     ) AS grading ON true
   ), '[]'::jsonb) AS students
 FROM definition;`;
+}
+
+export const listTermTestTeacherResultsSql = buildTermTestTeacherResultsSql({ legacyAccess: false });
+export const listTermTestTeacherResultsLegacySql = buildTermTestTeacherResultsSql({ legacyAccess: true });
 
 // Chỉ tải một bài chấm Writing khi giáo viên đã mở đúng học viên và đúng Task.
 // Query giữ nguyên cổng phân quyền lớp, không trả attempt token và chỉ trả bài viết của Task đang mở.
