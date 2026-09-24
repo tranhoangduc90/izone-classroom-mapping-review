@@ -22,6 +22,17 @@ for (const path of paths) {
     ? crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex')
     : null;
 }
+const packageHashes = {};
+for (const path of ['package.json', 'package-lock.json']) {
+  packageHashes[path] = fs.existsSync(path)
+    ? crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex')
+    : null;
+}
+const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const packageVersions = {
+  dependencies: packageJson.dependencies ?? {},
+  devDependencies: packageJson.devDependencies ?? {}
+};
 const db = new pg.Pool({connectionString: process.env.DATABASE_URL, max: 1,
   connectionTimeoutMillis: 10000});
 try {
@@ -41,7 +52,9 @@ try {
       ('assessment', 'term_test_roster'))
     ORDER BY table_schema, table_name, ordinal_position`)).rows;
   process.stdout.write(JSON.stringify({database: meta.database,
-    accessExists: meta.access_exists, access, definitions, hashes, importColumns}));
+    accessExists: meta.access_exists, access, definitions, hashes, packageHashes,
+    packageVersions,
+    nodeVersion: process.version, importColumns}));
 } finally { await db.end(); }
 """
 
@@ -90,6 +103,9 @@ def main():
                       "access": metadata["access"],
                       "definitions": metadata["definitions"],
                       "sourceHashes": metadata["hashes"],
+                      "packageHashes": metadata["packageHashes"],
+                      "packageVersions": metadata["packageVersions"],
+                      "nodeVersion": metadata["nodeVersion"],
                       "importColumns": metadata["importColumns"]}, ensure_ascii=False))
 
 
