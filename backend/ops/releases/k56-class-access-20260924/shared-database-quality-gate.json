@@ -1,0 +1,83 @@
+{
+  "schema_version": 3,
+  "product": "Bài thi Term và Mini khóa 56 trong kho mapping chung",
+  "change_id": "k56-shared-assessment-20260924",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "personal_data"],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Chuyển database bài thi có dữ liệu học viên và hàng chấm K67 đang hoạt động.",
+    "user": "Học viên, giảng viên và admin các lớp K56",
+    "problem": "Bài K56 còn ở kho riêng và mới có roster IC2264; IC2322/IC2326 chưa vào bài dù ERP có phạm vi lớp.",
+    "outcome": "Mọi lớp K56 ERP on_going, kể cả IC2322/IC2326 chưa có Classroom, mở đúng ba đề; Writing và điểm Portal phải được xác minh trên bài nộp thật mà K67/Substitute không đổi.",
+    "out_of_scope": ["Không tự ghép Classroom", "Không sửa bài/điểm K67", "Không đổi prompt hoặc model chấm"],
+    "plain_language_summary": "Giữ lớp dùng chung, tách bài thi từng khóa và chỉ mở đề sau khi danh sách học viên được kiểm đúng."
+  },
+  "change_package": {
+    "proposal": "Tạo schema assessment_k56 và role riêng trong mapping_db, chuyển roster giữ UUID rồi bật từng lớp–đề.",
+    "behavior_baseline": "K67 dùng assessment trong mapping_db; K56 dùng database riêng với 36 roster IC2264.",
+    "deltas": [
+      {"id": "D-ISOLATION", "operation": "ADDED", "behavior": "K56 chỉ truy cập assessment_k56, K67 chỉ truy cập assessment.", "test_ids": ["T-SCHEMA", "T-ROLE", "T-FULL"]},
+      {"id": "D-OPEN", "operation": "ADDED", "behavior": "IC2322/IC2326 và lớp ERP on_going khác được mở sau roster, không cần Classroom.", "test_ids": ["T-GATE", "T-IMPORT", "T-LIVE"]},
+      {"id": "D-ROLLBACK", "operation": "ADDED", "behavior": "Backup hai database và bảo toàn bài cũ khi cắt chuyển.", "test_ids": ["T-BACKUP", "T-LIVE"]}
+    ],
+    "archive_status": "active"
+  },
+  "requirements": [
+    {"id": "R-OPEN", "statement": "Mở ba đề cho mọi lớp K56 ERP on_going, kể cả IC2322/IC2326.", "test_ids": ["T-GATE", "T-IMPORT", "T-LIVE", "T-SCHEDULE"]},
+    {"id": "R-ISOLATION", "statement": "K56 không thể xem/nhận job K67 và ngược lại.", "test_ids": ["T-ROLE", "T-SCHEMA", "T-LIVE"]},
+    {"id": "R-PRESERVE", "statement": "UUID IC2264, bài và điểm K67/Toàn bộ hệ khác không đổi.", "test_ids": ["T-IMPORT", "T-BACKUP", "T-LIVE", "T-SUBSTITUTE"]},
+    {"id": "R-WRITING", "statement": "Một bài K56 nộp thật đi đúng hàng chấm, hiện kết quả đúng Task và ghi điểm Portal đúng lớp.", "test_ids": ["T-WRITING"]}
+  ],
+  "invariants": [
+    {"id": "I-IDENTITY", "statement": "Ghép theo slug–ID lớp ERP–ID học viên, không dùng tên hay thứ tự.", "test_ids": ["T-IMPORT", "T-GATE"]},
+    {"id": "I-GATE", "statement": "Không mở bài trước khi roster đủ ba đề và readback đúng UUID.", "test_ids": ["T-GATE", "T-LIVE"]},
+    {"id": "I-PRIVACY", "statement": "Không ghi hồ sơ học viên, secret hoặc JSON đề vào Git/log.", "test_ids": ["T-ROLE", "T-LIVE"]},
+    {"id": "I-ROLLBACK", "statement": "Không trỏ về kho cũ sau khi kho chung có bài K56 mới.", "test_ids": ["T-BACKUP", "T-LIVE"]}
+  ],
+  "tests": [
+    {"id": "T-SCHEMA", "category": "regression", "priority": "P0", "status": "passed", "evidence": "PGlite: 14 bảng K56, view/function, migration 003–005 và K67 không đổi."},
+    {"id": "T-ROLE", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "PGlite: role K56 bị chặn assessment K67; role K67 bị chặn assessment_k56."},
+    {"id": "T-GATE", "category": "invalid_input", "priority": "P0", "status": "passed", "evidence": "Cổng mặc định đóng; thiếu roster/UUID sai bị chặn; IC2322/IC2326 mở qua ID ERP không cần Classroom."},
+    {"id": "T-IMPORT", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "PGlite: nhập roster giữ UUID, rollback giữa lô, chạy lại không nhân đôi; kho K67 bất biến."},
+    {"id": "T-BACKUP", "category": "rollback_recovery", "priority": "P0", "status": "passed", "evidence": "Hai archive production đã restore drill trong DB tạm, đọc lại 1236 mapping và 36 roster K56; chưa thử rollback sau cutover."},
+    {"id": "T-FULL", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Image K56 production exact-source SHA fac90829: stage 225/225, SQL smoke 10/10, 0 skip; source local npm test 225/225, npm run check và Python K56 27/27."},
+    {"id": "T-LIVE", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Đã backup/restore hai kho, migration/schema/role, chuyển 36 UUID cũ, nhập 1341 roster và mở 87 cặp quyền; HTTP smoke ba lớp qua chín đường bài, K67 image không đổi."},
+    {"id": "T-PARTIAL", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "Canary production lượt ERP 105 thử giao dịch rollback, không ghi dữ liệu; canary image lỗi sắp xếp ID dừng trước ghi, bản sửa .4 chạy đạt và API healthy."},
+    {"id": "T-SCHEDULE", "category": "lifecycle_time", "priority": "P0", "status": "not_run", "evidence": "Chưa đến lần 04:30 tự chạy đầu tiên sau chuyển workflow ERP độc lập; lượt 105 là manual, không chứng minh Schedule Trigger."},
+    {"id": "T-WRITING", "category": "happy_path", "priority": "P0", "status": "not_run", "evidence": "Kho K56 chung chưa có bài nộp thật, job Writing hoặc điểm Portal mới để đối chiếu end-to-end."},
+    {"id": "T-SUBSTITUTE", "category": "regression", "priority": "P1", "status": "not_run", "evidence": "Hai gateway và workflow chấm Substitute K56 còn riêng; chưa có so sánh production sau cắt chuyển với Term/Mini và K67."},
+    {"id": "T-TIME", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Dry-run ERP chặn nguồn quá 36 giờ và lượt thiếu/giảm bất thường."}
+  ],
+  "task_graph": {
+    "plan_revision": "k56-shared-db-v2",
+    "tasks": [
+      {"id": "S1", "result": "Schema/role/query K56 cách ly K67.", "depends_on": [], "consumes": ["Hai API/schema live"], "produces": ["Candidate 213/213"], "contract": "Không đụng dữ liệu K67.", "test_ids": ["T-SCHEMA", "T-ROLE", "T-FULL"], "evidence_required": ["Full suite", "Role denial"], "decision_inputs": ["Cùng DB, khác schema"], "affected_future_tasks": ["S2", "S3"], "status": "done", "plan_revision": "k56-shared-db-v2"},
+      {"id": "S2", "result": "Schema K56 và dữ liệu pilot trong kho chung.", "depends_on": ["S1"], "consumes": ["Backup", "K56 source"], "produces": ["Schema và roster đã đối soát"], "contract": "Giữ UUID, không mở lớp trước roster.", "test_ids": ["T-BACKUP", "T-IMPORT", "T-LIVE"], "evidence_required": ["Restore drill", "Live readback"], "decision_inputs": ["ERP on_going"], "affected_future_tasks": ["S3"], "status": "done", "plan_revision": "k56-shared-db-v2"},
+      {"id": "S3", "result": "Mọi lớp K56 ongoing mở đúng bài và lượt ERP tiếp được đồng bộ; chấm/Portal hoạt động.", "depends_on": ["S2"], "consumes": ["Roster", "API", "ERP sync"], "produces": ["Kết quả nhìn thấy"], "contract": "Không đổi K67/Substitute; rollback theo dữ liệu mới.", "test_ids": ["T-GATE", "T-LIVE", "T-PARTIAL", "T-SCHEDULE", "T-WRITING", "T-SUBSTITUTE"], "evidence_required": ["HTTP smoke", "Schedule execution", "Writing/Portal readback", "K67/Substitute baseline"], "decision_inputs": ["IC2322/IC2326 cũng mở"], "affected_future_tasks": [], "status": "in_progress", "plan_revision": "k56-shared-db-v2"}
+    ]
+  },
+  "risk_register": {
+    "assessment": "FAIL",
+    "risks": [
+      {"id": "R-CUTOVER", "description": "Đổi API trước khi roster đầy đủ có thể khóa học viên.", "probability": 1, "impact": 3, "score": 3, "severity": "P2", "status": "mitigated", "owner": "Người triển khai", "mitigation": "Đã đổi sau readback roster, canary và HTTP smoke; tiếp tục theo dõi lượt tự chạy.", "test_ids": ["T-LIVE", "T-SCHEDULE"]},
+      {"id": "R-JOBS", "description": "Nhận nhầm job K67 khi dùng DB chung.", "probability": 1, "impact": 3, "score": 3, "severity": "P2", "status": "mitigated", "owner": "Người triển khai", "mitigation": "Schema/role tách biệt và test hai chiều; cần readback khi có job K56 thật.", "test_ids": ["T-ROLE", "T-WRITING"]},
+      {"id": "R-NATURAL", "description": "Lịch ERP hoặc bộ đối soát không chạy ở lượt 04:30 đầu tiên.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Người vận hành", "mitigation": "Quan sát execution Schedule Trigger, checkpoint và roster sau lượt tiếp; dừng mở rộng nếu partial/unknown.", "test_ids": ["T-SCHEDULE"]},
+      {"id": "R-WRITING", "description": "Chưa có bài K56 thật để chứng minh hàng chấm và điểm Portal sau cắt chuyển.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Người vận hành", "mitigation": "Theo dõi lượt nộp hợp lệ đầu tiên, đối chiếu attempt/job/Task/Portal với ID kỹ thuật tối thiểu.", "test_ids": ["T-WRITING"]}
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {"id": "ERP_FRESHNESS", "left": {"name": "source_max_age_seconds", "value": 129600}, "operator": ">", "right": {"name": "source_schedule_seconds", "value": 86400}, "status": "passed", "evidence": "Nguồn quá 36 giờ bị chặn."}
+  ],
+  "mutations": [],
+  "verification_runs": [
+    {"id": "V-STAGE", "scope": "full_suite", "command": "python backend/ops/releases/k56-class-access-20260924/stage_live_gate.py --from-current-live --unified-candidate --full-suite", "tree_revision": "6507b439be2d2c0f1bf65ba6cd95968a2ccb7f46", "captured_at": "2026-09-24T06:15:48Z", "exit_code": 0, "outcome": "passed", "passed": 225, "failed": 0, "skipped": 0, "evidence": "Đúng image production .4, source SHA fac908296e735a3f5dee6722a3a592eb573659ef5772d33238cb9d193dde452a; SQL smoke 10/10, productionWrites=0."}
+  ],
+  "convergence": {"status": "gaps", "tree_revision": "6507b439be2d2c0f1bf65ba6cd95968a2ccb7f46", "gaps": ["Chưa quan sát lịch ERP 04:30 tự chạy", "Chưa có bài K56 thật để đối chiếu Writing và Portal", "Substitute K56 còn bộ chấm riêng, chưa có nghiệm thu hợp nhất"], "unrequested_work": [], "evidence": "Schema/API/roster/quyền đã deploy và readback; quan sát production sau cắt chuyển còn thiếu ba luồng trên."},
+  "context_handoff": {"summary": "K56 đã chuyển vào mapping_db chung: 29 lớp, 447 học viên, 1341 roster, 87 quyền; image .4 và K67 healthy.", "decisions": ["Cùng mapping_db, hai schema assessment", "IC2322/IC2326 mở theo ERP on_going"], "completed": ["S1", "S2", "S3 mở lớp và deploy đối soát"], "next_step": "Xem lượt ERP 04:30 tự chạy; khi có bài K56 thật, đối chiếu Writing và Portal; audit tuyến Substitute riêng trước khi chốt hợp nhất.", "open_risks": ["Lịch tự chạy chưa quan sát", "Writing/Portal K56 chưa có bài thật", "Substitute chưa chung bộ chấm"], "tree_revision": "6507b439be2d2c0f1bf65ba6cd95968a2ccb7f46"},
+  "release": {"target_environment": "production", "decision": "deployed_awaiting_validation", "base_tree_revision": "309e59c", "current_tree_revision": "6507b439be2d2c0f1bf65ba6cd95968a2ccb7f46", "production_authorized": true, "rollback": "Backup hai kho đã restore drill; không trỏ về kho K56 riêng sau bài K56 mới. Khi lỗi giữ bài, cô lập đường ghi và sửa tiến tới sau kiểm đếm.", "deployment_readback": "verified", "operational_observation": "K56/K67 healthy restart 0; checkpoint 105; 1341 roster, 87 quyền; chín đường bài K56 đúng lớp; K67 image không đổi. Lượt lịch 04:30 và bài nộp thật chưa quan sát.", "open_risks": [{"severity": "P1", "summary": "Chưa quan sát lượt ERP tự chạy và Writing/Portal trên bài thật."}, {"severity": "P1", "summary": "Substitute K56 vẫn gọi bộ chấm riêng, chưa hoàn tất hợp nhất."}]}
+}
