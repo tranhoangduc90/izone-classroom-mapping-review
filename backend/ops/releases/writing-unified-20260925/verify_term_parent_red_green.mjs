@@ -28,8 +28,10 @@ assert.equal(report.productionWrites, 0);
 assert.equal(report.cases.length, 4);
 assert.equal(report.cases.every(item => item.jobsComplete === 2), true);
 assert.equal(report.miniWritingPortalWrites, 0);
+assert.deepEqual(report.schemaJobs, { k67: 2, k56: 6 });
 console.log(JSON.stringify({ toolOutcome: 'success', old: 'RED', fixed: 'GREEN',
   cases: report.cases.length, completedJobs: 8,
+  schemaJobs: report.schemaJobs,
   portalSyncCalls: report.portalSyncCalls,
   miniWritingPortalWrites: report.miniWritingPortalWrites,
   productionWrites: 0 }));
