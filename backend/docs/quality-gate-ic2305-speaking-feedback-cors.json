@@ -1,0 +1,433 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log IC2305 Buổi 4 và nhận xét Speaking",
+  "change_id": "ic2305-speaking-feedback-cors-20260924",
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "concurrent",
+    "authentication",
+    "personal_data",
+    "external_side_effects"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Phiếu lớp thật, nhận xét riêng tư và điểm danh có tác động ngoài hệ thống.",
+    "user": "Học viên IC2305 và giảng viên được phân công",
+    "problem": "Giảng viên bấm Gửi nhận xét Speaking nhưng trình duyệt báo Failed to fetch. Sau khi qua CORS, API báo 500 vì khóa roster vượt quyền database.",
+    "outcome": "Giảng viên gửi được nhận xét trên phiếu thật và học viên thấy trong tổng hợp cá nhân.",
+    "out_of_scope": [
+      "Không sửa hoặc xóa câu trả lời cũ.",
+      "Không dùng AI viết nhận xét của giảng viên."
+    ],
+    "plain_language_summary": "Giảng viên gửi được nhận xét Speaking từ trang quản lý; học viên thấy đúng nhận xét trong hành trình cá nhân."
+  },
+  "change_package": {
+    "proposal": "Bổ sung PUT vào danh sách phương thức CORS của API. Đổi khóa giao dịch sang assignment đã có quyền UPDATE.",
+    "behavior_baseline": "Preflight trả 204 nhưng danh sách phương thức không có PUT; trình duyệt chặn trước endpoint.",
+    "deltas": [
+      {
+        "id": "D-CORS",
+        "operation": "MODIFIED",
+        "behavior": "Preflight cho phép PUT từ Pages với CSRF header và giữ nguyên allowlist origin.",
+        "test_ids": [
+          "T-CORS",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "D-ROLE",
+        "operation": "MODIFIED",
+        "behavior": "Khóa assignment để giữ gửi nhận xét tuần tự với quyền database tối thiểu.",
+        "test_ids": [
+          "T-ROLE",
+          "T-REG"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "requirements": [
+    {
+      "id": "R-CORS",
+      "statement": "Pages gửi được PUT nhận xét Speaking có cookie và CSRF header.",
+      "test_ids": [
+        "T-CORS"
+      ]
+    },
+    {
+      "id": "R-ROLE",
+      "statement": "Vai trò learning_api gửi được nhận xét với quyền production hiện có.",
+      "test_ids": [
+        "T-ROLE"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I-CORS",
+      "statement": "Chỉ origin đã cho phép được dùng API; các phương thức cũ tiếp tục hoạt động.",
+      "test_ids": [
+        "T-CORS",
+        "T-REG"
+      ]
+    },
+    {
+      "id": "I-ROLE",
+      "statement": "Không cấp quyền sửa roster; hai lần gửi cùng phiếu được khóa tuần tự.",
+      "test_ids": [
+        "T-ROLE",
+        "T-FEEDBACK"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-FORM",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Template test: hai phần, 8 mục, đáp án ẩn; Playwright 390 px đọc đúng ô Listening và Phần 2."
+    },
+    {
+      "id": "T-FEEDBACK",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite kiểm luồng giảng viên/học viên; trên phiếu IC2305 thật, trang giảng viên báo đã gửi bản 1 và hành trình của hồ sơ kiểm thử hiển thị nguyên văn nhận xét Speaking."
+    },
+    {
+      "id": "T-INVALID",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "API từ chối nhận xét trống hoặc quá 500 ký tự trước khi chạm database."
+    },
+    {
+      "id": "T-ACCESS",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: người ngoài lớp bị chặn, học viên khác không thấy; quyền phân công lớp trực tiếp được kiểm."
+    },
+    {
+      "id": "T-RETRY",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: cùng operation ID chỉ một bản; revision cũ bị từ chối."
+    },
+    {
+      "id": "T-ROLLBACK",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "PGlite: sai lớp rollback, trạng thái cũ giữ published; gửi lặp thay phiếu an toàn."
+    },
+    {
+      "id": "T-UI",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Playwright localhost 390 px đạt; trình duyệt thật xác nhận học viên làm Phần 1, nhập Phần 2, giảng viên đọc bài và gửi nhận xét, học viên thấy nhận xét trong trang cá nhân."
+    },
+    {
+      "id": "T-CORS",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Cùng test RED trên 896d11f: thiếu PUT; GREEN trên head: PUT được phép, 204 và origin/CSRF đúng."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Backend full suite trên hai sửa lỗi đạt 169/169, không skip."
+    },
+    {
+      "id": "T-ROLE",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite dưới vai trò learning_api: RED 42501 khi khóa roster; GREEN khi khóa assignment."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "plan-v1",
+    "tasks": [
+      {
+        "id": "TASK-CORS",
+        "result": "Bản sửa một dòng CORS có RED/GREEN và rollback.",
+        "depends_on": [],
+        "consumes": [
+          "Lỗi live Failed to fetch",
+          "R-CORS"
+        ],
+        "produces": [
+          "regression test",
+          "image hash-guard",
+          "release plan"
+        ],
+        "contract": "Giữ allowlist origin, cookie và CSRF; không đổi endpoint hoặc dữ liệu lớp.",
+        "test_ids": [
+          "T-CORS",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "RED/GREEN",
+          "full suite",
+          "preflight live"
+        ],
+        "decision_inputs": [
+          "Đức yêu cầu thử phiếu thật và sửa lỗi tìm thấy."
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "TASK-ROLE",
+        "result": "Sửa khóa SQL theo quyền learning_api, có RED/GREEN và rollback.",
+        "depends_on": [
+          "TASK-CORS"
+        ],
+        "consumes": [
+          "Lỗi 500 sau khi CORS mở",
+          "R-ROLE"
+        ],
+        "produces": [
+          "regression test theo vai trò",
+          "image đã kiểm quyền"
+        ],
+        "contract": "Giữ kiểm lớp, phiên bản nhận xét và khóa tuần tự; không mở rộng quyền roster.",
+        "test_ids": [
+          "T-ROLE",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "RED/GREEN",
+          "full suite",
+          "role readback"
+        ],
+        "decision_inputs": [
+          "Lỗi production SQLSTATE 42501 khi gửi nhận xét."
+        ],
+        "affected_future_tasks": [
+          "TASK-LIVE"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "TASK-LIVE",
+        "result": "Học viên thử làm bài, giảng viên gửi nhận xét, học viên thấy nội dung; dữ liệu thử được xóa.",
+        "depends_on": [
+          "TASK-ROLE"
+        ],
+        "consumes": [
+          "Yêu cầu thử phiếu thật của Đức"
+        ],
+        "produces": [
+          "ảnh giao diện hành trình",
+          "readback sĩ số 18",
+          "link thử vô hiệu"
+        ],
+        "contract": "Dùng học viên tổng hợp riêng; không chạm bài nộp hoặc điểm danh của học viên thật.",
+        "test_ids": [
+          "T-UI",
+          "T-FEEDBACK"
+        ],
+        "evidence_required": [
+          "teacher UI",
+          "student UI",
+          "cleanup readback"
+        ],
+        "decision_inputs": [
+          "Đức cho phép thử phiếu thật rồi xóa dữ liệu thử."
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "PASS",
+    "risks": [
+      {
+        "id": "R-CORS",
+        "description": "Thêm PUT có thể mở rộng đường ghi cho origin ngoài allowlist.",
+        "probability": 1,
+        "impact": 3,
+        "score": 3,
+        "severity": "P2",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Giữ kiểm origin và CSRF; regression test xác nhận đúng origin/header.",
+        "test_ids": [
+          "T-CORS"
+        ]
+      },
+      {
+        "id": "R-ROLE",
+        "description": "Gửi nhận xét lỗi 500 nếu khóa bảng roster thiếu quyền.",
+        "probability": 2,
+        "impact": 2,
+        "score": 4,
+        "severity": "P2",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Dùng khóa assignment đã có quyền, PGlite với vai trò giới hạn xác nhận.",
+        "test_ids": [
+          "T-ROLE"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {
+    "external_partial": "Không gọi dịch vụ ngoài trên đường gửi nhận xét; điểm danh hiện có được kiểm hồi quy."
+  },
+  "cross_constraints": [
+    {
+      "id": "FEEDBACK-LENGTH",
+      "left": {
+        "name": "max_text_frontend",
+        "value": 500
+      },
+      "operator": "==",
+      "right": {
+        "name": "max_text_api_database",
+        "value": 500
+      },
+      "status": "passed",
+      "evidence": "Textarea, Zod API và CHECK database đều giới hạn 500 ký tự."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-IMAGE",
+      "target": "Image ứng viên CORS trên VPS",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Docker build hash-guard đạt; image sha256:8f42005ce7e558e647ff5a086391d13f0ee60c65743d824b6b23e18fce6955da."
+    },
+    {
+      "id": "M-IMAGE-ROLE",
+      "target": "Image sửa khóa giao dịch trên VPS",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Docker build hash-guard đạt; image sha256:0cdb961a5f868be0e435af82603c8ca8985a202990767fa5860ce3d9e2da7ae1."
+    },
+    {
+      "id": "M-DEPLOY",
+      "target": "mapping-review-api trên VPS",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Container dùng image 20260924.3-progress-log-feedback-lock và trạng thái healthy."
+    },
+    {
+      "id": "M-LIVE",
+      "target": "Nhận xét Speaking của hồ sơ thử trên phiếu IC2305 Buổi 4",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Giảng viên thấy Đã gửi đến tổng hợp, bản 1; học viên thấy nguyên văn nhận xét trên trang hành trình."
+    },
+    {
+      "id": "M-CLEANUP",
+      "target": "Hồ sơ tổng hợp thử của IC2305",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Giao dịch xóa 1 roster, 1 attempt, 1 checkpoint, 1 feedback, 1 link; đọc lại roster 18, attempt/checkpoint/feedback/submission/attendance của phiếu bằng 0; link thử không mở được."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-FULL",
+      "scope": "full_suite",
+      "command": "npm test (backend)",
+      "tree_revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce",
+      "captured_at": "2026-09-24T06:42:58Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 169,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Backend full suite 169/169 đạt trên app.js và learning-sql.js mới."
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Hai lỗi live được tái hiện riêng, mỗi lỗi có RED/GREEN, full suite 169/169; luồng trình duyệt thật và dọn dữ liệu thử đều đã readback."
+  },
+  "context_handoff": {
+    "summary": "CORS và khóa giao dịch đã sửa; giảng viên gửi bản 1, học viên thấy nhận xét; hồ sơ thử đã xóa.",
+    "decisions": [
+      "Đức chọn thay phiếu cũ; dữ liệu cũ được giữ."
+    ],
+    "completed": [
+      "TASK-CORS",
+      "TASK-ROLE",
+      "TASK-LIVE"
+    ],
+    "next_step": "Lưu bản sửa trong Git và theo dõi lượt sử dụng thật đầu tiên.",
+    "open_risks": [],
+    "tree_revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "verified",
+    "base_tree_revision": "896d11f+regression-test",
+    "current_tree_revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce",
+    "production_authorized": true,
+    "rollback": "Script giữ container API cũ; health check lỗi thì tự khởi động bản cũ.",
+    "deployment_readback": "verified",
+    "operational_observation": "Phiếu IC2305 thật: học viên tổng hợp nộp Phần 1 và lưu câu trả lời Phần 2; giảng viên gửi nhận xét bản 1; trang hành trình hiển thị đúng; xóa hồ sơ thử và link không còn hiệu lực; dashboard còn 18 học viên.",
+    "open_risks": []
+  },
+  "red_green": {
+    "red_on_base": {
+      "test_id": "T-CORS",
+      "command": "node --test test/learning-feedback-cors.test.js",
+      "tree_revision": "896d11f+regression-test",
+      "outcome": "failed",
+      "exit_code": 1,
+      "failed": 1,
+      "evidence": "Header thực tế GET, POST, PATCH, DELETE, OPTIONS; thiếu PUT."
+    },
+    "green_on_head": {
+      "test_id": "T-CORS",
+      "command": "node --test test/learning-feedback-cors.test.js",
+      "tree_revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Response 204, origin/credentials/CSRF đúng và allow-methods có PUT."
+    }
+  },
+  "red_green_additional": [
+    {
+      "test_id": "T-ROLE",
+      "command": "node --test test/learning-feedback-role-privilege.test.js",
+      "red_on_base": {
+        "revision": "CORS image source trước khóa assignment",
+        "outcome": "failed",
+        "exit_code": 1,
+        "sqlstate": "42501"
+      },
+      "green_on_head": {
+        "revision": "sha256:797d55b30f1701c69222152d2ab8b75d59ca0b24681fac57722575af5d55c8ce",
+        "outcome": "passed",
+        "exit_code": 0
+      }
+    }
+  ]
+}

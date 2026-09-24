@@ -385,7 +385,7 @@ function addCors(config) {
       res.set('Vary', 'Origin');
     }
     res.set('Access-Control-Allow-Credentials', 'true');
-    res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
