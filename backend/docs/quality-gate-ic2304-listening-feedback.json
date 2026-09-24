@@ -1,0 +1,507 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log IC2304 Buổi 2: Listening, Writing, Speaking",
+  "change_id": "ic2304-session2-listening-feedback-speaking-20260924",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "concurrent",
+    "authentication",
+    "personal_data"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Phiếu lớp thật có dữ liệu học viên và form version bất biến.",
+    "user": "Học viên IC2304 và giảng viên được cấp quyền lớp",
+    "problem": "Listening cần tự chấm; giảng viên cần thấy số đúng; phiếu thiếu phần Speaking.",
+    "outcome": "Học viên thấy đúng sai Listening và checklist Speaking tối đa hai mục; giảng viên thấy số đúng ngay trong danh sách.",
+    "out_of_scope": [
+      "Không chấm Writing/Speaking hoặc sửa điểm danh Portal."
+    ],
+    "plain_language_summary": "Nộp Listening thấy đáp án; Speaking cho chọn tối đa hai vấn đề và gõ nhận xét ngay tại mục chọn."
+  },
+  "change_package": {
+    "proposal": "Tạo version v3 có chấm Listening và checkpoint Speaking trên cùng phiếu IC2304 Buổi 2.",
+    "behavior_baseline": "Version hiện hành không có điểm hoặc khóa chấm Listening.",
+    "deltas": [
+      {
+        "id": "D-KEY",
+        "operation": "ADDED",
+        "behavior": "Version chấm năm câu với khóa riêng trong database; source công khai chỉ nhận khóa qua đầu vào riêng tư khi tạo version.",
+        "test_ids": [
+          "T-HP",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "D-STUDENT",
+        "operation": "MODIFIED",
+        "behavior": "Sau nộp phần, phiếu cũ hiện điểm và dấu đúng sai ngay trên A/B/C.",
+        "test_ids": [
+          "T-HP",
+          "T-TIME"
+        ]
+      },
+      {
+        "id": "D-TEACHER",
+        "operation": "MODIFIED",
+        "behavior": "Danh sách lớp hiện Listening n/5 sau checkpoint.",
+        "test_ids": [
+          "T-HP",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "D-UPGRADE",
+        "operation": "ADDED",
+        "behavior": "Chỉ xóa đúng một lượt thử đã sao lưu và đối chiếu hash; chuyển assignment sang v3 trong cùng giao dịch, giữ link và roster.",
+        "test_ids": [
+          "T-BAD",
+          "T-CON"
+        ]
+      },
+      {
+        "id": "D-SPEAKING",
+        "operation": "ADDED",
+        "behavior": "Thêm checkpoint Speaking tám mục, tối đa hai lựa chọn, ô nhập tự chọn mục và kiểm ở máy chủ.",
+        "test_ids": [
+          "T-SPEAK",
+          "T-SEC",
+          "T-REG"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "requirements": [
+    {
+      "id": "REQ-STUDENT",
+      "statement": "Học viên thấy đúng sai, đáp án và tổng số câu đúng ngay sau nộp Listening.",
+      "test_ids": [
+        "T-HP",
+        "T-TIME"
+      ]
+    },
+    {
+      "id": "REQ-TEACHER",
+      "statement": "Giảng viên xem số đúng của từng học viên ngay trong danh sách, không mở bài.",
+      "test_ids": [
+        "T-HP",
+        "T-SEC"
+      ]
+    },
+    {
+      "id": "REQ-SAFE-UPGRADE",
+      "statement": "Giữ link và roster; chỉ xóa lượt thử đã được Đức chỉ định sau khi đối chiếu bản sao lưu và không có bài nộp cuối.",
+      "test_ids": [
+        "T-BAD",
+        "T-CON"
+      ]
+    },
+    {
+      "id": "REQ-SPEAKING",
+      "statement": "Phần 3 có đúng tám mục tham chiếu IC2305; tối đa hai mục; ba ô nhập nằm ngay tại mục và gõ tự chọn.",
+      "test_ids": [
+        "T-SPEAK",
+        "T-REG"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-KEY",
+      "statement": "Đáp án không có trong Pages hoặc public definition trước khi nộp.",
+      "test_ids": [
+        "T-SEC"
+      ]
+    },
+    {
+      "id": "INV-ATTENDANCE",
+      "statement": "Nộp Listening chưa tự điểm danh và Writing vẫn khóa.",
+      "test_ids": [
+        "T-HP",
+        "T-REG"
+      ]
+    },
+    {
+      "id": "INV-RETRY",
+      "statement": "Retry và tải lại trả cùng kết quả đã nộp.",
+      "test_ids": [
+        "T-CON",
+        "T-TIME"
+      ]
+    },
+    {
+      "id": "INV-CHECKLIST",
+      "statement": "Máy chủ từ chối quá hai mục, mục lạ/trùng; mục không có vấn đề không đi cùng mục khác; Speaking không chấm.",
+      "test_ids": [
+        "T-SPEAK",
+        "T-SEC"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-HP",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite chấm Listening 2/5 và dashboard 2/5; live API/Pages mở đúng v3 ba phần. Bài làm thật đầu tiên chưa phát sinh để quan sát điểm production."
+    },
+    {
+      "id": "T-BAD",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Lệnh thử hash sai bị từ chối trước ghi; lần đầu thiếu quyền DELETE/UPDATE rollback; container tạm quản trị chỉ dùng khi nâng cấp, dịch vụ vẫn không có quyền xóa."
+    },
+    {
+      "id": "T-TIME",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Playwright tải lại phiếu desktop/mobile vẫn hiện 2/5 và lựa chọn bị khóa."
+    },
+    {
+      "id": "T-CON",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "PGlite retry checkpoint trả cùng 2/5; transaction upgrade khóa assignment và kiểm attempt."
+    },
+    {
+      "id": "T-SEC",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "API công khai và Pages không chứa đáp án; GitHub backend là public nên source mới buộc truyền khóa riêng, kiểm thử dùng khóa giả; đáp án thật đã được lưu riêng trong database production."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Backend full suite 187/187, Pages 20/20 và Playwright desktop/mobile đạt."
+    },
+    {
+      "id": "T-SPEAK",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite v3 nộp đủ ba phần và đọc lại Speaking; Playwright 1180/390px auto-check, giới hạn hai mục, độc quyền, tải lại, nộp và không tràn ngang."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "ic2304-feedback-speaking-plan-v2",
+    "tasks": [
+      {
+        "id": "TASK-LOCAL",
+        "result": "Code, test và ảnh kiểm chứng Listening, Writing, Speaking đã có.",
+        "depends_on": [],
+        "consumes": [
+          "Yêu cầu người dùng",
+          "Đáp án ảnh"
+        ],
+        "produces": [
+          "Version chấm",
+          "UI hai vai trò"
+        ],
+        "contract": "Không lộ đáp án trước nộp.",
+        "test_ids": [
+          "T-HP",
+          "T-SEC",
+          "T-REG",
+          "T-SPEAK"
+        ],
+        "evidence_required": [
+          "Full suite",
+          "Playwright"
+        ],
+        "decision_inputs": [
+          "Chấm sau checkpoint"
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "ic2304-feedback-speaking-plan-v2"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Pages, API và phiếu IC2304 v3 đã lên; dữ liệu thử được dọn sạch.",
+        "depends_on": [
+          "TASK-LOCAL"
+        ],
+        "consumes": [
+          "Code đã kiểm",
+          "Quyền phát hành",
+          "Reviewer thứ hai"
+        ],
+        "produces": [
+          "Readback production"
+        ],
+        "contract": "Chỉ dọn một lượt thử đã sao lưu/đối chiếu hash, giữ link và roster; Speaking khóa mặc định.",
+        "test_ids": [
+          "T-BAD",
+          "T-HP"
+        ],
+        "evidence_required": [
+          "Backup",
+          "Readback assignment",
+          "Smoke hai vai trò"
+        ],
+        "decision_inputs": [
+          "Số attempt live",
+          "Reviewer thực tế"
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "ic2304-feedback-speaking-plan-v2"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "CONCERNS",
+    "risks": [
+      {
+        "id": "R-ATTEMPTS",
+        "description": "Lớp đã bắt đầu làm thì không thể đổi form version an toàn.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Người phát hành",
+        "mitigation": "Chỉ một lượt thử đã sao lưu; script kiểm hash, trạng thái, dữ liệu liên quan và đọc lại sau giao dịch.",
+        "test_ids": [
+          "T-BAD"
+        ]
+      },
+      {
+        "id": "R-KEY",
+        "description": "Đáp án có thể lộ trước khi nộp.",
+        "probability": 1,
+        "impact": 3,
+        "score": 3,
+        "severity": "P2",
+        "status": "mitigated",
+        "owner": "Người xây dựng",
+        "mitigation": "Key chỉ nằm ở backend; API chỉ trả kết quả sau checkpoint.",
+        "test_ids": [
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "R-CHECKLIST",
+        "description": "Trình duyệt hoặc dữ liệu gửi trực tiếp vượt hai mục Speaking.",
+        "probability": 1,
+        "impact": 2,
+        "score": 2,
+        "severity": "P3",
+        "status": "mitigated",
+        "owner": "Người xây dựng",
+        "mitigation": "Cả UI và backend kiểm tối đa hai mục, tính duy nhất và mục loại trừ.",
+        "test_ids": [
+          "T-SPEAK"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "C-SCORE",
+      "left": {
+        "name": "scored_items",
+        "value": 5
+      },
+      "operator": "==",
+      "right": {
+        "name": "listening_items",
+        "value": 5
+      },
+      "status": "passed",
+      "evidence": "Definition và PGlite đọc lại năm câu chấm."
+    },
+    {
+      "id": "C-SPEAKING",
+      "left": {
+        "name": "speaking_options",
+        "value": 8
+      },
+      "operator": "==",
+      "right": {
+        "name": "ic2305_reference_options",
+        "value": 8
+      },
+      "status": "passed",
+      "evidence": "Definition v3 giữ đúng tám nhãn và giới hạn maxSelections=2."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-LOCAL",
+      "target": "PGlite fixture",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Checkpoint 2/5, dashboard 2/5 và attendance 0; không dùng học viên thật."
+    },
+    {
+      "id": "M-SPEAKING-LOCAL",
+      "target": "PGlite fixture",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Checkpoint Speaking lưu hai mục và hai giải thích; biên nhận complete; không dùng dữ liệu lớp thật."
+    },
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages Progress Log",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Build d0583f0 thành công; trang công khai HTTP 200 và tải revision Speaking mới."
+    },
+    {
+      "id": "M-API-ROLLBACK",
+      "target": "Khôi phục API cũ sau lỗi canary",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Container ảnh 20260924.3 trở lại và Docker health=healthy; form chưa đổi."
+    },
+    {
+      "id": "M-AUTHORITY",
+      "target": "Quyền tự duyệt form có điểm của lead khóa 67",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Đúng một quyền active; tài khoản dịch vụ đọc lại có quyền, vẫn không có DELETE/UPDATE trên bảng bài làm."
+    },
+    {
+      "id": "M-API",
+      "target": "API production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image 20260924.4 healthy; canary ba phần và API học viên đạt."
+    },
+    {
+      "id": "M-UPGRADE",
+      "target": "Phiếu IC2304 Buổi 2",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "v3, ba phần open/locked/locked, roster 16, attempt và các bảng liên quan bằng 0; link cũ giữ nguyên."
+    },
+    {
+      "id": "M-PRIVATE-BACKUP-DELETE",
+      "target": "Bản sao riêng tư lượt thử",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Đã xóa đúng tệp backup lượt thử, thư mục còn 0 tệp."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+      "captured_at": "2026-09-24T10:15:41.236496Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 187,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "187/187 trên nhánh sạch từ main; khóa đáp án thật không nằm trong source, kiểm thử dùng khóa giả."
+    },
+    {
+      "id": "V-PAGES",
+      "scope": "focused",
+      "command": "node --test tests/progress-log-static.mjs tests/progress-log-session3-static.mjs tests/progress-log-memory.cjs tests/progress-log-ic2305-demo.mjs tests/teacher-login-preference.mjs",
+      "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+      "captured_at": "2026-09-24T09:40:00.287560Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 20,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Pages 20/20 sau khi nhập thay đổi mới nhất từ main."
+    },
+    {
+      "id": "V-BROWSER",
+      "scope": "behavioral",
+      "command": "node E:/Codex-Data/temp/verify-ic2304-speaking.cjs",
+      "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+      "captured_at": "2026-09-24T09:40:00.287560Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Playwright 1180/390px đạt sau khi nhập main."
+    },
+    {
+      "id": "V-LIVE-STUDENT",
+      "scope": "behavioral",
+      "command": "node E:/Codex-Data/temp/verify-ic2304-live-browser.cjs",
+      "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+      "captured_at": "2026-09-24T10:04:54.020023Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Trang thật ở 390px hiện IC2304, Khóa 67, 16 học viên; không tạo lượt làm."
+    },
+    {
+      "id": "V-LIVE-API",
+      "scope": "behavioral",
+      "command": "IC2304 public assignment and teacher dashboard read-only smoke",
+      "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+      "captured_at": "2026-09-24T10:04:54.020023Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "API học viên có ba phần và 16 học viên; dashboard GV đọc được ba phần, 16 học viên và không còn điểm thử."
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Đối chiếu Pages, API, database và trình duyệt thật; hành vi chấm/hiện điểm đã đạt ở PGlite và Playwright."
+  },
+  "context_handoff": {
+    "summary": "IC2304 v3 đã lên; dữ liệu thử sạch; source công khai không chứa đáp án; cần xem điểm bài Listening thật đầu tiên.",
+    "decisions": [
+      "Giữ cùng assignment/link nếu chưa có attempt."
+    ],
+    "completed": [
+      "TASK-LOCAL",
+      "TASK-RELEASE"
+    ],
+    "next_step": "Sau bài Listening thật đầu tiên, đối chiếu điểm học viên và dashboard GV.",
+    "open_risks": [
+      "Chưa quan sát một checkpoint có điểm trên production."
+    ],
+    "tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "backend:b0740827ed4e097caf9365458308f6f769734e7d;pages:89799f1bbbdf200cd900c0398f4a5b06e146fbf6",
+    "current_tree_revision": "backend-code:3fc8454a5952a39a2c4146445ef7c6d9ad2ce3c8;pages:d0583f05c3a2c2261db477eb9776b7ec5e2e28c8",
+    "production_authorized": true,
+    "rollback": "Giữ bản form đang live; chỉ chuyển v1/v2 sang v3 khi chưa có attempt. Nếu cần trả về bản cũ thì xác nhận chưa có attempt trên v3.",
+    "deployment_readback": "verified",
+    "operational_observation": "Trang thật IC2304 Khóa 67 và API hai vai trò đạt; source public đã tách đáp án; chưa có checkpoint Listening thật để quan sát điểm.",
+    "open_risks": [
+      {
+        "severity": "P2",
+        "summary": "Cần kiểm điểm production sau bài Listening thật đầu tiên."
+      }
+    ]
+  }
+}

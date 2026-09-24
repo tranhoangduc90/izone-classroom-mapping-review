@@ -20,3 +20,9 @@
 - Nếu API lỗi **trước** bước 5, khởi động lại container backup `mapping-review-api-before-ic2304-v3-20260924`; không sửa database.
 - Sau bước 5, image cũ không hiểu form v3. Nếu chưa có lượt làm mới, chỉ chuyển assignment về v1 trong giao dịch đã duyệt rồi mới đổi image. Nếu đã có lượt làm mới, giữ image mới và sửa tiến tới; không đổi version bên dưới bài học viên.
 - Bản sao lưu lượt thử chỉ dùng khi bước chuyển lỗi hoặc cần phục hồi có mục tiêu. Khi production đã đọc lại đạt, xóa bản sao riêng tư vì Đức yêu cầu xóa dữ liệu thử.
+
+## Khóa chấm Listening
+
+- Repository công khai chỉ chứa luật chấm; năm đáp án thật đang nằm trong `learning.form_grading_key` của database production và không được ghi vào Git, Dockerfile hoặc log.
+- Nếu cần chạy lại lệnh tạo version ở môi trường khác, người vận hành cung cấp năm đáp án qua biến môi trường riêng `IC2304_LISTENING_ANSWER_IDS`. Lệnh dừng trước khi ghi nếu thiếu hoặc sai định dạng.
+- Kiểm thử dùng khóa giả. Khi chấm bài thật, API đọc khóa riêng đã lưu trong database; không cần biến môi trường này để học viên làm bài.
