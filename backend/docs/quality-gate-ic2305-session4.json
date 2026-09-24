@@ -353,6 +353,41 @@
       "outcome": "success",
       "readback": "verified",
       "evidence": "Docker build hash-guard đạt; image sha256:a3c2c67b535c199d1382d027cddeefe26f35aced83513da0ab76eb4f0828b9de; publisher và helper readback đúng hash."
+    },
+    {
+      "id": "M-BACKUP",
+      "target": "PostgreSQL production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Backup 271296266 byte, pg_restore liệt kê 1327 mục; file quyền riêng tư trên VPS."
+    },
+    {
+      "id": "M-SCHEMA",
+      "target": "Schema learning production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Bảng feedback mới, quyền SELECT/INSERT và UPDATE status được đọc lại; 0 nhận xét trước/sau migration."
+    },
+    {
+      "id": "M-API",
+      "target": "API production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image 20260924.1 health healthy; source helper/publisher đúng hash; container cũ còn để hoàn tác."
+    },
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "PR #15 merge cacefaf; 6 asset progress-log trên URL thật trùng SHA256 với Git commit đã kiểm."
+    },
+    {
+      "id": "M-ASSIGNMENT",
+      "target": "Phiếu IC2305 Buổi 4 production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Assignment mới eced2188-74e7-433f-bb58-21426976d46a published, roster 18, 2 phần mở; cũ retired, 0 bài nộp giữ nguyên; API cũ 404, API mới 200, 8 mục, đáp án ẩn."
     }
   ],
   "verification_runs": [
@@ -378,7 +413,7 @@
     "evidence": "Đối chiếu DOCX, luồng nhận xét riêng, thay phiếu cũ, diff và bộ kiểm thử trên đúng digest."
   },
   "context_handoff": {
-    "summary": "Mã phiếu, nhận xét và thay phiếu đã qua kiểm thử; image ứng viên đã dựng.",
+    "summary": "Phiếu mới và giao diện đã phát hành; API và dữ liệu được đọc lại.",
     "decisions": [
       "Đức chọn thay phiếu cũ; dữ liệu cũ được giữ."
     ],
@@ -387,19 +422,21 @@
       "TASK-FEEDBACK",
       "TASK-RELEASE"
     ],
-    "next_step": "Sao lưu database, áp migration, chuyển image, phát hành Pages và chạy publisher.",
-    "open_risks": [],
+    "next_step": "Quan sát lần học viên nộp bài và lần giảng viên gửi nhận xét Speaking đầu tiên.",
+    "open_risks": [
+      "Chưa có nhận xét thật để kiểm tra kết quả hiển thị từ tài khoản học viên."
+    ],
     "tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02"
   },
   "release": {
     "target_environment": "production",
-    "decision": "ready",
+    "decision": "deployed_awaiting_validation",
     "base_tree_revision": "backend:385652e;pages:4bf0c07",
     "current_tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02",
     "production_authorized": true,
-    "rollback": "Hoàn tác commit và migration riêng nếu chưa có nhận xét; sau khi có dữ liệu giữ nguyên và forward-fix.",
-    "deployment_readback": "not_run",
-    "operational_observation": "not_run",
+    "rollback": "Container API cũ được giữ; migration chỉ thêm bảng/quyền. Sau khi có dữ liệu mới, sửa tiếp, không xóa phiếu hoặc bài làm.",
+    "deployment_readback": "verified",
+    "operational_observation": "05:55 UTC: API khỏe; phiếu và Pages đúng bản; chưa có bài nộp hoặc nhận xét Speaking thật.",
     "open_risks": [
       {
         "severity": "P2",
