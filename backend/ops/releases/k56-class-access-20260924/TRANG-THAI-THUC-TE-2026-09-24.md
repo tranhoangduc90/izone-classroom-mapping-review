@@ -14,6 +14,8 @@ Tài liệu này là ảnh chụp vận hành lúc 13:15 giờ Việt Nam ngày 
 
 Backup hai kho trước chuyển đổi đã được restore drill; bản K56 riêng cũ được giữ cho mục đích khôi phục có kiểm soát. **Không trỏ API về kho riêng cũ sau khi kho chung có bài K56 mới**, vì việc đó có thể giấu bài mới khỏi người dùng. Nếu gặp bất thường, trước hết giữ dữ liệu, kiểm đúng lớp–đề và cô lập đường ghi có lỗi; chỉ chọn rollback image/schema sau khi đọc lại số bài mới và có kế hoạch không mất dữ liệu.
 
+**Cập nhật sau ảnh chụp trên:** khoảng 13:31 giờ Việt Nam cùng ngày, container K67 được tạo lại từ image `izone-term-test-backend:20260924.3-progress-log-feedback-lock` bởi một đợt phát hành khác. Lúc đọc lại, K67 vẫn healthy, restart 0 và có 46 hàng roster; không coi image K67 cũ trong bằng chứng cắt chuyển là baseline hiện hành cho các lượt kiểm sau. Không quy thay đổi này cho đợt K56 hoặc tự hoàn tác nó.
+
 ## Kiểm thử đã đạt
 
 - Backend trên branch: `npm test` đạt 225/225, không skip; `npm run check` đạt. Bộ Python K56 đạt 27/27 khi gọi từ cả gốc repository lẫn thư mục `backend`.

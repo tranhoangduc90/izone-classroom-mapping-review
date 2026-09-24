@@ -31,6 +31,11 @@ try:
     k67, _ = run(['docker','inspect','--format',
        '{{.Image}}|{{.State.Health.Status}}|{{.RestartCount}}',
        'mapping-review-api'], 'K67_INSPECT_FAILED')
+    # Đọc tên image và thời điểm tạo container để nhận diện phát hành song song.
+    # Chỉ là metadata; không xem biến môi trường hoặc dữ liệu học viên.
+    k67_release, _ = run(['docker','inspect','--format',
+       '{{.Config.Image}}|{{.Created}}', 'mapping-review-api'],
+       'K67_RELEASE_INSPECT_FAILED')
     stdout_log, stderr_log = run(['docker','logs','--since','15m','izone-k56-ic2264-api'],
                                  'K56_LOG_READ_FAILED')
     log = stdout_log + '\n' + stderr_log
@@ -50,6 +55,7 @@ try:
       'COUNTS_READ_FAILED', sql)
     print(json.dumps({'toolOutcome':'success','businessOutcome':'read_only_worker_audit',
       'k56':k56.split('|'),'k67':k67.split('|'),
+      'k67Release':k67_release.split('|'),
       'successfulEventsLast15m':len(events),'errorEventsLast15m':len(errors),
       'errorCodes':sorted({line.rsplit(':',1)[-1].strip() for line in errors}),
       'counts':json.loads(body),'productionWrites':0}))
