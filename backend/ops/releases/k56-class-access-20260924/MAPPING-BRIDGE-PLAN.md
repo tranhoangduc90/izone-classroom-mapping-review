@@ -1,5 +1,7 @@
 # Đưa snapshot K56 từ mapping chung vào kho bài thi riêng
 
+> Trạng thái kiến trúc: phương án này chỉ còn hiệu lực nếu Đức chọn **giữ database K56 riêng**. Câu hỏi dùng kho chung đã mở nhánh đánh giá [SHARED-DATABASE-CUTOVER.md](SHARED-DATABASE-CUTOVER.md); B3–B6 bên dưới không được triển khai lên `mapping_db` và các số đếm phải đọc lại trước phát hành.
+
 Trạng thái 24/09/2026: **B1/B2 đã có công cụ xem trước chỉ đọc; chưa nhập roster hoặc mở lớp mới**. Nguồn chung đã đối soát 29 lớp/447 học viên `on_going`; kho bài thi K56 chỉ có IC2264, 28 lớp còn thiếu. Hai kho PostgreSQL và hai API ở hai mạng Docker khác nhau; không đổi `DATABASE_URL` hoặc nối mạng production chỉ để giải quyết việc này.
 
 Lệnh xem trước trên máy Đức: `python backend/ops/releases/k56-class-access-20260924/bridge_dry_run.py`. Công cụ lấy thông tin kết nối từ container đang chạy qua SSH, chỉ thực thi `SELECT`, giữ hồ sơ học viên trong RAM và chỉ in số đếm. Lượt live `sync_run_id=102` trả 29 lớp, 447 học viên, ba đề, 28 mapping lớp cần thêm, 1.305 hàng roster cần thêm, 36 hàng roster cũ cần giữ, 0 tên cũ đổi, 0 hàng cũ ngoài phạm vi và 2 lớp chưa ghép Classroom; **productionWrites=0**. Đây là kết quả xem trước, không phải bằng chứng đã mở bài cho 28 lớp.
