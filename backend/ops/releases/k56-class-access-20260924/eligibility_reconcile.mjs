@@ -3,6 +3,8 @@
 // Kết quả: số hàng đổi trạng thái; roster, bài cũ và UUID luôn được giữ nguyên.
 // Khi lỗi: rollback toàn bộ và chỉ trả mã lỗi, không in thông tin học viên.
 
+import { createAssessmentSchemaPool } from '../../../src/assessment-schema-pool.js';
+
 const SLUGS = ['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56'];
 const slugSet = new Set(SLUGS);
 const SOURCE = 'n8n_k56_erp_ongoing';
@@ -73,7 +75,16 @@ export async function reconcileK56Eligibility(db, input, expectedDatabase) {
     && Array.isArray(input.expectedRoster) && Array.isArray(input.expectedAccess),
   'RECONCILE_INPUT_INVALID');
   requireCondition(expectedDatabase === 'izone_mapping_k56_ic2264'
-    || expectedDatabase === 'pglite_test', 'RECONCILE_TARGET_NOT_ALLOWED');
+    || expectedDatabase === 'pglite_test'
+    || expectedDatabase === 'mapping_db'
+    || expectedDatabase === 'pglite_shared_test', 'RECONCILE_TARGET_NOT_ALLOWED');
+  // Dữ liệu vào: pool của kho bài thi cũ hoặc kho mapping chung.
+  // Việc chính: kho chung chỉ định tuyến bảng assessment sang assessment_k56.
+  // Kết quả: mọi câu lệnh trong một transaction dùng cùng client PostgreSQL.
+  // Khi lỗi: rollback đúng client, không để một nửa cờ/quyền được ghi.
+  if (expectedDatabase === 'mapping_db' || expectedDatabase === 'pglite_shared_test') {
+    db = createAssessmentSchemaPool(db, { family: 'k56' });
+  }
   const summary = input.sourceSummary;
   const diff = input.diff;
   requireCondition(summary?.syncRunId === input.syncRunId
@@ -145,39 +156,40 @@ export async function reconcileK56Eligibility(db, input, expectedDatabase) {
     || String(input.reviewedSyncRunId) === input.syncRunId,
   'RECONCILE_REVIEW_REQUIRED');
 
-  await db.query('BEGIN');
+  const client = typeof db.connect === 'function' ? await db.connect() : db;
   try {
-    const name = (await db.query('SELECT current_database() AS name')).rows[0]?.name;
+    await client.query('BEGIN');
+    const name = (await client.query('SELECT current_database() AS name')).rows[0]?.name;
     requireCondition(name === expectedDatabase, 'RECONCILE_WRONG_DATABASE');
-    const gate = (await db.query(`SELECT
+    const gate = (await client.query(`SELECT
       to_regclass('assessment.term_test_class_access') IS NOT NULL AS access_exists,
       to_regclass('assessment.k56_roster_sync_checkpoint') IS NOT NULL AS checkpoint_exists`))
       .rows[0];
     requireCondition(gate?.access_exists && gate?.checkpoint_exists,
       'RECONCILE_MIGRATION_MISSING');
-    await db.query(`LOCK TABLE mapping.classroom_course_mapping,
+    await client.query(`LOCK TABLE mapping.classroom_course_mapping,
       assessment.term_test_roster, assessment.term_test_class_access,
       assessment.k56_roster_sync_checkpoint IN SHARE ROW EXCLUSIVE MODE`);
-    const checkpoint = (await db.query(`SELECT last_sync_run_id::text AS run_id
+    const checkpoint = (await client.query(`SELECT last_sync_run_id::text AS run_id
       FROM assessment.k56_roster_sync_checkpoint WHERE source_name = $1`, [SOURCE])).rows[0];
     requireCondition(!checkpoint || BigInt(input.syncRunId) >= BigInt(checkpoint.run_id),
       'RECONCILE_OLDER_SOURCE_RUN');
-    const mapped = (await db.query(`SELECT erp_course_class_id::text AS class_id,
+    const mapped = (await client.query(`SELECT erp_course_class_id::text AS class_id,
       erp_class_name_snapshot AS class_code FROM mapping.classroom_course_mapping
       WHERE erp_course_class_id = ANY($1::bigint[])`, [[...classes.keys()]])).rows;
     requireCondition(mapped.length === classes.size && mapped.every(row =>
       classes.get(row.class_id)?.class_code === row.class_code),
     'RECONCILE_CLASS_MAPPING_CHANGED');
-    const beforeRoster = indexRows(await readRoster(db), rosterKey,
+    const beforeRoster = indexRows(await readRoster(client), rosterKey,
       'RECONCILE_DUPLICATE_CURRENT_ROSTER');
-    const beforeAccess = indexRows(await readAccess(db), accessKey,
+    const beforeAccess = indexRows(await readAccess(client), accessKey,
       'RECONCILE_DUPLICATE_CURRENT_ACCESS');
     requireCondition(sameRoster(expectedRoster, beforeRoster)
       && sameAccess(expectedAccess, beforeAccess),
     'RECONCILE_TARGET_CHANGED_SINCE_PREVIEW');
 
     for (const row of [...activate, ...deactivate]) {
-      const result = await db.query(`UPDATE assessment.term_test_roster
+      const result = await client.query(`UPDATE assessment.term_test_roster
         SET is_eligible = $4
         WHERE test_slug = $1 AND erp_course_class_id = $2
           AND erp_student_contact_id = $3 AND is_eligible = $5
@@ -187,22 +199,22 @@ export async function reconcileK56Eligibility(db, input, expectedDatabase) {
       requireCondition(result.rows.length === 1, 'RECONCILE_ROSTER_WRITE_MISMATCH');
     }
     for (const row of [...enable, ...disable]) {
-      const result = await db.query(`UPDATE assessment.term_test_class_access
+      const result = await client.query(`UPDATE assessment.term_test_class_access
         SET enabled = $3, updated_at = now()
         WHERE test_slug = $1 AND erp_course_class_id = $2 AND enabled = $4
         RETURNING 1`,
       [row.test_slug, row.class_id, !row.enabled, row.enabled]);
       requireCondition(result.rows.length === 1, 'RECONCILE_ACCESS_WRITE_MISMATCH');
     }
-    await db.query(`INSERT INTO assessment.k56_roster_sync_checkpoint
+    await client.query(`INSERT INTO assessment.k56_roster_sync_checkpoint
       (source_name, last_sync_run_id) VALUES ($1, $2)
       ON CONFLICT (source_name) DO UPDATE
       SET last_sync_run_id = EXCLUDED.last_sync_run_id, updated_at = now()`,
     [SOURCE, input.syncRunId]);
 
-    const afterRoster = indexRows(await readRoster(db), rosterKey,
+    const afterRoster = indexRows(await readRoster(client), rosterKey,
       'RECONCILE_DUPLICATE_READBACK_ROSTER');
-    const afterAccess = indexRows(await readAccess(db), accessKey,
+    const afterAccess = indexRows(await readAccess(client), accessKey,
       'RECONCILE_DUPLICATE_READBACK_ACCESS');
     requireCondition(afterRoster.size === expectedRoster.size
       && [...expectedRoster].every(([key, old]) => {
@@ -215,20 +227,22 @@ export async function reconcileK56Eligibility(db, input, expectedDatabase) {
       && [...afterAccess].every(([key, row]) =>
         expectedAccess.has(key) && row.enabled === wantedAccess.has(key)),
     'RECONCILE_ACCESS_READBACK_MISMATCH');
-    const savedRun = (await db.query(`SELECT last_sync_run_id::text AS run_id
+    const savedRun = (await client.query(`SELECT last_sync_run_id::text AS run_id
       FROM assessment.k56_roster_sync_checkpoint WHERE source_name = $1`, [SOURCE]))
       .rows[0]?.run_id;
     requireCondition(savedRun === input.syncRunId,
       'RECONCILE_CHECKPOINT_READBACK_MISMATCH');
-    await db.query('COMMIT');
+    await client.query('COMMIT');
     return { toolOutcome: 'success', businessOutcome: 'eligibility_readback_verified',
       syncRunId: input.syncRunId, activated: activate.length,
       deactivated: deactivate.length, classTestPairsEnabled: enable.length,
       classTestPairsDisabled: disable.length, rosterRowsPreserved: afterRoster.size };
   } catch (error) {
-    try { await db.query('ROLLBACK'); } catch { /* Kết nối hỏng: phải kiểm lại đích. */ }
+    try { await client.query('ROLLBACK'); } catch { /* Kết nối hỏng: phải kiểm lại đích. */ }
     throw error instanceof ReconcileError ? error
       : new ReconcileError('RECONCILE_TRANSACTION_FAILED');
+  } finally {
+    if (client !== db && typeof client.release === 'function') client.release();
   }
 }
 

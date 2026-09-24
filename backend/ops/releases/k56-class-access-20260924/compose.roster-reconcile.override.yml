@@ -1,0 +1,11 @@
+# Dữ liệu vào: service K56 đang dùng mapping_db và image đã kiểm đúng SHA.
+# Việc chính: chỉ đổi image API K56 và bật đối soát lớp/học viên theo ERP.
+# Kết quả: K67, Substitute và các service khác không bị Compose chạm tới.
+# Khi lỗi: bỏ override này để quay lại image K56 trước đó; không xóa dữ liệu.
+services:
+  k56-ic2264-api:
+    image: izone-k56-live-results:20260924.4-roster-reconcile
+    environment:
+      APP_VERSION: k56-roster-reconcile-20260924.4
+      BUILD_SHA: fac908296e735a3f5dee6722a3a592eb573659ef5772d33238cb9d193dde452a
+      K56_ROSTER_RECONCILE_ENABLED: "true"

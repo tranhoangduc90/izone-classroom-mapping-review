@@ -226,3 +226,48 @@ test('lỗi giữa giao dịch rollback cả cờ và checkpoint', async () => {
     assert.equal(await checkpoint(db), '102');
   } finally { await db.close(); }
 });
+
+test('kho chung K56 dùng một client cho giao dịch và không sửa schema K67', async () => {
+  const db = await setup();
+  try {
+    await db.exec(`
+      CREATE SCHEMA assessment_k56;
+      CREATE TABLE assessment_k56.term_test_roster
+        (LIKE assessment.term_test_roster INCLUDING ALL);
+      CREATE TABLE assessment_k56.term_test_class_access
+        (LIKE assessment.term_test_class_access INCLUDING ALL);
+      CREATE TABLE assessment_k56.k56_roster_sync_checkpoint
+        (LIKE assessment.k56_roster_sync_checkpoint INCLUDING ALL);
+      INSERT INTO assessment_k56.term_test_roster
+        SELECT * FROM assessment.term_test_roster;
+      INSERT INTO assessment_k56.term_test_class_access
+        SELECT * FROM assessment.term_test_class_access;
+      INSERT INTO assessment_k56.k56_roster_sync_checkpoint
+        SELECT * FROM assessment.k56_roster_sync_checkpoint;
+    `);
+    const beforeK67 = await target(db);
+    const input = await payload(db, {
+      eligible: [members[0], members[2]], reviewed: '103'
+    });
+    let released = 0;
+    const pool = {
+      query: () => { throw new Error('POOL_QUERY_MUST_NOT_RUN_IN_TRANSACTION'); },
+      connect: async () => ({
+        query: (sql, params) => sql === 'SELECT current_database() AS name'
+          ? Promise.resolve({ rows: [{ name: 'pglite_shared_test' }] })
+          : db.query(sql, params),
+        release: () => { released += 1; }
+      })
+    };
+    const result = await reconcileK56Eligibility(pool, input, 'pglite_shared_test');
+    assert.equal(result.deactivated, 3);
+    assert.equal(released, 1);
+    assert.deepEqual(await target(db), beforeK67);
+    const k56 = (await db.query(`SELECT count(*)::int AS count
+      FROM assessment_k56.term_test_roster
+      WHERE erp_student_contact_id=102 AND is_eligible=false`)).rows[0];
+    assert.equal(k56.count, 3);
+    assert.equal((await db.query(`SELECT last_sync_run_id::text AS run_id
+      FROM assessment_k56.k56_roster_sync_checkpoint`)).rows[0].run_id, '103');
+  } finally { await db.close(); }
+});

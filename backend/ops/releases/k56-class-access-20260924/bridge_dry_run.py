@@ -56,7 +56,7 @@ try {
 } finally { await db.end(); }
 """
 TARGET_SCRIPT = r"""
-// Dữ liệu vào: kho bài thi riêng qua DATABASE_URL ở container đích.
+// Dữ liệu vào: kho bài thi K56 qua DATABASE_URL ở container đích.
 // Việc chính: chỉ đọc mapping, roster ba đề và định nghĩa đề.
 // Kết quả: JSON qua SSH về RAM, không sửa bài/điểm.
 // Khi lỗi: trả exit khác 0 để dừng đối soát.
@@ -66,6 +66,9 @@ const db = new pg.Pool({connectionString: process.env.DATABASE_URL, max: 1,
 const slugs = ['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56'];
 try {
   const name = (await db.query('SELECT current_database() AS name')).rows[0].name;
+  const schema = name === 'mapping_db' ? 'assessment_k56'
+    : name === 'izone_mapping_k56_ic2264' ? 'assessment' : null;
+  if (!schema) throw new Error('WRONG_TARGET_DATABASE');
   const mappings = (await db.query(`SELECT erp_course_class_id::text AS class_id,
     erp_class_name_snapshot AS class_code FROM mapping.classroom_course_mapping`)).rows;
   const roster = (await db.query(`SELECT test_slug,
@@ -73,15 +76,15 @@ try {
     erp_student_contact_id::text AS contact_id,
     student_name_snapshot AS student_name, student_ref::text AS student_ref,
     COALESCE((to_jsonb(roster)->>'is_eligible')::boolean, false) AS is_eligible
-    FROM assessment.term_test_roster AS roster
+    FROM ${schema}.term_test_roster AS roster
     WHERE test_slug = ANY($1::text[])`, [slugs])).rows;
   const definitions = (await db.query(`SELECT slug, is_active
-    FROM assessment.test_definition WHERE slug = ANY($1::text[])`, [slugs])).rows;
+    FROM ${schema}.test_definition WHERE slug = ANY($1::text[])`, [slugs])).rows;
   const accessExists = (await db.query(`SELECT
-    to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0].exists;
+    to_regclass('${schema}.term_test_class_access') IS NOT NULL AS exists`)).rows[0].exists;
   const access = accessExists ? (await db.query(`SELECT test_slug,
     erp_course_class_id::text AS class_id, enabled
-    FROM assessment.term_test_class_access`)).rows : [];
+    FROM ${schema}.term_test_class_access`)).rows : [];
   process.stdout.write(JSON.stringify({database: name, mappings, roster, definitions,
     accessExists, access}));
 } finally { await db.end(); }
@@ -101,7 +104,8 @@ def plan_diff(source, target, now=None):
     """So theo (đề, ID lớp, ID học viên); trả số đếm, không trả PII."""
     now = now or datetime.now(timezone.utc)
     require(source.get("database") == "mapping_db", "WRONG_SOURCE_DATABASE")
-    require(target.get("database") == "izone_mapping_k56_ic2264", "WRONG_TARGET_DATABASE")
+    require(target.get("database") in ("mapping_db", "izone_mapping_k56_ic2264"),
+            "WRONG_TARGET_DATABASE")
     runs = source.get("runs") or []
     require(runs and runs[0]["status"] == "completed", "LATEST_RUN_NOT_COMPLETE")
     run = runs[0]

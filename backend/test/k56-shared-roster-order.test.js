@@ -22,6 +22,11 @@ test('lượt ERP 102 phải mới hơn 98 theo ID số, không theo alias dạn
     'utf8');
     assert.match(source, /ORDER BY run\.id DESC LIMIT 1/);
     assert.doesNotMatch(source, /ORDER BY id DESC LIMIT 1/);
+    const audit = await readFile(new URL(
+      '../ops/releases/k56-class-access-20260924/audit_pre_cutover.py', import.meta.url),
+    'utf8');
+    assert.ok(/SELECT run\.id::text[\s\S]*?ORDER BY run\.id DESC LIMIT 1/.test(audit),
+      'Audit phải sắp theo ID số, không theo alias text.');
   } finally {
     await database.close();
   }

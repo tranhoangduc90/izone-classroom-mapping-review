@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEPLOYMENT_PROFILE_NAMES } from './deployment-profile.js';
+import { DEPLOYMENT_PROFILE_NAMES, resolveDeploymentProfile } from './deployment-profile.js';
 
 // Nhận biến môi trường, kiểm tra kiểu dữ liệu và dừng sớm nếu cấu hình production bị thiếu.
 const envSchema = z.object({
@@ -8,6 +8,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   DEPLOYMENT_PROFILE: z.enum(DEPLOYMENT_PROFILE_NAMES).default('k67'),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(10),
+  K56_ROSTER_RECONCILE_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  K56_ROSTER_RECONCILE_POLL_MS: z.coerce.number().int().min(60000).max(86400000).default(300000),
   LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   LEARNING_DATABASE_URL: z.string().optional().default(''),
   LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
@@ -94,12 +96,20 @@ export function loadConfig(env = process.env) {
     throw new Error('Cookie Partitioned bắt buộc bật Secure.');
   }
 
+  const deploymentProfile = resolveDeploymentProfile(parsed.DEPLOYMENT_PROFILE);
+  if (parsed.K56_ROSTER_RECONCILE_ENABLED && parsed.DEPLOYMENT_PROFILE !== 'k56-ic2264') {
+    throw new Error('Đối soát roster K56 chỉ được bật cho API K56 thật.');
+  }
   return {
     nodeEnv: parsed.NODE_ENV,
     port: parsed.PORT,
     databaseUrl: parsed.DATABASE_URL,
     deploymentProfileName: parsed.DEPLOYMENT_PROFILE,
+    demoIsolatedMode: deploymentProfile.demoIsolated,
+    k56PortalPilotEnabled: deploymentProfile.k56PortalPilot,
     dbPoolMax: parsed.DB_POOL_MAX,
+    k56RosterReconcileEnabled: parsed.K56_ROSTER_RECONCILE_ENABLED,
+    k56RosterReconcilePollMs: parsed.K56_ROSTER_RECONCILE_POLL_MS,
     learningEnabled: parsed.LEARNING_ENABLED,
     learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
     learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,

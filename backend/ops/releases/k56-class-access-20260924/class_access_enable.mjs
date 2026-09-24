@@ -85,29 +85,34 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
     slugSet.has(row.test_slug) && typeof row.enabled === 'boolean'),
   'ACCESS_BASELINE_INVALID');
 
-  await db.query('BEGIN');
+  // Dữ liệu vào: pool thật có thể cấp nhiều kết nối cho các lệnh query.
+  // Việc chính: giữ một client từ BEGIN đến COMMIT/ROLLBACK.
+  // Kết quả: mở cả lô hoặc không mở cặp nào khi phát sinh lỗi.
+  // Khi lỗi: trả client về pool sau khi thử rollback.
+  const client = typeof db.connect === 'function' ? await db.connect() : db;
   try {
-    const dbName = (await db.query('SELECT current_database() AS name')).rows[0]?.name;
+    await client.query('BEGIN');
+    const dbName = (await client.query('SELECT current_database() AS name')).rows[0]?.name;
     requireCondition(dbName === expectedDatabase, 'ACCESS_WRONG_DATABASE');
-    const gate = (await db.query(`SELECT
+    const gate = (await client.query(`SELECT
       to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0];
     requireCondition(gate?.exists, 'ACCESS_GATE_MISSING');
-    await db.query(`LOCK TABLE assessment.term_test_roster,
+    await client.query(`LOCK TABLE assessment.term_test_roster,
       assessment.term_test_class_access
       IN SHARE ROW EXCLUSIVE MODE`);
-    const definitions = (await db.query(`SELECT slug, is_active
+    const definitions = (await client.query(`SELECT slug, is_active
       FROM assessment.test_definition WHERE slug = ANY($1::text[])`, [SLUGS])).rows;
     requireCondition(definitions.length === SLUGS.length
       && definitions.every(row => slugSet.has(row.slug) && row.is_active),
     'ACCESS_TEST_DEFINITIONS_NOT_READY');
-    const mapped = (await db.query(`SELECT erp_course_class_id::text AS class_id,
+    const mapped = (await client.query(`SELECT erp_course_class_id::text AS class_id,
       erp_class_name_snapshot AS class_code FROM mapping.classroom_course_mapping
       WHERE erp_course_class_id = ANY($1::bigint[])
       FOR SHARE`, [[...classes.keys()]])).rows;
     requireCondition(mapped.length === classes.size
       && mapped.every(row => classes.get(row.class_id) === row.class_code),
     'ACCESS_CLASS_MAPPING_MISMATCH');
-    const roster = (await db.query(`SELECT test_slug,
+    const roster = (await client.query(`SELECT test_slug,
       erp_course_class_id::text AS class_id,
       erp_student_contact_id::text AS contact_id,
       student_ref::text AS student_ref
@@ -134,7 +139,7 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
       && roster.every(row => expectedRefs.get(
         `${row.test_slug}:${row.class_id}:${row.contact_id}`) === row.student_ref),
       'ACCESS_ROSTER_NOT_RECONCILED');
-    const before = await readAccess(db);
+    const before = await readAccess(client);
     const actualAccessKeys = distinctKeys(before,
       row => `${row.test_slug}:${row.class_id}`, 'ACCESS_DUPLICATE_CURRENT');
     requireCondition(sameSet(expectedAccessKeys, actualAccessKeys)
@@ -145,7 +150,7 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
       'ACCESS_ENABLED_OUTSIDE_SCOPE');
     for (const slug of SLUGS) {
       for (const classId of classes.keys()) {
-        await db.query(`INSERT INTO assessment.term_test_class_access
+        await client.query(`INSERT INTO assessment.term_test_class_access
           (test_slug, erp_course_class_id, enabled, source)
           VALUES ($1, $2, true, 'k56_erp_ongoing_sync')
           ON CONFLICT (test_slug, erp_course_class_id)
@@ -154,19 +159,21 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
           WHERE assessment.term_test_class_access.enabled = false`, [slug, classId]);
       }
     }
-    const after = await readAccess(db);
+    const after = await readAccess(client);
     const enabled = after.filter(row => row.enabled);
     const desired = new Set(SLUGS.flatMap(slug =>
       [...classes.keys()].map(classId => `${slug}:${classId}`)));
     requireCondition(sameSet(desired, new Set(enabled.map(row =>
       `${row.test_slug}:${row.class_id}`))), 'ACCESS_READBACK_MISMATCH');
-    await db.query('COMMIT');
+    await client.query('COMMIT');
     return { toolOutcome: 'success', businessOutcome: 'access_readback_verified',
       syncRunId: input.syncRunId, enabledClassCount: classes.size,
       enabledClassTestPairs: enabled.length, rosterRowsChecked: roster.length };
   } catch (error) {
-    try { await db.query('ROLLBACK'); } catch { /* Đích phải được kiểm lại trước retry. */ }
+    try { await client.query('ROLLBACK'); } catch { /* Đích phải được kiểm lại trước retry. */ }
     throw error instanceof AccessError ? error : new AccessError('ACCESS_TRANSACTION_FAILED');
+  } finally {
+    if (client !== db && typeof client.release === 'function') client.release();
   }
 }
 

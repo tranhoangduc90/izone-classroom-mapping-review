@@ -9,6 +9,7 @@ import unittest
 
 SCRIPT = (Path(__file__).parents[1] / "ops" / "releases" /
           "k56-class-access-20260924" / "reconcile_live_gate.py")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("k56_gate_reconcile", SCRIPT)
 reconcile = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reconcile)
@@ -16,7 +17,7 @@ spec.loader.exec_module(reconcile)
 
 def git_blob(revision, path):
     return subprocess.run(["git", "show", f"{revision}:backend/{path}"],
-                          capture_output=True, check=True).stdout
+                          cwd=REPO_ROOT, capture_output=True, check=True).stdout
 
 
 class GateReconcileTest(unittest.TestCase):

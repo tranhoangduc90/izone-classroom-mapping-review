@@ -1,0 +1,22 @@
+## Dữ liệu vào: chuỗi Compose đang chạy, runtime.env hiện hành và db-url.env riêng.
+## Việc chính: giữ port/volume/profile K56, thêm mạng kho chung và chỉ đổi image/database.
+## Kết quả: API K56 dùng assessment_k56; API K67 và mạng cũ không đổi.
+## Khi lỗi: không chạy up, giữ container cũ; xem runbook rollback trước khi chuyển lại.
+services:
+  k56-ic2264-api:
+    image: izone-k56-live-results:20260924.2-shared-db
+    env_file:
+      - /opt/izone-k56-pilot/runtime.env
+      - /opt/izone-k56-shared-db-20260924/db-url.env
+    environment:
+      APP_VERSION: k56-shared-db-20260924.2
+      BUILD_SHA: 6e2beb915a2b651dbd255ec6c2cdd986b4c5961a87495f86c889920c2b012243
+      DEPLOYMENT_PROFILE: k56-ic2264
+    networks:
+      k56-demo: {}
+      mapping-api-net: {}
+
+networks:
+  mapping-api-net:
+    external: true
+    name: mapping-api-net

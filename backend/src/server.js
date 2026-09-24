@@ -7,12 +7,13 @@ import { createTermTestWritingGradingService } from './term-test-writing-grading
 import { createTermTestWritingNotifier, withTermTestWritingNotifications } from './term-test-writing-notifier.js';
 import { createLearningAttendanceSync } from './learning-attendance-sync.js';
 import { startLearningAttendanceWorker } from './learning-attendance-worker.js';
+import { startK56RosterReconciler } from './k56-roster-reconcile.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
-const syncErpGrades = createErpGradeSync({ config });
+const syncErpGrades = createErpGradeSync({ config, pool });
 const termTestAssetService = config.termTestAssetDir
   ? createTermTestAssetService({
       assetDir: config.termTestAssetDir,
@@ -49,6 +50,11 @@ const learningAttendanceWorker = startLearningAttendanceWorker({
   handler: learningAttendanceSync,
   pollMs: config.learningAttendancePollMs
 });
+const k56RosterReconciler = startK56RosterReconciler({
+  pool,
+  enabled: config.k56RosterReconcileEnabled,
+  pollMs: config.k56RosterReconcilePollMs
+});
 
 server.requestTimeout = 15_000;
 server.headersTimeout = 16_000;
@@ -59,6 +65,7 @@ async function shutdown(signal) {
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   server.close(async () => {
     await learningAttendanceWorker.stop();
+    await k56RosterReconciler.stop();
     await Promise.all([pool.end(), learningPool?.end()]);
     process.exit(0);
   });

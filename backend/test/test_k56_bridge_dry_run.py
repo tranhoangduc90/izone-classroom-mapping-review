@@ -111,6 +111,14 @@ class BridgeDryRunTest(unittest.TestCase):
         source, target = fixture()
         self.assertEqual(bridge.plan_diff(source, target, NOW)["syncRunId"], "102")
 
+    def test_shared_target_uses_k56_schema_and_keeps_k67_separate(self):
+        source, target = fixture()
+        target["database"] = "mapping_db"
+        self.assertEqual(bridge.plan_diff(source, target, NOW)["rosterRowsToAdd"], 3)
+        self.assertIn("name === 'mapping_db' ? 'assessment_k56'", bridge.TARGET_SCRIPT)
+        self.assertIn("${schema}.term_test_roster", bridge.TARGET_SCRIPT)
+        self.assertIn("${schema}.test_definition", bridge.TARGET_SCRIPT)
+
     def test_zero_members_and_empty_class_fail_closed(self):
         source, target = fixture()
         source["members"] = []

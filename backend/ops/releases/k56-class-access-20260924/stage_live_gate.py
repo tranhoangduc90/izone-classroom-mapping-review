@@ -39,6 +39,7 @@ TEST_MIGRATIONS = (
     "202609240004_k56_roster_eligibility.sql",
     "202609240005_k56_class_access.sql",
     "202609240006_k56_shared_api_grants.sql",
+    "202609240007_k56_roster_reconcile_grants.sql",
 )
 BROADER_TESTS = (
     "api.test.js", "term-tests.test.js", "term-test-writing-grading.test.js",
@@ -53,6 +54,11 @@ UNIFIED_BRANCH_MODULES = (
     "teacher-class-access-health.js", "term-test-assets.js",
     "term-test-result-events.js", "term-test-writing-grading.js",
     "lark-replica-worker.js", "writing-portal-worker.js",
+)
+CURRENT_LIVE_IMAGE = "sha256:5b1e9e7e65809673dd6c453750a0bebe99185a371e5cdd484298732ca4b4a956"
+CURRENT_LIVE_TAG = "izone-k56-live-results:20260924.4-roster-reconcile"
+ROSTER_RECONCILE_MODULES = (
+    "assessment-schema-pool.js", "config.js", "server.js", "k56-roster-reconcile.js",
 )
 REMOTE_TREE_SCRIPT = r"""
 // Dữ liệu vào: thư mục src trong container K56 đang chạy.
@@ -128,8 +134,12 @@ def read_live_tree():
                 or ".." in pure.parts or not name.endswith(".js")):
             raise RuntimeError("LIVE_SOURCE_TREE_UNSAFE_PATH")
     image_parts = image.split("|")
+    expected_image = (CURRENT_LIVE_IMAGE if "--from-current-live" in sys.argv else None)
+    expected_tag = (CURRENT_LIVE_TAG if "--from-current-live" in sys.argv
+                    else "izone-k56-live-results:20260920.1-teacher-session")
     if (len(image_parts) != 2 or not image_parts[0].startswith("sha256:")
-            or image_parts[1] != "izone-k56-live-results:20260920.1-teacher-session"
+            or image_parts[1] != expected_tag
+            or (expected_image and image_parts[0] != expected_image)
             or not all(remote.get("packageHashes", {}).get(name)
                        for name in ("package.json", "package-lock.json"))):
         raise RuntimeError("LIVE_IMAGE_OR_PACKAGE_UNEXPECTED")
@@ -197,7 +207,7 @@ def run_stage():
     # Việc chính: dựng bản sao tạm bên trong backend, chạy test rồi dọn đúng đích.
     # Kết quả: số test đạt/không đạt; không ảnh hưởng production.
     # Khi lỗi: trả mã lỗi và không tuyên bố release sẵn sàng.
-    controls = read_live_files()
+    controls = {} if "--from-current-live" in sys.argv else read_live_files()
     tree, base_meta = read_live_tree()
     base_source_sha = seal_source_files(tree)
     if "--audit-admin" in sys.argv:
@@ -211,12 +221,15 @@ def run_stage():
                 "appPassesAdminFlag": "[req.reviewer.email, req.reviewer.canAccessAllClasses]" in app,
                 "teacherResponseIncludesAccessMode": "accessMode: row.access_mode" in app,
                 "productionWrites": 0}
-    for name in FILES:
-        if hashlib.sha256(controls[name]).digest() != hashlib.sha256(tree[name]).digest():
-            raise RuntimeError("LIVE_SOURCE_CHANGED_DURING_READ")
-    summary, candidates = try_overlay(controls, return_candidates=True)
-    if any(row["status"] != "compatible" for row in summary.values()):
-        raise RuntimeError("LIVE_OVERLAY_CONFLICT")
+    if "--from-current-live" in sys.argv:
+        candidates = {}
+    else:
+        for name in FILES:
+            if hashlib.sha256(controls[name]).digest() != hashlib.sha256(tree[name]).digest():
+                raise RuntimeError("LIVE_SOURCE_CHANGED_DURING_READ")
+        summary, candidates = try_overlay(controls, return_candidates=True)
+        if any(row["status"] != "compatible" for row in summary.values()):
+            raise RuntimeError("LIVE_OVERLAY_CONFLICT")
     selected_tests = TESTS + (("production-profiles.test.js",)
                               if "--profile-tests" in sys.argv else ())
     if "--export-context" in sys.argv and not ({"--unified-candidate", "--full-suite"}
@@ -250,7 +263,9 @@ def run_stage():
         for name, code in candidates.items():
             (stage_root / name).write_text(code, encoding="utf-8", newline="\n")
         if "--unified-candidate" in sys.argv:
-            for name in UNIFIED_BRANCH_MODULES:
+            overlay_names = (ROSTER_RECONCILE_MODULES if "--from-current-live" in sys.argv
+                             else UNIFIED_BRANCH_MODULES)
+            for name in overlay_names:
                 shutil.copy2(BACKEND / "src" / name, stage_root / "src" / name)
         if "--full-suite" in sys.argv:
             for original in (BACKEND / "src").rglob("*.js"):

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
 FILES = (
     "src/sql.js", "src/app.js", "src/erp-sync.js", "src/k56-portal-pilot.js",
     "src/term-test-portal-sync.js", "src/term-test-writing-grading.js",
@@ -77,7 +78,8 @@ def changed_hunks(commit, path):
     """Tách hunk từ Git diff; không ghi patch file hoặc động vào source."""
     result = subprocess.run(
         ["git", "diff", "--no-ext-diff", "--unified=3", f"{commit}^", commit,
-         "--", f"backend/{path}"], capture_output=True, check=True)
+         "--", f"backend/{path}"], cwd=REPO_ROOT,
+        capture_output=True, check=True)
     lines = result.stdout.decode("utf-8").splitlines(keepends=True)
     hunks = []
     old, new, removed, added, start = None, None, None, None, None

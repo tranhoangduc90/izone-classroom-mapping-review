@@ -148,6 +148,29 @@ test('kho chung chỉ mở cổng K56, không ghi cổng hoặc định nghĩa K
   } finally { await db.close(); }
 });
 
+test('bật lớp trong kho chung giữ một client xuyên transaction', async () => {
+  const db = await setup();
+  try {
+    await db.exec(`ALTER SCHEMA assessment RENAME TO assessment_k56;`);
+    let released = 0;
+    const pool = {
+      query: () => { throw new Error('POOL_QUERY_MUST_NOT_RUN_IN_TRANSACTION'); },
+      connect: async () => ({
+        query: (sql, params) => sql === 'SELECT current_database() AS name'
+          ? Promise.resolve({ rows: [{ name: 'pglite_shared_test' }] })
+          : db.query(sql, params),
+        release: () => { released += 1; }
+      })
+    };
+    const result = await enableK56ClassAccess(pool, input(), 'pglite_shared_test');
+    assert.equal(result.enabledClassTestPairs, 6);
+    assert.equal(released, 1);
+    const after = await db.query(`SELECT count(*)::int AS count
+      FROM assessment_k56.term_test_class_access WHERE enabled`);
+    assert.equal(after.rows[0].count, 6);
+  } finally { await db.close(); }
+});
+
 test('thiếu một học viên/đề thì không bật bất kỳ cặp mới nào', async () => {
   const db = await setup({ missingRoster: true });
   try {

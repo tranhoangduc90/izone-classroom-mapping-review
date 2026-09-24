@@ -116,53 +116,60 @@ export async function applyRosterImport(db, payload, expectedDatabase) {
     allRefs.add(refKey(row));
   }
 
-  await db.query('BEGIN');
+  // Dữ liệu vào: pool thật có thể phân tán các lệnh query sang nhiều kết nối.
+  // Việc chính: giữ một client từ BEGIN đến COMMIT hoặc ROLLBACK.
+  // Kết quả: roster mới chỉ xuất hiện khi toàn bộ đối chiếu và đọc lại đạt.
+  // Khi lỗi: rollback trên đúng client rồi trả kết nối về pool.
+  const client = typeof db.connect === 'function' ? await db.connect() : db;
   try {
-    const database = (await db.query('SELECT current_database() AS name')).rows[0]?.name;
+    await client.query('BEGIN');
+    const database = (await client.query('SELECT current_database() AS name')).rows[0]?.name;
     requireCondition(database === expectedDatabase, 'WRONG_TARGET_DATABASE');
-    const gate = (await db.query(`SELECT
+    const gate = (await client.query(`SELECT
       to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0];
     requireCondition(gate?.exists, 'CLASS_ACCESS_GATE_NOT_INSTALLED');
-    await db.query(shared
+    await client.query(shared
       ? 'LOCK TABLE assessment.term_test_roster IN SHARE ROW EXCLUSIVE MODE'
       : `LOCK TABLE mapping.classroom_course_mapping,
         assessment.term_test_roster IN SHARE ROW EXCLUSIVE MODE`);
     const scopeIds = shared ? [...oldMappings.keys()] : null;
-    const before = await readTarget(db, scopeIds);
+    const before = await readTarget(client, scopeIds);
     requireCondition(sameRows(payload.expectedMappings, before.mappings, mappingKey,
       ['class_id', 'class_code'])
       && sameRows(payload.expectedRoster, before.roster, rosterKey,
         ['test_slug', 'class_id', 'contact_id', 'student_ref', 'student_name']),
     'TARGET_CHANGED_SINCE_PREVIEW');
     for (const row of payload.newMappings) {
-      await db.query(`INSERT INTO mapping.classroom_course_mapping
+      await client.query(`INSERT INTO mapping.classroom_course_mapping
         (erp_course_class_id, erp_class_name_snapshot) VALUES ($1, $2)`,
       [row.class_id, row.class_code]);
     }
     for (const row of payload.newRoster) {
-      await db.query(`INSERT INTO assessment.term_test_roster
+      await client.query(`INSERT INTO assessment.term_test_roster
         (test_slug, erp_course_class_id, erp_student_contact_id,
           student_ref, student_name_snapshot)
         VALUES ($1, $2, $3, $4, $5)`,
       [row.test_slug, row.class_id, row.contact_id,
         row.student_ref, row.student_name]);
     }
-    const after = await readTarget(db, scopeIds);
+    const after = await readTarget(client, scopeIds);
     requireCondition(sameRows([...payload.expectedMappings, ...payload.newMappings],
       after.mappings, mappingKey, ['class_id', 'class_code'])
       && sameRows([...payload.expectedRoster, ...payload.newRoster],
         after.roster, rosterKey,
         ['test_slug', 'class_id', 'contact_id', 'student_ref', 'student_name']),
     'IMPORT_READBACK_MISMATCH');
-    await db.query('COMMIT');
+    await client.query('COMMIT');
     return { toolOutcome: 'success', businessOutcome: 'import_readback_verified',
       classMappingsAdded: payload.newMappings.length,
       rosterRowsAdded: payload.newRoster.length,
       rosterRowsPreserved: payload.expectedRoster.length,
       accessRowsChanged: 0 };
   } catch (error) {
-    try { await db.query('ROLLBACK'); } catch { /* Kết nối hỏng: caller phải đọc lại đích. */ }
+    try { await client.query('ROLLBACK'); } catch { /* Kết nối hỏng: caller phải đọc lại đích. */ }
     throw error instanceof ImportError ? error : new ImportError('IMPORT_TRANSACTION_FAILED');
+  } finally {
+    if (client !== db && typeof client.release === 'function') client.release();
   }
 }
 

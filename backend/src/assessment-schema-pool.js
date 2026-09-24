@@ -34,7 +34,9 @@ export function createAssessmentSchemaPool(pool, profile) {
         return (input, ...args) => target.query(scopeAssessmentQuery(input), ...args);
       }
       if (property === 'connect') {
-        return async (...args) => scopedClient(await target.connect(...args));
+        return typeof target.connect === 'function'
+          ? async (...args) => scopedClient(await target.connect(...args))
+          : undefined;
       }
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;

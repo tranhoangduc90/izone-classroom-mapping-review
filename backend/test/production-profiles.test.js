@@ -27,6 +27,34 @@ test('cấu hình khởi động giữ đúng profile K56 từ biến môi trư�
   });
   assert.equal(config.deploymentProfileName, 'k56-ic2264');
   assert.equal(resolveDeploymentProfile(config.deploymentProfileName).family, 'k56');
+  assert.equal(config.demoIsolatedMode, false);
+  assert.equal(config.k56PortalPilotEnabled, true);
+  assert.equal(config.k56RosterReconcileEnabled, false);
+  const reconciling = loadConfig({
+    NODE_ENV: 'test', DATABASE_URL: 'postgresql://test.invalid/local',
+    AUTH_MODE: 'legacy', LEGACY_REVIEW_TOKEN: 'test-token-long-enough',
+    DEPLOYMENT_PROFILE: 'k56-ic2264', K56_ROSTER_RECONCILE_ENABLED: 'true'
+  });
+  assert.equal(reconciling.k56RosterReconcileEnabled, true);
+  assert.throws(() => loadConfig({
+    NODE_ENV: 'test', DATABASE_URL: 'postgresql://test.invalid/local',
+    AUTH_MODE: 'legacy', LEGACY_REVIEW_TOKEN: 'test-token-long-enough',
+    DEPLOYMENT_PROFILE: 'k67', K56_ROSTER_RECONCILE_ENABLED: 'true'
+  }), /chỉ được bật cho API K56 thật/);
+  const k67 = loadConfig({
+    NODE_ENV: 'test', DATABASE_URL: 'postgresql://test.invalid/local',
+    AUTH_MODE: 'legacy', LEGACY_REVIEW_TOKEN: 'test-token-long-enough',
+    DEPLOYMENT_PROFILE: 'k67'
+  });
+  assert.equal(k67.demoIsolatedMode, false);
+  assert.equal(k67.k56PortalPilotEnabled, false);
+  const k56Demo = loadConfig({
+    NODE_ENV: 'test', DATABASE_URL: 'postgresql://test.invalid/local',
+    AUTH_MODE: 'legacy', LEGACY_REVIEW_TOKEN: 'test-token-long-enough',
+    DEPLOYMENT_PROFILE: 'k56-demo'
+  });
+  assert.equal(k56Demo.demoIsolatedMode, true);
+  assert.equal(k56Demo.k56PortalPilotEnabled, false);
 });
 
 test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, admin thấy cả lớp khác', async () => {

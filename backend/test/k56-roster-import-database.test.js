@@ -175,6 +175,32 @@ test('kho chung nhập roster IC2322/IC2326 không ghép Classroom hoặc chạm
   } finally { await db.close(); }
 });
 
+test('nhập roster kho chung giữ một client xuyên transaction', async () => {
+  const db = await setup();
+  try {
+    await db.exec(`ALTER SCHEMA assessment RENAME TO assessment_k56;
+      INSERT INTO mapping.classroom_course_mapping
+      (erp_course_class_id, erp_class_name_snapshot) VALUES (2322, 'IC2322');`);
+    const request = payload();
+    request.summary.classMappingsToAdd = 0;
+    request.expectedMappings.push({ class_id: '2322', class_code: 'IC2322' });
+    request.newMappings = [];
+    let released = 0;
+    const pool = {
+      query: () => { throw new Error('POOL_QUERY_MUST_NOT_RUN_IN_TRANSACTION'); },
+      connect: async () => ({
+        query: (sql, params) => sql === 'SELECT current_database() AS name'
+          ? Promise.resolve({ rows: [{ name: 'pglite_shared_test' }] })
+          : db.query(sql, params),
+        release: () => { released += 1; }
+      })
+    };
+    const result = await applyRosterImport(pool, request, 'pglite_shared_test');
+    assert.equal(result.rosterRowsAdded, 3);
+    assert.equal(released, 1);
+  } finally { await db.close(); }
+});
+
 test('thiếu cổng quyền hoặc sai database thì không ghi', async () => {
   const noGate = await setup({ gate: false });
   try {
