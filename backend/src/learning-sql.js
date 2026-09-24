@@ -51,6 +51,7 @@ export const fetchAssignmentStudentSql = `SELECT
   assignment.id::text AS assignment_id,
   assignment.form_version_id::text AS form_version_id,
   version.definition_hash,
+  version.public_definition,
   roster.student_ref::text AS student_ref,
   roster.student_name_snapshot AS student_name,
   roster.display_discriminator,
@@ -94,10 +95,30 @@ export const fetchLearningAttemptCheckpointsSql = `SELECT DISTINCT ON (block_id)
   checkpoint,
   completeness,
   missing_item_version_ids,
+  response_payload,
   submitted_at
 FROM learning.checkpoint_submission
 WHERE attempt_id = $1::uuid
 ORDER BY block_id, checkpoint_revision DESC, submitted_at DESC;`;
+
+export const fetchLearningFormGradingKeySql = `SELECT private_definition
+FROM learning.form_grading_key
+WHERE form_version_id = $1::uuid;`;
+
+export const fetchLearningAssignmentCheckpointScoresSql = `SELECT DISTINCT ON (checkpoint.student_ref, checkpoint.block_id)
+  checkpoint.student_ref::text AS student_ref,
+  checkpoint.block_id::text AS block_id,
+  checkpoint.response_payload,
+  version.public_definition,
+  grading.private_definition
+FROM learning.checkpoint_submission AS checkpoint
+JOIN learning.attempt AS attempt ON attempt.id = checkpoint.attempt_id
+  AND attempt.status <> 'superseded'
+JOIN learning.form_version AS version ON version.id = checkpoint.form_version_id
+JOIN learning.form_grading_key AS grading ON grading.form_version_id = version.id
+WHERE checkpoint.assignment_id = $1::uuid
+ORDER BY checkpoint.student_ref, checkpoint.block_id,
+  checkpoint.checkpoint_revision DESC, checkpoint.submitted_at DESC;`;
 
 export const insertLearningAttemptSql = `INSERT INTO learning.attempt (
   assignment_id,
@@ -699,6 +720,7 @@ export const findLearningCheckpointSubmissionSql = `SELECT
   checkpoint_submission.response_hash,
   checkpoint_submission.completeness,
   checkpoint_submission.missing_item_version_ids,
+  checkpoint_submission.response_payload,
   checkpoint_submission.submitted_at
 FROM learning.checkpoint_submission
 JOIN learning.attempt ON attempt.id = checkpoint_submission.attempt_id

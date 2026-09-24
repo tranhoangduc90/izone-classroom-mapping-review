@@ -18,6 +18,8 @@ import {
   fetchLearningBlockReleaseSql,
   fetchLearningAttemptContextSql,
   fetchLearningAttemptCheckpointsSql,
+  fetchLearningAssignmentCheckpointScoresSql,
+  fetchLearningFormGradingKeySql,
   fetchLearningLibraryItemsSql,
   fetchLearningRosterForClassSql,
   fetchLearningTeacherDashboardSql,
@@ -68,6 +70,19 @@ function asObject(value) {
 function asArray(value) {
   if (!value) return [];
   return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+function gradeCheckpoint(definition, gradingKey, block, responses) {
+  if (definition.answerReleasePolicy !== 'immediate' || !block) return null;
+  const scopedDefinition = { ...definition, blocks: [block] };
+  const result = gradeLearningSubmission({
+    definition: scopedDefinition,
+    gradingKey,
+    responses: asObject(responses)
+  });
+  return result.summary.maxScore > 0
+    ? buildStudentQuizResult(result, scopedDefinition)
+    : null;
 }
 
 function teacherLiveStudent(value) {
@@ -214,6 +229,13 @@ export function createLearningService({ pool }) {
           throw new LearningError('ATTEMPT_IDENTITY_MISMATCH', 'Phiên làm bài không khớp học viên.', 409);
         }
         const checkpointResult = await client.query(fetchLearningAttemptCheckpointsSql, [attempt.attempt_id]);
+        const definition = parseFormDefinition(asObject(student.public_definition));
+        const gradingKeyResult = checkpointResult.rowCount
+          ? await client.query(fetchLearningFormGradingKeySql, [attempt.form_version_id])
+          : null;
+        const gradingKey = gradingKeyResult?.rows[0]
+          ? parseFormGradingKey(asObject(gradingKeyResult.rows[0].private_definition))
+          : null;
         return {
           attemptToken: attempt.attempt_token,
           assignmentId: attempt.assignment_id,
@@ -227,6 +249,11 @@ export function createLearningService({ pool }) {
             checkpoint: Number(row.checkpoint),
             completeness: row.completeness,
             missingItemVersionIds: asArray(row.missing_item_version_ids),
+            result: gradingKey ? gradeCheckpoint(
+              definition, gradingKey,
+              definition.blocks.find(block => block.blockId === row.block_id),
+              row.response_payload
+            ) : null,
             submittedAt: row.submitted_at
           })),
           identity: {
@@ -289,6 +316,7 @@ export function createLearningService({ pool }) {
         }
         const validIds = new Set(block.items.map(item => item.itemVersionId));
         const blockResponses = Object.fromEntries(Object.entries(responses).filter(([id]) => validIds.has(id)));
+        const gradingKey = parseFormGradingKey(asObject(context.private_definition));
         const completeness = evaluateCompleteness({ ...definition, blocks: [block] }, blockResponses);
         const responseHash = sha256(stableStringify(blockResponses));
         const existingResult = await client.query(findLearningCheckpointSubmissionSql, [
@@ -305,6 +333,7 @@ export function createLearningService({ pool }) {
             checkpoint: Number(existing.checkpoint),
             completeness: existing.completeness,
             missingItemVersionIds: asArray(existing.missing_item_version_ids),
+            result: gradeCheckpoint(definition, gradingKey, block, existing.response_payload),
             submittedAt: existing.submitted_at,
             replayed: true
           };
@@ -334,6 +363,7 @@ export function createLearningService({ pool }) {
           checkpoint,
           completeness: completeness.complete ? 'complete' : 'incomplete',
           missingItemVersionIds: completeness.missingItemVersionIds,
+          result: gradeCheckpoint(definition, gradingKey, block, blockResponses),
           submittedAt: row.submitted_at,
           replayed: false
         };
@@ -769,6 +799,21 @@ export function createLearningService({ pool }) {
         reviewer.canAccessAllClasses
       ]);
       const row = assertSingleRow(result, 'ASSIGNMENT_ACCESS_DENIED', 'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+      const scoreRows = await pool.query(fetchLearningAssignmentCheckpointScoresSql, [assignmentId]);
+      const scoresByStudent = new Map();
+      for (const scoreRow of scoreRows.rows) {
+        const definition = parseFormDefinition(asObject(scoreRow.public_definition));
+        const block = definition.blocks.find(item => item.blockId === scoreRow.block_id);
+        if (!block) continue;
+        const gradingKey = parseFormGradingKey(asObject(scoreRow.private_definition));
+        const graded = gradeCheckpoint(definition, gradingKey, block, scoreRow.response_payload);
+        if (!graded) continue;
+        const current = scoresByStudent.get(scoreRow.student_ref) || [];
+        current.push({ blockId: block.blockId, checkpoint: block.checkpoint,
+          correct: graded.items.filter(item => item.verdict === 'correct').length,
+          total: graded.items.filter(item => item.maxScore > 0).length });
+        scoresByStudent.set(scoreRow.student_ref, current);
+      }
       return {
         assignmentId: row.assignment_id,
         title: row.title,
@@ -780,7 +825,10 @@ export function createLearningService({ pool }) {
         definition: parseFormDefinition(asObject(row.public_definition)),
         blockReleases: asArray(row.block_releases),
         classInsights: asArray(row.class_insights),
-        students: asArray(row.students)
+        students: asArray(row.students).map(student => ({
+          ...student,
+          checkpointScores: scoresByStudent.get(student.studentRef) || []
+        }))
       };
     },
 

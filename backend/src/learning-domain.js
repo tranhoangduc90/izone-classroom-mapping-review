@@ -61,7 +61,10 @@ function isCompleteAnswer(item, value) {
 function isConditionallyVisible(item, responses) {
   const dependencyId = item.interactionConfig?.visibleWhenItemVersionId;
   if (!dependencyId) return true;
-  return responses[dependencyId] === item.interactionConfig.visibleWhenValue;
+  const selected = responses[dependencyId];
+  return Array.isArray(selected)
+    ? selected.includes(item.interactionConfig.visibleWhenValue)
+    : selected === item.interactionConfig.visibleWhenValue;
 }
 
 function isRequiredForResponses(item, responses) {
@@ -82,6 +85,20 @@ function assertResponseIdentity(definition, responses) {
       throw error;
     }
     const value = responses[itemVersionId];
+    if (item.interactionType === 'multi_choice_group'
+      && item.interactionConfig?.maxSelections !== undefined) {
+      const exclusive = item.interactionConfig.exclusiveOptionId;
+      if (!Array.isArray(value)
+        || value.length > item.interactionConfig.maxSelections
+        || new Set(value).size !== value.length
+        || value.some(optionId => !item.options.some(option => option.id === optionId))
+        || (exclusive && value.includes(exclusive) && value.length > 1)) {
+        const error = new Error('Checklist vượt quá số lựa chọn hoặc có lựa chọn không hợp lệ.');
+        error.code = 'CHECKLIST_SELECTION_INVALID';
+        error.httpStatus = 400;
+        throw error;
+      }
+    }
     if (!isConditionallyVisible(item, responses) && isAnswered(value)) {
       const error = new Error('Câu trả lời phụ không còn phù hợp với lựa chọn hiện tại.');
       error.code = 'CONDITIONAL_RESPONSE_NOT_APPLICABLE';

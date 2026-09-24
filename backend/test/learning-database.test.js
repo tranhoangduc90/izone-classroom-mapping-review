@@ -6,6 +6,17 @@ import { PGlite } from '@electric-sql/pglite';
 import { LearningError, createLearningService } from '../src/learning-service.js';
 import { claimLearningJobs, processLearningJob } from '../src/learning-outbox.js';
 import { createLearningAttendanceSync } from '../src/learning-attendance-sync.js';
+import { sha256, stableStringify } from '../src/learning-domain.js';
+import {
+  buildIc2304Session2ScoredDefinition,
+  buildIc2304Session2ScoredGradingKey,
+  IC2304_SESSION2_SCORED
+} from '../src/learning-templates/ic2304-session2-scored.js';
+import {
+  buildIc2304Session2SpeakingDefinition,
+  buildIc2304Session2SpeakingGradingKey,
+  IC2304_SESSION2_SPEAKING
+} from '../src/learning-templates/ic2304-session2-speaking.js';
 
 function poolFrom(database, onQuery = () => {}) {
   const query = async (sql, params) => {
@@ -818,6 +829,165 @@ test('GV mở từng phần và checkpoint được lưu thật, idempotent, kh�
     checkpointSubmissionId: crypto.randomUUID(),
     idempotencyKey: `checkpoint-test:${crypto.randomUUID()}`
   }), error => error instanceof LearningError && error.code === 'ATTEMPT_NOT_ACTIVE');
+  await database.close();
+});
+
+test('Listening IC2304 chấm khi nộp phần, khôi phục được và hiện điểm ngay trong danh sách GV', async () => {
+  const { database, service } = await setupDatabase();
+  const definition = buildIc2304Session2ScoredDefinition();
+  const sampleAnswers = ['B', 'B', 'B', 'B', 'B'];
+  const gradingKey = buildIc2304Session2ScoredGradingKey(sampleAnswers);
+  const assignmentId = '23040002-0000-4000-8000-000000000005';
+  const publicToken = '23040002-0000-4000-8000-000000000006';
+  const studentRef = '60000000-0000-4000-8000-000000000001';
+  await database.query(`INSERT INTO mapping.reviewer_account (email) VALUES ('reviewer@example.test');`);
+  await database.query(`INSERT INTO mapping.reviewer_class_access VALUES ('reviewer@example.test', 2139);`);
+  await database.query(`INSERT INTO learning.form_template
+    (id, title, kind, created_by_email) VALUES ($1::uuid, $2, 'mixed', 'teacher@example.test');`, [
+    IC2304_SESSION2_SCORED.templateId, definition.title
+  ]);
+  await database.query(`INSERT INTO learning.form_version
+    (id, template_id, version, schema_version, public_definition, definition_hash,
+     status, created_by_email, approved_by_email, published_at)
+    VALUES ($1::uuid, $2::uuid, 2, 'FormDefinitionV1', $3::jsonb, $4,
+      'published', 'teacher@example.test', 'reviewer@example.test', now());`, [
+    definition.formVersionId, IC2304_SESSION2_SCORED.templateId,
+    JSON.stringify(definition), sha256(stableStringify(definition))
+  ]);
+  await database.query(`INSERT INTO learning.form_grading_key
+    (form_version_id, schema_version, grader_version, private_definition, content_hash)
+    VALUES ($1::uuid, 'FormGradingKeyV1', 1, $2::jsonb, $3);`, [
+    definition.formVersionId, JSON.stringify(gradingKey), sha256(stableStringify(gradingKey))
+  ]);
+  await database.query(`INSERT INTO learning.form_assignment
+    (id, public_token, form_version_id, course_code, erp_course_class_id,
+     class_name_snapshot, session_number, title, status, created_by_email)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, '67', 2139,
+      'IC2139', 2, $4, 'published', 'teacher@example.test');`, [
+    assignmentId, publicToken, definition.formVersionId, definition.title
+  ]);
+  await database.query(`INSERT INTO learning.form_assignment_roster
+    (assignment_id, student_ref, erp_student_contact_id, student_name_snapshot)
+    VALUES ($1::uuid, $2::uuid, 9001, 'Học viên mẫu');`, [assignmentId, studentRef]);
+  for (const [index, block] of definition.blocks.entries()) {
+    await database.query(`INSERT INTO learning.assignment_block_release
+      (assignment_id, block_id, checkpoint, status, release_version, updated_by_email)
+      VALUES ($1::uuid, $2::uuid, $3, $4, 1, 'teacher@example.test');`, [
+      assignmentId, block.blockId, block.checkpoint, index === 0 ? 'open' : 'locked'
+    ]);
+  }
+  const assignment = await service.getPublicAssignment(publicToken);
+  assert.equal(JSON.stringify(assignment).includes('expectedOptionId'), false);
+  const attempt = await service.startAttempt({ publicToken, studentRef,
+    clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true });
+  assert.equal(attempt.checkpointSubmissions.length, 0);
+  const responses = Object.fromEntries(definition.blocks[0].items.map((item, index) => [
+    item.itemVersionId, ['A', 'B', 'A', 'A', 'B'][index]
+  ]));
+  await service.saveDraft({ attemptToken: attempt.attemptToken, revision: 1,
+    definitionHash: attempt.definitionHash, responses });
+  const input = { attemptToken: attempt.attemptToken,
+    checkpointSubmissionId: crypto.randomUUID(), blockId: definition.blocks[0].blockId,
+    checkpoint: 1, draftRevision: 1, definitionHash: attempt.definitionHash,
+    responses, idempotencyKey: `ic2304-test:${crypto.randomUUID()}` };
+  const submitted = await service.submitCheckpoint(input);
+  assert.equal(submitted.result.summary.scoreEarned, 2);
+  assert.deepEqual(submitted.result.items.map(item => item.expectedAnswer), sampleAnswers);
+  const replayed = await service.submitCheckpoint(input);
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.result.summary.scoreEarned, 2);
+  const restored = await service.startAttempt({ publicToken, studentRef,
+    clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true });
+  assert.equal(restored.checkpointSubmissions[0].result.summary.scoreEarned, 2);
+  const dashboard = await service.getTeacherDashboard({ assignmentId,
+    reviewer: { email: 'teacher@example.test', canAccessAllClasses: false } });
+  assert.deepEqual(dashboard.students[0].checkpointScores, [
+    { blockId: definition.blocks[0].blockId, checkpoint: 1, correct: 2, total: 5 }
+  ]);
+  const denied = await service.getTeacherDashboard({ assignmentId,
+    reviewer: { email: 'outsider@example.test', canAccessAllClasses: false } }).catch(error => error);
+  assert.equal(denied.code, 'ASSIGNMENT_ACCESS_DENIED');
+  const attendance = await database.query('SELECT count(*)::int AS total FROM learning.attendance_record;');
+  assert.equal(attendance.rows[0].total, 0);
+  await database.close();
+});
+
+test('IC2304 v3 lưu Speaking và nộp đủ ba phần, chỉ Listening có điểm', async () => {
+  const { database, service } = await setupDatabase();
+  const definition = buildIc2304Session2SpeakingDefinition();
+  const sampleAnswers = ['B', 'B', 'B', 'B', 'B'];
+  const gradingKey = buildIc2304Session2SpeakingGradingKey(sampleAnswers);
+  const assignmentId = '23040002-0000-4000-8000-000000000025';
+  const publicToken = '23040002-0000-4000-8000-000000000026';
+  const studentRef = '60000000-0000-4000-8000-000000000001';
+  await database.query(`INSERT INTO mapping.reviewer_account (email) VALUES ('reviewer@example.test');`);
+  await database.query(`INSERT INTO mapping.reviewer_class_access VALUES ('reviewer@example.test', 2139);`);
+  await database.query(`INSERT INTO learning.form_template
+    (id, title, kind, created_by_email) VALUES ($1::uuid, $2, 'mixed', 'teacher@example.test');`, [
+    IC2304_SESSION2_SPEAKING.templateId, definition.title
+  ]);
+  await database.query(`INSERT INTO learning.form_version
+    (id, template_id, version, schema_version, public_definition, definition_hash,
+     status, created_by_email, approved_by_email, published_at)
+    VALUES ($1::uuid, $2::uuid, 3, 'FormDefinitionV1', $3::jsonb, $4,
+      'published', 'teacher@example.test', 'reviewer@example.test', now());`, [
+    definition.formVersionId, IC2304_SESSION2_SPEAKING.templateId,
+    JSON.stringify(definition), sha256(stableStringify(definition))
+  ]);
+  await database.query(`INSERT INTO learning.form_grading_key
+    (form_version_id, schema_version, grader_version, private_definition, content_hash)
+    VALUES ($1::uuid, 'FormGradingKeyV1', 1, $2::jsonb, $3);`, [
+    definition.formVersionId, JSON.stringify(gradingKey), sha256(stableStringify(gradingKey))
+  ]);
+  await database.query(`INSERT INTO learning.form_assignment
+    (id, public_token, form_version_id, course_code, erp_course_class_id,
+     class_name_snapshot, session_number, title, status, created_by_email)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, '67', 2139,
+      'IC2139', 2, $4, 'published', 'teacher@example.test');`, [
+    assignmentId, publicToken, definition.formVersionId, definition.title
+  ]);
+  await database.query(`INSERT INTO learning.form_assignment_roster
+    (assignment_id, student_ref, erp_student_contact_id, student_name_snapshot)
+    VALUES ($1::uuid, $2::uuid, 9001, 'Học viên mẫu');`, [assignmentId, studentRef]);
+  for (const block of definition.blocks) {
+    await database.query(`INSERT INTO learning.assignment_block_release
+      (assignment_id, block_id, checkpoint, status, release_version, updated_by_email)
+      VALUES ($1::uuid, $2::uuid, $3, 'open', 1, 'teacher@example.test');`, [
+      assignmentId, block.blockId, block.checkpoint
+    ]);
+  }
+  const assignment = await service.getPublicAssignment(publicToken);
+  assert.equal(assignment.definition.blocks.length, 3);
+  assert.equal(JSON.stringify(assignment).includes('expectedOptionId'), false);
+  const attempt = await service.startAttempt({ publicToken, studentRef,
+    clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true });
+  const [listening, writing, speaking] = definition.blocks;
+  const responses = Object.fromEntries(listening.items.map((item, index) => [
+    item.itemVersionId, sampleAnswers[index]
+  ]));
+  for (const item of writing.items) responses[item.itemVersionId] = 'Ý minh họa';
+  responses[speaking.items[0].itemVersionId] = ['IDEAS', 'VOCABULARY'];
+  responses[speaking.items[1].itemVersionId] = 'Em thiếu ví dụ';
+  responses[speaking.items[2].itemVersionId] = 'Em thiếu từ về môi trường';
+  await service.saveDraft({ attemptToken: attempt.attemptToken, revision: 1,
+    definitionHash: attempt.definitionHash, responses });
+  for (const block of definition.blocks) {
+    const submitted = await service.submitCheckpoint({ attemptToken: attempt.attemptToken,
+      checkpointSubmissionId: crypto.randomUUID(), blockId: block.blockId,
+      checkpoint: block.checkpoint, draftRevision: 1, definitionHash: attempt.definitionHash,
+      responses, idempotencyKey: `ic2304-v3:${crypto.randomUUID()}` });
+    assert.equal(submitted.completeness, 'complete');
+    assert.equal(submitted.result?.summary.maxScore ?? 0, block.checkpoint === 1 ? 5 : 0);
+  }
+  const final = await service.submit({ attemptToken: attempt.attemptToken,
+    submissionId: crypto.randomUUID(), definitionHash: attempt.definitionHash,
+    draftRevision: 1, responses });
+  assert.equal(final.receipt.completeness, 'complete');
+  assert.equal(final.receipt.attendanceStatus, 'self_confirmed');
+  const readback = await database.query(`SELECT response_payload FROM learning.checkpoint_submission
+    WHERE assignment_id = $1::uuid AND checkpoint = 3;`, [assignmentId]);
+  assert.deepEqual(readback.rows[0].response_payload[speaking.items[0].itemVersionId],
+    ['IDEAS', 'VOCABULARY']);
   await database.close();
 });
 

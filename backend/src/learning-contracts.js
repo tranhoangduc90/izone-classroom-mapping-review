@@ -22,7 +22,9 @@ const interactionConfigSchema = z.object({
   afterText: z.string().trim().min(1).max(500).optional(),
   visibleWhenItemVersionId: uuidSchema.optional(),
   visibleWhenValue: z.string().trim().min(1).max(80).optional(),
-  requiredWhenVisible: z.boolean().optional()
+  requiredWhenVisible: z.boolean().optional(),
+  maxSelections: z.number().int().min(1).max(40).optional(),
+  exclusiveOptionId: z.string().trim().min(1).max(80).optional()
 }).strict();
 
 export const interactionTypeSchema = z.enum([
@@ -71,6 +73,15 @@ export const formItemSchema = z.object({
   }
   if (['short_text', 'long_text', 'number_score'].includes(item.interactionType) && item.options.length) {
     context.addIssue({ code: 'custom', path: ['options'], message: 'Câu nhập chữ không được chứa option.' });
+  }
+  if (item.interactionConfig.maxSelections !== undefined || item.interactionConfig.exclusiveOptionId) {
+    if (item.interactionType !== 'multi_choice_group'
+      || !item.interactionConfig.maxSelections
+      || item.interactionConfig.maxSelections > item.options.length
+      || (item.interactionConfig.exclusiveOptionId
+        && !optionIds.includes(item.interactionConfig.exclusiveOptionId))) {
+      context.addIssue({ code: 'custom', path: ['interactionConfig'], message: 'Giới hạn checklist không hợp lệ.' });
+    }
   }
   if (item.interactionType === 'number_score') {
     const { min = 0, max } = item.interactionConfig;
@@ -128,7 +139,7 @@ export const formItemSchema = z.object({
       message: 'beforeText/afterText chỉ dùng cho reasoning_chain_completion.'
     });
   }
-  if (item.layoutType === 'conditional_other_text') {
+  if (['conditional_other_text', 'inline_option_text'].includes(item.layoutType)) {
     if (!['short_text', 'long_text'].includes(item.interactionType)
       || !item.interactionConfig.visibleWhenItemVersionId
       || !item.interactionConfig.visibleWhenValue
@@ -137,7 +148,7 @@ export const formItemSchema = z.object({
       context.addIssue({
         code: 'custom',
         path: ['interactionConfig'],
-        message: 'Ô nêu rõ cần điều kiện hiển thị, bắt buộc khi hiện và required=false.'
+        message: 'Ô phụ thuộc cần điều kiện hiển thị, bắt buộc khi hiện và required=false.'
       });
     }
   } else if (item.interactionConfig.visibleWhenItemVersionId
@@ -146,7 +157,7 @@ export const formItemSchema = z.object({
     context.addIssue({
       code: 'custom',
       path: ['interactionConfig'],
-      message: 'Điều kiện hiển thị chỉ dùng cho conditional_other_text.'
+      message: 'Điều kiện hiển thị chỉ dùng cho ô phụ thuộc.'
     });
   }
   if (item.graderType === 'unordered_group_slot' && !item.groupId) {
@@ -199,11 +210,11 @@ export const formDefinitionV1Schema = z.object({
     const dependencyId = item.interactionConfig.visibleWhenItemVersionId;
     if (!dependencyId) continue;
     const dependency = itemById.get(dependencyId);
-    if (!dependency || dependency.interactionType !== 'single_choice') {
+    if (!dependency || !['single_choice', 'multi_choice_group'].includes(dependency.interactionType)) {
       context.addIssue({
         code: 'custom',
         path: ['blocks'],
-        message: 'Điều kiện hiển thị phải tham chiếu một câu single_choice trong cùng form.'
+        message: 'Điều kiện hiển thị phải tham chiếu một câu lựa chọn trong cùng form.'
       });
       continue;
     }
