@@ -14,6 +14,10 @@ const interactionConfigSchema = z.object({
   unit: z.string().trim().min(1).max(40).optional(),
   responseCount: z.number().int().min(2).max(10).optional(),
   responseLabels: z.array(z.string().trim().min(1).max(100)).min(2).max(10).optional(),
+  sentenceLines: z.array(z.object({
+    title: z.string().trim().max(100).optional(),
+    parts: z.array(z.string().max(500)).min(1).max(10)
+  }).strict()).min(1).max(10).optional(),
   beforeText: z.string().trim().min(1).max(500).optional(),
   afterText: z.string().trim().min(1).max(500).optional(),
   visibleWhenItemVersionId: uuidSchema.optional(),
@@ -78,7 +82,7 @@ export const formItemSchema = z.object({
     }
   }
   if (item.layoutType === 'numbered_short_texts') {
-    const { responseCount, responseLabels } = item.interactionConfig;
+    const { responseCount, responseLabels, sentenceLines } = item.interactionConfig;
     if (item.interactionType !== 'short_text' || !Number.isInteger(responseCount)) {
       context.addIssue({
         code: 'custom',
@@ -93,7 +97,14 @@ export const formItemSchema = z.object({
         message: 'Số nhãn phải bằng số ô trả lời.'
       });
     }
-  } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels) {
+    if (sentenceLines && sentenceLines.reduce((count, line) => count + line.parts.length - 1, 0) !== responseCount) {
+      context.addIssue({
+        code: 'custom',
+        path: ['interactionConfig', 'sentenceLines'],
+        message: 'Số ô nằm trong câu phải bằng responseCount.'
+      });
+    }
+  } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels || item.interactionConfig.sentenceLines) {
     context.addIssue({
       code: 'custom',
       path: ['interactionConfig'],
@@ -247,7 +258,8 @@ export const formGradingKeyV1Schema = z.object({
   formVersionId: uuidSchema,
   graderVersion: z.number().int().positive(),
   items: z.record(uuidSchema, privateItemKeySchema).default({}),
-  groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({})
+  groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({}),
+  referenceAnswers: z.record(uuidSchema, z.array(z.string().trim().min(1).max(300)).min(1).max(10)).optional()
 }).strict();
 
 export const scoreResponseSchema = z.object({

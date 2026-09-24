@@ -67,6 +67,10 @@ async function createV1Database() {
       email TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'active'
     );
+    CREATE TABLE mapping.reviewer_class_assignment (
+      reviewer_email TEXT NOT NULL,
+      class_name TEXT NOT NULL
+    );
     INSERT INTO mapping.classroom_course_mapping VALUES (2139, 'IC2139');
     INSERT INTO mapping.student_mapping_review (
       public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot
@@ -112,6 +116,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(journeyMigration);
+  const speakingFeedbackMigration = await readFile(
+    new URL('../ops/learning-migrations/202609240001_teacher_session_speaking_feedback.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(speakingFeedbackMigration);
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
 
@@ -969,3 +978,62 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
 function stableContains(value, needle) {
   return JSON.stringify(value).includes(needle);
 }
+
+
+test('nhận xét Speaking gửi đúng học viên, đọc lại và chặn gửi trùng hay người không có quyền', async () => {
+  const { database, service } = await setupDatabase();
+  for (const name of [
+    '202608290002_seed_progress_log_demo.sql',
+    '202609150002_seed_progress_log_demo_v2.sql',
+    '202609150004_seed_student_course_journey_demo.sql'
+  ]) {
+    const seed = await readFile(new URL(`../ops/learning-migrations/${name}`, import.meta.url), 'utf8');
+    await database.exec(seed);
+  }
+  const assignmentId = '20000000-0000-4000-8000-000000000301';
+  const studentRef = '21000000-0000-4000-8000-000000000003';
+  const otherStudentRef = '21000000-0000-4000-8000-000000000004';
+  const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };
+  const input = { assignmentId, studentRef, noteText: 'Em đã phát triển ý rõ hơn; luyện nhịp nói mỗi ngày.',
+    expectedRevision: 0, operationId: crypto.randomUUID(), reviewer };
+  const sent = await service.sendTeacherSessionFeedback(input);
+  assert.equal(sent.revision, 1);
+  assert.equal(sent.replayed, false);
+  const replay = await service.sendTeacherSessionFeedback(input);
+  assert.equal(replay.replayed, true);
+  await assert.rejects(() => service.sendTeacherSessionFeedback({ ...input, noteText: 'Nội dung khác' }),
+    error => error instanceof LearningError && error.code === 'SESSION_FEEDBACK_IDEMPOTENCY_CONFLICT');
+  await assert.rejects(() => service.sendTeacherSessionFeedback({ ...input, operationId: crypto.randomUUID() }),
+    error => error instanceof LearningError && error.code === 'SESSION_FEEDBACK_STALE');
+  await assert.rejects(() => service.sendTeacherSessionFeedback({ ...input,
+    operationId: crypto.randomUUID(), reviewer: { email: 'outsider@example.test', canAccessAllClasses: false } }),
+  error => error instanceof LearningError && error.code === 'SESSION_FEEDBACK_ACCESS_DENIED');
+
+  const dashboard = await service.getTeacherDashboard({ assignmentId, reviewer });
+  assert.equal(dashboard.students.find(row => row.studentRef === studentRef)
+    .teacherSessionFeedback.noteText, input.noteText);
+  assert.equal(dashboard.students.find(row => row.studentRef === otherStudentRef)
+    .teacherSessionFeedback, null);
+  const journey = await service.getStudentCourseJourney({
+    accessToken: 'demo-progress-567-00000000-0000-4000-8000-000000000003'
+  });
+  assert.equal(journey.sessions[0].teacherSessionFeedback.noteText, input.noteText);
+  const otherAccessToken = 'generated-progress-link-00000000-0000-4000-8000-000000000004';
+  await service.createStudentProgressLink({ assignmentId, studentRef: otherStudentRef,
+    accessToken: otherAccessToken, expiresInDays: 30, reviewer, operationId: crypto.randomUUID() });
+  const otherJourney = await service.getStudentCourseJourney({ accessToken: otherAccessToken });
+  assert.equal(otherJourney.sessions[0].teacherSessionFeedback, null);
+  const saved = await database.query(`SELECT count(*)::int AS total FROM learning.teacher_session_feedback;`);
+  assert.equal(saved.rows[0].total, 1);
+  await database.query(`INSERT INTO mapping.reviewer_class_assignment (reviewer_email, class_name)
+    VALUES ('assigned@example.test', '[DEMO] PROGRESS LOG · KHÓA 56');`);
+  const assignedTeacher = await service.sendTeacherSessionFeedback({ ...input,
+    noteText: 'Em đã duy trì mạch nói tốt hơn.', expectedRevision: 1,
+    operationId: crypto.randomUUID(),
+    reviewer: { email: 'assigned@example.test', canAccessAllClasses: false } });
+  assert.equal(assignedTeacher.revision, 2);
+  const latest = await service.getTeacherDashboard({ assignmentId, reviewer });
+  assert.equal(latest.students.find(row => row.studentRef === studentRef)
+    .teacherSessionFeedback.noteText, assignedTeacher.noteText);
+  await database.close();
+});

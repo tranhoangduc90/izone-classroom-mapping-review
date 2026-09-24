@@ -80,6 +80,19 @@ test('tạo link hành trình bắt buộc identity và token đủ mạnh', asy
   assert.equal(response.body.error, 'INVALID_PROGRESS_LINK_REQUEST');
 });
 
+test('nhận xét Speaking trống hoặc quá dài bị chặn trước database', async () => {
+  for (const noteText of ['', 'x'.repeat(501)]) {
+    const response = await request(appWithPool(failIfQueriedPool()))
+      .put('/api/learning/teacher/session-feedback')
+      .send({ assignmentId: '11111111-1111-4111-8111-111111111111',
+        studentRef: '22222222-2222-4222-8222-222222222222',
+        noteText, expectedRevision: 0,
+        operationId: '33333333-3333-4333-8333-333333333333' });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'INVALID_SESSION_FEEDBACK');
+  }
+});
+
 test('API từ chối payload sai ở mọi bước trước khi chạm database', async t => {
   const app = appWithPool(failIfQueriedPool());
   const uuid = '11111111-1111-4111-8111-111111111111';

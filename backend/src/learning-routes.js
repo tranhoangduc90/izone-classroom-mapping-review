@@ -57,7 +57,21 @@ const publishReflectionSchema = z.object({
     libraryItemId: uuidSchema,
     checkpoint: z.number().int().min(1).max(3),
     required: z.boolean().default(true)
-  }).strict()).min(2).max(6)
+  }).strict()).min(2).max(20)
+}).strict().superRefine((value, context) => {
+  if (value.opensAt && value.closesAt && new Date(value.closesAt) <= new Date(value.opensAt)) {
+    context.addIssue({ code: 'custom', path: ['closesAt'], message: 'Thời gian đóng phải sau thời gian mở.' });
+  }
+});
+const publishQuizSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  courseCode: z.string().trim().max(80).optional().default(''),
+  classId: z.string().regex(/^\d+$/),
+  sessionNumber: z.number().int().min(1).max(100),
+  opensAt: z.iso.datetime().nullable().optional(),
+  closesAt: z.iso.datetime().nullable().optional(),
+  definition: z.record(z.string(), z.unknown()),
+  gradingKey: z.record(z.string(), z.unknown())
 }).strict().superRefine((value, context) => {
   if (value.opensAt && value.closesAt && new Date(value.closesAt) <= new Date(value.opensAt)) {
     context.addIssue({ code: 'custom', path: ['closesAt'], message: 'Thời gian đóng phải sau thời gian mở.' });
@@ -88,6 +102,13 @@ const teacherHumanNoteSchema = z.object({
   assignmentId: uuidSchema,
   studentRef: uuidSchema,
   noteText: z.string().trim().min(1).max(500)
+}).strict();
+const teacherSessionFeedbackSchema = z.object({
+  assignmentId: uuidSchema,
+  studentRef: uuidSchema,
+  noteText: z.string().trim().min(1).max(500),
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  operationId: uuidSchema
 }).strict();
 const studentProgressLinkSchema = z.object({
   assignmentId: uuidSchema,
@@ -250,6 +271,14 @@ export function createLearningRouter({ pool, authenticate }) {
     return res.status(201).json({ ok: true, published });
   }));
 
+  router.post('/teacher/quiz-forms/publish', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(publishQuizSchema, req.body, res, 'INVALID_QUIZ_FORM');
+    if (!input) return;
+    const published = await service.publishQuizForm({ ...input, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.status(201).json({ ok: true, published });
+  }));
+
   router.get('/teacher/dashboard', authenticate, asyncRoute(async (req, res) => {
     const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
     if (!input) return;
@@ -300,6 +329,14 @@ export function createLearningRouter({ pool, authenticate }) {
     const note = await service.saveTeacherHumanNote({ ...input, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, note });
+  }));
+
+  router.put('/teacher/session-feedback', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(teacherSessionFeedbackSchema, req.body, res, 'INVALID_SESSION_FEEDBACK');
+    if (!input) return;
+    const feedback = await service.sendTeacherSessionFeedback({ ...input, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, feedback });
   }));
 
   router.post('/teacher/student-progress-links', authenticate, asyncRoute(async (req, res) => {

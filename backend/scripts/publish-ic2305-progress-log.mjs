@@ -21,8 +21,14 @@ import {
   buildIc2305Session3GradingKey,
   IC2305_SESSION3_TEMPLATE
 } from '../src/learning-templates/ic2305-entrance-listening1-speaking2.js';
+import {
+  buildIc2305Session4Definition,
+  buildIc2305Session4GradingKey,
+  IC2305_SESSION4_TEMPLATE
+} from '../src/learning-templates/ic2305-session4-listening1-speaking2.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
 import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
+import { retireReplacedIc2305Session4 } from '../src/learning-replacement.js';
 
 const { Pool } = pg;
 
@@ -34,6 +40,7 @@ function option(name, fallback = '') {
 const apply = process.argv.includes('--apply');
 const classCode = option('class', 'IC2305').trim().toUpperCase();
 const formCode = option('form', 'writing1').trim().toLowerCase();
+const replacementAssignmentId = option('replace-assignment').trim().toLowerCase();
 const selected = {
   writing1: {
     template: IC2305_WRITING1_TEMPLATE,
@@ -46,6 +53,12 @@ const selected = {
     buildDefinition: buildIc2305Session3Definition,
     buildGradingKey: buildIc2305Session3GradingKey,
     defaultSession: 3
+  },
+  'session4-listening1-speaking2': {
+    template: IC2305_SESSION4_TEMPLATE,
+    buildDefinition: buildIc2305Session4Definition,
+    buildGradingKey: buildIc2305Session4GradingKey,
+    defaultSession: 4
   },
   'reading1-listening1': {
     template: IC2305_ENTRANCE_TEMPLATE,
@@ -67,6 +80,11 @@ const gradingHash = sha256(stableStringify(gradingKey));
 if (!Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 100) {
   throw new Error('INVALID_SESSION_NUMBER');
 }
+if (replacementAssignmentId && (formCode !== 'session4-listening1-speaking2'
+  || classCode !== 'IC2305' || sessionNumber !== 4
+  || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(replacementAssignmentId))) {
+  throw new Error('INVALID_REPLACEMENT_REQUEST');
+}
 
 const plan = {
   mode: apply ? 'apply' : 'plan',
@@ -78,7 +96,8 @@ const plan = {
   blocks: definition.blocks.length,
   items: definition.blocks.flatMap(block => block.items).length,
   scoredItems: definition.blocks.flatMap(block => block.items).filter(item => item.maxScore > 0).length,
-  answerReleasePolicy: definition.answerReleasePolicy
+  answerReleasePolicy: definition.answerReleasePolicy,
+  replacementAssignmentId: replacementAssignmentId || null
 };
 
 if (!apply) {
@@ -248,6 +267,12 @@ try {
     || (!replayed && Number(verified.open_blocks) !== definition.blocks.length)) {
     throw new Error('PUBLISH_READBACK_MISMATCH');
   }
+  let replacement = null;
+  if (replacementAssignmentId) {
+    phase = 'replacement_check';
+    replacement = await retireReplacedIc2305Session4({ client, replacementAssignmentId,
+      newAssignmentId: assignment.assignment_id, classId: targetClass.class_id });
+  }
   await client.query('COMMIT');
   process.stdout.write(`${JSON.stringify({
     ...plan,
@@ -256,6 +281,7 @@ try {
     className: verified.class_name,
     rosterCount: Number(verified.roster_count),
     openBlocks: Number(verified.open_blocks),
+    replacement,
     replayed
   }, null, 2)}\n`);
 } catch (error) {
