@@ -1,0 +1,15 @@
+FROM izone-term-test-backend:20260924.2-progress-log-feedback-cors
+
+USER root
+COPY src/learning-sql.js /tmp/learning-sql.js
+
+# Dữ liệu nhận vào: image API đã cho phép PUT và câu SQL phân quyền giảng viên.
+# Việc chính: kiểm hash, chuyển khóa giao dịch sang assignment có quyền UPDATE.
+# Kết quả: giảng viên gửi nhận xét mà không cần mở rộng quyền sửa roster.
+# Khi lỗi: build dừng, container production không đổi.
+RUN test "$(sha256sum /app/src/learning-sql.js | cut -d' ' -f1)" = "379aef807646be727e8d8f4cfa49f35380393a417a34bd6464a0ed809af3f578" \
+ && test "$(sha256sum /tmp/learning-sql.js | cut -d' ' -f1)" = "8d09430beb7eaf7f1de60ffb46b45f2a024ac0059c10795314365e7218b52b98" \
+ && install -m 0644 /tmp/learning-sql.js /app/src/learning-sql.js \
+ && node --check /app/src/learning-sql.js
+
+USER node

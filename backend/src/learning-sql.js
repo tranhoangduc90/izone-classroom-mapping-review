@@ -903,7 +903,7 @@ WHERE assignment.id = $1::uuid
       classIdSql: 'assignment.erp_course_class_id'
     })}
   )
-FOR UPDATE OF roster;`;
+FOR UPDATE OF assignment;`;
 
 export const findLearningSessionFeedbackByOperationSql = `SELECT
   id::text, assignment_id::text, student_ref::text, skill_code,
