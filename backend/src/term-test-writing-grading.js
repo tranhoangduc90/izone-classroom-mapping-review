@@ -14,6 +14,15 @@ const TASK_CRITERIA = Object.freeze({
   1: Object.freeze(['TA', 'CC', 'LR', 'GRA']),
   2: Object.freeze(['TR', 'CC', 'LR', 'GRA'])
 });
+// Backend xác nhận nguồn và rubric của từng đề; bộ chấm không tự đoán theo tên lớp.
+// Đề chưa được duyệt trả null để adapter hợp nhất dừng trước khi gọi AI.
+const GRADING_IDENTITY_BY_TEST = Object.freeze({
+  'term-test-1': Object.freeze({ source: 'k67_web', rubricVersion: 'ielts-writing-v1' }),
+  'term-test-2': Object.freeze({ source: 'k67_web', rubricVersion: 'ielts-writing-v1' }),
+  'term-test-1-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'ielts-writing-v1' }),
+  'term-test-2-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'ielts-writing-v1' }),
+  'mini-test-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'k56-mini-paragraph-v1' })
+});
 const WRITING_IMAGE_MAX_BYTES = 600 * 1024;
 const WRITING_IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\r\n]+)$/;
 
@@ -459,7 +468,9 @@ export function createTermTestWritingGradingService({
         run.essay_text,
         run.word_count,
         run.lark_record_id,
-        attempt.test_slug
+        attempt.test_slug,
+        attempt.id::text AS attempt_id,
+        attempt.erp_course_class_id::text AS class_id
       FROM updated
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = updated.run_id
       JOIN assessment.term_test_attempt AS attempt ON attempt.id = run.attempt_id
@@ -471,11 +482,16 @@ export function createTermTestWritingGradingService({
       ]);
       return claimed.rows.map(row => ({
         jobId: row.job_id,
+        operationId: row.job_id,
         jobType: row.job_type,
         attemptCount: Number(row.attempt_count),
         maxAttempts: Number(row.max_attempts),
         runKey: row.run_key,
         testSlug: row.test_slug,
+        source: GRADING_IDENTITY_BY_TEST[row.test_slug]?.source ?? null,
+        classId: row.class_id ?? null,
+        attemptId: row.attempt_id,
+        rubricVersion: GRADING_IDENTITY_BY_TEST[row.test_slug]?.rubricVersion ?? null,
         taskNumber: Number(row.task_number),
         prompt: row.job_type === 'dispatch' ? row.prompt_text : '',
         imageUrl: row.job_type === 'dispatch' ? (row.prompt_image_url || '') : '',

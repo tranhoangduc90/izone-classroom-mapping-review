@@ -217,6 +217,11 @@ test('Term Test 1 chỉ có Task 2 vẫn chấm xong, hiện điểm và đồng
 
   const [dispatchJob] = await service.claimJobs({ workerId: 'term-1-dispatch', limit: 2 });
   assert.equal(dispatchJob.taskNumber, 2);
+  assert.equal(dispatchJob.source, 'k67_web');
+  assert.equal(dispatchJob.classId, '2146');
+  assert.equal(dispatchJob.attemptId, attemptToken);
+  assert.equal(dispatchJob.operationId, dispatchJob.jobId);
+  assert.equal(dispatchJob.rubricVersion, 'ielts-writing-v1');
   await service.completeDispatch({
     jobId: dispatchJob.jobId,
     workerId: 'term-1-dispatch',
@@ -265,6 +270,10 @@ test('Term Test 2 K56 chỉ có Task 1 vẫn hoàn tất đúng lượt, không 
   await service.ensureSubmission({ ...submission, task1: 'Nội dung gửi lại không được ghi đè' });
   const [dispatch] = await service.claimJobs({ workerId: 'k56-dispatch', limit: 2 });
   assert.equal(dispatch.taskNumber, 1);
+  assert.equal(dispatch.source, 'k56_web');
+  assert.equal(dispatch.classId, '1252');
+  assert.equal(dispatch.attemptId, attemptToken);
+  assert.equal(dispatch.rubricVersion, 'ielts-writing-v1');
   await service.completeDispatch({ jobId: dispatch.jobId, workerId: 'k56-dispatch', sourceRecordId: 'k56-task-1' });
   await database.query(`UPDATE assessment.term_test_writing_grading_job SET next_attempt_at = now() WHERE job_type = 'collect';`);
   const [collect] = await service.claimJobs({ workerId: 'k56-collect', limit: 2 });
@@ -316,6 +325,13 @@ test('Mini K56 chấm đoạn văn Task 2 cho hai lớp cùng tên mà không l�
   for (const job of dispatches) {
     assert.equal(job.taskNumber, 2);
     assert.equal(job.testSlug, 'mini-test-k56');
+    const attempt = attempts.find(item => job.runKey.includes(item.token));
+    assert.ok(attempt);
+    assert.equal(job.source, 'k56_web');
+    assert.equal(job.classId, String(attempt.classId));
+    assert.equal(job.attemptId, attempt.token);
+    assert.equal(job.operationId, job.jobId);
+    assert.equal(job.rubricVersion, 'k56-mini-paragraph-v1');
     await service.completeDispatch({ jobId: job.jobId, workerId: 'mini-dispatch' });
   }
   await database.query(`UPDATE assessment.term_test_writing_grading_job
