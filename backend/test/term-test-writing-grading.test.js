@@ -286,6 +286,82 @@ test('Term Test 2 K56 chỉ có Task 1 vẫn hoàn tất đúng lượt, không 
   await database.close();
 });
 
+test('Mini K56 chấm đoạn văn Task 2 cho hai lớp cùng tên mà không lẫn lượt', async () => {
+  const database = await makeDatabase();
+  const attempts = [
+    { token: '00000000-0000-4000-8000-000000000213', classId: 1252, className: 'IC2264', score: 6.5 },
+    { token: '00000000-0000-4000-8000-000000000214', classId: 1253, className: 'IC2265', score: 8 }
+  ];
+  const service = createTermTestWritingGradingService({ pool: database });
+  for (const attempt of attempts) {
+    await database.query(`INSERT INTO assessment.term_test_attempt (
+      id, test_slug, erp_course_class_id, erp_student_contact_id,
+      class_name_snapshot, student_name_snapshot, completed_at, writing_submitted_at
+    ) VALUES ($1::uuid, 'mini-test-k56', $2, 9013, $3, 'Học viên cùng tên', now(), now());`, [
+      attempt.token, attempt.classId, attempt.className
+    ]);
+    const pending = await service.ensureSubmission({
+      attemptToken: attempt.token,
+      testSlug: 'mini-test-k56',
+      task1: '',
+      task2: `Đoạn văn giả lớp ${attempt.className}`,
+      taskDefinitions: [{ id: 'task2', prompt: 'Đề Mini giả, chấm đoạn văn.' }]
+    });
+    assert.deepEqual(pending.taskStates, { task2: 'queued' });
+  }
+
+  const dispatches = await service.claimJobs({ workerId: 'mini-dispatch', limit: 2, testSlug: 'mini-test-k56' });
+  assert.equal(dispatches.length, 2);
+  assert.notEqual(dispatches[0].runKey, dispatches[1].runKey);
+  for (const job of dispatches) {
+    assert.equal(job.taskNumber, 2);
+    assert.equal(job.testSlug, 'mini-test-k56');
+    await service.completeDispatch({ jobId: job.jobId, workerId: 'mini-dispatch' });
+  }
+  await database.query(`UPDATE assessment.term_test_writing_grading_job
+    SET next_attempt_at = now() WHERE job_type = 'collect';`);
+  const collects = await service.claimJobs({ workerId: 'mini-collect', limit: 2, testSlug: 'mini-test-k56' });
+  assert.equal(collects.length, 2);
+  const first = collects.find(job => job.runKey.includes(attempts[0].token));
+  const second = collects.find(job => job.runKey.includes(attempts[1].token));
+  assert.ok(first && second);
+  await assert.rejects(service.completeResult({
+    jobId: first.jobId,
+    workerId: 'mini-collect',
+    runKey: second.runKey,
+    result: { taskScore: 6.5, criteria: criteria(2, [6.5, 6.5, 6.5, 6.5]), report: 'Bài giả' }
+  }), error => error.code === 'WRITING_GRADING_JOB_TYPE_MISMATCH');
+  for (const [job, score] of [[second, 8], [first, 6.5]]) {
+    const completed = await service.completeResult({
+      jobId: job.jobId,
+      workerId: 'mini-collect',
+      runKey: job.runKey,
+      result: { taskScore: score, criteria: criteria(2, [score, score, score, score]), report: 'Bài giả' }
+    });
+    assert.equal(completed.grading.ready, true);
+    assert.equal(completed.grading.task1Score, null);
+    assert.equal(completed.grading.task2Score, score);
+    assert.equal(completed.grading.writingScore, score);
+    assert.equal(completed.portalSyncStatus, 'not_applicable');
+  }
+  for (const attempt of attempts) {
+    const status = await service.getStatus(attempt.token);
+    assert.equal(status.writingScore, attempt.score);
+    assert.equal(status.tasks.length, 1);
+    assert.deepEqual(status.taskStates, { task2: 'complete' });
+  }
+  const stored = await database.query(`SELECT run.run_key, run.essay_text, attempt.class_name_snapshot
+    FROM assessment.term_test_writing_grading_run AS run
+    JOIN assessment.term_test_attempt AS attempt ON attempt.id = run.attempt_id
+    ORDER BY attempt.class_name_snapshot;`);
+  assert.equal(stored.rows.length, 2);
+  for (const row of stored.rows) {
+    assert.ok(row.run_key.includes('mini-test-k56:'));
+    assert.equal(row.essay_text, `Đoạn văn giả lớp ${row.class_name_snapshot}`);
+  }
+  await database.close();
+});
+
 test('Portal lỗi tạm thời thì điểm Writing vẫn sẵn sàng và việc ghi điểm được đưa lại vào hàng chờ', async () => {
   const database = await makeDatabase();
   const attemptToken = '00000000-0000-4000-8000-000000000205';
