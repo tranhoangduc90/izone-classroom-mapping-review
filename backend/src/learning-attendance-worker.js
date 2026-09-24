@@ -1,5 +1,8 @@
 import { runLearningJobBatch } from './learning-outbox.js';
 
+export const ATTENDANCE_JOB_BATCH_LIMIT = 10;
+export const ATTENDANCE_JOB_LEASE_SECONDS = 180;
+
 // Nhận một pool PostgreSQL và hàm gọi Portal; mỗi nhịp chỉ lấy job điểm danh,
 // xử lý tuần tự theo lease và để job tự retry nếu Portal tạm thời lỗi.
 export function startLearningAttendanceWorker({ pool, handler, pollMs = 2000 }) {
@@ -19,8 +22,8 @@ export function startLearningAttendanceWorker({ pool, handler, pollMs = 2000 }) 
         pool,
         workerId,
         handler,
-        limit: 10,
-        leaseSeconds: 60,
+        limit: ATTENDANCE_JOB_BATCH_LIMIT,
+        leaseSeconds: ATTENDANCE_JOB_LEASE_SECONDS,
         jobTypes: ['sync_portal_attendance']
       });
       const failures = results.filter(result => result.status === 'failed_or_retry');
