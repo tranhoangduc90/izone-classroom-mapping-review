@@ -20,6 +20,11 @@ sql = '''
 WITH wanted(name) AS (
   VALUES ('pair'), ('source_record'), ('test_group'), ('test_pair'),
          ('handoff'), ('stage_result'), ('stage_attempt')
+), roster_sources(schema_name, table_name) AS (
+  VALUES ('assessment', 'term_test_roster'),
+         ('assessment_k56', 'term_test_roster'),
+         ('mapping', 'student_mapping_review'),
+         ('mapping', 'classroom_course_mapping')
 )
 SELECT json_build_object(
   'database', current_database(),
@@ -56,6 +61,28 @@ SELECT json_build_object(
       AND relation.relnamespace = (
         SELECT oid FROM pg_namespace WHERE nspname = 'writing_flow'
       )
+  ),
+  'rosterSources', (
+    SELECT json_agg(json_build_object(
+      'name', roster_sources.schema_name || '.' || roster_sources.table_name,
+      'exists', to_regclass(format('%I.%I', roster_sources.schema_name,
+                                    roster_sources.table_name)) IS NOT NULL,
+      'apiCanSelect', CASE
+        WHEN to_regclass(format('%I.%I', roster_sources.schema_name,
+                                roster_sources.table_name)) IS NULL THEN false
+        ELSE has_table_privilege('writing_practice_api',
+          to_regclass(format('%I.%I', roster_sources.schema_name,
+                             roster_sources.table_name)), 'SELECT')
+      END,
+      'columns', COALESCE((
+        SELECT json_agg(json_build_object('name', column_name,
+          'type', data_type, 'nullable', is_nullable) ORDER BY ordinal_position)
+        FROM information_schema.columns
+        WHERE table_schema = roster_sources.schema_name
+          AND table_name = roster_sources.table_name
+      ), '[]'::json)
+    ) ORDER BY roster_sources.schema_name, roster_sources.table_name)
+    FROM roster_sources
   )
 )::text;
 '''
