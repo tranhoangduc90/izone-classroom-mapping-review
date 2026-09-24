@@ -3,6 +3,8 @@
 -- Kết quả: đồng bộ sau này có thể khóa lượt thi mới mà không xóa kết quả lịch sử.
 -- Khi lỗi: transaction rollback; không sửa bài nộp, điểm hoặc UUID.
 BEGIN;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '30s';
 
 ALTER TABLE assessment.term_test_roster
   ADD COLUMN IF NOT EXISTS is_eligible BOOLEAN NOT NULL DEFAULT true;

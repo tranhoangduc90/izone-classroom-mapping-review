@@ -36,6 +36,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mapping_app') THEN
     GRANT SELECT ON assessment.term_test_class_access TO mapping_app;
   END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'k56_ic2264_app') THEN
+    GRANT SELECT ON assessment.term_test_class_access TO k56_ic2264_app;
+  END IF;
 END
 $permissions$;
 
