@@ -13,6 +13,7 @@ import { parseFormDefinition, parseFormGradingKey, parseResponses } from './lear
 import {
   authorizeLearningClassSql,
   authorizeLearningProgressLinkTargetSql,
+  authorizeLearningSessionFeedbackTargetSql,
   fetchAssignmentStudentSql,
   fetchLearningBlockReleaseSql,
   fetchLearningAttemptContextSql,
@@ -23,15 +24,19 @@ import {
   fetchLearningTeacherLiveDraftsSql,
   fetchPublicLearningAssignmentSql,
   fetchStudentCourseJourneySql,
+  fetchLatestLearningSessionFeedbackSql,
+  findLearningSessionFeedbackByOperationSql,
   findLearningCheckpointSubmissionSql,
   findLearningProgressAccessByOperationSql,
   findLearningSubmissionSql,
   insertLearningAssignmentBlockReleaseSql,
   insertLearningAssignmentRosterSql,
   insertLearningAssignmentSql,
+  insertLearningSessionFeedbackSql,
   insertLearningAttemptSql,
   finalizeLearningSubmissionSql,
   insertLearningFormGradingKeySql,
+  insertLearningQuizFormTemplateSql,
   insertLearningFormTemplateSql,
   insertLearningFormVersionSql,
   insertLearningCheckpointSubmissionSql,
@@ -111,6 +116,45 @@ function publicAssignment(row) {
 
 function internalResultFromRow(row) {
   return asObject(row.result_json);
+}
+
+function parseQuizPublishInput({ title, definition: rawDefinition, gradingKey: rawGradingKey }) {
+  let definition;
+  let gradingKey;
+  try {
+    definition = parseFormDefinition(rawDefinition);
+    gradingKey = parseFormGradingKey(rawGradingKey);
+  } catch {
+    throw new LearningError('INVALID_QUIZ_DEFINITION', 'Định nghĩa quiz hoặc grading key không hợp lệ.', 400);
+  }
+  if (definition.kind !== 'quiz' || definition.answerReleasePolicy !== 'hidden') {
+    throw new LearningError('INVALID_QUIZ_DEFINITION', 'Quiz phải là kind quiz và ẩn đáp án.', 400);
+  }
+  if (definition.title !== title || gradingKey.formVersionId !== definition.formVersionId) {
+    throw new LearningError('QUIZ_VERSION_MISMATCH', 'Tiêu đề hoặc grading key không khớp form version.', 400);
+  }
+
+  const items = definition.blocks.flatMap(block => block.items);
+  const itemById = new Map(items.map(item => [item.itemVersionId, item]));
+  for (const [itemVersionId, privateKey] of Object.entries(gradingKey.items)) {
+    const item = itemById.get(itemVersionId);
+    if (!item || item.graderType === 'none' || item.graderType !== privateKey.graderType) {
+      throw new LearningError('GRADING_KEY_MISMATCH', 'Grading key không khớp item quiz.', 400);
+    }
+  }
+  for (const item of items) {
+    if (item.graderType === 'none') continue;
+    if (item.graderType === 'unordered_group_slot') {
+      if (!item.groupId || !gradingKey.groups[item.groupId]) {
+        throw new LearningError('GRADING_KEY_MISMATCH', 'Quiz thiếu grading key cho nhóm lựa chọn.', 400);
+      }
+      continue;
+    }
+    if (!gradingKey.items[item.itemVersionId]) {
+      throw new LearningError('GRADING_KEY_MISMATCH', 'Quiz thiếu grading key cho item.', 400);
+    }
+  }
+  return { definition, gradingKey };
 }
 
 function buildStudentCourseJourney(row) {
@@ -648,6 +692,76 @@ export function createLearningService({ pool }) {
       });
     },
 
+    async publishQuizForm({ reviewer, title, courseCode, classId, sessionNumber, opensAt, closesAt, definition: rawDefinition, gradingKey: rawGradingKey }) {
+      const { definition, gradingKey } = parseQuizPublishInput({ title, definition: rawDefinition, gradingKey: rawGradingKey });
+      const definitionHash = sha256(stableStringify(definition));
+      const gradingHash = sha256(stableStringify(gradingKey));
+      return withTransaction(pool, async client => {
+        const classResult = await client.query(authorizeLearningClassSql, [
+          reviewer.email,
+          reviewer.canAccessAllClasses,
+          classId
+        ]);
+        const targetClass = assertSingleRow(classResult, 'CLASS_ACCESS_DENIED', 'Bạn không có quyền tạo phiếu cho lớp này.', 403);
+        const rosterResult = await client.query(fetchLearningRosterForClassSql, [classId]);
+        if (!rosterResult.rowCount) {
+          throw new LearningError('CLASS_ROSTER_EMPTY', 'Lớp chưa có học viên hợp lệ để chốt roster.', 409);
+        }
+
+        const templateResult = await client.query(insertLearningQuizFormTemplateSql, [title, reviewer.email]);
+        const template = assertSingleRow(templateResult, 'FORM_TEMPLATE_NOT_CREATED', 'Không tạo được mẫu phiếu.', 500);
+        await client.query(insertLearningFormVersionSql, [
+          definition.formVersionId,
+          template.template_id,
+          json(definition),
+          definitionHash,
+          reviewer.email
+        ]);
+        await client.query(insertLearningFormGradingKeySql, [
+          definition.formVersionId,
+          json(gradingKey),
+          gradingHash
+        ]);
+        const assignmentResult = await client.query(insertLearningAssignmentSql, [
+          definition.formVersionId,
+          courseCode || null,
+          classId,
+          targetClass.class_name,
+          sessionNumber,
+          title,
+          opensAt || null,
+          closesAt || null,
+          reviewer.email
+        ]);
+        const assignment = assertSingleRow(assignmentResult, 'ASSIGNMENT_NOT_CREATED', 'Không gán được quiz cho lớp.', 500);
+        for (const roster of rosterResult.rows) {
+          await client.query(insertLearningAssignmentRosterSql, [
+            assignment.assignment_id,
+            roster.student_ref,
+            roster.student_id,
+            roster.student_name,
+            roster.display_discriminator
+          ]);
+        }
+        for (const block of definition.blocks) {
+          await client.query(insertLearningAssignmentBlockReleaseSql, [
+            assignment.assignment_id,
+            block.blockId,
+            block.checkpoint,
+            block.checkpoint === 1 ? 'open' : 'locked',
+            reviewer.email
+          ]);
+        }
+        return {
+          assignmentId: assignment.assignment_id,
+          publicToken: assignment.public_token,
+          formVersionId: definition.formVersionId,
+          definitionHash,
+          rosterCount: rosterResult.rowCount
+        };
+      });
+    },
+
     async getTeacherDashboard({ assignmentId, reviewer }) {
       const result = await pool.query(fetchLearningTeacherDashboardSql, [
         assignmentId,
@@ -687,6 +801,53 @@ export function createLearningService({ pool }) {
         generatedAt: row.generated_at,
         students: asArray(row.students).map(teacherLiveStudent)
       };
+    },
+
+    async sendTeacherSessionFeedback({ assignmentId, studentRef, noteText, expectedRevision,
+      operationId, reviewer }) {
+      return withTransaction(pool, async client => {
+        // Khóa bản ghi lớp–học viên để hai lần gửi đồng thời không ghi đè nhau.
+        const target = await client.query(authorizeLearningSessionFeedbackTargetSql, [
+          assignmentId, studentRef, reviewer.email, reviewer.canAccessAllClasses
+        ]);
+        assertSingleRow(target, 'SESSION_FEEDBACK_ACCESS_DENIED',
+          'Không tìm thấy học viên trong phiếu bạn được phân công.', 403);
+
+        const prior = await client.query(findLearningSessionFeedbackByOperationSql, [operationId]);
+        if (prior.rowCount) {
+          const row = prior.rows[0];
+          if (row.assignment_id !== assignmentId || row.student_ref !== studentRef
+            || row.note_text !== noteText || row.revision !== expectedRevision + 1) {
+            throw new LearningError('SESSION_FEEDBACK_IDEMPOTENCY_CONFLICT',
+              'Mã thao tác đã được dùng cho nhận xét khác.', 409);
+          }
+          return { revision: row.revision, noteText: row.note_text, sentAt: row.sent_at,
+            studentRef: row.student_ref, replayed: true };
+        }
+
+        const latest = await client.query(fetchLatestLearningSessionFeedbackSql,
+          [assignmentId, studentRef]);
+        const currentRevision = Number(latest.rows[0]?.revision || 0);
+        if (currentRevision !== expectedRevision) {
+          throw new LearningError('SESSION_FEEDBACK_STALE',
+            'Nhận xét đã thay đổi; hãy mở lại bài trước khi gửi.', 409);
+        }
+        await client.query(insertLearningSessionFeedbackSql, [
+          crypto.randomUUID(), assignmentId, studentRef, currentRevision + 1,
+          noteText, reviewer.email, operationId
+        ]);
+        const readback = await client.query(findLearningSessionFeedbackByOperationSql,
+          [operationId]);
+        const saved = assertSingleRow(readback, 'SESSION_FEEDBACK_READBACK_FAILED',
+          'Chưa xác nhận được nhận xét vừa gửi.', 500);
+        if (saved.assignment_id !== assignmentId || saved.student_ref !== studentRef
+          || saved.note_text !== noteText || Number(saved.revision) !== currentRevision + 1) {
+          throw new LearningError('SESSION_FEEDBACK_READBACK_MISMATCH',
+            'Nhận xét lưu không khớp dữ liệu đã gửi.', 500);
+        }
+        return { revision: Number(saved.revision), noteText: saved.note_text,
+          sentAt: saved.sent_at, studentRef: saved.student_ref, replayed: false };
+      });
     },
 
     async createStudentProgressLink({ assignmentId, studentRef, accessToken, expiresInDays,

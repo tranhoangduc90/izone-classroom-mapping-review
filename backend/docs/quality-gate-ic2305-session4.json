@@ -1,0 +1,410 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log IC2305 Buổi 4 và nhận xét Speaking",
+  "change_id": "ic2305-session4-speaking-feedback-20260924",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "concurrent",
+    "authentication",
+    "personal_data",
+    "external_side_effects"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Phiếu lớp thật, nhận xét riêng tư và điểm danh có tác động ngoài hệ thống.",
+    "user": "Học viên IC2305 và giảng viên được phân công",
+    "problem": "Buổi 4 cần phiếu đúng tài liệu và giảng viên chưa gửi được nhận xét Speaking riêng theo học viên.",
+    "outcome": "Học viên nộp đúng phiếu và đọc được nhận xét Speaking do giảng viên gửi cho riêng mình.",
+    "out_of_scope": [
+      "Không sửa hoặc xóa câu trả lời cũ.",
+      "Không dùng AI viết nhận xét của giảng viên."
+    ],
+    "plain_language_summary": "Tạo phiếu Buổi 4 và gửi nhận xét Speaking đúng người, có xác nhận sau khi lưu."
+  },
+  "change_package": {
+    "proposal": "Thêm nội dung phiếu và luồng nhận xét Speaking theo assignment–học viên.",
+    "behavior_baseline": "Phiếu Buổi 4 cũ có nội dung khác; lời nhắn hiện gắn với báo cáo định kỳ.",
+    "deltas": [
+      {
+        "id": "D-FORM",
+        "operation": "ADDED",
+        "behavior": "Phiếu từ Buổi 4.docx có hai phần và đáp án riêng tư.",
+        "test_ids": [
+          "T-FORM",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "D-FEEDBACK",
+        "operation": "ADDED",
+        "behavior": "Giảng viên gửi nhận xét Speaking; đúng học viên đọc lại được.",
+        "test_ids": [
+          "T-FEEDBACK",
+          "T-ACCESS",
+          "T-RETRY",
+          "T-UI"
+        ]
+      },
+      {
+        "id": "D-REPLACE",
+        "operation": "MODIFIED",
+        "behavior": "Phiếu cũ lưu trữ sau khi phiếu mới được tạo và đọc lại đúng.",
+        "test_ids": [
+          "T-ROLLBACK",
+          "T-REG"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "requirements": [
+    {
+      "id": "R-FORM",
+      "statement": "Phiếu giữ nguyên nội dung DOCX, mở phần theo giảng viên và chỉ nộp cuối đủ trường mới điểm danh.",
+      "test_ids": [
+        "T-FORM",
+        "T-REG"
+      ]
+    },
+    {
+      "id": "R-FEEDBACK",
+      "statement": "Nhận xét Speaking tùy chọn được gửi riêng và hiện trên tổng hợp đúng học viên.",
+      "test_ids": [
+        "T-FEEDBACK",
+        "T-ACCESS",
+        "T-UI"
+      ]
+    },
+    {
+      "id": "R-REPLACE",
+      "statement": "Thay phiếu Buổi 4 cũ bằng phiếu mới trong một transaction, giữ dữ liệu lịch sử.",
+      "test_ids": [
+        "T-ROLLBACK",
+        "T-REG"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I-PRIVACY",
+      "statement": "Đáp án và nhận xét cá nhân không xuất hiện trên API hoặc giao diện công khai.",
+      "test_ids": [
+        "T-ACCESS",
+        "T-FORM"
+      ]
+    },
+    {
+      "id": "I-EXISTING",
+      "statement": "Assignment và bài nộp Buổi 4 hiện có không bị thay đổi ngoài quyết định được duyệt.",
+      "test_ids": [
+        "T-REG",
+        "T-ROLLBACK"
+      ]
+    },
+    {
+      "id": "I-RETRY",
+      "statement": "Gửi lặp hoặc mất phản hồi không tạo hai nhận xét hay gửi sai người.",
+      "test_ids": [
+        "T-RETRY",
+        "T-FEEDBACK"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-FORM",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Template test: hai phần, 8 mục, đáp án ẩn; Playwright 390 px đọc đúng ô Listening và Phần 2."
+    },
+    {
+      "id": "T-FEEDBACK",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: giảng viên gửi, dashboard đọc lại, học viên thấy trong course journey."
+    },
+    {
+      "id": "T-INVALID",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "API từ chối nhận xét trống hoặc quá 500 ký tự trước khi chạm database."
+    },
+    {
+      "id": "T-ACCESS",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: người ngoài lớp bị chặn, học viên khác không thấy; quyền phân công lớp trực tiếp được kiểm."
+    },
+    {
+      "id": "T-RETRY",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: cùng operation ID chỉ một bản; revision cũ bị từ chối."
+    },
+    {
+      "id": "T-ROLLBACK",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "PGlite: sai lớp rollback, trạng thái cũ giữ published; gửi lặp thay phiếu an toàn."
+    },
+    {
+      "id": "T-UI",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Playwright localhost 390 px: màn giảng viên gửi và màn học viên hiển thị nhận xét; dữ liệu giả."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Backend full suite 167/167 đạt; mẫu Buổi 3 và phiếu cũ vẫn đạt."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "plan-v1",
+    "tasks": [
+      {
+        "id": "TASK-FORM",
+        "result": "Template và publish plan an toàn cho Buổi 4.",
+        "depends_on": [],
+        "consumes": [
+          "Buổi 4.docx",
+          "R-FORM"
+        ],
+        "produces": [
+          "definition",
+          "grading key",
+          "publish plan"
+        ],
+        "contract": "Không sửa assignment đã có; đáp án riêng tư.",
+        "test_ids": [
+          "T-FORM",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "Focused tests",
+          "readback plan"
+        ],
+        "decision_inputs": [
+          "Đức chọn thay phiếu cũ bằng phiếu mới, giữ dữ liệu lịch sử."
+        ],
+        "affected_future_tasks": [
+          "TASK-FEEDBACK"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "TASK-FEEDBACK",
+        "result": "Giảng viên gửi và học viên đọc đúng nhận xét Speaking.",
+        "depends_on": [],
+        "consumes": [
+          "R-FEEDBACK",
+          "I-PRIVACY"
+        ],
+        "produces": [
+          "migration",
+          "API",
+          "teacher UI",
+          "student UI"
+        ],
+        "contract": "Phân quyền theo lớp, assignment và học viên; gửi có phiên bản.",
+        "test_ids": [
+          "T-FEEDBACK",
+          "T-ACCESS",
+          "T-RETRY",
+          "T-UI"
+        ],
+        "evidence_required": [
+          "API tests",
+          "browser readback"
+        ],
+        "decision_inputs": [
+          "Dùng nhận xét theo assignment, không theo báo cáo định kỳ."
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Gói phát hành đã dựng và phương án thay phiếu cũ có kiểm thử rollback.",
+        "depends_on": [
+          "TASK-FORM",
+          "TASK-FEEDBACK"
+        ],
+        "consumes": [
+          "verified code",
+          "authorization"
+        ],
+        "produces": [
+          "release evidence"
+        ],
+        "contract": "Chỉ phát hành khi có backup, rollback và readback.",
+        "test_ids": [
+          "T-ROLLBACK",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "Full suite 167/167",
+          "Docker image build và hash readback",
+          "Kiểm dữ liệu phiếu cũ read-only"
+        ],
+        "decision_inputs": [
+          "Quyết định assignment cũ và cổng production."
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "PASS",
+    "risks": [
+      {
+        "id": "R-OLD",
+        "description": "Thay sai phiếu cũ có thể mất đường xem lịch sử.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Đọc production: phiếu cũ 18 roster, 0 bài nộp; script khóa đúng ID, phiên bản, lớp, tiêu đề và đọc lại số bài nộp.",
+        "test_ids": [
+          "T-REG"
+        ]
+      },
+      {
+        "id": "R-LEAK",
+        "description": "Nhận xét Speaking có thể lộ cho học viên khác nếu thiếu kiểm identity.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Kiểm quyền server và test hai học viên khác nhau.",
+        "test_ids": [
+          "T-ACCESS"
+        ]
+      },
+      {
+        "id": "R-PROD",
+        "description": "Image production có quyền lớp và quiz chưa gộp vào main.",
+        "probability": 1,
+        "impact": 3,
+        "score": 3,
+        "severity": "P2",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Ghép đúng hai thay đổi đang chạy; Dockerfile chặn nếu hash image gốc đổi.",
+        "test_ids": [
+          "T-REG"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {
+    "external_partial": "Không gọi dịch vụ ngoài trên đường gửi nhận xét; điểm danh hiện có được kiểm hồi quy."
+  },
+  "cross_constraints": [
+    {
+      "id": "FEEDBACK-LENGTH",
+      "left": {
+        "name": "max_text_frontend",
+        "value": 500
+      },
+      "operator": "==",
+      "right": {
+        "name": "max_text_api_database",
+        "value": 500
+      },
+      "status": "passed",
+      "evidence": "Textarea, Zod API và CHECK database đều giới hạn 500 ký tự."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-FIXTURE",
+      "target": "PGlite dữ liệu giả",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Nhận xét một bản, thay phiếu giữ số bài nộp và test rollback đạt."
+    },
+    {
+      "id": "M-IMAGE",
+      "target": "Image ứng viên trên VPS",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Docker build hash-guard đạt; image sha256:a3c2c67b535c199d1382d027cddeefe26f35aced83513da0ab76eb4f0828b9de; publisher và helper readback đúng hash."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-FULL",
+      "scope": "full_suite",
+      "command": "npm test (backend)",
+      "tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02",
+      "captured_at": "2026-09-24T05:34:27.615898+00:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 167,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "E:/Codex-Data/ic2305-session4-backend-full-suite.log; 167/167 đạt."
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Đối chiếu DOCX, luồng nhận xét riêng, thay phiếu cũ, diff và bộ kiểm thử trên đúng digest."
+  },
+  "context_handoff": {
+    "summary": "Mã phiếu, nhận xét và thay phiếu đã qua kiểm thử; image ứng viên đã dựng.",
+    "decisions": [
+      "Đức chọn thay phiếu cũ; dữ liệu cũ được giữ."
+    ],
+    "completed": [
+      "TASK-FORM",
+      "TASK-FEEDBACK",
+      "TASK-RELEASE"
+    ],
+    "next_step": "Sao lưu database, áp migration, chuyển image, phát hành Pages và chạy publisher.",
+    "open_risks": [],
+    "tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "ready",
+    "base_tree_revision": "backend:385652e;pages:4bf0c07",
+    "current_tree_revision": "sha256:5a2cfd1af0574037c866b471665915a9cde1e90a0eaa3f47db271de061691a02",
+    "production_authorized": true,
+    "rollback": "Hoàn tác commit và migration riêng nếu chưa có nhận xét; sau khi có dữ liệu giữ nguyên và forward-fix.",
+    "deployment_readback": "not_run",
+    "operational_observation": "not_run",
+    "open_risks": [
+      {
+        "severity": "P2",
+        "summary": "Cần quan sát sau phát hành bằng dữ liệu thật."
+      }
+    ]
+  }
+}
