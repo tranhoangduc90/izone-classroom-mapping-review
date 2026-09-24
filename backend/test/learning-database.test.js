@@ -1043,6 +1043,45 @@ test('outbox lease đúng một lần và output sai identity bị fail-closed',
   await database.close();
 });
 
+test('outbox tự nhận lại job processing khi lease đã hết sau khi worker dừng', async () => {
+  const { database } = await setupDatabase();
+  const pool = poolFrom(database);
+  await database.query(`INSERT INTO learning.outbox_job (
+    job_type, entity_key, unit_key, operation_key, idempotency_key, payload
+  ) VALUES ('sync_portal_attendance', 'student:lease-test', 'class:2139:session:8',
+    'job:lease-test', 'job:lease-test:v1', '{}'::jsonb);`);
+
+  const [first] = await claimLearningJobs({
+    pool, workerId: 'worker-before-restart', limit: 1, leaseSeconds: 60,
+    jobTypes: ['sync_portal_attendance']
+  });
+  assert.ok(first);
+  assert.equal((await claimLearningJobs({
+    pool, workerId: 'worker-too-early', limit: 1, jobTypes: ['sync_portal_attendance']
+  })).length, 0);
+
+  await database.query(`UPDATE learning.outbox_job SET lease_until = now() - interval '1 second'
+    WHERE id = $1::uuid;`, [first.id]);
+  const [recovered] = await claimLearningJobs({
+    pool, workerId: 'worker-after-restart', limit: 1, jobTypes: ['sync_portal_attendance']
+  });
+  assert.equal(recovered?.id, first.id);
+  assert.equal(recovered.attemptCount, 2);
+  const finished = await processLearningJob({
+    pool, workerId: 'worker-after-restart', job: recovered,
+    handler: async job => ({
+      entityKey: job.entityKey, unitKey: job.unitKey,
+      operationKey: job.operationKey, idempotencyKey: job.idempotencyKey,
+      status: 'complete'
+    })
+  });
+  assert.equal(finished.status, 'complete');
+  assert.equal((await claimLearningJobs({
+    pool, workerId: 'worker-third', limit: 1, jobTypes: ['sync_portal_attendance']
+  })).length, 0);
+  await database.close();
+});
+
 test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal lỗi rồi hồi phục không làm mất biên nhận', async () => {
   const { database, service } = await setupDatabase();
   const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };

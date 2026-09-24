@@ -48,6 +48,13 @@ const envSchema = z.object({
       message: 'ERP_SYNC_SECRET là bắt buộc khi bật đồng bộ điểm danh Progress Log.'
     });
   }
+  if (value.NODE_ENV === 'production' && value.LEARNING_ENABLED && !value.LEARNING_ATTENDANCE_SYNC_URL) {
+    context.addIssue({
+      code: 'custom',
+      path: ['LEARNING_ATTENDANCE_SYNC_URL'],
+      message: 'LEARNING_ATTENDANCE_SYNC_URL là bắt buộc khi Progress Log chạy ở production.'
+    });
+  }
   if (value.MINI_TEST_SYNC_SECRET && value.MINI_TEST_SYNC_SECRET.length < 32) {
     context.addIssue({ code: 'custom', path: ['MINI_TEST_SYNC_SECRET'], message: 'MINI_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
   }

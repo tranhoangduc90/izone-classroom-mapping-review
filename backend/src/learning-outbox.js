@@ -12,9 +12,10 @@ const jobOutputSchema = z.object({
 const claimJobsSql = `WITH candidates AS (
   SELECT id
   FROM learning.outbox_job
-  WHERE status IN ('queued', 'retry_wait')
+  WHERE status IN ('queued', 'retry_wait', 'processing')
     AND ($4::text[] IS NULL OR job_type = ANY($4::text[]))
-    AND next_attempt_at <= now()
+  AND next_attempt_at <= now()
+    AND (status <> 'processing' OR lease_until < now())
     AND (lease_until IS NULL OR lease_until < now())
   ORDER BY next_attempt_at, created_at
   LIMIT $2::integer
