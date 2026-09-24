@@ -3,6 +3,8 @@
 // Kết quả: số cặp lớp–đề được bật; không ghép Classroom hay sửa bài học viên.
 // Khi lỗi: rollback toàn bộ, không mở một phần lớp và không in ID học viên.
 
+import { createAssessmentSchemaPool } from '../../../src/assessment-schema-pool.js';
+
 const SLUGS = ['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56'];
 const slugSet = new Set(SLUGS);
 
@@ -47,8 +49,17 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
     && input.summary?.eligibleStudents === input.eligibleMembers.length
     && input.summary?.testCount === SLUGS.length,
   'ACCESS_SOURCE_LINEAGE_INVALID');
-  requireCondition(expectedDatabase === 'izone_mapping_k56_ic2264'
+  requireCondition(expectedDatabase === 'mapping_db'
+    || expectedDatabase === 'pglite_shared_test'
+    || expectedDatabase === 'izone_mapping_k56_ic2264'
     || expectedDatabase === 'pglite_test', 'ACCESS_TARGET_NOT_ALLOWED');
+  // Dữ liệu vào: tên kho đích đã xác nhận trước giao dịch.
+  // Việc chính: khi dùng kho chung, chỉ đổi truy vấn bài thi sang schema K56.
+  // Kết quả: lớp mapping vẫn đọc chung; bảng K67 không thể bị bật nhầm.
+  // Khi lỗi: role K56 không có quyền schema K67 nên truy vấn lọt sẽ lỗi đóng.
+  if (expectedDatabase === 'mapping_db' || expectedDatabase === 'pglite_shared_test') {
+    db = createAssessmentSchemaPool(db, { family: 'k56' });
+  }
   const classes = new Map();
   for (const row of input.scopeClasses) {
     const id = String(row.class_id);
@@ -81,8 +92,8 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
     const gate = (await db.query(`SELECT
       to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0];
     requireCondition(gate?.exists, 'ACCESS_GATE_MISSING');
-    await db.query(`LOCK TABLE mapping.classroom_course_mapping,
-      assessment.term_test_roster, assessment.term_test_class_access
+    await db.query(`LOCK TABLE assessment.term_test_roster,
+      assessment.term_test_class_access
       IN SHARE ROW EXCLUSIVE MODE`);
     const definitions = (await db.query(`SELECT slug, is_active
       FROM assessment.test_definition WHERE slug = ANY($1::text[])`, [SLUGS])).rows;
@@ -91,7 +102,8 @@ export async function enableK56ClassAccess(db, input, expectedDatabase) {
     'ACCESS_TEST_DEFINITIONS_NOT_READY');
     const mapped = (await db.query(`SELECT erp_course_class_id::text AS class_id,
       erp_class_name_snapshot AS class_code FROM mapping.classroom_course_mapping
-      WHERE erp_course_class_id = ANY($1::bigint[])`, [[...classes.keys()]])).rows;
+      WHERE erp_course_class_id = ANY($1::bigint[])
+      FOR SHARE`, [[...classes.keys()]])).rows;
     requireCondition(mapped.length === classes.size
       && mapped.every(row => classes.get(row.class_id) === row.class_code),
     'ACCESS_CLASS_MAPPING_MISMATCH');

@@ -1,4 +1,6 @@
 import pg from 'pg';
+import { createAssessmentSchemaPool } from './assessment-schema-pool.js';
+import { profileForConfig } from './deployment-profile.js';
 
 const { Pool } = pg;
 
@@ -16,7 +18,7 @@ export function createDatabasePool(config) {
     // Không ghi connection string hoặc dữ liệu truy vấn vào log.
     console.error('PostgreSQL pool gặp lỗi kết nối nền.');
   });
-  return pool;
+  return createAssessmentSchemaPool(pool, profileForConfig(config));
 }
 
 // Progress Log dùng pool/role riêng để không kế thừa quyền rộng của API mapping.

@@ -21,6 +21,8 @@ from reconcile_live_gate import FILES, read_live_files, smoke_sql, try_overlay
 
 
 BACKEND = Path(__file__).resolve().parents[3]
+RELEASE = Path(__file__).resolve().parent
+EXPORT_ROOT = Path("E:/Codex-Data/izone-release-candidates")
 TESTS = (
     "term-test-k56-class-access-database.test.js",
     "k56-portal-class-scope.test.js",
@@ -33,13 +35,18 @@ TEST_MIGRATIONS = (
     "202609230002_term_test_listening_checkpoint.sql",
     "202609240001_term_test_k56_class_access.sql",
     "202609240002_term_test_k56_roster_eligibility.sql",
+    "202609240003_k56_assessment_schema.sql",
+    "202609240004_k56_roster_eligibility.sql",
+    "202609240005_k56_class_access.sql",
+    "202609240006_k56_shared_api_grants.sql",
 )
 BROADER_TESTS = (
     "api.test.js", "term-tests.test.js", "term-test-writing-grading.test.js",
     "writing-tests.test.js", "writing-tests-database.test.js",
 )
 UNIFIED_BRANCH_MODULES = (
-    "app.js", "auth.js", "config.js", "deployment-profile.js",
+    "app.js", "auth.js", "assessment-schema-pool.js", "config.js", "db.js",
+    "deployment-profile.js",
     "learning-contracts.js", "learning-domain.js", "learning-outbox.js",
     "learning-routes.js", "learning-service.js", "learning-sql.js",
     "server.js", "sql.js", "teacher-class-access-sql.js",
@@ -65,7 +72,18 @@ function walk(dir) {
   }
 }
 walk('src');
-process.stdout.write(JSON.stringify(files));
+const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const packageHashes = {};
+for (const name of ['package.json', 'package-lock.json']) {
+  packageHashes[name] = fs.existsSync(name)
+    ? (await import('node:crypto')).createHash('sha256')
+      .update(fs.readFileSync(name)).digest('hex')
+    : null;
+}
+process.stdout.write(JSON.stringify({files, packageHashes,
+  dependencies: packageJson.dependencies ?? {},
+  devDependencies: packageJson.devDependencies ?? {},
+  nodeVersion: process.version}));
 """
 
 
@@ -90,9 +108,18 @@ def read_live_tree():
         stderr.read()
         if stdout.channel.recv_exit_status() != 0:
             raise RuntimeError("LIVE_SOURCE_TREE_READ_FAILED")
+        image_stdin, image_stdout, image_stderr = client.exec_command(
+            "docker inspect --format '{{.Image}}|{{.Config.Image}}' izone-k56-ic2264-api",
+            timeout=20)
+        image_stdin.channel.shutdown_write()
+        image = image_stdout.read().decode("utf-8").strip()
+        image_stderr.read()
+        if image_stdout.channel.recv_exit_status() != 0:
+            raise RuntimeError("LIVE_IMAGE_READ_FAILED")
     finally:
         client.close()
-    encoded = json.loads(body.decode("utf-8"))
+    remote = json.loads(body.decode("utf-8"))
+    encoded = remote.get("files") or {}
     if not encoded or not set(FILES).issubset(encoded):
         raise RuntimeError("LIVE_SOURCE_TREE_INCOMPLETE")
     for name in encoded:
@@ -100,8 +127,69 @@ def read_live_tree():
         if (not name.startswith("src/") or pure.is_absolute()
                 or ".." in pure.parts or not name.endswith(".js")):
             raise RuntimeError("LIVE_SOURCE_TREE_UNSAFE_PATH")
-    return {name: base64.b64decode(value, validate=True)
-            for name, value in encoded.items()}
+    image_parts = image.split("|")
+    if (len(image_parts) != 2 or not image_parts[0].startswith("sha256:")
+            or image_parts[1] != "izone-k56-live-results:20260920.1-teacher-session"
+            or not all(remote.get("packageHashes", {}).get(name)
+                       for name in ("package.json", "package-lock.json"))):
+        raise RuntimeError("LIVE_IMAGE_OR_PACKAGE_UNEXPECTED")
+    local_package = json.loads((BACKEND / "package.json").read_text(encoding="utf-8"))
+    if (remote["dependencies"] != local_package.get("dependencies")
+            or remote["devDependencies"] != local_package.get("devDependencies")):
+        raise RuntimeError("LIVE_DEPENDENCY_VERSIONS_DIFFER")
+    return ({name: base64.b64decode(value, validate=True)
+             for name, value in encoded.items()},
+            {"imageId": image_parts[0], "imageTag": image_parts[1],
+             "packageHashes": remote["packageHashes"],
+             "nodeVersion": remote["nodeVersion"]})
+
+
+def seal_source_files(files):
+    """Dấu toàn cây dùng cùng hợp đồng đường dẫn với bộ kiểm trong Docker."""
+    seal = hashlib.sha256()
+    for relative in sorted(files):
+        seal.update(relative.encode("utf-8") + b"\0")
+        seal.update(files[relative])
+        seal.update(b"\0")
+    return seal.hexdigest()
+
+
+def export_build_context(stage_root, candidate_sha, base_sha, base_meta, test_summary):
+    """Chỉ lưu bản đã qua test vào ổ E; không sao chép .env hoặc dữ liệu học viên."""
+    root = EXPORT_ROOT.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    exported = Path(tempfile.mkdtemp(prefix="k56-class-access-", dir=root)).resolve()
+    if not exported.is_relative_to(root):
+        raise RuntimeError("UNSAFE_EXPORT_PATH")
+    shutil.copytree(stage_root / "src", exported / "src")
+    release_out = exported / "ops" / "releases" / "k56-class-access-20260924"
+    release_out.mkdir(parents=True)
+    for name in ("Dockerfile", "verify-source-hashes.mjs"):
+        shutil.copy2(RELEASE / name, release_out / name)
+    migrations_out = exported / "ops" / "migrations"
+    migrations_out.mkdir(parents=True)
+    for name in TEST_MIGRATIONS[-4:]:
+        shutil.copy2(BACKEND / "ops" / "migrations" / name, migrations_out / name)
+    verification = subprocess.run(
+        ["node", str(release_out / "verify-source-hashes.mjs"),
+         str(exported / "src"), candidate_sha], capture_output=True,
+        encoding="utf-8", errors="replace", timeout=20)
+    if verification.returncode != 0:
+        raise RuntimeError("EXPORTED_SOURCE_HASH_MISMATCH")
+    manifest = {
+        "toolOutcome": "success", "businessOutcome": "tested_build_context_exported",
+        "candidateSourceSha256": candidate_sha,
+        "baseSourceSha256": base_sha,
+        "baseImageId": base_meta["imageId"],
+        "baseImageTag": base_meta["imageTag"],
+        "basePackageHashes": base_meta["packageHashes"],
+        "baseNodeVersion": base_meta["nodeVersion"],
+        "testSummary": test_summary, "productionWrites": 0,
+        "imageBuilt": False, "productionDeployed": False,
+    }
+    (exported / "release-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return exported.as_posix()
 
 
 def run_stage():
@@ -110,7 +198,8 @@ def run_stage():
     # Kết quả: số test đạt/không đạt; không ảnh hưởng production.
     # Khi lỗi: trả mã lỗi và không tuyên bố release sẵn sàng.
     controls = read_live_files()
-    tree = read_live_tree()
+    tree, base_meta = read_live_tree()
+    base_source_sha = seal_source_files(tree)
     if "--audit-admin" in sys.argv:
         auth = tree["src/auth.js"].decode("utf-8")
         sql = tree["src/sql.js"].decode("utf-8")
@@ -130,6 +219,9 @@ def run_stage():
         raise RuntimeError("LIVE_OVERLAY_CONFLICT")
     selected_tests = TESTS + (("production-profiles.test.js",)
                               if "--profile-tests" in sys.argv else ())
+    if "--export-context" in sys.argv and not ({"--unified-candidate", "--full-suite"}
+                                               <= set(sys.argv)):
+        raise RuntimeError("EXPORT_REQUIRES_FULL_UNIFIED_SUITE")
     if "--broader-tests" in sys.argv:
         selected_tests += BROADER_TESTS
     if "--full-suite" in sys.argv:
@@ -217,6 +309,7 @@ def run_stage():
             source_seal.update(relative.encode("utf-8") + b"\0")
             source_seal.update(candidate_file.read_bytes())
             source_seal.update(b"\0")
+        candidate_sha = source_seal.hexdigest()
         command = ["node", "--test", *[f"test/{name}" for name in selected_tests]]
         process = subprocess.run(command, cwd=stage_root, capture_output=True,
                                  timeout=240, encoding="utf-8", errors="replace")
@@ -231,11 +324,19 @@ def run_stage():
                            if failed_at >= 0 else [])
         test_locations = re.findall(r"term-tests-database\.test\.js:\d+:\d+",
                                     process.stdout)
+        exported = (export_build_context(stage_root, candidate_sha, base_source_sha,
+                                         base_meta, summary_lines)
+                    if process.returncode == 0 and "--export-context" in sys.argv
+                    else None)
         return {"toolOutcome": "success" if process.returncode == 0 else "failure",
                 "businessOutcome": "stage_tests_passed" if process.returncode == 0
                 else "stage_tests_failed", "exitCode": process.returncode,
                 "sourceFiles": len(tree), "overlayFiles": len(candidates),
-                "candidateSourceSha256": source_seal.hexdigest(),
+                "candidateSourceSha256": candidate_sha,
+                "baseSourceSha256": base_source_sha,
+                "baseImageId": base_meta["imageId"],
+                "basePackageHashes": base_meta["packageHashes"],
+                "buildContext": exported,
                 "candidateMode": "unified_branch_modules" if "--unified-candidate" in sys.argv
                 else "live_gate_overlay",
                 "sqlSmokePassed": sql_smoke["passed"], "testSummary": summary_lines,

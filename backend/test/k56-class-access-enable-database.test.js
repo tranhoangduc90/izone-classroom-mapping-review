@@ -88,6 +88,14 @@ function testDatabase(db) {
   };
 }
 
+function sharedTestDatabase(db) {
+  return {
+    query: (sql, params) => sql === 'SELECT current_database() AS name'
+      ? Promise.resolve({ rows: [{ name: 'pglite_shared_test' }] })
+      : db.query(sql, params)
+  };
+}
+
 async function accessRows(db) {
   return (await db.query(`SELECT test_slug,
     erp_course_class_id::text AS class_id, enabled, source, updated_at
@@ -111,6 +119,32 @@ test('chỉ bật ba đề sau khi từng roster đã khớp, giữ pilot', asyn
     }
     assert.equal(after.filter(row => row.class_id === '2322'
       && row.source === 'k56_erp_ongoing_sync').length, 3);
+  } finally { await db.close(); }
+});
+
+test('kho chung chỉ mở cổng K56, không ghi cổng hoặc định nghĩa K67', async () => {
+  const db = await setup();
+  try {
+    await db.exec(`
+      ALTER SCHEMA assessment RENAME TO assessment_k56;
+      CREATE SCHEMA assessment;
+      CREATE TABLE assessment.test_definition (slug TEXT PRIMARY KEY);
+      CREATE TABLE assessment.term_test_class_access (
+        test_slug TEXT NOT NULL, erp_course_class_id BIGINT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT false
+      );
+      INSERT INTO assessment.test_definition VALUES ('term-test-1');
+      INSERT INTO assessment.term_test_class_access VALUES ('term-test-1', 2207, true);
+    `);
+    const result = await enableK56ClassAccess(sharedTestDatabase(db), input(),
+      'pglite_shared_test');
+    assert.equal(result.enabledClassTestPairs, 6);
+    const k56 = await db.query(`SELECT count(*)::int AS count
+      FROM assessment_k56.term_test_class_access WHERE enabled`);
+    assert.equal(k56.rows[0].count, 6);
+    assert.deepEqual((await db.query(`SELECT test_slug, erp_course_class_id::int AS class_id,
+      enabled FROM assessment.term_test_class_access`)).rows,
+    [{ test_slug: 'term-test-1', class_id: 2207, enabled: true }]);
   } finally { await db.close(); }
 });
 

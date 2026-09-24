@@ -3,6 +3,7 @@ import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
+import { loadConfig } from '../src/config.js';
 import { resolveDeploymentProfile } from '../src/deployment-profile.js';
 import { listTermTestTeacherOptionsLegacySql, listTermTestTeacherResultsLegacySql } from '../src/sql.js';
 
@@ -16,6 +17,16 @@ test('hai profile production giữ riêng cổng lớp và đường cập nhậ
   assert.equal(k67.teacherOptionsMode, 'portal-metadata');
   assert.equal(k67.writingNotifierEnabled, true);
   assert.throws(() => resolveDeploymentProfile('unknown'));
+});
+
+test('cấu hình khởi động giữ đúng profile K56 từ biến môi trường', () => {
+  const config = loadConfig({
+    NODE_ENV: 'test', DATABASE_URL: 'postgresql://test.invalid/local',
+    AUTH_MODE: 'legacy', LEGACY_REVIEW_TOKEN: 'test-token-long-enough',
+    DEPLOYMENT_PROFILE: 'k56-ic2264'
+  });
+  assert.equal(config.deploymentProfileName, 'k56-ic2264');
+  assert.equal(resolveDeploymentProfile(config.deploymentProfileName).family, 'k56');
 });
 
 test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, admin thấy cả lớp khác', async () => {
@@ -108,7 +119,7 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
       updated_at TIMESTAMPTZ
     );
     INSERT INTO mapping.classroom_course_mapping VALUES
-      (2264, 'IC2264'), (2265, 'IC2265');
+      (2264, 'IC2264'), (2265, 'IC2265'), (2207, 'IC2207');
     INSERT INTO mapping.reviewer_class_access VALUES
       ('teacher@example.test', 2264);
     INSERT INTO mapping.reviewer_account (email, display_name, role) VALUES
@@ -131,7 +142,8 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
   assert.equal(teacher.rows[0].response.classes[0].accessMode, 'assigned_teacher');
 
   const admin = await database.query(listTermTestTeacherOptionsLegacySql, ['teacher@example.test', true]);
-  assert.equal(admin.rows[0].response.classes.length, 2);
+  assert.equal(admin.rows[0].response.classes.length, 3);
+  assert.equal(admin.rows[0].response.classes.some(item => item.name === 'IC2207'), true);
   const otherClass = admin.rows[0].response.classes.find(item => item.name === 'IC2265');
   assert.equal(otherClass.accessMode, 'admin_override');
   assert.equal(otherClass.isAssignedTeacher, false);
@@ -168,7 +180,7 @@ test('K56 dùng schema lớp live: giảng viên chỉ xem lớp được giao, 
     .get('/api/term-tests/teacher/options')
     .set('x-review-token', 'a-valid-test-token');
   assert.equal(k56Options.status, 200);
-  assert.equal(k56Options.body.classes.length, 2);
+  assert.equal(k56Options.body.classes.length, 3);
   assert.equal(k56Options.body.classes.find(item => item.name === 'IC2265').accessMode, 'admin_override');
   const response = await request(app)
     .get('/api/term-tests/teacher/results?class=IC2265&test=term-test-2-k56')

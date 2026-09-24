@@ -83,6 +83,14 @@ function testDatabase(db) {
   };
 }
 
+function sharedTestDatabase(db) {
+  return {
+    query: (sql, params) => sql === 'SELECT current_database() AS name'
+      ? Promise.resolve({ rows: [{ name: 'pglite_shared_test' }] })
+      : db.query(sql, params)
+  };
+}
+
 async function snapshot(db) {
   const mappings = (await db.query(`SELECT erp_course_class_id::text AS class_id,
     erp_class_name_snapshot AS class_code, classroom_course_id, status
@@ -114,6 +122,56 @@ test('nhập một chiều giữ ba UUID cũ và để Classroom chưa duyệt',
     }
     assert.equal((await db.query(`SELECT count(*)::int AS count
       FROM assessment.term_test_class_access`)).rows[0].count, 3);
+  } finally { await db.close(); }
+});
+
+test('kho chung nhập roster IC2322/IC2326 không ghép Classroom hoặc chạm K67', async () => {
+  const db = await setup();
+  try {
+    await db.exec(`
+      ALTER SCHEMA assessment RENAME TO assessment_k56;
+      CREATE SCHEMA assessment;
+      CREATE TABLE assessment.term_test_roster (test_slug TEXT PRIMARY KEY);
+      INSERT INTO assessment.term_test_roster VALUES ('term-test-1');
+      INSERT INTO mapping.classroom_course_mapping
+        (erp_course_class_id, erp_class_name_snapshot) VALUES
+        (2322, 'IC2322'), (2326, 'IC2326');
+    `);
+    const candidates = ['2322', '2326'].flatMap((classId, classIndex) =>
+      slugs.map((test_slug, slugIndex) => ({
+        test_slug, class_id: classId, contact_id: String(202 + classIndex),
+        student_ref: `00000000-0000-4000-${classIndex ? 'a000' : '9000'}-${String(slugIndex + 1).padStart(12, '0')}`,
+        student_name: classIndex ? 'Học viên giả C' : 'Học viên giả B'
+      })));
+    const request = {
+      syncRunId: '102',
+      summary: { syncRunId: '102', classMappingsToAdd: 0,
+        rosterRowsToAdd: 6, testCount: 3 },
+      expectedMappings: [
+        { class_id: '1252', class_code: 'IC2264' },
+        { class_id: '2322', class_code: 'IC2322' },
+        { class_id: '2326', class_code: 'IC2326' }
+      ],
+      expectedRoster: oldRows.map(row => ({ ...row })),
+      newMappings: [], newRoster: candidates
+    };
+    const result = await applyRosterImport(sharedTestDatabase(db), request,
+      'pglite_shared_test');
+    assert.equal(result.classMappingsAdded, 0);
+    assert.equal(result.rosterRowsAdded, 6);
+    const imported = await db.query(`SELECT erp_course_class_id::int AS class_id,
+      count(*)::int AS rows FROM assessment_k56.term_test_roster
+      GROUP BY erp_course_class_id ORDER BY erp_course_class_id`);
+    assert.deepEqual(imported.rows,
+      [{ class_id: 1252, rows: 3 }, { class_id: 2322, rows: 3 },
+        { class_id: 2326, rows: 3 }]);
+    assert.deepEqual((await db.query('SELECT test_slug FROM assessment.term_test_roster')).rows,
+      [{ test_slug: 'term-test-1' }]);
+    const classroom = await db.query(`SELECT classroom_course_id
+      FROM mapping.classroom_course_mapping WHERE erp_course_class_id IN (2322, 2326)`);
+    assert.deepEqual(classroom.rows, [
+      { classroom_course_id: null }, { classroom_course_id: null }
+    ]);
   } finally { await db.close(); }
 });
 

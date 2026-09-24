@@ -224,6 +224,7 @@ test('migration K56 chỉ seed IC2264 và giữ nguyên quyết định tắt kh
   try {
     await database.exec(`
       CREATE ROLE mapping_review_api;
+      CREATE ROLE k56_ic2264_app;
       CREATE SCHEMA mapping;
       CREATE SCHEMA assessment;
       CREATE TABLE mapping.classroom_course_mapping (
@@ -239,6 +240,7 @@ test('migration K56 chỉ seed IC2264 và giữ nguyên quyết định tắt kh
       INSERT INTO assessment.test_definition VALUES
         ('term-test-1-k56', true), ('term-test-2-k56', true), ('mini-test-k56', true);
       GRANT USAGE ON SCHEMA assessment TO mapping_review_api;
+      GRANT USAGE ON SCHEMA assessment TO k56_ic2264_app;
     `);
     const migration = await readFile(
       new URL('../ops/migrations/202609240001_term_test_k56_class_access.sql', import.meta.url),
@@ -269,6 +271,9 @@ test('migration K56 chỉ seed IC2264 và giữ nguyên quyết định tắt kh
       { test_slug: 'term-test-1-k56', enabled: true },
       { test_slug: 'term-test-2-k56', enabled: true }
     ]);
+    await database.exec('RESET ROLE; SET ROLE k56_ic2264_app;');
+    assert.equal((await database.query(`SELECT count(*)::int AS count
+      FROM assessment.term_test_class_access`)).rows[0].count, 3);
   } finally {
     await database.close();
   }

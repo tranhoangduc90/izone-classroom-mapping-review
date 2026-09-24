@@ -3,6 +3,8 @@
 // Kết quả: chỉ số lượng đã ghi; không đổi hàng cũ, quyền mở bài hoặc dữ liệu lớp khác.
 // Khi lỗi: rollback toàn giao dịch và chỉ trả mã lỗi, không in hồ sơ học viên.
 
+import { createAssessmentSchemaPool } from '../../../src/assessment-schema-pool.js';
+
 const TEST_SLUGS = new Set(['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56']);
 
 class ImportError extends Error {
@@ -43,17 +45,21 @@ const sameRows = (expected, observed, keyOf, fields) => {
   return true;
 };
 
-const readTarget = async db => {
+const readTarget = async (db, classIds = null) => {
+  const scoped = Array.isArray(classIds);
   const mappings = (await db.query(`SELECT erp_course_class_id::text AS class_id,
     erp_class_name_snapshot AS class_code
-    FROM mapping.classroom_course_mapping`)).rows;
+    FROM mapping.classroom_course_mapping
+    ${scoped ? 'WHERE erp_course_class_id = ANY($1::bigint[]) FOR SHARE' : ''}`,
+  scoped ? [classIds] : [])).rows;
   const roster = (await db.query(`SELECT test_slug,
     erp_course_class_id::text AS class_id,
     erp_student_contact_id::text AS contact_id,
     student_ref::text AS student_ref,
     student_name_snapshot AS student_name
-    FROM assessment.term_test_roster WHERE test_slug = ANY($1::text[])`,
-    [[...TEST_SLUGS]])).rows;
+    FROM assessment.term_test_roster WHERE test_slug = ANY($1::text[])
+    ${scoped ? 'AND erp_course_class_id = ANY($2::bigint[])' : ''}`,
+    scoped ? [[...TEST_SLUGS], classIds] : [[...TEST_SLUGS]])).rows;
   return { mappings, roster };
 };
 
@@ -67,8 +73,15 @@ export async function applyRosterImport(db, payload, expectedDatabase) {
     && payload.summary?.rosterRowsToAdd === payload.newRoster.length
     && payload.summary?.testCount === TEST_SLUGS.size,
   'IMPORT_SOURCE_LINEAGE_INVALID');
-  requireCondition(expectedDatabase === 'izone_mapping_k56_ic2264'
+  requireCondition(expectedDatabase === 'mapping_db'
+    || expectedDatabase === 'pglite_shared_test'
+    || expectedDatabase === 'izone_mapping_k56_ic2264'
     || expectedDatabase === 'pglite_test', 'IMPORT_TARGET_NOT_ALLOWED');
+  const shared = expectedDatabase === 'mapping_db'
+    || expectedDatabase === 'pglite_shared_test';
+  requireCondition(!shared || payload.newMappings.length === 0,
+    'SHARED_MAPPING_ALREADY_EXISTS');
+  if (shared) db = createAssessmentSchemaPool(db, { family: 'k56' });
   const oldMappings = indexRows(payload.expectedMappings, mappingKey,
     'DUPLICATE_EXPECTED_MAPPING');
   const oldRoster = indexRows(payload.expectedRoster, rosterKey,
@@ -110,9 +123,12 @@ export async function applyRosterImport(db, payload, expectedDatabase) {
     const gate = (await db.query(`SELECT
       to_regclass('assessment.term_test_class_access') IS NOT NULL AS exists`)).rows[0];
     requireCondition(gate?.exists, 'CLASS_ACCESS_GATE_NOT_INSTALLED');
-    await db.query(`LOCK TABLE mapping.classroom_course_mapping,
-      assessment.term_test_roster IN SHARE ROW EXCLUSIVE MODE`);
-    const before = await readTarget(db);
+    await db.query(shared
+      ? 'LOCK TABLE assessment.term_test_roster IN SHARE ROW EXCLUSIVE MODE'
+      : `LOCK TABLE mapping.classroom_course_mapping,
+        assessment.term_test_roster IN SHARE ROW EXCLUSIVE MODE`);
+    const scopeIds = shared ? [...oldMappings.keys()] : null;
+    const before = await readTarget(db, scopeIds);
     requireCondition(sameRows(payload.expectedMappings, before.mappings, mappingKey,
       ['class_id', 'class_code'])
       && sameRows(payload.expectedRoster, before.roster, rosterKey,
@@ -131,7 +147,7 @@ export async function applyRosterImport(db, payload, expectedDatabase) {
       [row.test_slug, row.class_id, row.contact_id,
         row.student_ref, row.student_name]);
     }
-    const after = await readTarget(db);
+    const after = await readTarget(db, scopeIds);
     requireCondition(sameRows([...payload.expectedMappings, ...payload.newMappings],
       after.mappings, mappingKey, ['class_id', 'class_code'])
       && sameRows([...payload.expectedRoster, ...payload.newRoster],

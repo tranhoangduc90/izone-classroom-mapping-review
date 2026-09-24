@@ -14,6 +14,7 @@ REMOTE_SCRIPT = r"""
 // Kết quả: metadata JSON để quyết định có thể dùng chung database hay không.
 // Khi lỗi: exit khác 0; không suy diễn rằng bảng hoặc dữ liệu không tồn tại.
 import pg from 'pg';
+import fs from 'node:fs';
 const pool = new pg.Pool({connectionString: process.env.DATABASE_URL, max: 1,
   connectionTimeoutMillis: 10000});
 const tables = [
@@ -29,6 +30,15 @@ const tables = [
   'assessment.term_test_writing_grading_final'
 ];
 try {
+  let runtimeProfile = 'unavailable';
+  try {
+    const response = await fetch(`http://127.0.0.1:${process.env.PORT || '8788'}/health`,
+      {signal: AbortSignal.timeout(3000)});
+    const health = await response.json();
+    runtimeProfile = response.ok ? String(health.deploymentProfile || 'missing') : 'http_error';
+  } catch { runtimeProfile = 'unavailable'; }
+  const configHasProfileEnv = fs.readFileSync('src/config.js', 'utf8')
+    .includes('DEPLOYMENT_PROFILE');
   const db = await pool.connect();
   try {
     await db.query('BEGIN READ ONLY');
@@ -80,10 +90,28 @@ try {
       FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace
       WHERE n.nspname = 'assessment' AND c.relkind IN ('r', 'p')
       ORDER BY c.relname`)).rows;
+    const assessmentOtherObjects = (await db.query(`SELECT c.relname AS name,
+      CASE c.relkind WHEN 'S' THEN 'sequence' WHEN 'v' THEN 'view'
+        WHEN 'm' THEN 'materialized_view' ELSE c.relkind::text END AS kind
+      FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'assessment' AND c.relkind IN ('S', 'v', 'm')
+      ORDER BY c.relname`)).rows;
+    const assessmentFunctions = (await db.query(`SELECT p.proname AS name,
+      pg_get_function_identity_arguments(p.oid) AS arguments,
+      p.prokind AS kind FROM pg_proc AS p
+      JOIN pg_namespace AS n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'assessment' ORDER BY p.proname`)).rows;
+    const roleGrants = (await db.query(`SELECT table_schema, table_name,
+      array_agg(privilege_type ORDER BY privilege_type) AS privileges
+      FROM information_schema.role_table_grants WHERE grantee = current_user
+        AND table_schema IN ('mapping', 'assessment')
+      GROUP BY table_schema, table_name ORDER BY table_schema, table_name`)).rows;
     await db.query('COMMIT');
-    process.stdout.write(JSON.stringify({identity, layout, slugs,
+    process.stdout.write(JSON.stringify({identity, runtimeProfile,
+      configHasProfileEnv, layout, slugs,
       rosterByFamily, attemptsByFamily, relevantColumns, assessmentColumns,
-      assessmentSecurity, pilotIdentity}));
+      assessmentSecurity, assessmentOtherObjects, assessmentFunctions,
+      roleGrants, pilotIdentity}));
   } finally { db.release(); }
 } finally { await pool.end(); }
 """
