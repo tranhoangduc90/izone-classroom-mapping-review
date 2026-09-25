@@ -60,6 +60,7 @@ CURRENT_LIVE_TAG = "izone-k56-live-results:20260924.4-roster-reconcile"
 ROSTER_RECONCILE_MODULES = (
     "assessment-schema-pool.js", "config.js", "server.js", "k56-roster-reconcile.js",
 )
+TERM_ONLY_MODULES = ("k56-portal-pilot.js", "term-test-writing-grading.js")
 REMOTE_TREE_SCRIPT = r"""
 // Dữ liệu vào: thư mục src trong container K56 đang chạy.
 // Việc chính: chỉ đọc file .js để dựng bản kiểm tạm trên máy vận hành.
@@ -207,9 +208,27 @@ def run_stage():
     # Việc chính: dựng bản sao tạm bên trong backend, chạy test rồi dọn đúng đích.
     # Kết quả: số test đạt/không đạt; không ảnh hưởng production.
     # Khi lỗi: trả mã lỗi và không tuyên bố release sẵn sàng.
+    term_only = "--term-only-candidate" in sys.argv
+    if term_only and not {"--from-current-live", "--unified-candidate", "--full-suite",
+                          "--export-context"}.issubset(sys.argv):
+        raise RuntimeError("TERM_ONLY_STAGE_FLAGS_REQUIRED")
     controls = {} if "--from-current-live" in sys.argv else read_live_files()
     tree, base_meta = read_live_tree()
     base_source_sha = seal_source_files(tree)
+    if term_only:
+        # Dữ liệu vào: toàn cây source đang chạy và source branch đã qua regression.
+        # Việc chính: chặn mọi drift ngoài đúng hai file Term cần phát hành.
+        # Kết quả: image sau build chỉ phủ hai thay đổi nghiệp vụ lên image live.
+        # Khi lỗi: không xuất gói build và không đụng container production.
+        branch = {"src/" + path.relative_to(BACKEND / "src").as_posix():
+                  path.read_bytes() for path in (BACKEND / "src").rglob("*.js")}
+        if set(branch) != set(tree):
+            raise RuntimeError("TERM_ONLY_SOURCE_SET_CHANGED")
+        changed = {name for name in tree
+                   if tree[name].replace(b"\r\n", b"\n") !=
+                   branch[name].replace(b"\r\n", b"\n")}
+        if changed != {"src/" + name for name in TERM_ONLY_MODULES}:
+            raise RuntimeError("TERM_ONLY_SOURCE_DRIFT")
     if "--audit-admin" in sys.argv:
         auth = tree["src/auth.js"].decode("utf-8")
         sql = tree["src/sql.js"].decode("utf-8")
@@ -263,7 +282,8 @@ def run_stage():
         for name, code in candidates.items():
             (stage_root / name).write_text(code, encoding="utf-8", newline="\n")
         if "--unified-candidate" in sys.argv:
-            overlay_names = (ROSTER_RECONCILE_MODULES if "--from-current-live" in sys.argv
+            overlay_names = (TERM_ONLY_MODULES if term_only else
+                             ROSTER_RECONCILE_MODULES if "--from-current-live" in sys.argv
                              else UNIFIED_BRANCH_MODULES)
             for name in overlay_names:
                 shutil.copy2(BACKEND / "src" / name, stage_root / "src" / name)
@@ -352,7 +372,8 @@ def run_stage():
                 "baseImageId": base_meta["imageId"],
                 "basePackageHashes": base_meta["packageHashes"],
                 "buildContext": exported,
-                "candidateMode": "unified_branch_modules" if "--unified-candidate" in sys.argv
+                "candidateMode": "term_only_live_overlay" if term_only else
+                "unified_branch_modules" if "--unified-candidate" in sys.argv
                 else "live_gate_overlay",
                 "sqlSmokePassed": sql_smoke["passed"], "testSummary": summary_lines,
                 "failureSummary": failure_lines,
