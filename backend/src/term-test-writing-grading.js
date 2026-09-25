@@ -20,8 +20,7 @@ const GRADING_IDENTITY_BY_TEST = Object.freeze({
   'term-test-1': Object.freeze({ source: 'k67_web', rubricVersion: 'ielts-writing-v1' }),
   'term-test-2': Object.freeze({ source: 'k67_web', rubricVersion: 'ielts-writing-v1' }),
   'term-test-1-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'ielts-writing-v1' }),
-  'term-test-2-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'ielts-writing-v1' }),
-  'mini-test-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'k56-mini-paragraph-v1' })
+  'term-test-2-k56': Object.freeze({ source: 'k56_web', rubricVersion: 'ielts-writing-v1' })
 });
 const WRITING_IMAGE_MAX_BYTES = 600 * 1024;
 const WRITING_IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\r\n]+)$/;
@@ -482,16 +481,19 @@ export function createTermTestWritingGradingService({
       ]);
       return claimed.rows.map(row => ({
         jobId: row.job_id,
-        operationId: row.job_id,
         jobType: row.job_type,
         attemptCount: Number(row.attempt_count),
         maxAttempts: Number(row.max_attempts),
         runKey: row.run_key,
         testSlug: row.test_slug,
-        source: GRADING_IDENTITY_BY_TEST[row.test_slug]?.source ?? null,
-        classId: row.class_id ?? null,
-        attemptId: row.attempt_id,
-        rubricVersion: GRADING_IDENTITY_BY_TEST[row.test_slug]?.rubricVersion ?? null,
+        // Chỉ Term nhận metadata mới; Mini giữ nguyên hợp đồng job đang vận hành.
+        ...(GRADING_IDENTITY_BY_TEST[row.test_slug] ? {
+          operationId: row.job_id,
+          source: GRADING_IDENTITY_BY_TEST[row.test_slug].source,
+          classId: row.class_id ?? null,
+          attemptId: row.attempt_id,
+          rubricVersion: GRADING_IDENTITY_BY_TEST[row.test_slug].rubricVersion
+        } : {}),
         taskNumber: Number(row.task_number),
         prompt: row.job_type === 'dispatch' ? row.prompt_text : '',
         imageUrl: row.job_type === 'dispatch' ? (row.prompt_image_url || '') : '',

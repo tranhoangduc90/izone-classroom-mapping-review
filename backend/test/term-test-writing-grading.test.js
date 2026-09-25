@@ -327,11 +327,10 @@ test('Mini K56 chấm đoạn văn Task 2 cho hai lớp cùng tên mà không l�
     assert.equal(job.testSlug, 'mini-test-k56');
     const attempt = attempts.find(item => job.runKey.includes(item.token));
     assert.ok(attempt);
-    assert.equal(job.source, 'k56_web');
-    assert.equal(job.classId, String(attempt.classId));
-    assert.equal(job.attemptId, attempt.token);
-    assert.equal(job.operationId, job.jobId);
-    assert.equal(job.rubricVersion, 'k56-mini-paragraph-v1');
+    // Đợt phát hành Term không đổi hợp đồng job Mini đang chạy.
+    for (const field of ['source', 'classId', 'attemptId', 'operationId', 'rubricVersion']) {
+      assert.equal(Object.hasOwn(job, field), false, `Mini không có metadata mới: ${field}`);
+    }
     await service.completeDispatch({ jobId: job.jobId, workerId: 'mini-dispatch' });
   }
   await database.query(`UPDATE assessment.term_test_writing_grading_job
