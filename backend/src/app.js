@@ -51,6 +51,7 @@ import {
 } from './sql.js';
 import { buildCombinedResult, buildListeningResult, getTestScoringMetadata, gradeSection, parseStoredTest } from './term-tests.js';
 import { buildErpGradePayload } from './erp-sync.js';
+import { readTermK56PortalSnapshot } from './term-test-portal-snapshot.js';
 import { buildMiniTestResult } from './mini-tests.js';
 import { createWritingTestService, WritingTestError } from './writing-tests.js';
 import {
@@ -197,6 +198,11 @@ const writingGradingClaimSchema = z.object({
 });
 const writingGradingImageParamsSchema = z.object({ jobId: z.string().uuid() });
 const writingGradingImageQuerySchema = z.object({ token: z.string().regex(/^[0-9a-f]{64}$/i) });
+const portalSnapshotQuerySchema = z.object({
+  classId: z.string().regex(/^[1-9][0-9]{0,14}$/),
+  studentId: z.string().regex(/^[1-9][0-9]{0,14}$/),
+  testSlug: z.enum(['term-test-1-k56', 'term-test-2-k56'])
+}).strict();
 const writingGradingDispatchCompleteSchema = z.object({
   jobId: z.string().uuid(),
   workerId: writingGradingWorkerSchema,
@@ -488,6 +494,7 @@ export function createApp({
   termTestWritingGradingService = null,
   termTestAssetService = null,
   termTestResultEvents = null,
+  portalSnapshotFetchImpl = globalThis.fetch,
   logger = console
 }) {
   const app = express();
@@ -1669,6 +1676,37 @@ export function createApp({
       message: 'Chức năng chấm Writing bài thi máy chưa được bật.'
     });
     return false;
+  }
+
+  if (deploymentProfile.name === 'k56-ic2264') {
+    app.get('/api/term-tests/writing-grading/portal-snapshot', testReadLimiter,
+      asyncRoute(async (req, res) => {
+        if (!config.erpSyncSecret) {
+          return res.status(503).json({ ok: false, error: 'PORTAL_SNAPSHOT_DISABLED' });
+        }
+        if (!hasValidSharedSecret(req.get('x-term-test-sync'), config.erpSyncSecret)) {
+          return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+        }
+        const parsed = portalSnapshotQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+          return res.status(400).json({ ok: false, error: 'PORTAL_SNAPSHOT_INVALID_QUERY' });
+        }
+        try {
+          const snapshot = await readTermK56PortalSnapshot({
+            ...parsed.data, fetchImpl: portalSnapshotFetchImpl
+          });
+          res.set('Cache-Control', 'private, no-store');
+          return res.json(snapshot);
+        } catch (error) {
+          // Dữ liệu vào: chỉ mã lỗi kỹ thuật; payload Portal có thể chứa hồ sơ học viên.
+          // Việc chính: báo lỗi tổng quát, tuyệt đối không log hoặc trả phản hồi gốc.
+          // Kết quả: writer dừng trước PUT nếu không đọc được đúng snapshot đã lọc.
+          // Khi lỗi: xem mã PORTAL_SNAPSHOT_* trong log, không xem dữ liệu học viên.
+          logger.warn?.(JSON.stringify({ event: 'portal_snapshot',
+            code: String(error?.code || 'PORTAL_SNAPSHOT_UNKNOWN') }));
+          return res.status(502).json({ ok: false, error: 'PORTAL_SNAPSHOT_UNAVAILABLE' });
+        }
+      }));
   }
 
   app.post('/api/term-tests/writing-grading/jobs/claim', testWriteLimiter, asyncRoute(async (req, res) => {
