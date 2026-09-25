@@ -125,3 +125,71 @@ test('K56 được cấp quyền chỉ gửi một lần cho cùng điểm/lư�
   assert.equal(replay.skipped, true);
   assert.equal(fetchCount, 1);
 });
+
+for (const scenario of [
+  {
+    name: 'timeout sau khi gửi',
+    expectedStatus: 'unknown',
+    expectedCode: 'ERP_SYNC_TIMEOUT',
+    fetchImpl: async () => { throw new Error('Request timed out'); }
+  },
+  {
+    name: 'Portal trả HTTP 503',
+    expectedStatus: 'failed_response',
+    expectedCode: 'ERP_SYNC_HTTP_ERROR',
+    fetchImpl: async () => ({ ok: false, status: 503 })
+  },
+  {
+    name: 'Portal trả sai mã lượt',
+    expectedStatus: 'unknown',
+    expectedCode: 'ERP_SYNC_INVALID_RESPONSE',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({
+      ok: true, status: 'synced', attemptToken: '00000000-0000-4000-8000-000000000999'
+    }) })
+  }
+]) {
+  test(`K56 ${scenario.name}: giữ trạng thái cần đối soát và không gửi lại mù`, async () => {
+    let fetchCount = 0;
+    let claimCount = 0;
+    let storedStatus = null;
+    let storedCode = null;
+    const pool = {
+      async query(sql, params) {
+        // Dữ liệu vào: truy vấn cấp quyền và trạng thái của một lượt thi giả.
+        // Việc chính: mô phỏng claim duy nhất rồi lưu lỗi; lần gọi lại chỉ đọc trạng thái.
+        // Kết quả: không có lần ghi Portal thứ hai; lỗi truy vấn làm test thất bại.
+        if (sql.includes('term_test_class_access')) return { rows: [{ allowed: true }] };
+        if (sql.includes('INSERT INTO assessment.term_test_portal_sync_state')) {
+          claimCount += 1;
+          return { rowCount: claimCount === 1 ? 1 : 0 };
+        }
+        if (sql.includes('UPDATE assessment.term_test_portal_sync_state') && sql.includes('RETURNING status')) {
+          return { rows: [{ status: storedStatus }] };
+        }
+        if (sql.includes('UPDATE assessment.term_test_portal_sync_state')) {
+          storedStatus = params[2];
+          storedCode = params[4];
+          return { rowCount: 1 };
+        }
+        throw new Error('Truy vấn ngoài hợp đồng thử nghiệm');
+      }
+    };
+    const sync = createErpGradeSync({
+      config: config(), pool,
+      fetchImpl: async (...args) => {
+        fetchCount += 1;
+        return scenario.fetchImpl(...args);
+      },
+      logger: { info() {}, error() {} }
+    });
+
+    const first = await sync(payloadForSecondClass());
+    const replay = await sync(payloadForSecondClass());
+    assert.equal(first.status, scenario.expectedStatus);
+    assert.equal(first.errorCode, scenario.expectedCode);
+    assert.equal(storedStatus, scenario.expectedStatus);
+    assert.equal(storedCode, scenario.expectedCode);
+    assert.deepEqual(replay, { status: scenario.expectedStatus, skipped: true });
+    assert.equal(fetchCount, 1);
+  });
+}
