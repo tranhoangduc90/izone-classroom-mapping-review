@@ -13,8 +13,11 @@ import { createTermTestWritingGradingService } from '../../../src/term-test-writ
 // Khi lỗi: dừng với mã khác 0; không dùng secret, bài thật hoặc database production.
 const candidatePath = process.argv[2];
 if (!candidatePath) throw new Error('TERM_PARENT_CANDIDATE_PATH_REQUIRED');
-const realChildMode = process.argv[3] === '--child-execution-stdin';
-if (process.argv.length > (realChildMode ? 4 : 3)) {
+const flags = process.argv.slice(3);
+const realChildMode = flags.includes('--child-execution-stdin');
+const legacyUrlMode = flags.includes('--allow-legacy-production-url');
+if (flags.length !== Number(realChildMode) + Number(legacyUrlMode)
+    || flags.some(flag => !['--child-execution-stdin', '--allow-legacy-production-url'].includes(flag))) {
   throw new Error('TERM_PARENT_ARGUMENTS_INVALID');
 }
 const workflow = JSON.parse(await readFile(resolve(candidatePath), 'utf8'));
@@ -111,9 +114,13 @@ const contexts = { k67_web: createContext('k67'), k56_web: createContext('k56') 
 let activeApp = null;
 
 async function httpRequest(options) {
-  // Chuyển URL production cố định trong Code node sang chính API Express trong bộ nhớ.
+  // Chuyển URL canary cố định trong Code node sang API Express trong bộ nhớ.
+  // Chỉ cho phép URL production khi kiểm snapshot RED cũ bằng flag tường minh;
+  // cả hai trường hợp đều không gửi HTTP ra mạng.
   // Yêu cầu đi qua parser, xác thực và validation HTTP thật nhưng không dùng mạng ngoài.
-  const prefix = 'https://ducizone.ddns.net/mapping-api';
+  const prefix = legacyUrlMode
+    ? 'https://ducizone.ddns.net/mapping-api'
+    : 'http://writing-term-api-canary.invalid';
   assert.ok(options.url.startsWith(prefix), 'TERM_PARENT_HTTP_DESTINATION_DRIFT');
   assert.ok(activeApp, 'TERM_PARENT_HTTP_APP_NOT_SELECTED');
   const response = await request(activeApp).post(options.url.slice(prefix.length))

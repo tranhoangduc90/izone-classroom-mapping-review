@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url';
 const [oldPath, fixedPath] = process.argv.slice(2);
 if (!oldPath || !fixedPath) throw new Error('OLD_AND_FIXED_CANDIDATE_PATHS_REQUIRED');
 const testPath = fileURLToPath(new URL('./test_term_parent_http_contract.mjs', import.meta.url));
-function run(candidatePath) {
-  return spawnSync(process.execPath, [testPath, candidatePath], {
+function run(candidatePath, legacyUrl = false) {
+  return spawnSync(process.execPath, [testPath, candidatePath,
+    ...(legacyUrl ? ['--allow-legacy-production-url'] : [])], {
     encoding: 'utf8', timeout: 60000, maxBuffer: 1024 * 1024
   });
 }
-const old = run(oldPath);
+const old = run(oldPath, true);
 assert.equal(old.error, undefined, 'TERM_PARENT_OLD_PROCESS_ERROR');
 assert.notEqual(old.status, 0, 'TERM_PARENT_OLD_MUST_BE_RED');
 assert.match(old.stderr,
