@@ -101,6 +101,47 @@ test('API Term canary tạo đúng một collect job và không gọi Portal th�
   assert.equal(redis.size, 0);
 });
 
+test('Term Test 1 K56 Task 2 lưu đúng lượt và chỉ đồng bộ Portal giả một lần', async () => {
+  const redis = new Map();
+  const canary = await createTermCanary({ profileName: 'term1',
+    setRedis: async (key, value) => {
+      if (redis.has(key)) return null;
+      redis.set(key, value);
+      return 'OK';
+    },
+    deleteRedis: async key => Number(redis.delete(key)),
+  });
+  try {
+    const fixture = fakeCache({ testSlug: 'term-test-1-k56', taskNumber: 2 });
+    const seeded = await request(canary.app).post('/__canary/seed')
+      .send({ cacheValue: fixture.value });
+    assert.equal(seeded.status, 200);
+    const secret = redis.get(canary.syncKey);
+    const claimed = await request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/claim')
+      .set('x-writing-test-sync', secret)
+      .send({ workerId: 'term1-canary-worker', limit: 1 });
+    assert.equal(claimed.status, 200);
+    assert.equal(claimed.body.jobs.length, 1);
+    assert.equal(claimed.body.jobs[0].testSlug, 'term-test-1-k56');
+    assert.equal(claimed.body.jobs[0].taskNumber, 2);
+    const saved = await request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/result')
+      .set('x-writing-test-sync', secret)
+      .send({ jobId: claimed.body.jobs[0].jobId, workerId: 'term1-canary-worker',
+        runKey: fixture.runKey, result: JSON.parse(fixture.value).result });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.portalSyncStatus, 'synced');
+    const audit = await request(canary.app).get('/__canary/audit');
+    assert.equal(audit.body.profileName, 'term1');
+    assert.deepEqual(audit.body.runStates, [{ status: 'complete', task_number: 2 }]);
+    assert.equal(audit.body.portalMockCalls, 1);
+  } finally {
+    await canary.close();
+  }
+  assert.equal(redis.size, 0);
+});
+
 test('Mini K56 Task 2 dùng cùng callback và đúng thang Portal 10/13', async () => {
   const redis = new Map();
   const canary = await createTermCanary({ profileName: 'mini',

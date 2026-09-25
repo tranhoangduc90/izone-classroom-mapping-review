@@ -185,7 +185,7 @@ def rollback(client):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["deploy", "audit", "rollback"])
-    parser.add_argument("--profile", choices=["term", "mini"], default="term")
+    parser.add_argument("--profile", choices=["term", "term1", "mini"], default="term")
     args = parser.parse_args()
     client = connect()
     try:

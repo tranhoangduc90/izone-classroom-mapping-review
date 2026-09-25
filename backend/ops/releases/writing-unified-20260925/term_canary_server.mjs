@@ -14,6 +14,7 @@ const REDIS_PORT = 6379;
 const TTL_SECONDS = 7200;
 const PROFILES = Object.freeze({
   term: Object.freeze({ testSlug: 'term-test-2-k56', taskNumber: 1 }),
+  term1: Object.freeze({ testSlug: 'term-test-1-k56', taskNumber: 2 }),
   mini: Object.freeze({ testSlug: 'mini-test-k56', taskNumber: 2 }),
 });
 
@@ -138,6 +139,9 @@ export async function createTermCanary({
       const combined = profileName === 'mini'
         ? { listening: { total: 10, correct: 5 },
           reading: { total: 13, correct: 6 } }
+        : profileName === 'term1'
+          ? { listening: { total: 40, correct: 20 },
+            reading: { total: 26, correct: 13 } }
         : { listening: { total: 40, correct: 20, band: 5.5 },
           reading: { total: 40, correct: 20, band: 5.5 } };
       await pool.query(`INSERT INTO assessment.term_test_attempt (
