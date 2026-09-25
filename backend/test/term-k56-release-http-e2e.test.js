@@ -20,7 +20,7 @@ const cases = [
     studentId: 991001,
     className: 'CODEX-CANARY-1',
     taskNumber: 2,
-    essay: 'Bài giả Task 2 của Term 1.',
+    essay: 'Bài giả Task 2 của Term 1: “đúng bài” — e\u0301 và 🧪.',
     listeningCorrect: 20,
     readingCorrect: 13,
     readingTotal: 26
@@ -32,7 +32,7 @@ const cases = [
     studentId: 991002,
     className: 'CODEX-CANARY-2',
     taskNumber: 1,
-    essay: 'Bài giả Task 1 của Term 2.',
+    essay: 'Bài giả Task 1 của Term 2: “đúng bài” — e\u0301 và 🧪.',
     listeningCorrect: 21,
     readingCorrect: 22,
     readingTotal: 40
@@ -58,7 +58,7 @@ function criteria(taskNumber) {
     code,
     name: code,
     bandScore: 6.5,
-    feedback: `Nhận xét giả ${code}`,
+    feedback: `Nhận xét giả ${code}: “độ chính xác” — e\u0301 và 🧪.`,
     components: []
   }));
 }
@@ -268,6 +268,7 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
       assert.equal(collect.runKey, dispatch.runKey);
       assert.equal(collect.attemptId, item.token);
 
+      const report = `Báo cáo giả ${item.slug}: “đúng lớp” — e\u0301 và 🧪.`;
       const callback = {
         jobId: collect.jobId,
         workerId: 'release-fixture-collect',
@@ -276,7 +277,7 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
         result: {
           taskScore: 6.5,
           criteria: criteria(item.taskNumber),
-          report: `Báo cáo giả ${item.slug}`
+          report
         }
       };
       const completed = await request(app)
@@ -288,6 +289,9 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
       assert.equal(completed.body.portalSyncStatus, expectedPortalStatus);
       assert.equal(completed.body.grading.ready, true);
       assert.equal(completed.body.grading.writingScore, 6.5);
+      assert.equal(completed.body.grading.tasks[0].report, report);
+      assert.deepEqual(completed.body.grading.tasks[0].criteria.map(row => row.feedback),
+        criteria(item.taskNumber).map(row => row.feedback));
       const repeatedCallback = await request(app)
         .post('/api/term-tests/writing-grading/jobs/result')
         .set('x-writing-test-sync', WORKER_SECRET)
@@ -318,6 +322,9 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
         assert.equal(reopened.body.writing.submitted, true);
         assert.equal(reopened.body.writing.grading.ready, true);
         assert.equal(reopened.body.writing.grading.writingScore, 6.5);
+        assert.equal(reopened.body.writing.grading.tasks[0].report, report);
+        assert.deepEqual(reopened.body.writing.grading.tasks[0].criteria.map(row => row.feedback),
+          criteria(item.taskNumber).map(row => row.feedback));
         assert.equal(
           item.taskNumber === 1 ? reopened.body.writing.task1 : reopened.body.writing.task2,
           item.essay
