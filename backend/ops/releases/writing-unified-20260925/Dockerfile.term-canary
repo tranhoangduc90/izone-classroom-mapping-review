@@ -1,0 +1,16 @@
+FROM node:24-alpine
+
+WORKDIR /workspace
+COPY backend/package.json backend/package-lock.json ./backend/
+RUN cd backend && npm ci --include=dev --ignore-scripts --no-audit --no-fund
+COPY backend/src ./backend/src
+COPY backend/ops/releases/writing-unified-20260925/term_canary_server.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_server.mjs
+COPY backend/ops/releases/writing-unified-20260925/term_canary_seed.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_seed.mjs
+COPY backend/ops/releases/writing-unified-20260925/term_canary_health.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_health.mjs
+COPY backend/ops/releases/writing-unified-20260925/term_canary_audit.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_audit.mjs
+COPY docs/migrations/2026-08-19-term-test-writing-grading.sql ./docs/migrations/2026-08-19-term-test-writing-grading.sql
+
+USER node
+WORKDIR /workspace/backend
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 CMD ["node", "ops/releases/writing-unified-20260925/term_canary_health.mjs"]
+CMD ["node", "ops/releases/writing-unified-20260925/term_canary_server.mjs"]
