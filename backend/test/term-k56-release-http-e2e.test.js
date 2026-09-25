@@ -36,6 +36,19 @@ const cases = [
     listeningCorrect: 21,
     readingCorrect: 22,
     readingTotal: 40
+  },
+  {
+    slug: 'term-test-1-k56',
+    token: '00000000-0000-4000-8000-000000009003',
+    classId: 990003,
+    studentId: 991003,
+    className: 'CODEX-CANARY-TIMEOUT',
+    taskNumber: 2,
+    essay: 'Bài giả Task 2 của lượt mất phản hồi Portal.',
+    listeningCorrect: 19,
+    readingCorrect: 12,
+    readingTotal: 26,
+    simulatePortalTimeout: true
   }
 ];
 
@@ -51,9 +64,9 @@ function criteria(taskNumber) {
 }
 
 async function createIsolatedDatabase() {
-  // Dữ liệu vào: migration K56 đã ghim và hai lớp/học viên hoàn toàn giả.
+  // Dữ liệu vào: migration K56 đã ghim và ba lớp/học viên hoàn toàn giả.
   // Việc chính: dựng đúng schema K56 trong PostgreSQL nhúng, không kết nối production.
-  // Kết quả: hai lượt đã xong Reading nhưng chưa nộp Writing; schema K67 làm mốc không đổi.
+  // Kết quả: ba lượt đã xong Reading nhưng chưa nộp Writing; schema K67 làm mốc không đổi.
   // Khi lỗi: test thất bại và kho nhúng bị đóng, không có dữ liệu bên ngoài để hoàn tác.
   const database = new PGlite();
   await database.exec(`
@@ -91,7 +104,8 @@ async function createIsolatedDatabase() {
     [item.classId, item.className]);
     await database.query(`INSERT INTO assessment_k56.test_definition
       (slug, title, version, listening_definition, reading_definition, is_active)
-      VALUES ($1, $2, 1, '{}'::jsonb, '{}'::jsonb, true)`,
+      VALUES ($1, $2, 1, '{}'::jsonb, '{}'::jsonb, true)
+      ON CONFLICT (slug) DO NOTHING`,
     [item.slug, item.slug]);
     await database.query(`INSERT INTO assessment_k56.term_test_class_access
       (test_slug, erp_course_class_id, enabled, source)
@@ -120,7 +134,7 @@ async function createIsolatedDatabase() {
   return database;
 }
 
-test('Term 1/2 K56: HTTP nộp → job → callback → Portal giả → mở lại, đúng lượt và không ghi lặp', async () => {
+test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản hồi → mở lại, không ghi lặp', async () => {
   const database = await createIsolatedDatabase();
   try {
     // PGlite không có rowCount như driver PostgreSQL production; chỉ chuẩn hóa ở biên test.
@@ -166,6 +180,12 @@ test('Term 1/2 K56: HTTP nộp → job → callback → Portal giả → mở l�
         const payload = JSON.parse(options.body);
         portalWrites.push(payload);
         portalRows.set(`${payload.classId}:${payload.studentId}:${payload.testSlug}`, payload.grades);
+        if (payload.attemptToken === cases[2].token) {
+          // Portal giả đã ghi điểm nhưng phản hồi bị mất: backend phải giữ trạng thái chưa rõ.
+          const error = new Error('fixture timeout after write');
+          error.name = 'TimeoutError';
+          throw error;
+        }
         return Response.json({
           ok: true,
           status: 'synced',
@@ -264,7 +284,8 @@ test('Term 1/2 K56: HTTP nộp → job → callback → Portal giả → mở l�
         .set('x-writing-test-sync', WORKER_SECRET)
         .send(callback);
       assert.equal(completed.status, 200, completed.body.error);
-      assert.equal(completed.body.portalSyncStatus, 'synced');
+      const expectedPortalStatus = item.simulatePortalTimeout ? 'unknown' : 'synced';
+      assert.equal(completed.body.portalSyncStatus, expectedPortalStatus);
       assert.equal(completed.body.grading.ready, true);
       assert.equal(completed.body.grading.writingScore, 6.5);
       const repeatedCallback = await request(app)
@@ -301,9 +322,18 @@ test('Term 1/2 K56: HTTP nộp → job → callback → Portal giả → mở l�
           item.taskNumber === 1 ? reopened.body.writing.task1 : reopened.body.writing.task2,
           item.essay
         );
-        assert.equal(reopened.body.portalSyncStatus, 'synced');
+        assert.equal(reopened.body.portalSyncStatus, expectedPortalStatus);
       }
       assert.equal(portalWrites.length, cases.indexOf(item) + 1);
+      if (item.simulatePortalTimeout) {
+        const syncState = await database.query(`SELECT status, error_code
+          FROM assessment_k56.term_test_portal_sync_state
+          WHERE attempt_id = $1::uuid`, [item.token]);
+        assert.deepEqual(syncState.rows, [{
+          status: 'unknown',
+          error_code: 'ERP_SYNC_TIMEOUT'
+        }]);
+      }
     }
     assert.deepEqual(portalRows.get('unrelated-k67'), { writing: 8 });
     assert.deepEqual(
@@ -316,7 +346,7 @@ test('Term 1/2 K56: HTTP nộp → job → callback → Portal giả → mở l�
       JOIN assessment_k56.term_test_attempt AS attempt ON attempt.id = run.attempt_id
       WHERE job.status = 'complete'
       GROUP BY attempt.test_slug ORDER BY attempt.test_slug`);
-    assert.deepEqual(states.rows.map(row => row.total), [2, 2]);
+    assert.deepEqual(states.rows.map(row => row.total), [4, 2]);
   } finally {
     await database.close();
   }
