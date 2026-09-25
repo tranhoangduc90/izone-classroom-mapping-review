@@ -1,0 +1,12 @@
+FROM node:24-alpine
+
+WORKDIR /workspace
+COPY backend/package.json backend/package-lock.json ./backend/
+RUN cd backend && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY backend/src ./backend/src
+COPY backend/ops/releases/writing-unified-20260925/term_pg_concurrency_canary.mjs ./backend/ops/releases/writing-unified-20260925/term_pg_concurrency_canary.mjs
+COPY docs/migrations/2026-08-19-term-test-writing-grading.sql ./docs/migrations/2026-08-19-term-test-writing-grading.sql
+
+USER node
+WORKDIR /workspace/backend
+CMD ["node", "ops/releases/writing-unified-20260925/term_pg_concurrency_canary.mjs"]
