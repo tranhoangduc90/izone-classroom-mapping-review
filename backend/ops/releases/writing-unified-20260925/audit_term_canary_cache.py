@@ -16,10 +16,13 @@ def main():
     # Khi lỗi: giữ unknown, không xóa hoặc retry bài.
     parser = argparse.ArgumentParser()
     parser.add_argument("--sync-key")
+    parser.add_argument("--run-key")
     parser.add_argument("--profile", choices=sorted(PROFILES), default="term")
     args = parser.parse_args()
-    cache = json.loads(load_anonymized_cache(args.profile))
-    run_key = cache["runKey"]
+    # Khi thử nhánh dispatch, run key lấy từ execution bài giả đã kiểm, không in ra báo cáo.
+    # Nhánh collect cũ vẫn lấy từ execution seed đã ghim như trước.
+    run_key = (args.run_key if args.run_key else
+               json.loads(load_anonymized_cache(args.profile))["runKey"])
     if not re.fullmatch(re.escape(PROFILES[args.profile]["slug"])
                         + r":[A-Za-z0-9_:-]{1,200}", run_key):
         raise RuntimeError("TERM_CANARY_RUN_KEY_UNSAFE")
