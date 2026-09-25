@@ -13,8 +13,43 @@ import { createTermTestWritingGradingService } from '../../../src/term-test-writ
 // Khi lỗi: dừng với mã khác 0; không dùng secret, bài thật hoặc database production.
 const candidatePath = process.argv[2];
 if (!candidatePath) throw new Error('TERM_PARENT_CANDIDATE_PATH_REQUIRED');
+const realChildMode = process.argv[3] === '--child-execution-stdin';
+if (process.argv.length > (realChildMode ? 4 : 3)) {
+  throw new Error('TERM_PARENT_ARGUMENTS_INVALID');
+}
 const workflow = JSON.parse(await readFile(resolve(candidatePath), 'utf8'));
 assert.equal(workflow.active, false, 'TERM_PARENT_CANDIDATE_MUST_BE_INACTIVE');
+let realChildCache = null;
+if (realChildMode) {
+  // Dữ liệu vào: chỉ execution bài giả K56 đã ghim, đọc từ stdin và giữ trong RAM.
+  // Việc chính: lấy nguyên cacheValue do bộ chấm cũ tạo, không sửa kết quả/chữ Unicode.
+  // Kết quả: thử phiếu ấy qua callback HTTP/PGlite bên dưới, không ghi production.
+  // Khi lỗi: dừng nếu execution khác hoặc payload quá lớn; không in bài/nhận xét.
+  let raw = '';
+  for await (const chunk of process.stdin) {
+    raw += chunk;
+    if (raw.length > 10_000_000) throw new Error('TERM_CHILD_EXECUTION_TOO_LARGE');
+  }
+  const execution = JSON.parse(raw);
+  assert.equal(String(execution.id), '2341142', 'TERM_CHILD_EXECUTION_ID_MISMATCH');
+  assert.equal(execution.workflowId, '4mmOJmshY0AVIKTi',
+    'TERM_CHILD_WORKFLOW_ID_MISMATCH');
+  assert.equal(execution.status, 'success', 'TERM_CHILD_EXECUTION_NOT_SUCCESS');
+  assert.equal(execution.finished, true, 'TERM_CHILD_EXECUTION_NOT_FINISHED');
+  const runs = execution.data?.resultData?.runData?.['Chấm bằng tuyến K56 thử nghiệm'];
+  assert.equal(runs?.length, 1, 'TERM_CHILD_RUN_COUNT_MISMATCH');
+  const output = runs[0]?.data?.main?.[0]?.[0]?.json;
+  assert.equal(typeof output?.cacheValue, 'string', 'TERM_CHILD_CACHE_MISSING');
+  const envelope = JSON.parse(output.cacheValue);
+  assert.equal(envelope.schemaVersion, 1, 'TERM_CHILD_CACHE_SCHEMA_MISMATCH');
+  assert.equal(envelope.taskNumber, 1, 'TERM_CHILD_TASK_MISMATCH');
+  assert.equal(envelope.runKey, output.runKey, 'TERM_CHILD_RUN_KEY_MISMATCH');
+  assert.ok(envelope.runKey.startsWith('term-test-2-k56:'),
+    'TERM_CHILD_PROFILE_MISMATCH');
+  assert.ok(envelope.result?.taskScore && Array.isArray(envelope.result.criteria),
+    'TERM_CHILD_RESULT_MISSING');
+  realChildCache = { runKey: envelope.runKey, value: output.cacheValue };
+}
 function nodeCode(name) {
   const matches = workflow.nodes.filter(node => node.name === name);
   assert.equal(matches.length, 1, `TERM_PARENT_NODE_CARDINALITY:${name}`);
@@ -153,6 +188,13 @@ for (const [index, fixture] of cases.entries()) {
     task2: fixture.task === 2 ? 'Bài giả Task 2' : '',
     taskDefinitions: [taskDefinition]
   });
+  if (realChildCache && fixture.slug === 'term-test-2-k56') {
+    // Kho thử dùng run key từ execution giả để truyền nguyên cacheValue, không vá payload.
+    const updated = await pool.query(`UPDATE assessment.term_test_writing_grading_run
+      SET run_key = $1 WHERE attempt_id = $2::uuid AND task_number = 1
+      RETURNING id;`, [realChildCache.runKey, attemptToken]);
+    assert.equal(updated.rows.length, 1, 'TERM_CHILD_RUN_BINDING_FAILED');
+  }
 
   const dispatchItems = await runCode('Nhận việc chấm', {
     executionId: `synthetic-dispatch-${index}`
@@ -183,11 +225,13 @@ for (const [index, fixture] of cases.entries()) {
   assert.equal(collect.runKey, dispatch.runKey);
   const result = { taskScore: 6, criteria: criteria(fixture.task),
     report: 'Báo cáo giả để thử callback' };
+  const cacheValue = realChildCache && fixture.slug === 'term-test-2-k56'
+    ? realChildCache.value : JSON.stringify({
+      runKey: collect.runKey, taskNumber: fixture.task, result
+    });
   const saved = await runCode('Ghi kết quả vào bài thi', {
     job: collect, executionId: `synthetic-collect-${index}`,
-    data: { cacheValue: JSON.stringify({
-      runKey: collect.runKey, taskNumber: fixture.task, result
-    }) }
+    data: { cacheValue }
   });
   assert.equal(saved.json.ok, true);
   assert.equal(saved.json.writingReady, true);
@@ -214,5 +258,6 @@ assert.equal(k67Jobs.rows[0].count, 2);
 assert.equal(k56Jobs.rows[0].count, 6);
 console.log(JSON.stringify({ toolOutcome: 'success', productionWrites: 0,
   cases: results, portalSyncCalls: syncCalls.length,
+  realChildCacheCases: Number(Boolean(realChildCache)),
   miniWritingPortalWrites: Number(Object.hasOwn(miniSync.grades, 'writing')),
   schemaJobs: { k67: k67Jobs.rows[0].count, k56: k56Jobs.rows[0].count } }));
