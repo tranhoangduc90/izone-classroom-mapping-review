@@ -523,6 +523,63 @@ test('lease hết hạn được nhận lại và tiến trình cũ không thể
   await database.close();
 });
 
+test('dừng worker Term K56 giữ job, K67 vẫn nhận việc và K56 nối lại đúng một lần', async () => {
+  const database = await makeDatabase();
+  const k56Attempt = '00000000-0000-4000-8000-000000000216';
+  const k67Attempt = '00000000-0000-4000-8000-000000000217';
+  await database.query(`INSERT INTO assessment.term_test_attempt (
+    id, test_slug, completed_at, writing_submitted_at
+  ) VALUES ($1::uuid, 'term-test-1-k56', now(), now()),
+           ($2::uuid, 'term-test-2', now(), now());`, [k56Attempt, k67Attempt]);
+  const service = createTermTestWritingGradingService({ pool: database });
+  await service.ensureSubmission({
+    attemptToken: k56Attempt, testSlug: 'term-test-1-k56', task1: '',
+    task2: 'Bài giả K56', taskDefinitions: [{ id: 'task2', prompt: 'Đề giả K56' }]
+  });
+  await service.ensureSubmission({
+    attemptToken: k67Attempt, testSlug: 'term-test-2', task1: 'Bài giả K67 Task 1',
+    task2: 'Bài giả K67 Task 2', taskDefinitions
+  });
+
+  // Dữ liệu vào: job giả K56 đang được worker cũ giữ và job K67 cùng kho thử.
+  // Việc chính: dừng nhận K56, kiểm K67 vẫn chạy, rồi cho K56 nhận lại khi lease hết hạn.
+  // Kết quả: chỉ worker mới được chốt đúng job K56; không phát sinh collect trùng.
+  // Khi lỗi: test dừng trong PostgreSQL nhúng, không đọc hay sửa job production.
+  const [oldLease] = await service.claimJobs({ workerId: 'k56-worker-old',
+    limit: 1, testSlug: 'term-test-1-k56' });
+  assert.equal(oldLease.jobType, 'dispatch');
+  const lease = await database.query(`SELECT
+    EXTRACT(EPOCH FROM (lease_until - leased_at))::int AS seconds
+    FROM assessment.term_test_writing_grading_job WHERE id = $1::uuid;`, [oldLease.jobId]);
+  assert.equal(lease.rows[0].seconds, 180 * 60);
+  assert.equal((await service.claimJobs({ workerId: 'k56-worker-paused',
+    limit: 1, testSlug: 'term-test-1-k56' })).length, 0);
+  const k67Jobs = await service.claimJobs({ workerId: 'k67-worker',
+    limit: 2, testSlug: 'term-test-2' });
+  assert.equal(k67Jobs.length, 2);
+  assert.ok(k67Jobs.every(job => job.testSlug === 'term-test-2'));
+
+  await database.query(`UPDATE assessment.term_test_writing_grading_job
+    SET lease_until = now() - interval '1 second'
+    WHERE id = $1::uuid;`, [oldLease.jobId]);
+  const [newLease] = await service.claimJobs({ workerId: 'k56-worker-new',
+    limit: 1, testSlug: 'term-test-1-k56' });
+  assert.equal(newLease.jobId, oldLease.jobId);
+  assert.equal(newLease.attemptCount, 2);
+  await assert.rejects(() => service.completeDispatch({ jobId: oldLease.jobId,
+    workerId: 'k56-worker-old' }), error => error.code === 'WRITING_GRADING_JOB_LEASE_MISMATCH');
+  assert.equal((await service.completeDispatch({ jobId: newLease.jobId,
+    workerId: 'k56-worker-new' })).status, 'accepted');
+  assert.equal((await service.completeDispatch({ jobId: newLease.jobId,
+    workerId: 'k56-worker-new' })).status, 'duplicate');
+  const collect = await database.query(`SELECT count(*)::int AS total
+    FROM assessment.term_test_writing_grading_job AS job
+    JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+    WHERE run.attempt_id = $1::uuid AND job.job_type = 'collect';`, [k56Attempt]);
+  assert.equal(collect.rows[0].total, 1);
+  await database.close();
+});
+
 test('kết quả sai công thức rollback toàn bộ và quá số lần thử chuyển sang giáo viên kiểm tra', async () => {
   const database = await makeDatabase();
   const attemptToken = '00000000-0000-4000-8000-000000000204';
