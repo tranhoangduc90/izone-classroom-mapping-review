@@ -49,6 +49,19 @@ const cases = [
     readingCorrect: 12,
     readingTotal: 26,
     simulatePortalTimeout: true
+  },
+  {
+    slug: 'term-test-2-k56',
+    token: '00000000-0000-4000-8000-000000009004',
+    classId: 990004,
+    studentId: 991004,
+    className: 'CODEX-CANARY-DEADLINE',
+    taskNumber: 1,
+    essay: 'Bản nháp đúng hạn của bài giả Term 2.',
+    lateEssay: 'Phần sửa muộn tuyệt đối không được chấm.',
+    listeningCorrect: 22,
+    readingCorrect: 23,
+    readingTotal: 40
   }
 ];
 
@@ -64,9 +77,9 @@ function criteria(taskNumber) {
 }
 
 async function createIsolatedDatabase() {
-  // Dữ liệu vào: migration K56 đã ghim và ba lớp/học viên hoàn toàn giả.
+  // Dữ liệu vào: migration K56 đã ghim và bốn lớp/học viên hoàn toàn giả.
   // Việc chính: dựng đúng schema K56 trong PostgreSQL nhúng, không kết nối production.
-  // Kết quả: ba lượt đã xong Reading nhưng chưa nộp Writing; schema K67 làm mốc không đổi.
+  // Kết quả: bốn lượt đã xong Reading nhưng chưa nộp Writing; schema K67 làm mốc không đổi.
   // Khi lỗi: test thất bại và kho nhúng bị đóng, không có dữ liệu bên ngoài để hoàn tác.
   const database = new PGlite();
   await database.exec(`
@@ -130,11 +143,26 @@ async function createIsolatedDatabase() {
       JSON.stringify(combined.reading),
       JSON.stringify(combined)
     ]);
+    if (item.lateEssay) {
+      // Dữ liệu vào: một bản nháp giả đã lưu và hạn Writing đã qua.
+      // Việc chính: dựng trạng thái trước cú bấm nộp muộn để khóa phần sửa muộn.
+      // Kết quả: API phải dùng bản nháp này để chấm; sai khác sẽ làm test đỏ.
+      // Khi lỗi: chỉ kho PostgreSQL nhúng bị ảnh hưởng và được đóng sau test.
+      await database.query(`UPDATE assessment_k56.term_test_attempt
+        SET writing_task_1 = $2, writing_draft_revision = 1,
+            listening_submitted_at = now() - interval '63 minutes',
+            reading_submitted_at = now() - interval '62 minutes',
+            completed_at = now() - interval '62 minutes',
+            writing_started_at = now() - interval '61 minutes',
+            writing_deadline_at = now() - interval '1 minute',
+            writing_updated_at = now() - interval '2 minutes'
+        WHERE id = $1::uuid`, [item.token, item.essay]);
+    }
   }
   return database;
 }
 
-test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản hồi → mở lại, không ghi lặp', async () => {
+test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản hồi → mở lại và khóa sửa muộn', async () => {
   const database = await createIsolatedDatabase();
   try {
     // PGlite không có rowCount như driver PostgreSQL production; chỉ chuẩn hóa ở biên test.
@@ -224,14 +252,18 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
         .set('Origin', ORIGIN)
         .send({
           attemptToken: item.token,
-          revision: 1,
+          revision: item.lateEssay ? 2 : 1,
           action: 'submit',
-          task1: item.taskNumber === 1 ? item.essay : '',
+          task1: item.taskNumber === 1 ? (item.lateEssay || item.essay) : '',
           task2: item.taskNumber === 2 ? item.essay : ''
         });
       assert.equal(submitted.status, 200, submitted.body.error);
       assert.equal(submitted.body.writing.submitted, true);
       assert.equal(submitted.body.writing.grading.ready, false);
+      if (item.lateEssay) {
+        assert.equal(submitted.body.writing.task1, item.essay);
+        assert.equal(submitted.body.writing.timedOut, true);
+      }
 
       const claim = await request(app)
         .post('/api/term-tests/writing-grading/jobs/claim')
@@ -245,6 +277,7 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
       assert.equal(dispatch.classId, String(item.classId));
       assert.equal(dispatch.attemptId, item.token);
       assert.equal(dispatch.taskNumber, item.taskNumber);
+      assert.equal(dispatch.essay, item.essay);
 
       const dispatched = await request(app)
         .post('/api/term-tests/writing-grading/jobs/dispatch-complete')
@@ -353,7 +386,7 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
       JOIN assessment_k56.term_test_attempt AS attempt ON attempt.id = run.attempt_id
       WHERE job.status = 'complete'
       GROUP BY attempt.test_slug ORDER BY attempt.test_slug`);
-    assert.deepEqual(states.rows.map(row => row.total), [4, 2]);
+    assert.deepEqual(states.rows.map(row => row.total), [4, 4]);
   } finally {
     await database.close();
   }
