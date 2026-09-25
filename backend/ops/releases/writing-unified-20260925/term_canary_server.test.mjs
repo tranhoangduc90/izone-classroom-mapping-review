@@ -105,6 +105,52 @@ test('Term Test 2 K56 giữ đúng lượt callback và chỉ gọi Portal giả
   assert.equal(redis.size, 0);
 });
 
+test('hai tiến trình cùng nhận Term 2 chỉ chốt một việc và một lần ghi Portal giả', async () => {
+  const redis = new Map();
+  const canary = await createTermCanary({
+    setRedis: async (key, value) => {
+      if (redis.has(key)) return null;
+      redis.set(key, value);
+      return 'OK';
+    },
+    deleteRedis: async key => Number(redis.delete(key)),
+  });
+  try {
+    // Dữ liệu vào là một bài giả; hai request nhận việc và callback chạy đồng thời.
+    // Kết quả cần giữ đúng một job hoàn tất và một tác động Portal giả.
+    const fixture = fakeCache();
+    const seeded = await request(canary.app).post('/__canary/seed')
+      .send({ cacheValue: fixture.value });
+    assert.equal(seeded.status, 200);
+    const secret = redis.get(canary.syncKey);
+    const workers = ['canary-worker-a', 'canary-worker-b'];
+    const claims = await Promise.all(workers.map(workerId => request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/claim')
+      .set('x-writing-test-sync', secret)
+      .send({ workerId, limit: 1 })));
+    assert.deepEqual(claims.map(item => item.status), [200, 200]);
+    assert.equal(claims.reduce((total, item) => total + item.body.jobs.length, 0), 1);
+    const winnerIndex = claims.findIndex(item => item.body.jobs.length === 1);
+    const jobId = claims[winnerIndex].body.jobs[0].jobId;
+    const resultBody = { jobId, workerId: workers[winnerIndex],
+      runKey: fixture.runKey, result: JSON.parse(fixture.value).result };
+    const callbacks = await Promise.all([0, 1].map(() => request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/result')
+      .set('x-writing-test-sync', secret)
+      .send(resultBody)));
+    assert.ok(callbacks.some(item => item.status === 200));
+    assert.ok(callbacks.every(item => [200, 409].includes(item.status)));
+    const audit = await request(canary.app).get('/__canary/audit');
+    assert.equal(audit.status, 200);
+    assert.equal(audit.body.portalMockCalls, 1);
+    assert.deepEqual(audit.body.jobs.map(item => [item.job_type, item.status, item.total]),
+      [['collect', 'complete', 1], ['dispatch', 'complete', 1]]);
+  } finally {
+    await canary.close();
+  }
+  assert.equal(redis.size, 0);
+});
+
 test('Term Test 1 K56 Task 2 lưu đúng lượt và chỉ đồng bộ Portal giả một lần', async () => {
   const redis = new Map();
   const canary = await createTermCanary({ profileName: 'term1',
