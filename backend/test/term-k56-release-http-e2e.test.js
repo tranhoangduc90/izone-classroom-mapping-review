@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
@@ -18,7 +22,7 @@ const cases = [
     token: '00000000-0000-4000-8000-000000009001',
     classId: 990001,
     studentId: 991001,
-    className: 'CODEX-CANARY-1',
+    className: 'IC990001',
     taskNumber: 2,
     essay: 'Bài giả Task 2 của Term 1: “đúng bài” — e\u0301 và 🧪.',
     listeningCorrect: 20,
@@ -30,7 +34,7 @@ const cases = [
     token: '00000000-0000-4000-8000-000000009002',
     classId: 990002,
     studentId: 991002,
-    className: 'CODEX-CANARY-2',
+    className: 'IC990002',
     taskNumber: 1,
     essay: 'Bài giả Task 1 của Term 2: “đúng bài” — e\u0301 và 🧪.',
     listeningCorrect: 21,
@@ -74,6 +78,124 @@ function criteria(taskNumber) {
     feedback: `Nhận xét giả ${code}: “độ chính xác” — e\u0301 và 🧪.`,
     components: []
   }));
+}
+
+async function verifyPagesAgainstBackend(app) {
+  // Dữ liệu vào: source Pages được chỉ rõ bằng K56_PAGES_ROOT và hai lượt bài giả đã chấm trong API.
+  // Việc chính: mở Chrome, cho trang gọi endpoint kết quả của API thử và chặn mọi request thật.
+  // Kết quả: học viên giả thấy đúng lớp, Task, bài, điểm và bốn nhận xét sau khi tải lại.
+  // Khi lỗi: test đỏ; browser và máy chủ file thử được đóng, production không có request.
+  if (!process.env.K56_PAGES_ROOT) return;
+  const pagesRoot = resolve(process.env.K56_PAGES_ROOT);
+  const modules = process.env.CODEX_NODE_MODULES || resolve(
+    process.env.USERPROFILE || '', '.cache', 'codex-runtimes',
+    'codex-primary-runtime', 'dependencies', 'node', 'node_modules'
+  );
+  const { chromium } = createRequire(pathToFileURL(resolve(modules, 'playwright', 'package.json')).href)('playwright');
+  const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
+  const server = createServer(async (req, res) => {
+    const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+    const relative = pathname.endsWith('/') ? `${pathname}index.html` : pathname;
+    const target = resolve(pagesRoot, `.${relative}`);
+    if (!target.startsWith(`${pagesRoot}${sep}`)) return res.writeHead(403).end();
+    try {
+      res.writeHead(200, { 'Content-Type': mime[extname(target)] || 'application/octet-stream' });
+      res.end(await readFile(target));
+    } catch {
+      res.writeHead(404).end();
+    }
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  const siteBase = `http://127.0.0.1:${server.address().port}/`;
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, channel: 'chrome' });
+    for (const item of cases.slice(0, 2)) {
+      const context = await browser.newContext();
+      try {
+        const page = await context.newPage();
+        const calls = [];
+        const blocked = [];
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.addInitScript(({ slug, className, token }) => {
+          localStorage.setItem(`izone-test:${slug}:${className}`, JSON.stringify({
+            studentRef: '11111111-1111-4111-8111-111111111111',
+            studentName: 'Học viên giả', attemptToken: token,
+            completed: true, writingStarted: true, writingSubmitted: true
+          }));
+        }, { slug: item.slug, className: item.className, token: item.token });
+        await context.route('**/*', async route => {
+          const req = route.request();
+          const url = new URL(req.url());
+          if (/\/k56(?:-test2)?-shared\/config\.js$/u.test(url.pathname)) {
+            return route.fulfill({ contentType: 'text/javascript',
+              body: "window.TERM_TEST_APP_CONFIG={API_BASE_URL:'https://ducizone.ddns.net/mapping-api'};" });
+          }
+          if (url.pathname === '/mapping-api/api/term-tests/roster') {
+            return route.fulfill({ json: { class: { name: item.className },
+              students: [{ ref: '11111111-1111-4111-8111-111111111111', name: 'Học viên giả' }] } });
+          }
+          if (url.pathname === '/mapping-api/api/term-tests/result' && req.method() === 'POST') {
+            const payload = req.postDataJSON();
+            calls.push(payload);
+            const result = await request(app).post('/api/term-tests/result')
+              .set('Origin', ORIGIN).send(payload);
+            return route.fulfill({ status: result.status, json: result.body });
+          }
+          if (url.pathname === `/mapping-api/api/term-tests/${item.slug}/session/resume-attempt`) {
+            const content = await page.evaluate(() => window.K56_TERM_TEST_CONTENT);
+            return route.fulfill({ json: { content, serverNow: new Date().toISOString(),
+              attemptToken: item.token, listeningSubmitted: true } });
+          }
+          if (url.pathname === '/mapping-api/api/term-tests/result/stream') {
+            return route.fulfill({ status: 404, json: { message: 'Fixture: kiểm tra kết quả.' } });
+          }
+          if (req.method() === 'GET' && req.url().startsWith(siteBase)) return route.continue();
+          blocked.push(`${req.method()} ${url.origin}${url.pathname}`);
+          return route.abort();
+        });
+        await page.goto(`${siteBase}term-tests/${item.slug}-computer-based/?class=${item.className}`);
+        const score = page.locator('#writingSubmissionResult .writing-score-card.is-action');
+        try {
+          await score.waitFor({ state: 'visible', timeout: 10_000 });
+        } catch (error) {
+          throw new Error(`Trang chưa hiện điểm từ API thử: ${JSON.stringify({
+            slug: item.slug, body: (await page.locator('body').innerText()).slice(0, 700),
+            calls: calls.length, blocked, errors
+          })}`, { cause: error });
+        }
+        assert.match(await score.innerText(), new RegExp(`Writing Task ${item.taskNumber}[\\s\\S]*Band 6.5`));
+        assert.match(await page.locator('#resultMeta').innerText(), new RegExp(item.className));
+        assert.equal(await page.locator('#resultStudentName').innerText(), 'Học viên giả');
+        await score.click();
+        const dialog = page.locator('.writing-feedback-dialog');
+        await dialog.waitFor({ state: 'visible' });
+        assert.equal(await dialog.locator('.writing-feedback-essay').innerText(), item.essay);
+        assert.equal(await dialog.locator('.writing-band-summary-item').count(), 4);
+        assert.match(await dialog.innerText(), new RegExp(`Báo cáo giả ${item.slug}`));
+        for (const row of criteria(item.taskNumber)) {
+          assert.match(await dialog.innerText(), new RegExp(row.feedback));
+        }
+        await dialog.getByRole('button', { name: 'Đóng bài chấm Writing' }).click();
+        await page.reload();
+        await score.waitFor({ state: 'visible' });
+        await score.click();
+        await dialog.waitFor({ state: 'visible' });
+        assert.equal(await dialog.locator('.writing-feedback-essay').innerText(), item.essay);
+        assert.ok(calls.length >= 2 && calls.every(call => call.attemptToken === item.token),
+          'Trang không đọc lại đúng lượt từ API thử');
+        assert.deepEqual(blocked, [], 'Trang gọi ra ngoài fixture');
+        assert.deepEqual(errors, [], 'Trang có lỗi JavaScript');
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser?.close();
+    await new Promise(done => server.close(done));
+  }
 }
 
 async function createIsolatedDatabase() {
@@ -387,6 +509,8 @@ test('Term 1/2 K56: HTTP nộp → chấm → Portal thành công/mất phản h
       WHERE job.status = 'complete'
       GROUP BY attempt.test_slug ORDER BY attempt.test_slug`);
     assert.deepEqual(states.rows.map(row => row.total), [4, 4]);
+    await verifyPagesAgainstBackend(app);
+    assert.equal(portalWrites.length, cases.length, 'Mở trang kết quả không được gửi điểm Portal thêm');
   } finally {
     await database.close();
   }
