@@ -53,6 +53,19 @@ test('Term 2 K56 gửi số câu đúng trên thang 40/40, không đổi sang Ba
   assert.deepEqual(payload.grades, { listening: 31, reading: 28, writing: 6.5 });
 });
 
+test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', () => {
+  const payload = buildErpGradePayload({
+    attempt_token: attemptToken,
+    test_slug: 'mini-test-k56',
+    class_id: '2002',
+    student_id: '3002'
+  }, {
+    listening: { total: 10, correct: 8 },
+    reading: { total: 13, correct: 10 }
+  });
+  assert.deepEqual(payload.grades, {});
+});
+
 test('K56 không gọi Portal nếu cặp lớp–đề chưa được cấp quyền', async () => {
   let fetchCount = 0;
   const pool = {

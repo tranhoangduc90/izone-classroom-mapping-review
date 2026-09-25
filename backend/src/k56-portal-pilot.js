@@ -22,6 +22,8 @@ export function isK56PortalAttempt(attempt) {
 export function buildK56PortalGrades(attempt, result, extraGrades = {}) {
   if (!isK56PortalAttempt(attempt)) return {};
   const testSlug = attempt.test_slug || attempt.slug;
+  // Đợt phát hành này chỉ ghi Portal cho Term; Mini vẫn giữ tuyến hiện hành.
+  if (testSlug === 'mini-test-k56') return {};
   const limits = K56_PORTAL_TESTS[testSlug];
   const grades = {};
   for (const skill of ['listening', 'reading']) {
