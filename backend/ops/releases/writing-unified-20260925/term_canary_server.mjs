@@ -117,6 +117,10 @@ export async function createTermCanary({
   const service = createTermTestWritingGradingService({
     pool,
     syncErpGrades: async payload => {
+      // Mô phỏng cổng thật: bài không có điểm để ghi (Mini trong đợt Term) dừng trước request Portal.
+      if (Object.keys(payload.grades || {}).length === 0) {
+        return { status: 'disabled', attemptToken: payload.attemptToken };
+      }
       portalMockCalls += 1;
       return { status: 'synced', attemptToken: payload.attemptToken };
     }

@@ -35,7 +35,7 @@ function fakeCache({ testSlug = 'term-test-2-k56', taskNumber = 1 } = {}) {
           summary: 'Tóm tắt giả', feedback: 'Chi tiết giả' }] })) } }) };
 }
 
-test('API Term canary tạo đúng một collect job và không gọi Portal thật', async () => {
+test('Term Test 2 K56 giữ đúng lượt callback và chỉ gọi Portal giả một lần', async () => {
   const redis = new Map();
   const canary = await createTermCanary({
     setRedis: async (key, value) => {
@@ -72,6 +72,10 @@ test('API Term canary tạo đúng một collect job và không gọi Portal th�
     assert.equal(claim.body.jobs.length, 1);
     assert.equal(claim.body.jobs[0].jobType, 'collect');
     assert.equal(claim.body.jobs[0].source, 'k56_web');
+    assert.equal(claim.body.jobs[0].testSlug, 'term-test-2-k56');
+    assert.equal(claim.body.jobs[0].taskNumber, 1);
+    assert.equal(claim.body.jobs[0].rubricVersion, 'ielts-writing-v1');
+    assert.equal(claim.body.jobs[0].operationId, claim.body.jobs[0].jobId);
     assert.equal(claim.body.jobs[0].runKey, fixture.runKey);
     const claimedJob = claim.body.jobs[0];
     const wrong = await request(canary.app)
@@ -175,13 +179,13 @@ test('Mini K56 giữ callback cũ và không nhận metadata adapter Term', asyn
       .send({ jobId: claimed.body.jobs[0].jobId, workerId: 'mini-canary-worker',
         runKey: fixture.runKey, result: JSON.parse(fixture.value).result });
     assert.equal(saved.status, 200, JSON.stringify(saved.body));
-    assert.equal(saved.body.portalSyncStatus, 'synced');
+    assert.equal(saved.body.portalSyncStatus, 'not_applicable');
     const audit = await request(canary.app).get('/__canary/audit');
     assert.equal(audit.body.profileName, 'mini');
     assert.deepEqual(audit.body.runStates, [{ status: 'complete', task_number: 2 }]);
     assert.deepEqual(audit.body.jobs.map(item => [item.job_type, item.status]),
       [['collect', 'complete'], ['dispatch', 'complete']]);
-    assert.equal(audit.body.portalMockCalls, 1);
+    assert.equal(audit.body.portalMockCalls, 0);
   } finally {
     await canary.close();
   }
