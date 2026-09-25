@@ -218,6 +218,18 @@ for (const [index, fixture] of cases.entries()) {
   const routed = guard(dispatch).json;
   assert.ok(['k67', 'k56_term', 'k56_mini'].includes(routed.routeFamily));
   assert.equal(routed.routeFamily, fixture.routeFamily ?? (fixture.source === 'k67_web' ? 'k67' : 'k56_term'));
+  if (fixture.slug !== 'mini-test-k56') {
+    // Image API cũ thiếu metadata: K67 vẫn đi tuyến cũ, Term K56 phải dừng trước AI.
+    const legacyClaim = { ...dispatch };
+    for (const field of ['source', 'classId', 'attemptId', 'operationId', 'rubricVersion']) {
+      legacyClaim[field] = '';
+    }
+    if (fixture.source === 'k67_web') {
+      assert.equal(guard(legacyClaim).json.routeFamily, 'k67');
+    } else {
+      assert.throws(() => guard(legacyClaim), /WRITING_PROFILE_NOT_APPROVED/u);
+    }
+  }
   const confirmed = await runCode('Xác nhận đã chấm xong', {
     job: dispatch, executionId: `synthetic-dispatch-${index}`
   });
