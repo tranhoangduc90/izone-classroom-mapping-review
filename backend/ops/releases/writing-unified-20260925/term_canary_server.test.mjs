@@ -5,6 +5,74 @@ import test from 'node:test';
 import request from 'supertest';
 import { createTermCanary, redisCommand } from './term_canary_server.mjs';
 
+const WRITER_TRIAL_URL = 'https://n8n-ai.izone.edu.vn/webhook/term-k56-writer-bridge-00000000-0000-4000-8000-000000000321';
+
+test('cổng thử từ chối URL ghi điểm không thuộc webhook thử và Mini', async () => {
+  await assert.rejects(createTermCanary({ writerBridgeUrl: 'https://n8n-ai.izone.edu.vn/webhook/production' }),
+    /CANARY_WRITER_ROUTE_INVALID/u);
+  await assert.rejects(createTermCanary({ profileName: 'mini', writerBridgeUrl: WRITER_TRIAL_URL }),
+    /CANARY_WRITER_TERM_ONLY/u);
+});
+
+test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và không gửi lặp', async () => {
+  for (const profileName of ['term1', 'term']) {
+    const redis = new Map();
+    const requests = [];
+    const canary = await createTermCanary({ profileName,
+      writerBridgeUrl: WRITER_TRIAL_URL,
+      writerFetchImpl: async (url, options) => {
+        assert.equal(url, WRITER_TRIAL_URL);
+        const payload = JSON.parse(options.body);
+        requests.push(payload);
+        return new Response(JSON.stringify({ ok: true, status: 'synced',
+          attemptToken: payload.attemptToken }), { status: 200,
+          headers: { 'content-type': 'application/json' } });
+      },
+      setRedis: async (key, value) => {
+        if (redis.has(key)) return null;
+        redis.set(key, value);
+        return 'OK';
+      },
+      deleteRedis: async key => Number(redis.delete(key)),
+    });
+    try {
+      const fixture = fakeCache({ testSlug: profileName === 'term1'
+        ? 'term-test-1-k56' : 'term-test-2-k56',
+      taskNumber: profileName === 'term1' ? 2 : 1 });
+      assert.equal((await request(canary.app).post('/__canary/seed')
+        .send({ cacheValue: fixture.value })).status, 200);
+      const secret = redis.get(canary.syncKey);
+      const claimed = await request(canary.app)
+        .post('/api/term-tests/writing-grading/jobs/claim')
+        .set('x-writing-test-sync', secret)
+        .send({ workerId: 'writer-bridge-unit', limit: 1 });
+      assert.equal(claimed.body.jobs.length, 1);
+      const job = claimed.body.jobs[0];
+      const callback = () => request(canary.app)
+        .post('/api/term-tests/writing-grading/jobs/result')
+        .set('x-writing-test-sync', secret)
+        .send({ jobId: job.jobId, workerId: 'writer-bridge-unit',
+          runKey: fixture.runKey, result: JSON.parse(fixture.value).result });
+      const first = await callback();
+      assert.equal(first.status, 200, JSON.stringify(first.body));
+      assert.equal(first.body.portalSyncStatus, 'synced');
+      await callback();
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].testSlug, fixture.runKey.split(':')[0]);
+      assert.equal(requests[0].classId, profileName === 'term1' ? '99000001' : '99000002');
+      assert.equal(requests[0].studentId, '9002');
+      assert.deepEqual(requests[0].grades, { listening: 20, reading: profileName === 'term1' ? 13 : 20,
+        writing: 6 });
+      const audit = await request(canary.app).get('/__canary/audit');
+      assert.equal(audit.body.portalSyncMode, 'writer_bridge');
+      assert.deepEqual(audit.body.portalSyncStates, [{ status: 'synced', total: 1 }]);
+    } finally {
+      await canary.close();
+    }
+    assert.equal(redis.size, 0);
+  }
+});
+
 test('hai đề Term K56 seed một job dispatch đúng prompt/ảnh và không ghi Portal', async () => {
   for (const profileName of ['term1', 'term']) {
     const redis = new Map();

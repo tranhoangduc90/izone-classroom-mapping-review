@@ -7,6 +7,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { createApp } from '../../../src/app.js';
 import { createAssessmentSchemaPool } from '../../../src/assessment-schema-pool.js';
 import { createTermTestWritingGradingService } from '../../../src/term-test-writing-grading.js';
+import { createErpGradeSync } from '../../../src/erp-sync.js';
+import { validateCanaryWriterUrl } from './term_writer_http_canary.mjs';
 
 const PORT = 8791;
 const REDIS_HOST = 'redis';
@@ -118,9 +120,17 @@ export async function createTermCanary({
   profileName = 'term',
   setRedis = (key, value) => redisCommand(['SET', key, value, 'EX', TTL_SECONDS, 'NX']),
   deleteRedis = key => redisCommand(['DEL', key]),
+  writerBridgeUrl = null,
+  writerFetchImpl = globalThis.fetch,
 } = {}) {
   const profile = PROFILES[profileName];
   assert.ok(profile, 'CANARY_PROFILE_NOT_APPROVED');
+  // Chỉ bài Term giả mới được thử tuyến ghi điểm; URL phải là webhook thử riêng.
+  assert.ok(!writerBridgeUrl || ['term', 'term1'].includes(profileName),
+    'CANARY_WRITER_TERM_ONLY');
+  const validatedWriterUrl = writerBridgeUrl ? validateCanaryWriterUrl(writerBridgeUrl) : null;
+  const fakeClassId = profileName === 'term' && validatedWriterUrl ? '99000002' : '99000001';
+  const fakeStudentId = validatedWriterUrl ? '9002' : '99000001';
   const database = new PGlite();
   for (const schema of ['assessment', 'assessment_k56']) {
     await database.exec(`CREATE SCHEMA ${schema};
@@ -136,7 +146,41 @@ export async function createTermCanary({
     import.meta.url), 'utf8');
   await database.exec(migration);
   await database.exec(migration.replace(/\bassessment\./gu, 'assessment_k56.'));
-  const pool = createAssessmentSchemaPool(database, { family: 'k56' });
+  if (validatedWriterUrl) {
+    // Kho nhúng chỉ có lớp/học viên giả và quyền đề giả, không đọc hoặc ghi kho production.
+    await database.exec(`CREATE SCHEMA mapping;
+      CREATE TABLE mapping.classroom_course_mapping (erp_course_class_id BIGINT PRIMARY KEY);
+      CREATE TABLE assessment_k56.test_definition (slug TEXT PRIMARY KEY, is_active BOOLEAN NOT NULL);
+      CREATE TABLE assessment_k56.term_test_class_access (
+        test_slug TEXT NOT NULL, erp_course_class_id BIGINT NOT NULL, enabled BOOLEAN NOT NULL);
+      CREATE TABLE assessment_k56.term_test_portal_sync_state (
+        attempt_id UUID NOT NULL, payload_fingerprint TEXT NOT NULL, test_slug TEXT NOT NULL,
+        grade_fields TEXT[] NOT NULL DEFAULT '{}'::text[], status TEXT NOT NULL DEFAULT 'processing',
+        http_status INTEGER, error_code TEXT, duration_ms INTEGER,
+        attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (attempt_id, payload_fingerprint));`);
+    await database.query(`INSERT INTO mapping.classroom_course_mapping VALUES ($1::bigint)`,
+      [fakeClassId]);
+    await database.query(`INSERT INTO assessment_k56.test_definition VALUES ($1, true)`,
+      [profile.testSlug]);
+    await database.query(`INSERT INTO assessment_k56.term_test_class_access VALUES ($1, $2::bigint, true)`,
+      [profile.testSlug, fakeClassId]);
+  }
+  // PGlite không luôn trả rowCount như pg; adapter cần nó để chống gửi trùng.
+  const pgCompatiblePool = {
+    async query(...args) {
+      const result = await database.query(...args);
+      return { ...result, rowCount: result.rows.length || result.affectedRows || 0 };
+    },
+  };
+  const pool = createAssessmentSchemaPool(pgCompatiblePool, { family: 'k56' });
+  const bridgeSync = validatedWriterUrl ? createErpGradeSync({
+    config: { demoIsolatedMode: false, k56PortalPilotEnabled: true,
+      erpSyncUrl: validatedWriterUrl, erpSyncSecret: 'canary-term-k56',
+      erpSyncTimeoutMs: 20_000 },
+    pool, fetchImpl: writerFetchImpl, logger: { info() {}, error() {} },
+  }) : null;
   const secret = randomBytes(32).toString('hex');
   const syncKey = `codex:writing:term_canary:${randomUUID()}:sync_secret`;
   const syncSet = await setRedis(syncKey, secret);
@@ -153,7 +197,8 @@ export async function createTermCanary({
         return { status: 'disabled', attemptToken: payload.attemptToken };
       }
       portalMockCalls += 1;
-      return { status: 'synced', attemptToken: payload.attemptToken };
+      return bridgeSync ? bridgeSync(payload)
+        : { status: 'synced', attemptToken: payload.attemptToken };
     }
   });
   const config = {
@@ -183,9 +228,9 @@ export async function createTermCanary({
         id, test_slug, erp_course_class_id, erp_student_contact_id,
         class_name_snapshot, student_name_snapshot, combined_result,
         completed_at, writing_submitted_at
-      ) VALUES ($1::uuid, $2, 99000001, 99000001,
-        'CODEX-CANARY', 'Học viên giả', $3::jsonb, now(), now());`,
-      [attemptToken, profile.testSlug, JSON.stringify(combined)]);
+      ) VALUES ($1::uuid, $2, $3::bigint, $4::bigint,
+        'CODEX-CANARY', 'Học viên giả', $5::jsonb, now(), now());`,
+      [attemptToken, profile.testSlug, fakeClassId, fakeStudentId, JSON.stringify(combined)]);
       await service.ensureSubmission({ attemptToken, testSlug: profile.testSlug,
         task1: profile.taskNumber === 1 ? 'Bài giả cho phép thử callback' : '',
         task2: profile.taskNumber === 2 ? 'Đoạn văn giả cho phép thử callback' : '',
@@ -226,9 +271,9 @@ export async function createTermCanary({
         id, test_slug, erp_course_class_id, erp_student_contact_id,
         class_name_snapshot, student_name_snapshot, combined_result,
         completed_at, writing_submitted_at
-      ) VALUES ($1::uuid, $2, 99000001, 99000001,
-        'CODEX-CANARY', 'Học viên giả', $3::jsonb, now(), now());`,
-      [attemptToken, profile.testSlug, JSON.stringify(combined)]);
+      ) VALUES ($1::uuid, $2, $3::bigint, $4::bigint,
+        'CODEX-CANARY', 'Học viên giả', $5::jsonb, now(), now());`,
+      [attemptToken, profile.testSlug, fakeClassId, fakeStudentId, JSON.stringify(combined)]);
       await service.ensureSubmission({ attemptToken, testSlug: profile.testSlug,
         task1: profile.taskNumber === 1 ? SYNTHETIC_ESSAY : '',
         task2: profile.taskNumber === 2 ? SYNTHETIC_ESSAY : '',
@@ -248,8 +293,14 @@ export async function createTermCanary({
       GROUP BY job_type, status ORDER BY job_type, status;`);
     const runs = await pool.query(`SELECT status, task_number
       FROM assessment.term_test_writing_grading_run;`);
+    const portalSync = validatedWriterUrl
+      ? await pool.query(`SELECT status, count(*)::int AS total
+          FROM assessment.term_test_portal_sync_state GROUP BY status ORDER BY status;`)
+      : { rows: [] };
     return res.json({ ok: true, database: 'embedded_pglite', profileName, seedState, syncKey,
       jobs: jobs.rows, runStates: runs.rows, portalMockCalls,
+      portalSyncMode: validatedWriterUrl ? 'writer_bridge' : 'mock',
+      portalSyncStates: portalSync.rows,
       attemptCount: attemptToken ? 1 : 0, ownedRedisKeys: [...ownedKeys] });
   });
   // Chỉ mở bốn endpoint chấm cho n8n; các API khác trong ứng dụng gốc bị chặn.
@@ -275,7 +326,8 @@ export async function createTermCanary({
 }
 
 if (process.argv[1] && process.argv[1].endsWith('/term_canary_server.mjs')) {
-  const canary = await createTermCanary({ profileName: process.env.TERM_CANARY_PROFILE || 'term' });
+  const canary = await createTermCanary({ profileName: process.env.TERM_CANARY_PROFILE || 'term',
+    writerBridgeUrl: process.env.TERM_CANARY_WRITER_URL || null });
   const server = canary.app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(JSON.stringify({ outcome: 'ready', port: PORT,
       database: 'embedded_pglite', publicPort: false }) + '\n');

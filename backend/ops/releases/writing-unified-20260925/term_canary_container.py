@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -24,6 +25,7 @@ EXPLICIT_FILES = [
     Path("docs/migrations/2026-08-19-term-test-writing-grading.sql"),
     *[SCRIPTS / name for name in (
         "Dockerfile.term-canary", "term_canary_server.mjs",
+        "term_writer_http_canary.mjs",
         "term_canary_seed.mjs", "term_canary_seed_dispatch.mjs",
         "term_canary_health.mjs", "term_canary_audit.mjs")],
 ]
@@ -194,7 +196,18 @@ def seed_dispatch(client, profile_name):
             "productionServicesChanged": 0}
 
 
-def deploy(client, profile_name):
+def deploy(client, profile_name, writer_bridge=False):
+    # Dữ liệu vào: URL webhook thử qua biến môi trường của phiên vận hành.
+    # Việc chính: chỉ chuyển URL đúng dạng sang container thử, không in URL.
+    # Kết quả: backend giả dùng adapter thật; lỗi dừng trước khi tạo image/container.
+    writer_url = os.environ.get("TERM_CANARY_WRITER_URL", "") if writer_bridge else ""
+    if writer_bridge and profile_name not in {"term", "term1"}:
+        raise RuntimeError("TERM_CANARY_WRITER_TERM_ONLY")
+    if writer_bridge and not re.fullmatch(
+            r"https://n8n-ai\.izone\.edu\.vn/webhook/term-k56-writer-bridge-"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            writer_url):
+        raise RuntimeError("TERM_CANARY_WRITER_URL_INVALID")
     if object_exists(client, "container", CONTAINER) or object_exists(client, "image", IMAGE):
         raise RuntimeError("TERM_CANARY_ALREADY_EXISTS")
     _, network = remote(client, "docker network inspect --format '{{.Name}}' n8n-net")
@@ -223,7 +236,9 @@ def deploy(client, profile_name):
            + " --tmpfs /tmp:rw,noexec,nosuid,size=64m"
            + " --cap-drop ALL --security-opt no-new-privileges"
            + " --memory 768m --cpus 1.0"
-           + " -e TERM_CANARY_PROFILE=" + profile_name + " " + IMAGE,
+           + " -e TERM_CANARY_PROFILE=" + profile_name
+           + (" -e TERM_CANARY_WRITER_URL=" + shlex.quote(writer_url)
+              if writer_bridge else "") + " " + IMAGE,
            timeout=30, stage="run")
     return {"businessOutcome": "created", "contextFiles": file_count,
             "productionServicesChanged": 0}
@@ -251,11 +266,12 @@ def main():
     parser.add_argument("mode", choices=["deploy", "inspect", "diagnose", "audit",
                                          "seed-dispatch", "rollback"])
     parser.add_argument("--profile", choices=["term", "term1", "mini"], default="term")
+    parser.add_argument("--writer-bridge", action="store_true")
     args = parser.parse_args()
     client = connect()
     try:
         if args.mode == "deploy":
-            result = deploy(client, args.profile)
+            result = deploy(client, args.profile, args.writer_bridge)
         elif args.mode == "inspect":
             result = inspect_container(client) or {"businessOutcome": "absent"}
         elif args.mode == "diagnose":

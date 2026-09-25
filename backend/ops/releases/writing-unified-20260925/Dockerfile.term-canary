@@ -5,6 +5,7 @@ COPY backend/package.json backend/package-lock.json ./backend/
 RUN cd backend && npm ci --include=dev --ignore-scripts --no-audit --no-fund
 COPY backend/src ./backend/src
 COPY backend/ops/releases/writing-unified-20260925/term_canary_server.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_server.mjs
+COPY backend/ops/releases/writing-unified-20260925/term_writer_http_canary.mjs ./backend/ops/releases/writing-unified-20260925/term_writer_http_canary.mjs
 COPY backend/ops/releases/writing-unified-20260925/term_canary_seed.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_seed.mjs
 COPY backend/ops/releases/writing-unified-20260925/term_canary_seed_dispatch.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_seed_dispatch.mjs
 COPY backend/ops/releases/writing-unified-20260925/term_canary_health.mjs ./backend/ops/releases/writing-unified-20260925/term_canary_health.mjs
