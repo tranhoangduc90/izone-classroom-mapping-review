@@ -1,8 +1,55 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import test from 'node:test';
 import request from 'supertest';
 import { createTermCanary, redisCommand } from './term_canary_server.mjs';
+
+test('hai đề Term K56 seed một job dispatch đúng prompt/ảnh và không ghi Portal', async () => {
+  for (const profileName of ['term1', 'term']) {
+    const redis = new Map();
+    const canary = await createTermCanary({ profileName,
+      setRedis: async (key, value) => {
+        if (redis.has(key)) return null;
+        redis.set(key, value);
+        return 'OK';
+      },
+      deleteRedis: async key => Number(redis.delete(key)),
+    });
+    try {
+      const seeded = await request(canary.app).post('/__canary/seed-dispatch');
+      assert.equal(seeded.status, 200);
+      assert.equal(seeded.body.jobType, 'dispatch');
+      const again = await request(canary.app).post('/__canary/seed-dispatch');
+      assert.equal(again.status, 409);
+      const claimed = await request(canary.app)
+        .post('/api/term-tests/writing-grading/jobs/claim')
+        .set('x-writing-test-sync', redis.get(canary.syncKey))
+        .send({ workerId: 'canary-dispatch-test', limit: 1 });
+      assert.equal(claimed.status, 200);
+      assert.equal(claimed.body.jobs.length, 1);
+      const job = claimed.body.jobs[0];
+      assert.equal(job.jobType, 'dispatch');
+      assert.equal(job.source, 'k56_web');
+      assert.equal(job.testSlug, profileName === 'term1' ? 'term-test-1-k56' : 'term-test-2-k56');
+      assert.equal(job.taskNumber, profileName === 'term1' ? 2 : 1);
+      assert.equal(createHash('sha256').update(job.prompt.normalize('NFC')
+        .replace(/\s+/gu, ' ').trim()).digest('hex'),
+        profileName === 'term1'
+          ? '23161a3ecea18085daa41b02336292839eb4b57536d9cf590efc2e29881007fb'
+          : '869873a419079aba3a6d145c8700eddfc609c3865b1935d49fa698b7614d7c51');
+      assert.equal(job.imageUrl, profileName === 'term1' ? ''
+        : 'https://ducizone.ddns.net/writing-assets/v1/4a6b19c91981dbabf3bc559c7764a04ffb28ac4e1b61f9a954147c7712b337b1.png');
+      assert.ok(job.essay.startsWith('This is a synthetic writing sample'));
+      const audit = await request(canary.app).get('/__canary/audit');
+      assert.equal(audit.body.portalMockCalls, 0);
+      assert.equal(audit.body.attemptCount, 1);
+    } finally {
+      await canary.close();
+    }
+    assert.equal(redis.size, 0);
+  }
+});
 
 test('gửi Redis bằng số byte UTF-8, không cắt nhận xét tiếng Việt', async () => {
   let received = Buffer.alloc(0);

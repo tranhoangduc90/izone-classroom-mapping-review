@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 import tarfile
 import tempfile
@@ -23,7 +24,8 @@ EXPLICIT_FILES = [
     Path("docs/migrations/2026-08-19-term-test-writing-grading.sql"),
     *[SCRIPTS / name for name in (
         "Dockerfile.term-canary", "term_canary_server.mjs",
-        "term_canary_seed.mjs", "term_canary_health.mjs", "term_canary_audit.mjs")],
+        "term_canary_seed.mjs", "term_canary_seed_dispatch.mjs",
+        "term_canary_health.mjs", "term_canary_audit.mjs")],
 ]
 
 
@@ -130,6 +132,68 @@ def audit(client):
     return result
 
 
+def diagnose(client):
+    # Dữ liệu vào: container canary do đúng task sở hữu.
+    # Việc chính: hỏi HTTP nội bộ chỉ lấy mã trạng thái, không đọc body hoặc log bài làm.
+    # Kết quả: metadata và mã lỗi an toàn để phân biệt ứng dụng với công cụ kiểm.
+    # Khi lỗi: không thay đổi container hoặc tự chạy lại job.
+    result = inspect_container(client)
+    if result is None:
+        return {"businessOutcome": "absent"}
+    script = ("fetch('http://127.0.0.1:8791/__canary/audit')"
+              ".then(async r=>{const b=await r.json();"
+              "console.log(JSON.stringify({status:r.status,ok:b.ok===true,"
+              "keys:Object.keys(b).sort()}))})"
+              ".catch(e=>console.log(JSON.stringify({error:e.name})))")
+    _, output = remote(client, "docker exec " + CONTAINER + " node -e "
+                       + shlex.quote(script), stage="diagnose")
+    result["auditHttp"] = json.loads(output)
+    _stdin, stdout, stderr = client.exec_command(
+        "docker exec " + CONTAINER + " node "
+        "ops/releases/writing-unified-20260925/term_canary_audit.mjs", timeout=20)
+    audit_output = stdout.read().decode("utf-8", errors="replace")
+    audit_error = stderr.read().decode("utf-8", errors="replace")
+    audit_exit = stdout.channel.recv_exit_status()
+    result["auditScript"] = {"exitCode": audit_exit,
+                             "outputIsJson": audit_output.lstrip().startswith("{"),
+                             "errorType": "SyntaxError" if "SyntaxError" in audit_error else
+                             "ERR_MODULE_NOT_FOUND" if "ERR_MODULE_NOT_FOUND" in audit_error else
+                             "TypeError" if "TypeError" in audit_error else
+                             "other" if audit_error else "none"}
+    return result
+
+
+def seed_dispatch(client, profile_name):
+    # Dữ liệu vào: canary rỗng đã kiểm và bài giả cố định trong image thử.
+    # Việc chính: tạo một job dispatch, không nhận bài/định danh từ người dùng.
+    # Kết quả: readback một job chờ, chưa gọi Portal.
+    # Khi lỗi: không retry vì seed là thao tác một lần; giữ trạng thái để đối soát.
+    if profile_name not in {"term", "term1"}:
+        raise RuntimeError("TERM_CANARY_DISPATCH_PROFILE_INVALID")
+    before = audit(client)
+    if (before.get("health") != "healthy" or before.get("app", {}).get("profileName") != profile_name
+            or before["app"].get("seedState") != "empty"
+            or before["app"].get("portalMockCalls") != 0):
+        raise RuntimeError("TERM_CANARY_DISPATCH_PRECONDITION_FAILED")
+    _, raw = remote(client, "docker exec " + CONTAINER + " node "
+                    "ops/releases/writing-unified-20260925/term_canary_seed_dispatch.mjs",
+                    stage="dispatch_seed")
+    seeded = json.loads(raw)
+    if (seeded.get("outcome") != "success" or seeded.get("pendingJobs") != 1
+            or seeded.get("jobType") != "dispatch"):
+        raise RuntimeError("TERM_CANARY_DISPATCH_SEED_INVALID")
+    after = audit(client)
+    jobs = after.get("app", {}).get("jobs", [])
+    if (after["app"].get("seedState") != "ready"
+            or after["app"].get("portalMockCalls") != 0
+            or len(jobs) != 1 or jobs[0].get("job_type") != "dispatch"
+            or jobs[0].get("status") != "queued" or jobs[0].get("total") != 1):
+        raise RuntimeError("TERM_CANARY_DISPATCH_READBACK_FAILED")
+    return {"businessOutcome": "dispatch_ready", "profile": profile_name,
+            "pendingJobs": 1, "portalMockCalls": 0,
+            "productionServicesChanged": 0}
+
+
 def deploy(client, profile_name):
     if object_exists(client, "container", CONTAINER) or object_exists(client, "image", IMAGE):
         raise RuntimeError("TERM_CANARY_ALREADY_EXISTS")
@@ -184,13 +248,20 @@ def rollback(client):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["deploy", "audit", "rollback"])
+    parser.add_argument("mode", choices=["deploy", "inspect", "diagnose", "audit",
+                                         "seed-dispatch", "rollback"])
     parser.add_argument("--profile", choices=["term", "term1", "mini"], default="term")
     args = parser.parse_args()
     client = connect()
     try:
         if args.mode == "deploy":
             result = deploy(client, args.profile)
+        elif args.mode == "inspect":
+            result = inspect_container(client) or {"businessOutcome": "absent"}
+        elif args.mode == "diagnose":
+            result = diagnose(client)
+        elif args.mode == "seed-dispatch":
+            result = seed_dispatch(client, args.profile)
         elif args.mode == "audit":
             result = audit(client)
         else:

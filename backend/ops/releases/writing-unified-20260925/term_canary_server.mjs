@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import express from 'express';
@@ -12,11 +12,42 @@ const PORT = 8791;
 const REDIS_HOST = 'redis';
 const REDIS_PORT = 6379;
 const TTL_SECONDS = 7200;
-const PROFILES = Object.freeze({
-  term: Object.freeze({ testSlug: 'term-test-2-k56', taskNumber: 1 }),
-  term1: Object.freeze({ testSlug: 'term-test-1-k56', taskNumber: 2 }),
+export const PROFILES = Object.freeze({
+  term: Object.freeze({ testSlug: 'term-test-2-k56', taskNumber: 1,
+    prompt: 'The graph below shows the amounts of waste produced by three companies over a period of 15 years.',
+    followUp: 'Summarise the information by selecting and reporting the main features, and make comparisons where relevant.',
+    image: 'https://ducizone.ddns.net/writing-assets/v1/4a6b19c91981dbabf3bc559c7764a04ffb28ac4e1b61f9a954147c7712b337b1.png',
+    promptSha256: '869873a419079aba3a6d145c8700eddfc609c3865b1935d49fa698b7614d7c51' }),
+  term1: Object.freeze({ testSlug: 'term-test-1-k56', taskNumber: 2,
+    prompt: 'Although more and more people read the news on the Internet, newspapers will remain the main source of news for the majority of people.',
+    followUp: 'To what extent do you agree or disagree?',
+    image: '',
+    promptSha256: '23161a3ecea18085daa41b02336292839eb4b57536d9cf590efc2e29881007fb' }),
   mini: Object.freeze({ testSlug: 'mini-test-k56', taskNumber: 2 }),
 });
+const SYNTHETIC_ESSAY = 'This is a synthetic writing sample for an isolated grading test. '
+  + 'It does not belong to a student. The response states a clear position, offers a reason, '
+  + 'and develops an example in ordinary English. The next paragraph explains a possible '
+  + 'counterargument before returning to the central idea. The wording is intentionally '
+  + 'simple so that the test checks the route, prompt, model, and callback rather than the '
+  + 'quality of a real examination script. No personal details, class roster, or actual '
+  + 'assessment answer are included. The test should create one grading job, save the '
+  + 'result under the same attempt, and send one score to the mock scorebook. If the '
+  + 'grader cannot use the selected task definition, it should stop with an error instead '
+  + 'of silently switching to another task or course. This final sentence makes the sample '
+  + 'long enough to exercise the usual essay path without pretending to be learner work.';
+
+// Dữ liệu vào: đề Term K56 công khai đã được chốt trong registry chuyên môn.
+// Việc chính: so prompt nối đúng như backend lưu với hash đã ghim trước khi seed.
+// Kết quả: chỉ bài giả có đề đúng mới đi vào hàng chờ canary.
+// Khi lỗi: dừng trước khi tạo job; không thử ghép gần đúng sang đề khác.
+export function assertCanaryPrompt(profile) {
+  const prompt = [profile.prompt, profile.followUp].join('\n\n');
+  assert.equal(createHash('sha256').update(prompt.normalize('NFC')
+    .replace(/\s+/gu, ' ').trim()).digest('hex'),
+    profile.promptSha256, 'CANARY_PROMPT_PIN_MISMATCH');
+  return prompt;
+}
 
 function encodeRedis(args) {
   return Buffer.concat([Buffer.from(`*${args.length}\r\n`), ...args.flatMap(value => {
@@ -178,6 +209,37 @@ export async function createTermCanary({
     } catch {
       seedState = 'failed';
       return res.status(409).json({ ok: false, error: 'CANARY_SEED_FAILED' });
+    }
+  });
+  app.post('/__canary/seed-dispatch', localOnly, async (_req, res) => {
+    if (seedState !== 'empty') return res.status(409).json({ ok: false, error: 'CANARY_SEED_ALREADY_USED' });
+    seedState = 'seeding';
+    try {
+      assert.ok(profileName === 'term' || profileName === 'term1', 'CANARY_DISPATCH_TERM_ONLY');
+      assertCanaryPrompt(profile);
+      attemptToken = randomUUID();
+      const combined = profileName === 'term1'
+        ? { listening: { total: 40, correct: 20 }, reading: { total: 26, correct: 13 } }
+        : { listening: { total: 40, correct: 20, band: 5.5 },
+          reading: { total: 40, correct: 20, band: 5.5 } };
+      await pool.query(`INSERT INTO assessment.term_test_attempt (
+        id, test_slug, erp_course_class_id, erp_student_contact_id,
+        class_name_snapshot, student_name_snapshot, combined_result,
+        completed_at, writing_submitted_at
+      ) VALUES ($1::uuid, $2, 99000001, 99000001,
+        'CODEX-CANARY', 'Học viên giả', $3::jsonb, now(), now());`,
+      [attemptToken, profile.testSlug, JSON.stringify(combined)]);
+      await service.ensureSubmission({ attemptToken, testSlug: profile.testSlug,
+        task1: profile.taskNumber === 1 ? SYNTHETIC_ESSAY : '',
+        task2: profile.taskNumber === 2 ? SYNTHETIC_ESSAY : '',
+        taskDefinitions: [{ id: `task${profile.taskNumber}`, prompt: profile.prompt,
+          followUp: profile.followUp, image: profile.image }] });
+      seedState = 'ready';
+      return res.json({ ok: true, state: seedState, pendingJobs: 1,
+        jobType: 'dispatch' });
+    } catch {
+      seedState = 'failed';
+      return res.status(409).json({ ok: false, error: 'CANARY_DISPATCH_SEED_FAILED' });
     }
   });
   app.get('/__canary/audit', localOnly, async (_req, res) => {
