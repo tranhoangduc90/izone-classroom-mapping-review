@@ -40,6 +40,19 @@ test('K56 tạo điểm Portal cho lớp thứ hai nhưng giữ nguyên thang đ
   assert.deepEqual(invalid.grades, {});
 });
 
+test('Term 2 K56 gửi số câu đúng trên thang 40/40, không đổi sang Band', () => {
+  const payload = buildErpGradePayload({
+    attempt_token: attemptToken,
+    test_slug: 'term-test-2-k56',
+    class_id: '2002',
+    student_id: '3002'
+  }, {
+    listening: { total: 40, correct: 31, band: 7 },
+    reading: { total: 40, correct: 28, band: 6.5 }
+  }, { writing: 6.5 });
+  assert.deepEqual(payload.grades, { listening: 31, reading: 28, writing: 6.5 });
+});
+
 test('K56 không gọi Portal nếu cặp lớp–đề chưa được cấp quyền', async () => {
   let fetchCount = 0;
   const pool = {
