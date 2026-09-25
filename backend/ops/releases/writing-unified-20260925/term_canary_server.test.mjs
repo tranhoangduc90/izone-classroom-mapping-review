@@ -142,7 +142,7 @@ test('Term Test 1 K56 Task 2 lưu đúng lượt và chỉ đồng bộ Portal g
   assert.equal(redis.size, 0);
 });
 
-test('Mini K56 Task 2 dùng cùng callback và đúng thang Portal 10/13', async () => {
+test('Mini K56 giữ callback cũ và không nhận metadata adapter Term', async () => {
   const redis = new Map();
   const canary = await createTermCanary({ profileName: 'mini',
     setRedis: async (key, value) => {
@@ -165,7 +165,10 @@ test('Mini K56 Task 2 dùng cùng callback và đúng thang Portal 10/13', async
     assert.equal(claimed.body.jobs.length, 1);
     assert.equal(claimed.body.jobs[0].testSlug, 'mini-test-k56');
     assert.equal(claimed.body.jobs[0].taskNumber, 2);
-    assert.equal(claimed.body.jobs[0].rubricVersion, 'k56-mini-paragraph-v1');
+    // Phát hành Term không chuyển Mini sang contract chấm hợp nhất.
+    for (const field of ['source', 'classId', 'attemptId', 'operationId', 'rubricVersion']) {
+      assert.equal(Object.hasOwn(claimed.body.jobs[0], field), false);
+    }
     const saved = await request(canary.app)
       .post('/api/term-tests/writing-grading/jobs/result')
       .set('x-writing-test-sync', redis.get(canary.syncKey))

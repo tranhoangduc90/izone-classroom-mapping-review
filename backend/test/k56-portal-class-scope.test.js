@@ -53,7 +53,7 @@ test('Term 2 K56 gửi số câu đúng trên thang 40/40, không đổi sang Ba
   assert.deepEqual(payload.grades, { listening: 31, reading: 28, writing: 6.5 });
 });
 
-test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', () => {
+test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', async () => {
   const payload = buildErpGradePayload({
     attempt_token: attemptToken,
     test_slug: 'mini-test-k56',
@@ -64,6 +64,14 @@ test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', ()
     reading: { total: 13, correct: 10 }
   });
   assert.deepEqual(payload.grades, {});
+  let fetchCount = 0;
+  const sync = createErpGradeSync({
+    config: config(),
+    pool: { async query() { throw new Error('Mini không được tra quyền ghi Portal'); } },
+    fetchImpl: async () => { fetchCount += 1; throw new Error('Mini không được gọi Portal'); }
+  });
+  assert.deepEqual(await sync(payload), { status: 'disabled' });
+  assert.equal(fetchCount, 0);
 });
 
 test('K56 không gọi Portal nếu cặp lớp–đề chưa được cấp quyền', async () => {
