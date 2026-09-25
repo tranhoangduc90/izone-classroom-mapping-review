@@ -15,8 +15,8 @@ import { createTermTestWritingGradingService } from '../../../src/term-test-writ
 // Khi lỗi: in mã kiểm thử, không in bài, định danh hay cấu hình kết nối.
 const databaseUrl = process.env.TERM_CANARY_DATABASE_URL;
 if (!databaseUrl) throw new Error('CANARY_DATABASE_URL_MISSING');
-const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
-const scopedPool = createAssessmentSchemaPool(pool, { family: 'k56' });
+let pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+let scopedPool = createAssessmentSchemaPool(pool, { family: 'k56' });
 const result = {
   taskScore: 6,
   report: 'Báo cáo giả',
@@ -152,6 +152,24 @@ async function main() {
     const winner = claims.findIndex(item => item.jobs.length === 1);
     await service().completeDispatch({ jobId: claimed[0].jobId,
       workerId: winner === 0 ? 'canary-a' : 'canary-b' });
+    stage = 'pause_and_reconnect';
+    // Dữ liệu vào: một dispatch đã hoàn tất và collect còn trong hàng chờ PostgreSQL.
+    // Việc chính: đóng kết nối API thử, tạo kết nối mới rồi so trạng thái trước/sau.
+    // Kết quả: job không biến mất hay nhận lại; sau đó mới mở lượt collect.
+    // Khi lỗi: dừng canary, không đụng hàng chờ production hoặc tự chạy lại bài.
+    const beforeReconnect = await scopedPool.query(`SELECT job_type, status
+      FROM assessment.term_test_writing_grading_job ORDER BY job_type;`);
+    assert.deepEqual(beforeReconnect.rows,
+      [{ job_type: 'collect', status: 'retry_wait' },
+        { job_type: 'dispatch', status: 'complete' }],
+      'CANARY_PENDING_BEFORE_RECONNECT_INVALID');
+    await pool.end();
+    pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    scopedPool = createAssessmentSchemaPool(pool, { family: 'k56' });
+    const afterReconnect = await scopedPool.query(`SELECT job_type, status
+      FROM assessment.term_test_writing_grading_job ORDER BY job_type;`);
+    assert.deepEqual(afterReconnect.rows, beforeReconnect.rows,
+      'CANARY_PENDING_LOST_AFTER_RECONNECT');
     await scopedPool.query(`UPDATE assessment.term_test_writing_grading_job
       SET next_attempt_at = now() WHERE job_type = 'collect';`);
 
@@ -219,7 +237,8 @@ async function main() {
         callbacks.filter(item => item.ok).length,
       callbackConflicts: callbacks.filter(item => !item.ok).map(item => item.code),
       replayStatus: 'duplicate', conflictFailStatus: conflict ? 'already_complete' : 'not_applicable',
-      collectStatus: 'complete', portalStatus: 'synced', finalStatus: 'ready' }));
+      collectStatus: 'complete', portalStatus: 'synced', finalStatus: 'ready',
+      pendingJobPreservedAfterReconnect: true }));
   } catch (error) {
     console.log(JSON.stringify({ toolOutcome: 'success', businessOutcome: 'failure',
       stage, code: String(error?.message || 'UNKNOWN').replace(/[^A-Z0-9_]/gi, '_').slice(0, 100) }));
