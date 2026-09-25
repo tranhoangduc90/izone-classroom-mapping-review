@@ -20,7 +20,8 @@ assert.equal(old.error, undefined, 'TERM_PARENT_OLD_PROCESS_ERROR');
 assert.notEqual(old.status, 0, 'TERM_PARENT_OLD_MUST_BE_RED');
 assert.match(old.stderr,
   /TERM_PARENT_UNEXPECTED_NODE_REFERENCE:Chấm trực tiếp một Task/u);
-const fixed = run(fixedPath);
+// Snapshot ứng viên giữ URL production; httpRequest của fixture chặn toàn bộ mạng ngoài.
+const fixed = run(fixedPath, true);
 assert.equal(fixed.error, undefined, 'TERM_PARENT_FIXED_PROCESS_ERROR');
 assert.equal(fixed.status, 0, 'TERM_PARENT_FIXED_MUST_BE_GREEN');
 const report = JSON.parse(fixed.stdout.trim());

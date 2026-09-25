@@ -162,7 +162,8 @@ const cases = [
   { slug: 'term-test-1', task: 2, source: 'k67_web' },
   { slug: 'term-test-1-k56', task: 2, source: 'k56_web' },
   { slug: 'term-test-2-k56', task: 1, source: 'k56_web' },
-  { slug: 'mini-test-k56', task: 2, source: 'k56_web' },
+  // Mini giữ hợp đồng claim và bộ chấm cũ; đợt phát hành này chỉ đổi Term K56.
+  { slug: 'mini-test-k56', task: 2, source: 'k56_web', claimSource: '', routeFamily: 'k67' },
 ];
 const results = [];
 for (const [index, fixture] of cases.entries()) {
@@ -208,14 +209,15 @@ for (const [index, fixture] of cases.entries()) {
   });
   assert.equal(dispatchItems.length, 1, 'TERM_PARENT_DISPATCH_COUNT');
   const dispatch = dispatchItems[0].json;
-  assert.equal(dispatch.source, fixture.source);
-  assert.equal(dispatch.classId, String(classId));
-  assert.equal(dispatch.attemptId, attemptToken);
+  assert.equal(dispatch.source, fixture.claimSource ?? fixture.source);
+  assert.equal(dispatch.classId, fixture.claimSource === '' ? '' : String(classId));
+  assert.equal(dispatch.attemptId, fixture.claimSource === '' ? '' : attemptToken);
   assert.equal(dispatch.taskNumber, fixture.task);
-  assert.equal(dispatch.operationId, dispatch.jobId);
+  assert.equal(dispatch.operationId, fixture.claimSource === '' ? '' : dispatch.jobId);
   const guard = new Function('$json', nodeCode('Kiểm nguồn, lớp và lượt trước khi chấm'));
   const routed = guard(dispatch).json;
   assert.ok(['k67', 'k56_term', 'k56_mini'].includes(routed.routeFamily));
+  assert.equal(routed.routeFamily, fixture.routeFamily ?? (fixture.source === 'k67_web' ? 'k67' : 'k56_term'));
   const confirmed = await runCode('Xác nhận đã chấm xong', {
     job: dispatch, executionId: `synthetic-dispatch-${index}`
   });
@@ -256,7 +258,8 @@ for (const [index, fixture] of cases.entries()) {
 assert.equal(syncCalls.length, 4);
 const miniSync = syncCalls.find(payload => payload.testSlug === 'mini-test-k56');
 assert.ok(miniSync, 'MINI_PORTAL_PAYLOAD_MISSING');
-assert.deepEqual(Object.keys(miniSync.grades).sort(), ['listening', 'reading']);
+// Mini không thuộc writer Portal mới của đợt Term-only; không đẩy bất kỳ cột điểm nào.
+assert.deepEqual(Object.keys(miniSync.grades).sort(), []);
 const k67Jobs = await database.query(`SELECT count(*)::integer AS count
   FROM assessment.term_test_writing_grading_job;`);
 const k56Jobs = await database.query(`SELECT count(*)::integer AS count
