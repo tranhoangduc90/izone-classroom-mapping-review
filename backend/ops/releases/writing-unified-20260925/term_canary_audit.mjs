@@ -10,6 +10,7 @@ if (!response.ok || body?.ok !== true) process.exit(2);
 process.stdout.write(JSON.stringify({
   outcome: 'success',
   database: body.database,
+  profileName: body.profileName,
   seedState: body.seedState,
   syncKey: body.syncKey,
   jobs: body.jobs,

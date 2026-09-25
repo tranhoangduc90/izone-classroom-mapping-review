@@ -12,7 +12,10 @@ const PORT = 8791;
 const REDIS_HOST = 'redis';
 const REDIS_PORT = 6379;
 const TTL_SECONDS = 7200;
-const TEST_SLUG = 'term-test-2-k56';
+const PROFILES = Object.freeze({
+  term: Object.freeze({ testSlug: 'term-test-2-k56', taskNumber: 1 }),
+  mini: Object.freeze({ testSlug: 'mini-test-k56', taskNumber: 2 }),
+});
 
 function encodeRedis(args) {
   return Buffer.concat([Buffer.from(`*${args.length}\r\n`), ...args.flatMap(value => {
@@ -62,13 +65,14 @@ function localOnly(req, res, next) {
   next();
 }
 
-function parseCache(value) {
+function parseCache(value, profile) {
   assert.equal(typeof value, 'string', 'CANARY_CACHE_REQUIRED');
   assert.ok(value.length > 0 && value.length < 8_000_000, 'CANARY_CACHE_SIZE_INVALID');
   const parsed = JSON.parse(value);
   assert.equal(parsed.schemaVersion, 1, 'CANARY_CACHE_SCHEMA_INVALID');
-  assert.equal(parsed.taskNumber, 1, 'CANARY_CACHE_TASK_INVALID');
-  assert.match(String(parsed.runKey), /^term-test-2-k56:/u, 'CANARY_CACHE_RUN_KEY_INVALID');
+  assert.equal(parsed.taskNumber, profile.taskNumber, 'CANARY_CACHE_TASK_INVALID');
+  assert.ok(String(parsed.runKey).startsWith(`${profile.testSlug}:`),
+    'CANARY_CACHE_RUN_KEY_INVALID');
   assert.equal(typeof parsed.result?.taskScore, 'number', 'CANARY_CACHE_SCORE_INVALID');
   assert.equal(parsed.result.criteria?.length, 4, 'CANARY_CACHE_CRITERIA_INVALID');
   return parsed;
@@ -79,9 +83,12 @@ function parseCache(value) {
 // Kết quả: n8n có thể nhận đúng một job giả, đọc cache và callback vào API thật trong canary.
 // Khi lỗi: không mở lại seed; dừng và khởi tạo container mới, khóa Redis tự hết hạn.
 export async function createTermCanary({
+  profileName = 'term',
   setRedis = (key, value) => redisCommand(['SET', key, value, 'EX', TTL_SECONDS, 'NX']),
   deleteRedis = key => redisCommand(['DEL', key]),
 } = {}) {
+  const profile = PROFILES[profileName];
+  assert.ok(profile, 'CANARY_PROFILE_NOT_APPROVED');
   const database = new PGlite();
   for (const schema of ['assessment', 'assessment_k56']) {
     await database.exec(`CREATE SCHEMA ${schema};
@@ -126,26 +133,31 @@ export async function createTermCanary({
     seedState = 'seeding';
     try {
       const cacheValue = req.body?.cacheValue;
-      const envelope = parseCache(cacheValue);
+      const envelope = parseCache(cacheValue, profile);
       attemptToken = randomUUID();
-      const combined = { listening: { total: 40, correct: 20, band: 5.5 },
-        reading: { total: 40, correct: 20, band: 5.5 } };
+      const combined = profileName === 'mini'
+        ? { listening: { total: 10, correct: 5 },
+          reading: { total: 13, correct: 6 } }
+        : { listening: { total: 40, correct: 20, band: 5.5 },
+          reading: { total: 40, correct: 20, band: 5.5 } };
       await pool.query(`INSERT INTO assessment.term_test_attempt (
         id, test_slug, erp_course_class_id, erp_student_contact_id,
         class_name_snapshot, student_name_snapshot, combined_result,
         completed_at, writing_submitted_at
       ) VALUES ($1::uuid, $2, 99000001, 99000001,
         'CODEX-CANARY', 'Học viên giả', $3::jsonb, now(), now());`,
-      [attemptToken, TEST_SLUG, JSON.stringify(combined)]);
-      await service.ensureSubmission({ attemptToken, testSlug: TEST_SLUG,
-        task1: 'Bài giả cho phép thử callback', task2: '',
-        taskDefinitions: [{ id: 'task1', prompt: 'Đề giả, chỉ dùng nhánh collect' }] });
+      [attemptToken, profile.testSlug, JSON.stringify(combined)]);
+      await service.ensureSubmission({ attemptToken, testSlug: profile.testSlug,
+        task1: profile.taskNumber === 1 ? 'Bài giả cho phép thử callback' : '',
+        task2: profile.taskNumber === 2 ? 'Đoạn văn giả cho phép thử callback' : '',
+        taskDefinitions: [{ id: `task${profile.taskNumber}`,
+          prompt: 'Đề giả, chỉ dùng nhánh collect' }] });
       const updated = await pool.query(`UPDATE assessment.term_test_writing_grading_run
-        SET run_key = $1 WHERE attempt_id = $2::uuid AND task_number = 1 RETURNING id;`,
-      [envelope.runKey, attemptToken]);
+        SET run_key = $1 WHERE attempt_id = $2::uuid AND task_number = $3 RETURNING id;`,
+      [envelope.runKey, attemptToken, profile.taskNumber]);
       assert.equal(updated.rows.length, 1, 'CANARY_RUN_KEY_BINDING_FAILED');
       const [dispatch] = await service.claimJobs({ workerId: 'canary-seed', limit: 1,
-        testSlug: TEST_SLUG });
+        testSlug: profile.testSlug });
       assert.ok(dispatch && dispatch.jobType === 'dispatch', 'CANARY_DISPATCH_NOT_FOUND');
       await service.completeDispatch({ jobId: dispatch.jobId, workerId: 'canary-seed' });
       await pool.query(`UPDATE assessment.term_test_writing_grading_job
@@ -166,7 +178,7 @@ export async function createTermCanary({
       GROUP BY job_type, status ORDER BY job_type, status;`);
     const runs = await pool.query(`SELECT status, task_number
       FROM assessment.term_test_writing_grading_run;`);
-    return res.json({ ok: true, database: 'embedded_pglite', seedState, syncKey,
+    return res.json({ ok: true, database: 'embedded_pglite', profileName, seedState, syncKey,
       jobs: jobs.rows, runStates: runs.rows, portalMockCalls,
       attemptCount: attemptToken ? 1 : 0, ownedRedisKeys: [...ownedKeys] });
   });
@@ -193,7 +205,7 @@ export async function createTermCanary({
 }
 
 if (process.argv[1] && process.argv[1].endsWith('/term_canary_server.mjs')) {
-  const canary = await createTermCanary();
+  const canary = await createTermCanary({ profileName: process.env.TERM_CANARY_PROFILE || 'term' });
   const server = canary.app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(JSON.stringify({ outcome: 'ready', port: PORT,
       database: 'embedded_pglite', publicPort: false }) + '\n');

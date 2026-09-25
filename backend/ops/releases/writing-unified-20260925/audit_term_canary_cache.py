@@ -5,7 +5,7 @@ import json
 import re
 import sys
 
-from seed_term_canary_from_execution import load_anonymized_cache
+from seed_term_canary_from_execution import PROFILES, load_anonymized_cache
 from term_canary_container import connect, remote
 
 
@@ -14,13 +14,15 @@ def main():
     # Việc chính: hỏi Redis EXISTS, không GET; chỉ in số khóa còn lại.
     # Kết quả: xác nhận workflow đã xóa cache sau khi callback hoàn tất.
     # Khi lỗi: giữ unknown, không xóa hoặc retry bài.
-    cache = json.loads(load_anonymized_cache())
-    run_key = cache["runKey"]
-    if not re.fullmatch(r"term-test-2-k56:[A-Za-z0-9_:-]{1,200}", run_key):
-        raise RuntimeError("TERM_CANARY_RUN_KEY_UNSAFE")
     parser = argparse.ArgumentParser()
     parser.add_argument("--sync-key")
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="term")
     args = parser.parse_args()
+    cache = json.loads(load_anonymized_cache(args.profile))
+    run_key = cache["runKey"]
+    if not re.fullmatch(re.escape(PROFILES[args.profile]["slug"])
+                        + r":[A-Za-z0-9_:-]{1,200}", run_key):
+        raise RuntimeError("TERM_CANARY_RUN_KEY_UNSAFE")
     client = connect()
     try:
         if args.sync_key:

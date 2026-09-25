@@ -23,11 +23,12 @@ test('gửi Redis bằng số byte UTF-8, không cắt nhận xét tiếng Việ
   }
 });
 
-function fakeCache() {
-  const runKey = 'term-test-2-k56:canary-unit-test';
-  const codes = ['TA', 'CC', 'LR', 'GRA'];
+function fakeCache({ testSlug = 'term-test-2-k56', taskNumber = 1 } = {}) {
+  const runKey = `${testSlug}:canary-unit-test`;
+  const codes = taskNumber === 1 ? ['TA', 'CC', 'LR', 'GRA']
+    : ['TR', 'CC', 'LR', 'GRA'];
   return { runKey, value: JSON.stringify({ schemaVersion: 1, runKey,
-    taskNumber: 1, result: { taskScore: 6, report: 'Báo cáo giả',
+    taskNumber, result: { taskScore: 6, report: 'Báo cáo giả',
       criteria: codes.map(code => ({ code, bandScore: 6,
         feedback: `Nhận xét giả ${code}`, components: [{
           code: `${code.toLowerCase()}_detail`, label: code,
@@ -85,7 +86,7 @@ test('API Term canary tạo đúng một collect job và không gọi Portal th�
       .set('x-writing-test-sync', secret)
       .send({ jobId: claimedJob.jobId, workerId: 'canary-worker',
         runKey: fixture.runKey, result: JSON.parse(fixture.value).result });
-    assert.equal(saved.status, 200);
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
     assert.equal(saved.body.ok, true);
     const audit = await request(canary.app).get('/__canary/audit');
     assert.equal(audit.status, 200);
@@ -94,6 +95,49 @@ test('API Term canary tạo đúng một collect job và không gọi Portal th�
     assert.equal(audit.body.attemptCount, 1);
     assert.deepEqual(audit.body.jobs.map(item => [item.job_type, item.status, item.total]),
       [['collect', 'complete', 1], ['dispatch', 'complete', 1]]);
+  } finally {
+    await canary.close();
+  }
+  assert.equal(redis.size, 0);
+});
+
+test('Mini K56 Task 2 dùng cùng callback và đúng thang Portal 10/13', async () => {
+  const redis = new Map();
+  const canary = await createTermCanary({ profileName: 'mini',
+    setRedis: async (key, value) => {
+      if (redis.has(key)) return null;
+      redis.set(key, value);
+      return 'OK';
+    },
+    deleteRedis: async key => Number(redis.delete(key)),
+  });
+  try {
+    const fixture = fakeCache({ testSlug: 'mini-test-k56', taskNumber: 2 });
+    const seeded = await request(canary.app).post('/__canary/seed')
+      .send({ cacheValue: fixture.value });
+    assert.equal(seeded.status, 200);
+    const claimed = await request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/claim')
+      .set('x-writing-test-sync', redis.get(canary.syncKey))
+      .send({ workerId: 'mini-canary-worker', limit: 1 });
+    assert.equal(claimed.status, 200);
+    assert.equal(claimed.body.jobs.length, 1);
+    assert.equal(claimed.body.jobs[0].testSlug, 'mini-test-k56');
+    assert.equal(claimed.body.jobs[0].taskNumber, 2);
+    assert.equal(claimed.body.jobs[0].rubricVersion, 'k56-mini-paragraph-v1');
+    const saved = await request(canary.app)
+      .post('/api/term-tests/writing-grading/jobs/result')
+      .set('x-writing-test-sync', redis.get(canary.syncKey))
+      .send({ jobId: claimed.body.jobs[0].jobId, workerId: 'mini-canary-worker',
+        runKey: fixture.runKey, result: JSON.parse(fixture.value).result });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.portalSyncStatus, 'synced');
+    const audit = await request(canary.app).get('/__canary/audit');
+    assert.equal(audit.body.profileName, 'mini');
+    assert.deepEqual(audit.body.runStates, [{ status: 'complete', task_number: 2 }]);
+    assert.deepEqual(audit.body.jobs.map(item => [item.job_type, item.status]),
+      [['collect', 'complete'], ['dispatch', 'complete']]);
+    assert.equal(audit.body.portalMockCalls, 1);
   } finally {
     await canary.close();
   }

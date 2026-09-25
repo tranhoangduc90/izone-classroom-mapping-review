@@ -15,7 +15,7 @@ import win32cred
 
 ROOT = Path(__file__).resolve().parents[4]
 CONTAINER = "writing-term-api-canary"
-IMAGE = "codex-writing-term-canary:20260925-a"
+IMAGE = "codex-writing-term-canary:20260925-b"
 LABEL = "codex.task=term-writing-canary-20260925"
 SCRIPTS = Path("backend/ops/releases/writing-unified-20260925")
 EXPLICIT_FILES = [
@@ -130,7 +130,7 @@ def audit(client):
     return result
 
 
-def deploy(client):
+def deploy(client, profile_name):
     if object_exists(client, "container", CONTAINER) or object_exists(client, "image", IMAGE):
         raise RuntimeError("TERM_CANARY_ALREADY_EXISTS")
     _, network = remote(client, "docker network inspect --format '{{.Name}}' n8n-net")
@@ -158,7 +158,9 @@ def deploy(client):
            + " --network n8n-net --restart no --read-only"
            + " --tmpfs /tmp:rw,noexec,nosuid,size=64m"
            + " --cap-drop ALL --security-opt no-new-privileges"
-           + " --memory 768m --cpus 1.0 " + IMAGE, timeout=30, stage="run")
+           + " --memory 768m --cpus 1.0"
+           + " -e TERM_CANARY_PROFILE=" + profile_name + " " + IMAGE,
+           timeout=30, stage="run")
     return {"businessOutcome": "created", "contextFiles": file_count,
             "productionServicesChanged": 0}
 
@@ -183,11 +185,12 @@ def rollback(client):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["deploy", "audit", "rollback"])
+    parser.add_argument("--profile", choices=["term", "mini"], default="term")
     args = parser.parse_args()
     client = connect()
     try:
         if args.mode == "deploy":
-            result = deploy(client)
+            result = deploy(client, args.profile)
         elif args.mode == "audit":
             result = audit(client)
         else:

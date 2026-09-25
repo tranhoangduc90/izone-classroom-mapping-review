@@ -1,6 +1,7 @@
 """Chuyển cache bài giả đã ghim thẳng vào container canary qua RAM/SSH."""
 
 import json
+import argparse
 import shutil
 import subprocess
 import sys
@@ -9,33 +10,39 @@ import paramiko
 import win32cred
 
 
-EXECUTION_ID = "2341142"
-WORKFLOW_ID = "4mmOJmshY0AVIKTi"
-OUTPUT_NODE = "Chấm bằng tuyến K56 thử nghiệm"
+PROFILES = {
+    "term": {"execution": "2341142", "workflow": "4mmOJmshY0AVIKTi",
+             "node": "Chấm bằng tuyến K56 thử nghiệm", "slug": "term-test-2-k56",
+             "task": 1},
+    "mini": {"execution": "2340922", "workflow": "bEmiXsrSPMJMBbQu",
+             "node": "Kiểm đủ điểm và phân tích", "slug": "mini-test-k56",
+             "task": 2},
+}
 CONTAINER = "writing-term-api-canary"
 
 
-def load_anonymized_cache():
+def load_anonymized_cache(profile_name="term"):
     # Dữ liệu vào: đúng execution bài giả đã ghim, không truy vấn lượt học viên khác.
     # Việc chính: lấy duy nhất cacheValue trong RAM và kiểm run/Task.
     # Kết quả: chuỗi cache để seed; không ghi file hoặc in bài/nhận xét.
     # Khi lỗi: dừng trước SSH để tránh gửi nhầm payload.
+    profile = PROFILES[profile_name]
     n8nctl = shutil.which("n8nctl.cmd")
     if not n8nctl:
         raise RuntimeError("CANARY_N8NCTL_NOT_FOUND")
-    result = subprocess.run([n8nctl, "execution", "get", EXECUTION_ID,
+    result = subprocess.run([n8nctl, "execution", "get", profile["execution"],
                              "--logs", "--json"], capture_output=True,
                             text=True, encoding="utf-8", timeout=30, check=False)
     if result.returncode != 0:
         raise RuntimeError("CANARY_EXECUTION_READ_FAILED")
     execution = json.loads(result.stdout)
-    if (str(execution.get("id")) != EXECUTION_ID
-            or execution.get("workflowId") != WORKFLOW_ID
+    if (str(execution.get("id")) != profile["execution"]
+            or execution.get("workflowId") != profile["workflow"]
             or execution.get("status") != "success"
             or execution.get("finished") is not True):
         raise RuntimeError("CANARY_EXECUTION_IDENTITY_MISMATCH")
     runs = execution.get("data", {}).get("resultData", {}).get("runData", {}).get(
-        OUTPUT_NODE, [])
+        profile["node"], [])
     if len(runs) != 1:
         raise RuntimeError("CANARY_EXECUTION_OUTPUT_COUNT_INVALID")
     try:
@@ -46,9 +53,9 @@ def load_anonymized_cache():
         raise RuntimeError("CANARY_EXECUTION_CACHE_INVALID") from exc
     if (not isinstance(cache, str) or len(cache) > 8_000_000
             or envelope.get("schemaVersion") != 1
-            or envelope.get("taskNumber") != 1
+            or envelope.get("taskNumber") != profile["task"]
             or envelope.get("runKey") != output.get("runKey")
-            or not str(envelope.get("runKey", "")).startswith("term-test-2-k56:")):
+            or not str(envelope.get("runKey", "")).startswith(profile["slug"] + ":")):
         raise RuntimeError("CANARY_EXECUTION_CACHE_CONTRACT_FAILED")
     return cache
 
@@ -58,7 +65,10 @@ def main():
     # Việc chính: truyền cache qua stdin của đúng container thử; không đưa vào dòng lệnh.
     # Kết quả: xác nhận một collect job được tạo, không in định danh hoặc bài làm.
     # Khi lỗi: trả mã tổng quát; không retry vì seed chỉ dùng một lần.
-    cache = load_anonymized_cache()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="term")
+    args = parser.parse_args()
+    cache = load_anonymized_cache(args.profile)
     credential = win32cred.CredRead("Codex/SSH/vps_1", win32cred.CRED_TYPE_GENERIC, 0)
     username = ((credential.get("UserName") or "root").strip().split("@", 1)[0]
                 or "root")
@@ -83,6 +93,7 @@ def main():
                 or response.get("pendingJobs") != 1):
             raise RuntimeError("CANARY_REMOTE_SEED_RESULT_INVALID")
         print(json.dumps({"toolOutcome": "success", "businessOutcome": "seed_ready",
+                          "profile": args.profile,
                           "pendingJobs": 1, "productionWrites": 0}))
     finally:
         client.close()
