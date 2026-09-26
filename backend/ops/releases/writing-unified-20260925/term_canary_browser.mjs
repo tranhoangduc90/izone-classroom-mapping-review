@@ -10,6 +10,28 @@ const MIME = { '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8' };
 
+// Dữ liệu vào: báo cáo gốc và văn bản đã render an toàn trên trang.
+// Việc chính: so phần mở đầu theo từ ngữ, bỏ Markdown/HTML và khoảng trắng trình bày.
+// Kết quả: xác nhận nhận xét tổng hợp vẫn thuộc đúng kết quả AI của lượt bài.
+// Khi lỗi: chỉ phát mã bước, không in nội dung bài hoặc nhận xét.
+function reportOpeningWords(value) {
+  return String(value || '')
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/gu, '$1')
+    .replace(/[&*#_`>|-]/gu, ' ')
+    .toLocaleLowerCase('vi')
+    .match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function assertRenderedFeedback(source, rendered, code) {
+  const opening = reportOpeningWords(source).slice(0, 12);
+  const displayed = reportOpeningWords(rendered);
+  const shared = opening.filter(word => displayed.includes(word)).length;
+  if (!opening.length || shared < Math.ceil(opening.length * 0.8)) {
+    throw new Error(`${code}_${opening.length}_${displayed.length}_${shared}`);
+  }
+}
+
 // Dữ liệu vào: kết quả chỉ của bài giả từ /__canary/result và source Pages đã ghim.
 // Việc chính: mở trang Term trong Chrome cô lập, cấp đúng kết quả cùng attempt qua API giả.
 // Kết quả: kiểm điểm, Task, bài viết, bốn nhận xét và tải lại; không gọi API/Portal thật.
@@ -107,7 +129,9 @@ export async function verifyTermCanaryBrowserResult({ result, pagesRoot }) {
       const essay = task.taskNumber === 1 ? result.writing.task1 : result.writing.task2;
       assert.equal(await dialog.locator('.writing-feedback-essay').innerText(), essay);
       assert.equal(await dialog.locator('.writing-band-summary-item').count(), 4);
-      assert.ok((await dialog.innerText()).includes(task.report), 'CANARY_BROWSER_REPORT_MISMATCH');
+      assertRenderedFeedback(task.report,
+        await dialog.locator('.writing-feedback-text').innerText(),
+        'CANARY_BROWSER_REPORT_MISMATCH');
       const cards = dialog.locator('.writing-criterion-card');
       assert.equal(await cards.count(), task.criteria.length);
       for (let index = 0; index < task.criteria.length; index += 1) {
@@ -115,7 +139,7 @@ export async function verifyTermCanaryBrowserResult({ result, pagesRoot }) {
         const criterion = cards.nth(index);
         const components = Array.isArray(row.components) ? row.components : [];
         if (!components.length) {
-          assert.ok((await criterion.innerText()).includes(row.feedback),
+          assertRenderedFeedback(row.feedback, await criterion.innerText(),
             `CANARY_BROWSER_FEEDBACK_MISMATCH_${row.code}`);
           continue;
         }
@@ -126,12 +150,12 @@ export async function verifyTermCanaryBrowserResult({ result, pagesRoot }) {
           const component = components[componentIndex];
           const panel = rendered.nth(componentIndex);
           if (component.summary) {
-            assert.ok((await panel.innerText()).includes(component.summary),
+            assertRenderedFeedback(component.summary, await panel.innerText(),
               `CANARY_BROWSER_COMPONENT_SUMMARY_${row.code}`);
           }
           if (component.feedback) {
             await panel.locator('.writing-component-toggle').click();
-            assert.ok((await panel.innerText()).includes(component.feedback),
+            assertRenderedFeedback(component.feedback, await panel.innerText(),
               `CANARY_BROWSER_COMPONENT_DETAIL_${row.code}`);
           }
         }

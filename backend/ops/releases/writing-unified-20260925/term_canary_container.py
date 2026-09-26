@@ -197,6 +197,13 @@ def browser_readback(client, pages_root):
         check=False,
     )
     if checked.returncode != 0:
+        try:
+            failure = json.loads(checked.stderr)
+            error_code = failure.get("errorCode", "")
+        except (TypeError, ValueError):
+            error_code = ""
+        if re.fullmatch(r"CANARY_BROWSER_[A-Z0-9_]{1,100}", error_code):
+            raise RuntimeError("TERM_" + error_code)
         raise RuntimeError("TERM_CANARY_BROWSER_VERIFICATION_FAILED")
     outcome = json.loads(checked.stdout)
     if (outcome.get("toolOutcome") != "success"

@@ -78,7 +78,7 @@ test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và kh
       assert.equal(result.body.writing.grading.tasks.length, 1);
       assert.equal(result.body.writing.grading.tasks[0].taskNumber,
         profileName === 'term1' ? 2 : 1);
-      assert.equal(result.body.writing.grading.tasks[0].report, 'Báo cáo giả');
+      assert.equal(result.body.writing.grading.tasks[0].report, '**Báo cáo giả**');
       assert.equal(result.body.portalSyncStatus, 'synced');
       assert.equal(result.body.attemptToken, requests[0].attemptToken);
       assert.equal(result.body.className, 'CODEX-CANARY');
@@ -184,11 +184,11 @@ function fakeCache({ testSlug = 'term-test-2-k56', taskNumber = 1 } = {}) {
   const codes = taskNumber === 1 ? ['TA', 'CC', 'LR', 'GRA']
     : ['TR', 'CC', 'LR', 'GRA'];
   return { runKey, value: JSON.stringify({ schemaVersion: 1, runKey,
-    taskNumber, result: { taskScore: 6, report: 'Báo cáo giả',
+    taskNumber, result: { taskScore: 6, report: '**Báo cáo giả**',
       criteria: codes.map(code => ({ code, bandScore: 6,
         feedback: `Nhận xét giả ${code}`, components: [{
           code: `${code.toLowerCase()}_detail`, label: code,
-          summary: 'Tóm tắt giả', feedback: 'Chi tiết giả' }] })) } }) };
+          summary: '**Tóm tắt giả**', feedback: '*Chi tiết giả*' }] })) } }) };
 }
 
 test('Term Test 2 K56 giữ đúng lượt callback và chỉ gọi Portal giả một lần', async () => {
