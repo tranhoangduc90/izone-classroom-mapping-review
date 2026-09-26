@@ -53,7 +53,7 @@ test('Term 2 K56 gửi số câu đúng trên thang 40/40, không đổi sang Ba
   assert.deepEqual(payload.grades, { listening: 31, reading: 28, writing: 6.5 });
 });
 
-test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', async () => {
+test('Mini K56 giữ điểm thô và dùng cùng writer hiện hành với Term', async () => {
   const payload = buildErpGradePayload({
     attempt_token: attemptToken,
     test_slug: 'mini-test-k56',
@@ -63,15 +63,32 @@ test('Phát hành Term K56 không tự chuyển Mini K56 sang Portal writer', as
     listening: { total: 10, correct: 8 },
     reading: { total: 13, correct: 10 }
   });
-  assert.deepEqual(payload.grades, {});
-  let fetchCount = 0;
+  assert.deepEqual(payload.grades, { listening: 8, reading: 10 });
+  const routes = [];
+  const pool = {
+    async query(sql) {
+      if (sql.includes('term_test_class_access')) return { rows: [{ allowed: true }] };
+      if (sql.includes('INSERT INTO assessment.term_test_portal_sync_state')) return { rowCount: 1 };
+      return { rowCount: 1, rows: [] };
+    }
+  };
   const sync = createErpGradeSync({
     config: config(),
-    pool: { async query() { throw new Error('Mini không được tra quyền ghi Portal'); } },
-    fetchImpl: async () => { fetchCount += 1; throw new Error('Mini không được gọi Portal'); }
+    pool,
+    fetchImpl: async (url, options) => {
+      routes.push({ url, testSlug: JSON.parse(options.body).testSlug });
+      return { ok: true, status: 200, json: async () => ({
+        ok: true, status: 'synced', attemptToken
+      }) };
+    },
+    logger: { info() {}, error() {} }
   });
-  assert.deepEqual(await sync(payload), { status: 'disabled' });
-  assert.equal(fetchCount, 0);
+  assert.equal((await sync(payload)).status, 'synced');
+  assert.equal((await sync(payloadForSecondClass())).status, 'synced');
+  assert.deepEqual(routes, [
+    { url: 'https://example.invalid/k56-portal', testSlug: 'mini-test-k56' },
+    { url: 'https://example.invalid/k56-portal', testSlug: 'term-test-1-k56' }
+  ]);
 });
 
 test('K56 không gọi Portal nếu cặp lớp–đề chưa được cấp quyền', async () => {
