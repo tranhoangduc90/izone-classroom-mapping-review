@@ -60,7 +60,11 @@ CURRENT_LIVE_TAG = "izone-k56-live-results:20260924.4-roster-reconcile"
 ROSTER_RECONCILE_MODULES = (
     "assessment-schema-pool.js", "config.js", "server.js", "k56-roster-reconcile.js",
 )
-TERM_ONLY_MODULES = ("k56-portal-pilot.js", "term-test-writing-grading.js")
+TERM_ONLY_CHANGED_MODULES = (
+    "app.js", "k56-portal-pilot.js", "term-test-writing-grading.js",
+)
+TERM_ONLY_ADDED_MODULES = ("term-test-portal-snapshot.js",)
+TERM_ONLY_MODULES = TERM_ONLY_CHANGED_MODULES + TERM_ONLY_ADDED_MODULES
 REMOTE_TREE_SCRIPT = r"""
 // Dữ liệu vào: thư mục src trong container K56 đang chạy.
 // Việc chính: chỉ đọc file .js để dựng bản kiểm tạm trên máy vận hành.
@@ -165,6 +169,20 @@ def seal_source_files(files):
     return seal.hexdigest()
 
 
+def verify_term_only_source_delta(live, branch):
+    """Chỉ nhận ba file sửa và một module mới của Term K56 so với image đang chạy."""
+    added = set(branch) - set(live)
+    removed = set(live) - set(branch)
+    if removed or added != {"src/" + name for name in TERM_ONLY_ADDED_MODULES}:
+        raise RuntimeError("TERM_ONLY_SOURCE_SET_CHANGED")
+    changed = {name for name in set(live) & set(branch)
+               if live[name].replace(b"\r\n", b"\n")
+               != branch[name].replace(b"\r\n", b"\n")}
+    if changed != {"src/" + name for name in TERM_ONLY_CHANGED_MODULES}:
+        raise RuntimeError("TERM_ONLY_SOURCE_DRIFT")
+    return {"added": len(added), "changed": len(changed)}
+
+
 def export_build_context(stage_root, candidate_sha, base_sha, base_meta, test_summary):
     """Chỉ lưu bản đã qua test vào ổ E; không sao chép .env hoặc dữ liệu học viên."""
     root = EXPORT_ROOT.resolve()
@@ -217,18 +235,12 @@ def run_stage():
     base_source_sha = seal_source_files(tree)
     if term_only:
         # Dữ liệu vào: toàn cây source đang chạy và source branch đã qua regression.
-        # Việc chính: chặn mọi drift ngoài đúng hai file Term cần phát hành.
+        # Việc chính: chặn mọi drift ngoài ba file sửa và một module mới Term K56.
         # Kết quả: image sau build chỉ phủ hai thay đổi nghiệp vụ lên image live.
         # Khi lỗi: không xuất gói build và không đụng container production.
         branch = {"src/" + path.relative_to(BACKEND / "src").as_posix():
                   path.read_bytes() for path in (BACKEND / "src").rglob("*.js")}
-        if set(branch) != set(tree):
-            raise RuntimeError("TERM_ONLY_SOURCE_SET_CHANGED")
-        changed = {name for name in tree
-                   if tree[name].replace(b"\r\n", b"\n") !=
-                   branch[name].replace(b"\r\n", b"\n")}
-        if changed != {"src/" + name for name in TERM_ONLY_MODULES}:
-            raise RuntimeError("TERM_ONLY_SOURCE_DRIFT")
+        verify_term_only_source_delta(tree, branch)
     if "--audit-admin" in sys.argv:
         auth = tree["src/auth.js"].decode("utf-8")
         sql = tree["src/sql.js"].decode("utf-8")
