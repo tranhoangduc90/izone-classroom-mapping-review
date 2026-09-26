@@ -303,6 +303,45 @@ export async function createTermCanary({
       portalSyncStates: portalSync.rows,
       attemptCount: attemptToken ? 1 : 0, ownedRedisKeys: [...ownedKeys] });
   });
+  app.get('/__canary/result', localOnly, async (_req, res) => {
+    // Dữ liệu vào: đúng một bài Term hoàn toàn giả đã seed trong kho canary.
+    // Việc chính: đọc kết quả của chính attempt đó sau callback và dựng phản hồi cho thử giao diện.
+    // Kết quả: cùng Task, bài viết, nhận xét và điểm; chỉ mở qua localhost, không gọi Portal thật.
+    // Khi lỗi hoặc chưa chấm xong: trả trạng thái rõ, không ghép sang lượt hay lớp khác.
+    if (!attemptToken || !['term', 'term1'].includes(profileName)) {
+      return res.status(404).json({ ok: false, error: 'CANARY_RESULT_NOT_FOUND' });
+    }
+    const grading = await service.getStatus(attemptToken);
+    if (grading?.ready !== true) return res.status(202).json({ ok: true, state: 'pending' });
+    const found = await pool.query(`SELECT attempt.test_slug, attempt.class_name_snapshot,
+      attempt.student_name_snapshot, attempt.combined_result,
+      run.task_number, run.essay_text
+      FROM assessment.term_test_attempt AS attempt
+      JOIN assessment.term_test_writing_grading_run AS run
+        ON run.attempt_id = attempt.id
+      WHERE attempt.id = $1::uuid;`, [attemptToken]);
+    if (found.rows.length !== 1 || Number(found.rows[0].task_number) !== profile.taskNumber
+      || found.rows[0].test_slug !== profile.testSlug
+      || grading.tasks?.length !== 1
+      || Number(grading.tasks[0].taskNumber) !== profile.taskNumber) {
+      return res.status(409).json({ ok: false, error: 'CANARY_RESULT_IDENTITY_MISMATCH' });
+    }
+    const row = found.rows[0];
+    const syncState = validatedWriterUrl
+      ? await pool.query(`SELECT status FROM assessment.term_test_portal_sync_state
+          WHERE attempt_id = $1::uuid;`, [attemptToken])
+      : { rows: [] };
+    const portalSyncStatus = validatedWriterUrl
+      ? (syncState.rows.length === 1 ? syncState.rows[0].status : 'unknown')
+      : (portalMockCalls === 1 ? 'synced' : 'unknown');
+    return res.json({ ok: true, attemptToken, testSlug: row.test_slug,
+      className: row.class_name_snapshot, studentName: row.student_name_snapshot,
+      completed: true, writing: {
+        task1: profile.taskNumber === 1 ? row.essay_text : '',
+        task2: profile.taskNumber === 2 ? row.essay_text : '',
+        started: true, submitted: true, grading
+      }, portalSyncStatus, result: row.combined_result });
+  });
   // Chỉ mở bốn endpoint chấm cho n8n; các API khác trong ứng dụng gốc bị chặn.
   const allowed = new Set([
     'POST /api/term-tests/writing-grading/jobs/claim',

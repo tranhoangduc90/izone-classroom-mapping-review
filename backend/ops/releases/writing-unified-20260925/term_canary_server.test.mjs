@@ -41,6 +41,9 @@ test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và kh
       taskNumber: profileName === 'term1' ? 2 : 1 });
       assert.equal((await request(canary.app).post('/__canary/seed')
         .send({ cacheValue: fixture.value })).status, 200);
+      const pending = await request(canary.app).get('/__canary/result');
+      assert.equal(pending.status, 202);
+      assert.deepEqual(pending.body, { ok: true, state: 'pending' });
       const secret = redis.get(canary.syncKey);
       const claimed = await request(canary.app)
         .post('/api/term-tests/writing-grading/jobs/claim')
@@ -66,6 +69,25 @@ test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và kh
       const audit = await request(canary.app).get('/__canary/audit');
       assert.equal(audit.body.portalSyncMode, 'writer_bridge');
       assert.deepEqual(audit.body.portalSyncStates, [{ status: 'synced', total: 1 }]);
+      const result = await request(canary.app).get('/__canary/result');
+      assert.equal(result.status, 200);
+      assert.equal(result.body.testSlug, fixture.runKey.split(':')[0]);
+      assert.equal(result.body.writing.grading.ready, true);
+      assert.equal(result.body.writing.grading.tasks.length, 1);
+      assert.equal(result.body.writing.grading.tasks[0].taskNumber,
+        profileName === 'term1' ? 2 : 1);
+      assert.equal(result.body.writing.grading.tasks[0].report, 'Báo cáo giả');
+      assert.equal(result.body.portalSyncStatus, 'synced');
+      assert.equal(result.body.attemptToken, requests[0].attemptToken);
+      assert.equal(result.body.className, 'CODEX-CANARY');
+      assert.equal(result.body.studentName, 'Học viên giả');
+      assert.equal(profileName === 'term1' ? result.body.writing.task2
+        : result.body.writing.task1, profileName === 'term1'
+          ? 'Đoạn văn giả cho phép thử callback' : 'Bài giả cho phép thử callback');
+      assert.equal(profileName === 'term1' ? result.body.writing.task1
+        : result.body.writing.task2, '');
+      const reopened = await request(canary.app).get('/__canary/result');
+      assert.deepEqual(reopened.body, result.body);
     } finally {
       await canary.close();
     }
@@ -322,6 +344,7 @@ test('Mini K56 giữ callback cũ và không nhận metadata adapter Term', asyn
     const seeded = await request(canary.app).post('/__canary/seed')
       .send({ cacheValue: fixture.value });
     assert.equal(seeded.status, 200);
+    assert.equal((await request(canary.app).get('/__canary/result')).status, 404);
     const claimed = await request(canary.app)
       .post('/api/term-tests/writing-grading/jobs/claim')
       .set('x-writing-test-sync', redis.get(canary.syncKey))
