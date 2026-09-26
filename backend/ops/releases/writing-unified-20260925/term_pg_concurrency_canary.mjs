@@ -231,14 +231,87 @@ async function main() {
       assert.equal(failed.status, 'already_complete',
         'CANARY_CONFLICT_CHANGED_COMPLETE_JOB');
     }
+    stage = 'pause_processing';
+    // Dữ liệu vào: bài giả thứ hai và một job collect đã được tiến trình cũ giữ.
+    // Việc chính: đóng/mở kết nối, chặn nhận lại trước hạn, rồi cho lease hết hạn chỉ trong kho thử.
+    // Kết quả: tiến trình cũ không thể ghi, tiến trình mới hoàn tất đúng một lần.
+    // Khi lỗi: dừng canary và chỉ gỡ tài nguyên thử; không điều chỉnh lease production.
+    const inFlightAttemptId = randomUUID();
+    await scopedPool.query(`INSERT INTO assessment.term_test_attempt (
+      id, test_slug, erp_course_class_id, erp_student_contact_id,
+      class_name_snapshot, student_name_snapshot, combined_result,
+      completed_at, writing_submitted_at
+    ) VALUES ($1::uuid, 'term-test-2-k56', 9000001, 9000002,
+      'CANARY-ONLY', 'Học viên giả', $2::jsonb, now(), now());`,
+    [inFlightAttemptId, JSON.stringify(combined)]);
+    await service().ensureSubmission({ attemptToken: inFlightAttemptId,
+      testSlug: 'term-test-2-k56', task1: 'Bài giả khi tạm dừng', task2: '',
+      taskDefinitions: [{ id: 'task1', prompt: 'Đề giả' }] });
+    const inFlightDispatch = await child('claim', 'canary-inflight-dispatch');
+    assert.equal(inFlightDispatch.jobs?.length, 1, 'CANARY_INFLIGHT_DISPATCH_MISSING');
+    assert.equal(inFlightDispatch.jobs[0].jobType, 'dispatch');
+    await service().completeDispatch({ jobId: inFlightDispatch.jobs[0].jobId,
+      workerId: 'canary-inflight-dispatch' });
+    await scopedPool.query(`UPDATE assessment.term_test_writing_grading_job
+      SET next_attempt_at = now()
+      WHERE job_type = 'collect' AND run_id = (
+        SELECT id FROM assessment.term_test_writing_grading_run WHERE run_key = $1
+      );`, [inFlightDispatch.jobs[0].runKey]);
+    const inFlightClaim = await child('claim', 'canary-inflight-old');
+    assert.equal(inFlightClaim.jobs?.length, 1, 'CANARY_INFLIGHT_COLLECT_MISSING');
+    assert.equal(inFlightClaim.jobs[0].jobType, 'collect');
+    const inFlightJob = inFlightClaim.jobs[0];
+    await pool.end();
+    pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    scopedPool = createAssessmentSchemaPool(pool, { family: 'k56' });
+    const held = await scopedPool.query(`SELECT status, worker_id,
+      lease_until > now() AS lease_active
+      FROM assessment.term_test_writing_grading_job WHERE id = $1::uuid;`,
+    [inFlightJob.jobId]);
+    assert.deepEqual(held.rows, [{ status: 'processing',
+      worker_id: 'canary-inflight-old', lease_active: true }],
+    'CANARY_INFLIGHT_LOST_AFTER_RECONNECT');
+    const earlyClaim = await child('claim', 'canary-inflight-new');
+    assert.equal(earlyClaim.ok, true, 'CANARY_EARLY_CLAIM_FAILED');
+    assert.equal(earlyClaim.jobs.length, 0, 'CANARY_INFLIGHT_RECLAIMED_EARLY');
+    await scopedPool.query(`UPDATE assessment.term_test_writing_grading_job
+      SET lease_until = now() - interval '1 second'
+      WHERE id = $1::uuid;`, [inFlightJob.jobId]);
+    const resumedClaim = await child('claim', 'canary-inflight-new');
+    assert.equal(resumedClaim.jobs?.length, 1, 'CANARY_INFLIGHT_NOT_RECOVERED');
+    assert.equal(resumedClaim.jobs[0].jobId, inFlightJob.jobId,
+      'CANARY_INFLIGHT_WRONG_JOB_RECOVERED');
+    const stale = await child('result', 'canary-inflight-old',
+      inFlightJob.jobId, inFlightJob.runKey,
+      { TERM_CANARY_PORTAL_URL: portalUrl });
+    assert.equal(stale.ok, false, 'CANARY_STALE_WORKER_ACCEPTED');
+    assert.equal(stale.code, 'WRITING_GRADING_JOB_LEASE_MISMATCH',
+      'CANARY_STALE_WORKER_WRONG_ERROR');
+    assert.equal(portalCalls, 1, 'CANARY_STALE_WORKER_CALLED_PORTAL');
+    const recovered = await child('result', 'canary-inflight-new',
+      inFlightJob.jobId, inFlightJob.runKey,
+      { TERM_CANARY_PORTAL_URL: portalUrl });
+    assert.equal(recovered.ok, true, 'CANARY_RECOVERED_CALLBACK_FAILED');
+    assert.equal(recovered.portalSyncStatus, 'synced',
+      'CANARY_RECOVERED_PORTAL_NOT_SYNCED');
+    assert.equal(portalCalls, 2, 'CANARY_RECOVERED_PORTAL_CALL_COUNT');
+    const recoveredFinal = await scopedPool.query(`SELECT status
+      FROM assessment.term_test_writing_grading_final
+      WHERE attempt_id = $1::uuid;`, [inFlightAttemptId]);
+    assert.deepEqual(recoveredFinal.rows.map(row => row.status), ['ready'],
+      'CANARY_INFLIGHT_FINAL_NOT_READY');
     console.log(JSON.stringify({ toolOutcome: 'success', businessOutcome: 'success',
-      database: 'isolated_postgresql', processes: 2, dispatchClaims: claimed.length,
+      database: 'isolated_postgresql', processes: 2, attempts: 2,
+      dispatchClaims: claimed.length,
       collectClaims: collect.length, portalCalls, callbackAccepted:
         callbacks.filter(item => item.ok).length,
       callbackConflicts: callbacks.filter(item => !item.ok).map(item => item.code),
       replayStatus: 'duplicate', conflictFailStatus: conflict ? 'already_complete' : 'not_applicable',
       collectStatus: 'complete', portalStatus: 'synced', finalStatus: 'ready',
-      pendingJobPreservedAfterReconnect: true }));
+      pendingJobPreservedAfterReconnect: true,
+      processingJobPreservedAfterReconnect: true,
+      prematureReclaimPrevented: true, staleCallbackRejected: true,
+      recoveredAfterLeaseExpiry: true }));
   } catch (error) {
     console.log(JSON.stringify({ toolOutcome: 'success', businessOutcome: 'failure',
       stage, code: String(error?.message || 'UNKNOWN').replace(/[^A-Z0-9_]/gi, '_').slice(0, 100) }));
