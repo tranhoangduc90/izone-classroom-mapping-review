@@ -4,6 +4,7 @@ import net from 'node:net';
 import test from 'node:test';
 import request from 'supertest';
 import { createTermCanary, redisCommand } from './term_canary_server.mjs';
+import { verifyTermCanaryBrowserResult } from './term_canary_browser.mjs';
 
 const WRITER_TRIAL_URL = 'https://n8n-ai.izone.edu.vn/webhook/term-k56-writer-bridge-00000000-0000-4000-8000-000000000321';
 
@@ -88,6 +89,13 @@ test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và kh
         : result.body.writing.task2, '');
       const reopened = await request(canary.app).get('/__canary/result');
       assert.deepEqual(reopened.body, result.body);
+      if (process.env.K56_PAGES_ROOT) {
+        const browser = await verifyTermCanaryBrowserResult({
+          result: result.body, pagesRoot: process.env.K56_PAGES_ROOT
+        });
+        assert.equal(browser.passed, true);
+        assert.equal(browser.externalRequests, 0);
+      }
     } finally {
       await canary.close();
     }
