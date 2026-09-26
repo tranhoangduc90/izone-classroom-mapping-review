@@ -37,19 +37,19 @@ const db = new pg.Pool({connectionString: process.env.DATABASE_URL, max: 1,
   connectionTimeoutMillis: 10000});
 try {
   const meta = (await db.query(`SELECT current_database() AS database,
-    to_regclass('assessment.term_test_class_access') IS NOT NULL AS access_exists`)).rows[0];
+    to_regclass('assessment_k56.term_test_class_access') IS NOT NULL AS access_exists`)).rows[0];
   const definitions = (await db.query(`SELECT slug, is_active
-    FROM assessment.test_definition WHERE slug = ANY($1::text[])`,
+    FROM assessment_k56.test_definition WHERE slug = ANY($1::text[])`,
     [['term-test-1-k56', 'term-test-2-k56', 'mini-test-k56']])).rows;
   const access = meta.access_exists ? (await db.query(`SELECT test_slug, enabled,
-    count(*)::int AS rows FROM assessment.term_test_class_access
+    count(*)::int AS rows FROM assessment_k56.term_test_class_access
     GROUP BY test_slug, enabled ORDER BY test_slug, enabled`)).rows : [];
   const importColumns = (await db.query(`SELECT table_schema, table_name,
     column_name, data_type, is_nullable, column_default
     FROM information_schema.columns
     WHERE (table_schema, table_name) IN (
       ('mapping', 'classroom_course_mapping'),
-      ('assessment', 'term_test_roster'))
+      ('assessment_k56', 'term_test_roster'))
     ORDER BY table_schema, table_name, ordinal_position`)).rows;
   process.stdout.write(JSON.stringify({database: meta.database,
     accessExists: meta.access_exists, access, definitions, hashes, packageHashes,
@@ -59,7 +59,7 @@ try {
 """
 
 
-def ssh_read(client, command, stdin_data=None):
+def ssh_read(client, command, code, stdin_data=None):
     # Dữ liệu vào: lệnh đọc metadata với đích container cố định.
     # Việc chính: kiểm exit rồi mới phân tích output; không in stderr thô.
     # Kết quả: JSON/chuỗi không nhạy cảm; lỗi chỉ có mã.
@@ -70,7 +70,7 @@ def ssh_read(client, command, stdin_data=None):
     data = stdout.read().decode("utf-8")
     stderr.read()
     if stdout.channel.recv_exit_status() != 0:
-        raise RuntimeError("RELEASE_PREFLIGHT_READ_FAILED")
+        raise RuntimeError(code)
     return data.strip()
 
 
@@ -87,14 +87,14 @@ def main():
     client.connect("ducizone.ddns.net", port=22, username=username,
                    password=password, timeout=15, auth_timeout=15)
     try:
-        image = ssh_read(client, "docker inspect --format '{{.Image}}|{{.Config.Image}}|{{.State.Health.Status}}|{{.RestartCount}}' izone-k56-ic2264-api")
+        image = ssh_read(client, "docker inspect --format '{{.Image}}|{{.Config.Image}}|{{.State.Health.Status}}|{{.RestartCount}}' izone-k56-ic2264-api", "RELEASE_IMAGE_READ_FAILED")
         metadata = json.loads(ssh_read(client,
             "docker exec -i izone-k56-ic2264-api node --input-type=module -",
-            REMOTE_SCRIPT))
+            "RELEASE_DB_METADATA_READ_FAILED", REMOTE_SCRIPT))
     finally:
         client.close()
     parts = image.split("|")
-    if len(parts) != 4 or metadata.get("database") != "izone_mapping_k56_ic2264":
+    if len(parts) != 4 or metadata.get("database") != "mapping_db":
         raise RuntimeError("UNEXPECTED_RELEASE_TARGET")
     print(json.dumps({"toolOutcome": "success", "imageId": parts[0],
                       "imageTag": parts[1], "health": parts[2],
