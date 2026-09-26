@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import net from 'node:net';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import request from 'supertest';
 import { createTermCanary, redisCommand } from './term_canary_server.mjs';
@@ -95,6 +96,16 @@ test('Term K56 gọi adapter thật đúng một lần, lưu biên nhận và kh
         });
         assert.equal(browser.passed, true);
         assert.equal(browser.externalRequests, 0);
+        if (profileName === 'term1') {
+          const cli = spawnSync(process.execPath,
+            ['backend/ops/releases/writing-unified-20260925/term_canary_browser_check.mjs'],
+            { input: JSON.stringify(result.body), encoding: 'utf8',
+              env: process.env, timeout: 45_000 });
+          assert.equal(cli.status, 0, 'CANARY_BROWSER_CLI_FAILED');
+          const output = JSON.parse(cli.stdout);
+          assert.equal(output.businessOutcome, 'browser_result_verified');
+          assert.equal(output.externalRequests, 0);
+        }
       }
     } finally {
       await canary.close();

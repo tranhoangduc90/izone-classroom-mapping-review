@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -165,6 +167,48 @@ def diagnose(client):
     return result
 
 
+def browser_readback(client, pages_root):
+    # Dữ liệu vào: kết quả bài giả từ đúng container canary và source Pages được chỉ định.
+    # Việc chính: truyền JSON qua RAM/stdin tới Chrome cục bộ, không in bài hoặc điểm.
+    # Kết quả: chỉ trả trạng thái, Task và số lần trang đọc kết quả.
+    # Khi lỗi: dừng tại bước lỗi, không tự gọi lại API hoặc tạo bài mới.
+    state = inspect_container(client)
+    if state is None or not state["running"] or state["health"] != "healthy":
+        raise RuntimeError("TERM_CANARY_BROWSER_PRECONDITION_FAILED")
+    if not pages_root or not Path(pages_root).is_dir():
+        raise RuntimeError("TERM_CANARY_PAGES_ROOT_INVALID")
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("TERM_CANARY_NODE_NOT_FOUND")
+    script = ("fetch('http://127.0.0.1:8791/__canary/result')"
+              ".then(async r=>{const b=await r.json();"
+              "process.stdout.write(JSON.stringify({status:r.status,result:b}))})"
+              ".catch(()=>process.exitCode=3)")
+    _, raw = remote(client, "docker exec " + CONTAINER + " node -e "
+                    + shlex.quote(script), stage="browser_result_read")
+    response = json.loads(raw)
+    if response.get("status") != 200:
+        raise RuntimeError("TERM_CANARY_BROWSER_RESULT_NOT_READY")
+    checked = subprocess.run(
+        [node, str(ROOT / SCRIPTS / "term_canary_browser_check.mjs")],
+        input=json.dumps(response["result"], ensure_ascii=False),
+        text=True, encoding="utf-8", capture_output=True, timeout=45,
+        env={**os.environ, "K56_PAGES_ROOT": str(Path(pages_root).resolve())},
+        check=False,
+    )
+    if checked.returncode != 0:
+        raise RuntimeError("TERM_CANARY_BROWSER_VERIFICATION_FAILED")
+    outcome = json.loads(checked.stdout)
+    if (outcome.get("toolOutcome") != "success"
+            or outcome.get("businessOutcome") != "browser_result_verified"
+            or outcome.get("externalRequests") != 0
+            or outcome.get("pageErrors") != 0):
+        raise RuntimeError("TERM_CANARY_BROWSER_READBACK_INVALID")
+    return {"businessOutcome": "browser_result_verified",
+            "testSlug": outcome["testSlug"], "taskNumber": outcome["taskNumber"],
+            "resultReads": outcome["resultReads"], "productionWrites": 0}
+
+
 def seed_dispatch(client, profile_name):
     # Dữ liệu vào: canary rỗng đã kiểm và bài giả cố định trong image thử.
     # Việc chính: tạo một job dispatch, không nhận bài/định danh từ người dùng.
@@ -264,8 +308,9 @@ def rollback(client):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["deploy", "inspect", "diagnose", "audit",
-                                         "seed-dispatch", "rollback"])
+                                         "seed-dispatch", "browser-readback", "rollback"])
     parser.add_argument("--profile", choices=["term", "term1", "mini"], default="term")
+    parser.add_argument("--pages-root")
     parser.add_argument("--writer-bridge", action="store_true")
     args = parser.parse_args()
     client = connect()
@@ -280,6 +325,8 @@ def main():
             result = seed_dispatch(client, args.profile)
         elif args.mode == "audit":
             result = audit(client)
+        elif args.mode == "browser-readback":
+            result = browser_readback(client, args.pages_root)
         else:
             result = rollback(client)
         print(json.dumps({"toolOutcome": "success", **result}, ensure_ascii=False))
