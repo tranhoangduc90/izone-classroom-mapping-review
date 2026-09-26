@@ -39,6 +39,7 @@ javascript = r'''
 // Kết quả: chỉ ba cột/điểm của học viên đích; kiểm cả Term 1 và Term 2.
 // Khi lỗi: dừng smoke test, không có tác động đến Portal thật.
 import { readTermK56PortalSnapshot } from '/app/src/term-test-portal-snapshot.js';
+import { createApp } from '/app/src/app.js';
 const marker = 'DO_NOT_EXPOSE_PRIVATE_FIXTURE';
 const portal = {
   class_tests: [
@@ -84,7 +85,59 @@ for (const [slug, ids] of [
   }
 }
 if (calls !== 2) throw new Error('FETCH_COUNT_MISMATCH');
-process.stdout.write(JSON.stringify({ toolOutcome: 'success', cases: 2,
+// Dữ liệu vào: hai request HTTP loopback và secret chỉ dùng cho fixture.
+// Việc chính: xác nhận route chặn khách lạ, lọc Portal cho K56, không mở cho K67.
+// Kết quả: bản image thật trả 401/200/404; không có HTTP ra ngoài container.
+// Khi lỗi: đóng cổng loopback rồi để container tự gỡ.
+const app = createApp({
+  config: {
+    nodeEnv: 'test', authMode: 'legacy', googleClientId: '',
+    legacyReviewToken: '', allowedOrigins: new Set(), trustProxyHops: 0,
+    deploymentProfileName: 'k56-ic2264', erpSyncSecret: 'fixture-secret'
+  },
+  pool: { async query() { throw new Error('DATABASE_MUST_NOT_BE_CALLED'); } },
+  portalSnapshotFetchImpl: fakeFetch,
+  logger: { info() {}, warn() {}, error() {} }
+});
+const server = app.listen(0, '127.0.0.1');
+try {
+  await new Promise(resolve => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const path = '/api/term-tests/writing-grading/portal-snapshot'
+    + '?classId=99000001&studentId=9002&testSlug=term-test-1-k56';
+  if ((await fetch(base + path)).status !== 401) throw new Error('AUTH_MISSING');
+  const response = await fetch(base + path, {
+    headers: { 'x-term-test-sync': 'fixture-secret' }
+  });
+  const body = await response.json();
+  if (response.status !== 200 || JSON.stringify(body).includes(marker)
+      || body.student_test_grades.length !== 3) {
+    throw new Error('HTTP_SNAPSHOT_MISMATCH');
+  }
+} finally {
+  await new Promise(resolve => server.close(resolve));
+}
+const k67 = createApp({
+  config: {
+    nodeEnv: 'test', authMode: 'legacy', googleClientId: '',
+    legacyReviewToken: '', allowedOrigins: new Set(), trustProxyHops: 0,
+    deploymentProfileName: 'k67', erpSyncSecret: 'fixture-secret'
+  },
+  pool: { async query() { throw new Error('DATABASE_MUST_NOT_BE_CALLED'); } },
+  portalSnapshotFetchImpl: fakeFetch,
+  logger: { info() {}, warn() {}, error() {} }
+});
+const k67Server = k67.listen(0, '127.0.0.1');
+try {
+  await new Promise(resolve => k67Server.once('listening', resolve));
+  const url = `http://127.0.0.1:${k67Server.address().port}`
+    + '/api/term-tests/writing-grading/portal-snapshot';
+  if ((await fetch(url)).status !== 404) throw new Error('K67_ROUTE_EXPOSED');
+} finally {
+  await new Promise(resolve => k67Server.close(resolve));
+}
+if (calls !== 3) throw new Error('HTTP_FETCH_COUNT_MISMATCH');
+process.stdout.write(JSON.stringify({ toolOutcome: 'success', cases: 5,
   privateFieldExposed: false, networkUsed: false }) + '\n');
 '''
 
@@ -101,14 +154,14 @@ try:
         '--input-type=module', '-'
     ], 'ISOLATED_IMAGE_SMOKE_FAILED', javascript)
     report = json.loads(result)
-    if report != {'toolOutcome': 'success', 'cases': 2,
+    if report != {'toolOutcome': 'success', 'cases': 5,
                   'privateFieldExposed': False, 'networkUsed': False}:
         raise RuntimeError('ISOLATED_IMAGE_SMOKE_MISMATCH')
     if output(['docker', 'inspect', '--format', '{{.Image}}', production],
               'PRODUCTION_API_READBACK_FAILED') != base_image_id:
         raise RuntimeError('PRODUCTION_API_CHANGED_DURING_SMOKE')
     print(json.dumps({'toolOutcome': 'success', 'businessOutcome': 'isolated_image_smoke',
-                      'cases': 2, 'productionApiChanged': False,
+                      'cases': 5, 'productionApiChanged': False,
                       'networkEnabled': False, 'publicPortPublished': False}))
 except Exception as exc:
     code = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
