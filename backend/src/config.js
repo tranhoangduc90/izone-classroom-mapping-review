@@ -9,6 +9,11 @@ const envSchema = z.object({
   LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   LEARNING_DATABASE_URL: z.string().optional().default(''),
   LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
+  SPEAKING_HOMEWORK_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  SPEAKING_HOMEWORK_DATABASE_URL: z.string().optional().default(''),
+  SPEAKING_HOMEWORK_DB_POOL_MAX: z.coerce.number().int().min(1).max(20).default(5),
+  SPEAKING_HOMEWORK_WORKER_SECRET: z.string().optional().default(''),
+  SPEAKING_HOMEWORK_ACCESS_SECRET: z.string().optional().default(''),
   AUTH_MODE: z.enum(['google', 'legacy']).default('google'),
   GOOGLE_CLIENT_ID: z.string().trim().optional().default(''),
   LEGACY_REVIEW_TOKEN: z.string().optional().default(''),
@@ -70,6 +75,18 @@ const envSchema = z.object({
   if (value.LEARNING_ENABLED && !value.LEARNING_DATABASE_URL) {
     context.addIssue({ code: 'custom', path: ['LEARNING_DATABASE_URL'], message: 'LEARNING_DATABASE_URL là bắt buộc khi bật Progress Log.' });
   }
+  if (value.SPEAKING_HOMEWORK_ENABLED && !value.SPEAKING_HOMEWORK_DATABASE_URL) {
+    context.addIssue({ code: 'custom', path: ['SPEAKING_HOMEWORK_DATABASE_URL'],
+      message: 'Cần database URL riêng khi bật Speaking Homework.' });
+  }
+  if (value.SPEAKING_HOMEWORK_ENABLED && value.SPEAKING_HOMEWORK_WORKER_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['SPEAKING_HOMEWORK_WORKER_SECRET'],
+      message: 'Cần secret worker Speaking tối thiểu 32 ký tự khi bật hệ thống.' });
+  }
+  if (value.SPEAKING_HOMEWORK_ENABLED && value.SPEAKING_HOMEWORK_ACCESS_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['SPEAKING_HOMEWORK_ACCESS_SECRET'],
+      message: 'Cần secret phiên học viên Speaking tối thiểu 32 ký tự khi bật hệ thống.' });
+  }
   if (value.TEACHER_SESSION_ABSOLUTE_DAYS < value.TEACHER_SESSION_IDLE_DAYS) {
     context.addIssue({ code: 'custom', path: ['TEACHER_SESSION_ABSOLUTE_DAYS'], message: 'Hạn tuyệt đối phải lớn hơn hoặc bằng hạn nhàn rỗi.' });
   }
@@ -107,6 +124,11 @@ export function loadConfig(env = process.env) {
     learningEnabled: parsed.LEARNING_ENABLED,
     learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
     learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,
+    speakingHomeworkEnabled: parsed.SPEAKING_HOMEWORK_ENABLED,
+    speakingHomeworkDatabaseUrl: parsed.SPEAKING_HOMEWORK_DATABASE_URL,
+    speakingHomeworkDbPoolMax: parsed.SPEAKING_HOMEWORK_DB_POOL_MAX,
+    speakingHomeworkWorkerSecret: parsed.SPEAKING_HOMEWORK_WORKER_SECRET,
+    speakingHomeworkAccessSecret: parsed.SPEAKING_HOMEWORK_ACCESS_SECRET,
     authMode: parsed.AUTH_MODE,
     googleClientId: parsed.GOOGLE_CLIENT_ID,
     legacyReviewToken: parsed.LEGACY_REVIEW_TOKEN,
