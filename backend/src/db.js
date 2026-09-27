@@ -36,6 +36,19 @@ export function createLearningDatabasePool(config) {
   return pool;
 }
 
+// Speaking Homework dùng role riêng để không cấp quyền của API mapping cho worker.
+export function createSpeakingHomeworkDatabasePool(config) {
+  const pool = new Pool({
+    connectionString: config.speakingHomeworkDatabaseUrl,
+    max: config.speakingHomeworkDbPoolMax,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    application_name: 'izone_speaking_homework_api'
+  });
+  pool.on('error', () => console.error('PostgreSQL pool Speaking Homework gặp lỗi kết nối nền.'));
+  return pool;
+}
+
 // Chạy một thao tác trong transaction; lỗi ở bất kỳ bước nào đều rollback.
 export async function withTransaction(pool, work) {
   const client = await pool.connect();

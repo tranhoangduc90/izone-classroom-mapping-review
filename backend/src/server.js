@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
-import { createDatabasePool, createLearningDatabasePool } from './db.js';
+import { createDatabasePool, createLearningDatabasePool, createSpeakingHomeworkDatabasePool } from './db.js';
 import { createErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
@@ -12,6 +12,7 @@ import { startLearningAttendanceWorker } from './learning-attendance-worker.js';
 const config = loadConfig();
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
+const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
 const syncErpGrades = createErpGradeSync({ config });
 const termTestAssetService = config.termTestAssetDir
   ? createTermTestAssetService({
@@ -35,6 +36,7 @@ const app = createApp({
   config,
   pool,
   learningPool,
+  speakingHomeworkPool,
   syncErpGrades,
   termTestAssetService,
   termTestWritingGradingService
@@ -59,7 +61,7 @@ async function shutdown(signal) {
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   server.close(async () => {
     await learningAttendanceWorker.stop();
-    await Promise.all([pool.end(), learningPool?.end()]);
+    await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end()]);
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

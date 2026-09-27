@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
+import { createSpeakingHomeworkRouter } from './speaking-homework-routes.js';
 import {
   completeReadingAttemptSql,
   fetchTermTestAttemptReviewSql,
@@ -398,6 +399,7 @@ export function createApp({
   config,
   pool,
   learningPool = null,
+  speakingHomeworkPool = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   writingTestService,
@@ -1309,6 +1311,17 @@ export function createApp({
   }
   if (config.learningEnabled) {
     app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
+  }
+  if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
+    throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');
+  }
+  if (config.speakingHomeworkEnabled) {
+    app.use('/api/speaking-homework', createSpeakingHomeworkRouter({
+      pool: speakingHomeworkPool,
+      workerSecret: config.speakingHomeworkWorkerSecret,
+      accessSecret: config.speakingHomeworkAccessSecret,
+      authenticate
+    }));
   }
   app.get('/api/auth/me', authenticate, (req, res) => {
     res.json({ ok: true, reviewer: req.reviewer });
