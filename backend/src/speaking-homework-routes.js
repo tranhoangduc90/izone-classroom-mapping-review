@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createSpeakingHomeworkService, SpeakingHomeworkError } from './speaking-homework.js';
 import { createSpeakingDocsJobs } from './speaking-docs-jobs.js';
 import { createSpeakingAlerts } from './speaking-alerts.js';
+import { createSpeakingClassroomCopies } from './speaking-classroom-copies.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -53,6 +54,24 @@ const classroomAlertScan = classroomAlertScope.extend({ snapshotComplete: z.lite
   }
 });
 const classroomAlertAck = z.object({ batchId: z.string().uuid() }).strict();
+const classroomCopyScope = z.object({ courseId: z.string().regex(/^\d+$/),
+  courseWorkId: z.string().regex(/^\d+$/) }).strict();
+const classroomCopySync = classroomCopyScope.extend({
+  snapshotComplete: z.literal(true),
+  submissions: z.array(z.object({
+    id: z.string().trim().min(1).max(200),
+    userId: z.string().trim().min(1).max(200),
+    documentId: z.string().regex(/^[A-Za-z0-9_-]{5,120}$/).nullable()
+  }).strict()).max(100)
+}).strict().superRefine((input, context) => {
+  if (new Set(input.submissions.map(item => item.id)).size !== input.submissions.length
+    || new Set(input.submissions.filter(item => item.documentId)
+      .map(item => item.documentId)).size !== input.submissions.filter(item => item.documentId).length) {
+    context.addIssue({ code: 'custom', message: 'Danh sách bản sao Classroom bị trùng.' });
+  }
+});
+const classroomCopyDoc = z.object({ documentId: z.string().regex(/^[A-Za-z0-9_-]{5,120}$/),
+  document: z.record(z.string(), z.unknown()) }).strict();
 const doctorEvent = z.object({
   sourceKey: z.string().trim().min(16).max(200),
   kind: z.enum(['recommendation', 'practice']),
@@ -96,6 +115,7 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   const service = createSpeakingHomeworkService({ pool, accessSecret });
   const docsJobs = createSpeakingDocsJobs({ pool });
   const alerts = createSpeakingAlerts({ pool });
+  const classroomCopies = createSpeakingClassroomCopies({ pool });
   router.use(rateLimit({ windowMs: 60_000, limit: 120,
     standardHeaders: 'draft-8', legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng chờ.' } }));
@@ -156,6 +176,21 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   }));
 
   router.use('/internal', workerAuth(workerSecret));
+  router.post('/internal/classroom-copies/sync', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomCopySync, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, result: await classroomCopies.sync(input) });
+  }));
+  router.post('/internal/classroom-copies/plan', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomCopyDoc, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, plan: await classroomCopies.plan(input) });
+  }));
+  router.post('/internal/classroom-copies/verify', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomCopyDoc, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, result: await classroomCopies.verify(input) });
+  }));
   router.post('/internal/checks/claim', asyncRoute(async (_req, res) => {
     res.json({ ok: true, job: await service.claimCheckJob() });
   }));

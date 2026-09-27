@@ -7,6 +7,8 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
+import { createSpeakingClassroomCopies, planSpeakingCopyCta,
+  verifySpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -55,6 +57,15 @@ async function fixture() {
   `);
   const migration = await readFile(new URL('../ops/migrations/202609270001_speaking_homework_candidate.sql', import.meta.url), 'utf8');
   await db.exec(migration);
+  await db.exec(`ALTER TABLE speaking_homework.assignment_document
+    ADD COLUMN classroom_submission_id TEXT,
+    ADD COLUMN cta_verified_at TIMESTAMPTZ;
+    CREATE UNIQUE INDEX speaking_document_student_once
+    ON speaking_homework.assignment_document(assignment_id, student_ref)
+    WHERE student_ref IS NOT NULL;
+    CREATE UNIQUE INDEX speaking_document_classroom_submission_once
+    ON speaking_homework.assignment_document(assignment_id, classroom_submission_id)
+    WHERE classroom_submission_id IS NOT NULL;`);
   const pool = poolFrom(db);
   const first = await pool.query(`INSERT INTO speaking_homework.assignment
     (class_id, course_id, course_work_id, assignment_code, doctor_course_key, title, status)
@@ -77,6 +88,8 @@ async function fixture() {
   await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id, student_ref) VALUES ($1, $2, $3)', [second.rows[0].id, 'doc-B', secondStudentRef]);
   await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id, student_ref) VALUES ($1, $2, $3)', [second.rows[0].id, 'doc-C', studentRef]);
   await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id) VALUES ($1, $2)', [second.rows[0].id, 'template-doc']);
+  await pool.query(`UPDATE speaking_homework.assignment_document
+    SET cta_verified_at = now() WHERE student_ref IS NOT NULL`);
   for (const [assignmentId, ref, token, doc] of [
     [first.rows[0].id, studentRef, accessToken, 'doc-A'],
     [second.rows[0].id, secondStudentRef, secondToken, 'doc-B']
@@ -105,6 +118,65 @@ test('chỉ nhận đúng link Share, chuẩn hóa URL và chặn link hội tho
   assert.throws(() => parseSpeakingShareUrl('https://chatgpt.com/c/abc'), { code: 'INVALID_SHARE_URL' });
   assert.throws(() => parseSpeakingShareUrl('https://evil.test/share/' + 'a'.repeat(32)),
     { code: 'INVALID_SHARE_URL' });
+});
+
+test('bản sao Classroom phải đúng học viên và CTA đã đọc lại mới mở được', async () => {
+  const { db, pool } = await fixture();
+  const service = createSpeakingHomeworkService({ pool,
+    accessSecret: 'test-student-access-secret-32-characters' });
+  const copies = createSpeakingClassroomCopies({ pool });
+  const copy = { id: 'submission-new', userId: 'classroom-A', documentId: 'student-doc-new' };
+  const scope = { courseId: 'course-2304', courseWorkId: 'lesson-3', submissions: [copy] };
+  const document = url => ({ documentId: copy.documentId, revisionId: 'rev-1', tabs: [{
+    tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [{
+      paragraph: { elements: [{ startIndex: 70, endIndex: 107,
+        textRun: { content: 'NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING',
+          textStyle: { link: { url } } } }] }
+    }] } }
+  }] });
+  try {
+    await pool.query("DELETE FROM speaking_homework.assignment_document WHERE document_id = 'doc-C'");
+    const bound = await copies.sync(scope);
+    assert.equal(bound.bound, 1);
+    assert.equal(bound.pending.length, 1);
+    assert.equal((await copies.sync(scope)).pending.length, 1);
+    await assert.rejects(service.openAssignment({ documentId: copy.documentId,
+      assignmentCode: '67-speaking-lam_ro' }), { code: 'ASSIGNMENT_NOT_FOUND' });
+    const plan = await copies.plan({ documentId: copy.documentId,
+      document: document('https://example.test/old') });
+    assert.equal(plan.status, 'write');
+    assert.equal(plan.requests[0].updateTextStyle.range.tabId, 't.0');
+    assert.equal(plan.requests[0].updateTextStyle.range.startIndex, 70);
+    assert.match(plan.url, /documentId=student-doc-new/);
+    assert.equal(verifySpeakingCopyCta({ document: document(plan.url),
+      documentId: copy.documentId, classCode: 'IC2304',
+      assignmentCode: '67-speaking-lam_ro' }), true);
+    await assert.rejects(copies.verify({ documentId: copy.documentId,
+      document: document('https://example.test/old') }), { code: 'DOC_CTA_NOT_VERIFIED' });
+    await copies.verify({ documentId: copy.documentId, document: document(plan.url) });
+    assert.equal((await copies.sync(scope)).pending.length, 0);
+    const opened = await service.openAssignment({ documentId: copy.documentId,
+      assignmentCode: '67-speaking-lam_ro', classCode: 'IC2304' });
+    assert.equal(opened.students.length, 2);
+    await assert.rejects(service.startSession({ documentId: copy.documentId,
+      assignmentCode: '67-speaking-lam_ro', studentRef: secondStudentRef }),
+    { code: 'ACCESS_DENIED' });
+    await assert.rejects(copies.sync({ ...scope, submissions: [{ ...copy,
+      userId: 'classroom-B' }] }), { code: 'DOCUMENT_BINDING_CONFLICT' });
+    await assert.rejects(copies.sync({ ...scope, submissions: [{ ...copy,
+      documentId: 'different-doc' }] }));
+  } finally { await db.close(); }
+});
+
+test('CTA thiếu hoặc trùng không được đánh dấu đã cập nhật', () => {
+  const input = { documentId: 'doc-1', classCode: 'IC2304',
+    assignmentCode: '67-speaking-lam_ro' };
+  const base = { documentId: 'doc-1', revisionId: 'rev-1', tabs: [{
+    tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [] } }
+  }] };
+  assert.throws(() => planSpeakingCopyCta({ ...input, document: base }),
+    /DOC_CTA_AMBIGUOUS/);
+  assert.equal(verifySpeakingCopyCta({ ...input, document: base }), false);
 });
 
 test('lịch Classroom chỉ gom TURNED_IN thiếu bài Speaking và gửi một lần', async () => {
@@ -344,6 +416,15 @@ test('route nội bộ đòi secret; chưa bật cờ thì API cũ không đổi
     const app = createApp({ config, pool, speakingHomeworkPool: pool });
     const denied = await request(app).post('/api/speaking-homework/internal/checks/claim').send({});
     assert.equal(denied.status, 401);
+    const deniedCopy = await request(app)
+      .post('/api/speaking-homework/internal/classroom-copies/sync')
+      .send({ courseId: '1', courseWorkId: '2', snapshotComplete: true, submissions: [] });
+    assert.equal(deniedCopy.status, 401);
+    const incompleteCopy = await request(app)
+      .post('/api/speaking-homework/internal/classroom-copies/sync')
+      .set('x-speaking-worker-secret', workerSecret)
+      .send({ courseId: '1', courseWorkId: '2', snapshotComplete: false, submissions: [] });
+    assert.equal(incompleteCopy.status, 400);
     const opened = await request(app).post('/api/speaking-homework/open').send({ accessToken, studentRef });
     assert.equal(opened.status, 200);
     assert.equal(opened.body.assignment.documentId, 'doc-A');
@@ -384,7 +465,7 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
     const templateSession = await request(app).post('/api/speaking-homework/session/start')
       .send({ documentId: 'template-doc', assignmentCode: '67-speaking-lam_ro',
         studentRef, identityConfirmed: true });
-    assert.equal(templateSession.status, 403);
-    assert.equal(templateSession.body.error, 'STUDENT_DOCUMENT_REQUIRED');
+    assert.equal(templateSession.status, 404);
+    assert.equal(templateSession.body.error, 'ASSIGNMENT_NOT_FOUND');
   } finally { await db.close(); }
 });
