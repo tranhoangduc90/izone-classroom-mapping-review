@@ -25,3 +25,7 @@ Theo dõi số việc kiểm quá năm phút, kết quả bị từ chối theo 
 3. Kiểm đủ bốn phần, trùng URL/nội dung/bài cũ, voice warning, timeout/retry, hai tab, đổi người, quyền giảng viên và Docs readback.
 4. Chạy bộ test đầy đủ của API và Pages; kiểm một lượt thật có phép thử trên bản sao tạm trước khi bật học viên.
 5. Nếu lỗi sau phát hành, tắt cờ Speaking Homework và phục hồi CTA cũ từ snapshot; giữ nguyên biên nhận và dấu chống trùng. Không xóa bài hoặc tắt điểm danh Progress Log.
+
+## Phát hiện khi chuẩn bị chuyển API ngày 28/09
+
+Container API live trước lần phát hành này thiếu `LEARNING_ATTENDANCE_SYNC_URL` và không chứa worker nhận `sync_portal_attendance`; ba việc điểm danh đã đến hạn vẫn ở hàng chờ. Image ứng viên ban đầu kế thừa thiếu sót đó nên không được chuyển thẳng sang production. Bản phát hành đã bổ sung guard cấu hình, worker và ba module điểm danh từ source được kiểm; URL cũ lấy từ container dự phòng ngày 24/09, lưu trong file private trên VPS. Endpoint từ chối phép thử sai quyền với HTTP 403. Canary image mới chạy khỏe và xử lý ba việc điểm danh: hàng chờ chuyển từ 67 hoàn tất + 3 chờ sang 70 hoàn tất + 0 chờ. Đây là bằng chứng worker/contract; vẫn cần đối chiếu outcome Portal và theo dõi sau chuyển container chính.

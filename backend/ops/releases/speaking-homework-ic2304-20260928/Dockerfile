@@ -3,6 +3,7 @@ FROM izone-term-test-backend:20260925.4-learning-contract-compat
 USER root
 COPY src/speaking-homework.js src/speaking-homework-routes.js src/speaking-docs-writer.js src/speaking-docs-jobs.js src/speaking-alerts.js src/speaking-share-reader.js src/speaking-checker.js src/speaking-check-worker.js src/speaking-grade-worker.js src/teacher-class-access-sql.js /app/src/
 COPY src/db.js /tmp/speaking-db.js
+COPY src/learning-outbox.js src/learning-attendance-sync.js src/learning-attendance-worker.js /app/src/
 COPY ops/releases/speaking-homework-ic2304-20260928/patch-live.mjs /tmp/patch-live.mjs
 
 # Dữ liệu vào: image API production đang chạy và source Speaking đã kiểm.
