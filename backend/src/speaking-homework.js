@@ -43,7 +43,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       JOIN speaking_homework.assignment a ON a.id = d.assignment_id
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE d.document_id = $1 AND a.assignment_code = $2
-        AND a.status = 'open' AND c.status = 'approved'`, [documentId, assignmentCode]);
+        AND a.status = 'open' AND c.status = 'approved'
+        AND d.cta_verified_at IS NOT NULL`, [documentId, assignmentCode]);
     if (result.rows.length !== 1) {
       throw new SpeakingHomeworkError('ASSIGNMENT_NOT_FOUND', 'File Homework chưa được đăng ký cho bài này.', 404);
     }
