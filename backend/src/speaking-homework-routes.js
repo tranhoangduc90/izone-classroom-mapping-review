@@ -3,6 +3,8 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { createSpeakingHomeworkService, SpeakingHomeworkError } from './speaking-homework.js';
+import { createSpeakingDocsJobs } from './speaking-docs-jobs.js';
+import { createSpeakingAlerts } from './speaking-alerts.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -28,10 +30,29 @@ const checkResult = z.object({
 }).strict();
 const checkFailure = z.object({ checkJobId: z.string().uuid(),
   errorCode: z.string().regex(/^[A-Z0-9_]{3,80}$/) }).strict();
+const checkRejection = z.object({ checkJobId: z.string().uuid(),
+  checkCode: z.enum(['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID']) }).strict();
 const outboxComplete = z.object({ jobId: z.string().uuid(),
   externalReceipt: z.string().trim().min(1).max(500) }).strict();
+const outboxClaim = z.object({ kind: z.enum(['write_doc', 'grade_speaking', 'doctor_analyze']).optional() }).strict();
 const outboxFailure = z.object({ jobId: z.string().uuid(),
   errorCode: z.string().regex(/^[A-Z0-9_]{3,80}$/) }).strict();
+const docsRequest = z.object({ jobId: z.string().uuid(),
+  document: z.record(z.string(), z.unknown()) }).strict();
+const classroomAlertScope = z.object({ courseId: z.string().regex(/^\d+$/),
+  courseWorkId: z.string().regex(/^\d+$/) }).strict();
+const classroomAlertScan = classroomAlertScope.extend({ snapshotComplete: z.literal(true),
+  submissions: z.array(z.object({
+    id: z.string().trim().min(1).max(200),
+    userId: z.string().trim().min(1).max(200),
+    state: z.enum(['NEW', 'CREATED', 'TURNED_IN', 'RETURNED', 'RECLAIMED_BY_STUDENT']),
+    alternateLink: z.string().max(1000).optional().default('')
+  }).strict()).max(100) }).strict().superRefine((input, context) => {
+  if (new Set(input.submissions.map(item => item.id)).size !== input.submissions.length) {
+    context.addIssue({ code: 'custom', message: 'Danh sách Classroom trùng bài nộp.' });
+  }
+});
+const classroomAlertAck = z.object({ batchId: z.string().uuid() }).strict();
 const doctorEvent = z.object({
   sourceKey: z.string().trim().min(16).max(200),
   kind: z.enum(['recommendation', 'practice']),
@@ -73,6 +94,8 @@ function workerAuth(secret) {
 export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate }) {
   const router = express.Router();
   const service = createSpeakingHomeworkService({ pool, accessSecret });
+  const docsJobs = createSpeakingDocsJobs({ pool });
+  const alerts = createSpeakingAlerts({ pool });
   router.use(rateLimit({ windowMs: 60_000, limit: 120,
     standardHeaders: 'draft-8', legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng chờ.' } }));
@@ -147,6 +170,11 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     await service.failCheckJob(input);
     res.json({ ok: true });
   }));
+  router.post('/internal/checks/reject', asyncRoute(async (req, res) => {
+    const input = parseOrReply(checkRejection, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, check: await service.rejectCheckJob(input) });
+  }));
   router.post('/internal/practice-checks/claim', asyncRoute(async (_req, res) => {
     res.json({ ok: true, job: await service.claimPracticeCheckJob() });
   }));
@@ -155,8 +183,10 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     if (!input) return;
     res.json({ ok: true, check: await service.completePracticeCheck(input) });
   }));
-  router.post('/internal/outbox/claim', asyncRoute(async (_req, res) => {
-    res.json({ ok: true, job: await service.claimOutboxJob() });
+  router.post('/internal/outbox/claim', asyncRoute(async (req, res) => {
+    const input = parseOrReply(outboxClaim, req.body || {}, res);
+    if (!input) return;
+    res.json({ ok: true, job: await service.claimOutboxJob(input.kind || '') });
   }));
   router.post('/internal/outbox/complete', asyncRoute(async (req, res) => {
     const input = parseOrReply(outboxComplete, req.body, res);
@@ -168,6 +198,31 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     if (!input) return;
     await service.failOutboxJob(input);
     res.json({ ok: true });
+  }));
+  router.post('/internal/docs/plan', asyncRoute(async (req, res) => {
+    const input = parseOrReply(docsRequest, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, plan: await docsJobs.plan(input) });
+  }));
+  router.post('/internal/docs/verify', asyncRoute(async (req, res) => {
+    const input = parseOrReply(docsRequest, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, write: await docsJobs.verifyAndComplete(input) });
+  }));
+  router.post('/internal/alerts/scan', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomAlertScan, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, scan: await alerts.scan(input) });
+  }));
+  router.post('/internal/alerts/claim', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomAlertScope, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, batch: await alerts.claim(input) });
+  }));
+  router.post('/internal/alerts/ack', asyncRoute(async (req, res) => {
+    const input = parseOrReply(classroomAlertAck, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, alert: await alerts.acknowledge(input) });
   }));
   router.post('/internal/doctor/events', asyncRoute(async (req, res) => {
     const input = parseOrReply(doctorEvent, req.body, res);

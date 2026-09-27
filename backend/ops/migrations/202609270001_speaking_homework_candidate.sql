@@ -120,6 +120,31 @@ CREATE TABLE speaking_homework.outbox (
   UNIQUE (receipt_id, kind)
 );
 
+CREATE TABLE speaking_homework.grade_result (
+  receipt_id UUID PRIMARY KEY REFERENCES speaking_homework.receipt(id),
+  part_counts JSONB NOT NULL,
+  total_questions INTEGER NOT NULL CHECK (total_questions >= 0),
+  typing_warning_parts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  voice_confirmed_parts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL CHECK (status IN ('meets_requirements')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE speaking_homework.classroom_alert (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id UUID NOT NULL REFERENCES speaking_homework.assignment(id),
+  classroom_submission_id TEXT NOT NULL,
+  student_ref UUID NOT NULL,
+  classroom_url TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'sending', 'sent', 'resolved')),
+  batch_id UUID,
+  detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (assignment_id, classroom_submission_id)
+);
+
 CREATE TABLE speaking_homework.doctor_exercise (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   course_key TEXT NOT NULL,

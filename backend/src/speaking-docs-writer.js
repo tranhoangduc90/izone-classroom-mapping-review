@@ -11,7 +11,7 @@ function cellRuns(cell) {
 }
 function cellText(cell) { return cellRuns(cell).map(run => run.text).join('').trim(); }
 function statusCell(document, tabId) {
-  const tab = document.tabs?.find(item => item.tabId === tabId);
+  const tab = document.tabs?.find(item => item.tabProperties?.tabId === tabId);
   if (!tab) throw new Error('DOC_TAB_NOT_FOUND');
   const matches = [];
   function walk(content) {
@@ -28,7 +28,7 @@ function statusCell(document, tabId) {
       for (const row of rows) for (const cell of row.tableCells || []) walk(cell.content);
     }
   }
-  walk(tab.body?.content);
+  walk(tab.documentTab?.body?.content);
   if (matches.length !== 1) throw new Error('DOC_STATUS_CELL_AMBIGUOUS');
   return matches[0];
 }

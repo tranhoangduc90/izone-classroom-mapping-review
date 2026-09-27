@@ -1,83 +1,506 @@
 {
   "schema_version": 3,
-  "product": "Nhận bài Speaking Homework Lesson 3 và Bác sĩ AI cho IC2304",
+  "product": "Nhận bài Speaking Homework Lesson 3 của IC2304",
   "change_id": "speaking-homework-ic2304-backend-20260927",
   "change_kind": "feature",
   "escaped_user_defect": false,
   "risk": "high",
-  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "multi_user", "multi_service", "personal_data"],
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "multi_user",
+    "multi_service",
+    "personal_data"
+  ],
   "experience": {
     "planning_mode": "controlled",
     "mode_reason": "Nhiều học viên, kiểm AI bất đồng bộ, biên nhận và ghi Google Docs.",
     "user": "Học viên IC2304 và giảng viên có quyền lớp",
-    "problem": "Link Speaking chưa được kiểm và ghi nhận tập trung; giảng viên thiếu bản xem bài đã nộp.",
-    "outcome": "Bốn link được kiểm riêng, lưu biên nhận, cập nhật Docs và bản xem giảng viên.",
-    "out_of_scope": ["Chưa triển khai production hoặc chuyển dữ liệu lịch sử Lark."],
-    "plain_language_summary": "Chuẩn bị máy chủ nhận bốn hội thoại, chống nộp trùng và ghi kết quả đúng file Homework."
+    "problem": "Học viên cần nộp bốn hội thoại được kiểm ngay; giảng viên cần bản xem và email gộp khi Classroom đã nộp nhưng thiếu Speaking.",
+    "outcome": "Bốn link riêng được kiểm, biên nhận bền, Docs ghi đúng ô vàng, giảng viên xem bản chỉ đọc và nhận một email cho ca mới.",
+    "out_of_scope": [
+      "Lesson 3 không có Bác sĩ AI.",
+      "Không chuyển bài Speaking cũ từ Lark Base."
+    ],
+    "plain_language_summary": "Bài mới kiểm từng hội thoại, chỉ báo đã nộp khi đủ bốn phần, rồi cập nhật file Homework và bản xem giảng viên."
   },
   "change_package": {
-    "proposal": "Bổ sung schema, API học viên, hàng chờ và màn xem bài giảng viên.",
+    "proposal": "Bổ sung API, bộ kiểm Share, ghi Docs và lịch kiểm bài Classroom cho một lớp pilot.",
     "behavior_baseline": "Bài Speaking hiện nộp bằng link trong Google Docs; chưa có biên nhận trong database mapping.",
     "deltas": [
-      {"id": "D-SUBMIT", "operation": "ADDED", "behavior": "Nhận đủ bốn phần và chống dùng lại hội thoại.", "module_ids": ["M-SERVICE"], "test_ids": ["T-PARTS", "T-DUP"]},
-      {"id": "D-DOC", "operation": "ADDED", "behavior": "Chuẩn bị ghi đúng ô vàng và link giảng viên.", "module_ids": ["M-DOC"], "test_ids": ["T-DOC"]},
-      {"id": "D-DOCTOR", "operation": "ADDED", "behavior": "Giữ logic đề xuất và luyện theo Lark hiện hành.", "module_ids": ["M-SERVICE"], "test_ids": ["T-DOCTOR"]}
+      {
+        "id": "D-SUBMIT",
+        "operation": "ADDED",
+        "behavior": "Nhận đủ bốn phần, kiểm Share thật và chống dùng lại hội thoại.",
+        "module_ids": [
+          "M-SERVICE"
+        ],
+        "test_ids": [
+          "T-PARTS",
+          "T-DUP",
+          "T-WORKER"
+        ]
+      },
+      {
+        "id": "D-DOC",
+        "operation": "ADDED",
+        "behavior": "Ghi đúng ô vàng của bản sao Docs và link xem giảng viên.",
+        "module_ids": [
+          "M-DOC"
+        ],
+        "test_ids": [
+          "T-DOC"
+        ]
+      },
+      {
+        "id": "D-ALERT",
+        "operation": "ADDED",
+        "behavior": "Gom ca TURNED_IN thiếu Speaking vào một email, không báo RETURNED hoặc gửi lại.",
+        "module_ids": [
+          "M-ALERT"
+        ],
+        "test_ids": [
+          "T-ALERT"
+        ]
+      }
     ],
     "archive_status": "active"
   },
   "module_map": {
-    "revision": "lesson-3-plan-v1",
+    "revision": "lesson-3-live-v2",
     "modules": [
-      {"id": "M-SERVICE", "name": "Nhận bài và Bác sĩ AI", "responsibility": "Kiểm danh tính, lưu bài và tiến trình luyện.", "owns_data": ["submission", "receipt", "doctor_recommendation"], "public_interfaces": ["/api/speaking-homework"], "depends_on": [], "boundary_rules": ["Không báo nộp khi chưa đủ bốn phần."], "test_ids": ["T-PARTS", "T-DUP", "T-DOCTOR", "T-AUTH"]},
-      {"id": "M-DOC", "name": "Ghi trạng thái Homework", "responsibility": "Tạo thay đổi đúng ô vàng và kiểm đọc lại.", "owns_data": ["document_status"], "public_interfaces": ["planSpeakingStatusWrite"], "depends_on": [], "boundary_rules": ["Không sửa ô có nội dung khác."], "test_ids": ["T-DOC"]}
+      {
+        "id": "M-SERVICE",
+        "name": "Nhận và kiểm bài Speaking",
+        "responsibility": "Khóa đúng học viên/Doc, đọc Share, giữ biên nhận và đánh giá.",
+        "owns_data": [
+          "submission",
+          "receipt",
+          "conversation_claim",
+          "grade_result"
+        ],
+        "public_interfaces": [
+          "/api/speaking-homework"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không báo nộp khi chưa đủ bốn phần.",
+          "Không nhận hội thoại đã nộp trong khóa."
+        ],
+        "test_ids": [
+          "T-PARTS",
+          "T-DUP",
+          "T-WORKER",
+          "T-AUTH"
+        ]
+      },
+      {
+        "id": "M-DOC",
+        "name": "Ghi trạng thái Homework",
+        "responsibility": "Ghi và đọc lại đúng ô vàng trong bản sao Docs.",
+        "owns_data": [
+          "document_status"
+        ],
+        "public_interfaces": [
+          "/internal/docs/plan",
+          "/internal/docs/verify"
+        ],
+        "depends_on": [
+          "M-SERVICE"
+        ],
+        "boundary_rules": [
+          "Không sửa ô có nội dung khác.",
+          "Chỉ chốt sau readback."
+        ],
+        "test_ids": [
+          "T-DOC"
+        ]
+      },
+      {
+        "id": "M-ALERT",
+        "name": "Báo ca đã nộp Classroom nhưng thiếu Speaking",
+        "responsibility": "Đối chiếu snapshot Classroom và biên nhận, ghi dấu email.",
+        "owns_data": [
+          "classroom_alert"
+        ],
+        "public_interfaces": [
+          "/internal/alerts/scan",
+          "/internal/alerts/claim",
+          "/internal/alerts/ack"
+        ],
+        "depends_on": [
+          "M-SERVICE"
+        ],
+        "boundary_rules": [
+          "Chỉ TURNED_IN.",
+          "Một lô gửi một lần."
+        ],
+        "test_ids": [
+          "T-ALERT"
+        ]
+      }
     ],
-    "integrations": [{"id": "I-RECEIPT-DOC", "producer": "M-SERVICE", "consumer": "M-DOC", "contract": "Biên nhận có Doc ID và receipt ID; writer khóa revision và đọc lại.", "test_ids": ["T-DOC"]}]
-  },
-  "operational_design": {
-    "plan_revision": "lesson-3-plan-v1",
-    "signals": ["multi_user", "multi_service"],
-    "critical_path": "Học viên chọn tên → kiểm bốn Share → lưu biên nhận → hàng chờ ghi Docs/chấm/cập nhật Bác sĩ AI.",
-    "peak_load": {"value": 40, "unit": "concurrent_students", "basis": "Giả định kiểm thử một lớp; phải đo lại từ roster IC2304."},
-    "user_wait_target": "Xác nhận nhận link ngay; kiểm nội dung chạy nền và hiện tiến độ.",
-    "limits_and_cost": ["Mỗi học viên có bốn lần đọc Share và AI; giới hạn tốc độ cần đo trong pilot."],
-    "failure_and_recovery": ["Lỗi kiểm hoặc ghi Docs giữ job để thử lại; không chuyển thành đã hoàn tất."],
-    "monitoring": ["Theo dõi check job, outbox quá năm phút và biên nhận chưa ghi Docs."],
-    "decision": "Bật bằng feature flag sau khi có worker, migration chính thức và kiểm end-to-end.",
-    "test_ids": ["T-PARTS", "T-DOC", "T-DUP"]
-  },
-  "requirements": [
-    {"id": "R-PARTS", "statement": "Lesson 3 bắt buộc bốn link với ngưỡng riêng.", "test_ids": ["T-PARTS"]},
-    {"id": "R-DOC", "statement": "Chỉ ghi thông điệp và link giảng viên vào ô vàng dưới heading.", "test_ids": ["T-DOC"]},
-    {"id": "R-DOCTOR", "statement": "Giữ thứ tự Số lần đề xuất và luật mở lại hiện hành.", "test_ids": ["T-DOCTOR"]}
-  ],
-  "invariants": [
-    {"id": "V-IDENTITY", "statement": "Doc ID, học viên, lớp và bài phải khớp trước khi cấp phiên.", "test_ids": ["T-AUTH"]},
-    {"id": "V-NO-DUP", "statement": "Một hội thoại không được nộp lại trong cùng khóa.", "test_ids": ["T-DUP"]},
-    {"id": "V-NO-FALSE-DOC", "statement": "Không báo Docs đã ghi nếu chưa đọc lại đúng ô.", "test_ids": ["T-DOC"]}
-  ],
-  "tests": [
-    {"id": "T-PARTS", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "PGlite: Lesson 3 đòi đủ bốn phần với ngưỡng riêng."},
-    {"id": "T-DUP", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "PGlite: URL và fingerprint trùng bị chặn; retry một biên nhận."},
-    {"id": "T-AUTH", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "PGlite: Doc ID và học viên sai bị chặn; giảng viên ngoài lớp không xem được."},
-    {"id": "T-BAD", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "PGlite: URL Share sai định dạng, part ngoài bài và body sai bị từ chối."},
-    {"id": "T-REG", "category": "regression", "priority": "P1", "status": "passed", "evidence": "Full suite API cũ kiểm khi feature flag mặc định tắt; route cũ giữ nguyên."},
-    {"id": "T-DOCTOR", "category": "lifecycle_time", "priority": "P1", "status": "passed", "evidence": "PGlite: số lần đề xuất, chờ luyện và ngưỡng hơn năm ngày."},
-    {"id": "T-DOC", "category": "external_partial", "priority": "P0", "status": "not_run", "evidence": "Planner được unit test; worker Google Docs và readback thật chưa kết nối."},
-    {"id": "T-ROLL", "category": "rollback_recovery", "priority": "P1", "status": "not_run", "evidence": "Feature flag mặc định tắt; chưa diễn tập rollback pilot."}
-  ],
-  "task_graph": {
-    "plan_revision": "lesson-3-plan-v1",
-    "tasks": [
-      {"id": "TASK-BACKEND", "result": "Schema ứng viên, API và test local.", "module_ids": ["M-SERVICE", "M-DOC"], "depends_on": [], "consumes": ["Nội dung Docs cũ và logic Lark hiện hành"], "produces": ["Migration ứng viên và API"], "contract": "Không đổi API cũ khi cờ tắt.", "test_ids": ["T-PARTS", "T-DUP", "T-AUTH", "T-DOCTOR"], "evidence_required": ["Full suite backend"], "decision_inputs": ["Bốn link riêng"], "affected_future_tasks": ["TASK-PILOT"], "status": "done", "plan_revision": "lesson-3-plan-v1"},
-      {"id": "TASK-PILOT", "result": "Nối worker, Docs và kiểm người dùng thấy kết quả.", "module_ids": ["M-SERVICE", "M-DOC"], "depends_on": ["TASK-BACKEND"], "consumes": ["Migration, mã lớp, Doc ID"], "produces": ["Pilot IC2304"], "contract": "Chỉ bật sau readback.", "test_ids": ["T-DOC", "T-ROLL"], "evidence_required": ["Docs readback và Classroom pilot"], "decision_inputs": ["Quyền triển khai riêng"], "affected_future_tasks": [], "status": "in_progress", "plan_revision": "lesson-3-plan-v1"}
+    "integrations": [
+      {
+        "id": "I-RECEIPT-DOC",
+        "producer": "M-SERVICE",
+        "consumer": "M-DOC",
+        "contract": "Biên nhận gắn đúng Doc ID; writer khóa revision và đọc lại.",
+        "test_ids": [
+          "T-DOC"
+        ]
+      },
+      {
+        "id": "I-RECEIPT-ALERT",
+        "producer": "M-SERVICE",
+        "consumer": "M-ALERT",
+        "contract": "Chỉ học viên chưa có biên nhận và đang TURNED_IN mới thành cảnh báo.",
+        "test_ids": [
+          "T-ALERT"
+        ]
+      }
     ]
   },
-  "risk_register": {"assessment": "CONCERNS", "risks": [{"id": "RISK-WORKER", "description": "Chưa nối worker và DB production.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Đức và Codex", "mitigation": "Giữ cờ tắt, nối và kiểm theo plan pilot.", "test_ids": ["T-DOC"]}], "waivers": []},
+  "operational_design": {
+    "plan_revision": "lesson-3-live-v2",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
+    "critical_path": "Classroom giao bản sao Docs → học viên chọn tên → kiểm bốn Share → biên nhận → ghi Docs/chấm. Lịch 30 phút đối chiếu TURNED_IN và gửi một email khi có ca mới.",
+    "peak_load": {
+      "value": 15,
+      "unit": "concurrent_students",
+      "basis": "Roster IC2304 có 15 tài khoản Classroom đã duyệt."
+    },
+    "user_wait_target": "Xác nhận nhận link ngay; kiểm nội dung chạy nền và hiện tiến độ.",
+    "limits_and_cost": [
+      "Tối đa 60 lượt đọc Share/AI nếu cả lớp nộp bốn phần.",
+      "Mỗi 30 phút một lần đọc Classroom; chỉ có Gmail call khi có ca mới."
+    ],
+    "failure_and_recovery": [
+      "Lỗi kiểm link giữ nháp và retry tối đa năm lần.",
+      "Ghi Docs phải đọc lại trước chốt.",
+      "Gmail không được xác nhận giữ lô ở sending để đối chiếu thủ công, tránh spam."
+    ],
+    "monitoring": [
+      "Check job quá năm phút, outbox chưa ghi Docs/chấm, alert sending chưa ack, API canary/production health và Portal attendance."
+    ],
+    "decision": "Mở Classroom chỉ sau khi bản sao có CTA đúng Doc ID và cả Pages/API/n8n đã được đọc lại.",
+    "test_ids": [
+      "T-PARTS",
+      "T-DOC",
+      "T-DUP",
+      "T-ALERT",
+      "T-ROLL"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "R-PARTS",
+      "statement": "Lesson 3 bắt buộc bốn link với ngưỡng riêng và kiểm nội dung Share ngay.",
+      "test_ids": [
+        "T-PARTS",
+        "T-WORKER"
+      ]
+    },
+    {
+      "id": "R-DOC",
+      "statement": "Chỉ ghi thông điệp và link giảng viên vào ô vàng bản sao Docs.",
+      "test_ids": [
+        "T-DOC"
+      ]
+    },
+    {
+      "id": "R-ALERT",
+      "statement": "Lịch báo một email cho ca TURNED_IN thiếu Speaking; không báo RETURNED hoặc ca đã báo.",
+      "test_ids": [
+        "T-ALERT"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "V-IDENTITY",
+      "statement": "Doc ID, học viên, lớp và bài phải khớp trước khi cấp phiên.",
+      "test_ids": [
+        "T-AUTH"
+      ]
+    },
+    {
+      "id": "V-NO-DUP",
+      "statement": "Một hội thoại không được nộp lại trong cùng khóa.",
+      "test_ids": [
+        "T-DUP"
+      ]
+    },
+    {
+      "id": "V-NO-FALSE-DOC",
+      "statement": "Không báo Docs đã ghi nếu chưa đọc lại đúng ô.",
+      "test_ids": [
+        "T-DOC"
+      ]
+    },
+    {
+      "id": "V-NO-SPAM",
+      "statement": "Một lượt Classroom chỉ có tối đa một email tự động.",
+      "test_ids": [
+        "T-ALERT"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-PARTS",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: Lesson 3 đòi đủ bốn phần với ngưỡng riêng."
+    },
+    {
+      "id": "T-DUP",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: URL và fingerprint trùng bị chặn; retry một biên nhận."
+    },
+    {
+      "id": "T-AUTH",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: Doc ID và học viên sai bị chặn; giảng viên ngoài lớp không xem được."
+    },
+    {
+      "id": "T-BAD",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "PGlite: URL Share sai định dạng, part ngoài bài và body sai bị từ chối."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Full suite API cũ kiểm khi feature flag mặc định tắt; route cũ giữ nguyên."
+    },
+    {
+      "id": "T-DOC",
+      "category": "external_partial",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Planner unit test và Google Docs API batchUpdate trên bản sao thử: câu/link nằm đúng ô vàng; đọc lại đạt DOC_READBACK_VERIFIED."
+    },
+    {
+      "id": "T-ROLL",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Canary cùng image với SPEAKING_HOMEWORK_ENABLED=false: health 200, route Speaking 404; API production cũ vẫn health 200. Giữ image/container cũ cho lần chuyển thật."
+    },
+    {
+      "id": "T-WORKER",
+      "category": "invalid_input",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Bộ kiểm từ chối thiếu loại từ dù đủ tổng câu; 3 test worker và smoke đọc Share thật."
+    },
+    {
+      "id": "T-ALERT",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "PGlite: TURNED_IN thiếu biên nhận vào một batch; RETURNED, ca đã báo và ca giải quyết không gửi."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "lesson-3-live-v2",
+    "tasks": [
+      {
+        "id": "TASK-BACKEND",
+        "result": "Schema, API, bộ kiểm và test đầy đủ.",
+        "module_ids": [
+          "M-SERVICE",
+          "M-DOC"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "Nội dung Docs cũ và logic Lark hiện hành"
+        ],
+        "produces": [
+          "Migration ứng viên và API"
+        ],
+        "contract": "Không đổi API cũ khi cờ tắt.",
+        "test_ids": [
+          "T-PARTS",
+          "T-DUP",
+          "T-AUTH",
+          "T-WORKER",
+          "T-ALERT"
+        ],
+        "evidence_required": [
+          "Full suite backend"
+        ],
+        "decision_inputs": [
+          "Bốn link riêng"
+        ],
+        "affected_future_tasks": [
+          "TASK-PILOT"
+        ],
+        "status": "done",
+        "plan_revision": "lesson-3-live-v2"
+      },
+      {
+        "id": "TASK-PILOT",
+        "result": "Phát hành Pages/API, nối Docs và lịch cảnh báo, kiểm bài thật.",
+        "module_ids": [
+          "M-SERVICE",
+          "M-DOC"
+        ],
+        "depends_on": [
+          "TASK-BACKEND"
+        ],
+        "consumes": [
+          "Migration, mã lớp, Doc ID"
+        ],
+        "produces": [
+          "Pilot IC2304"
+        ],
+        "contract": "Chỉ bật sau readback.",
+        "test_ids": [
+          "T-DOC",
+          "T-ALERT",
+          "T-ROLL"
+        ],
+        "evidence_required": [
+          "Docs readback và Classroom pilot"
+        ],
+        "decision_inputs": [
+          "Quyền triển khai riêng"
+        ],
+        "affected_future_tasks": [],
+        "status": "in_progress",
+        "plan_revision": "lesson-3-live-v2"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "CONCERNS",
+    "risks": [
+      {
+        "id": "RISK-COPIES",
+        "description": "Bản sao Classroom có thể được tạo khi học viên mở bài; CTA riêng chưa thể gắn trước.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Đức và Codex",
+        "mitigation": "Kiểm thực tế sau publish, giữ API draft cho tới khi bind và đọc lại Doc.",
+        "test_ids": [
+          "T-AUTH",
+          "T-DOC"
+        ]
+      }
+    ],
+    "waivers": []
+  },
   "coverage_exemptions": {},
-  "cross_constraints": [{"id": "TIME-CHECK", "left": {"name": "check_job_lease_seconds", "value": 300}, "operator": ">", "right": {"name": "preview_reader_ai_seconds", "value": 140}, "status": "passed", "evidence": "Backend nhận lại job sau năm phút; bộ đọc 95 giây và AI 45 giây ở bản thử."}],
-  "mutations": [{"id": "M-CTA", "target": "Google Docs mẫu Homework Lesson 3", "outcome": "success", "readback": "verified", "evidence": "Đã đọc lại CTA trỏ đến bản xem thử local; ô vàng vẫn trống."}],
-  "verification_runs": [{"id": "V-BACKEND", "scope": "full_suite", "command": "npm run check; npm test", "tree_revision": "uncommitted", "captured_at": "2026-09-27T14:21:16Z", "exit_code": 0, "outcome": "passed", "passed": 200, "failed": 0, "skipped": 0, "evidence": "Node syntax check đạt; full suite backend 200/200 trên worktree hiện tại."}],
-  "convergence": {"status": "gaps", "tree_revision": "uncommitted", "gaps": ["Worker, migration chính thức, Google Docs readback thực và HTTPS chưa nối."], "unrequested_work": [], "evidence": "Backend và Docs mẫu đã kiểm riêng, hành trình production chưa đủ."},
-  "context_handoff": {"summary": "Schema và API ứng viên đã kiểm local, production chưa bật.", "decisions": ["Lesson 3 nhận bốn link riêng."], "completed": ["TASK-BACKEND"], "next_step": "Nối worker, migration chính thức và kiểm pilot IC2304.", "open_risks": ["Chưa có readback Docs thực."], "tree_revision": "uncommitted"},
-  "release": {"target_environment": "production", "decision": "not_ready", "base_tree_revision": "cd6e59e", "current_tree_revision": "uncommitted", "production_authorized": false, "rollback": "Tắt feature flag; giữ dữ liệu đã nhận để chống nộp trùng.", "deployment_readback": "pending", "operational_observation": "Chưa triển khai.", "open_risks": [{"severity": "P1", "summary": "Chưa có worker, migration chính thức và kiểm end-to-end."}]}
+  "cross_constraints": [
+    {
+      "id": "TIME-CHECK",
+      "left": {
+        "name": "check_job_lease_seconds",
+        "value": 300
+      },
+      "operator": ">",
+      "right": {
+        "name": "preview_reader_ai_seconds",
+        "value": 140
+      },
+      "status": "passed",
+      "evidence": "Backend nhận lại job sau năm phút; bộ đọc 95 giây và AI 45 giây ở bản thử."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-CTA",
+      "target": "Google Doc mẫu Lesson 3",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "CTA trỏ Pages có docID/class/code; ô vàng mẫu trống; có bản sao backup."
+    },
+    {
+      "id": "M-DB",
+      "target": "mapping_db Speaking schema và alert",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Ledger ba migration và role/table đã đọc lại; backup trước DDL giữ riêng."
+    },
+    {
+      "id": "M-CLASSROOM",
+      "target": "Classroom IC2304 Lesson 3",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "courseWork đã tạo DRAFT, vật liệu là Doc mẫu, chưa mở cho học viên."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND",
+      "scope": "full_suite",
+      "command": "npm run check; npm test",
+      "tree_revision": "uncommitted",
+      "captured_at": "2026-09-27T19:14:02Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 207,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Node check đạt; full suite backend 207/207 trên worktree sau alert."
+    }
+  ],
+  "convergence": {
+    "status": "gaps",
+    "tree_revision": "uncommitted",
+    "gaps": [
+      "Chưa mở Classroom, chưa gắn CTA vào bản sao riêng, chưa kiểm Gmail và Docs end-to-end sau phát hành."
+    ],
+    "unrequested_work": [],
+    "evidence": "Canary API khỏe, Pages UI mock đạt; bài thật chưa mở."
+  },
+  "context_handoff": {
+    "summary": "Schema production và canary API đã kiểm; bài Classroom còn DRAFT.",
+    "decisions": [
+      "Lesson 3 nhận bốn link riêng, không có Bác sĩ AI."
+    ],
+    "completed": [
+      "TASK-BACKEND"
+    ],
+    "next_step": "Phát hành Pages/API và ràng buộc bản sao Classroom rồi kiểm end-to-end.",
+    "open_risks": [
+      "Bản sao Classroom có thể xuất hiện muộn."
+    ],
+    "tree_revision": "uncommitted"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "not_ready",
+    "base_tree_revision": "cd6e59e",
+    "current_tree_revision": "uncommitted",
+    "production_authorized": true,
+    "rollback": "Giữ image API cũ và CTA backup; tắt Speaking flag nếu lỗi, không xóa biên nhận.",
+    "deployment_readback": "Chỉ canary API đã khỏe; production vẫn image cũ.",
+    "operational_observation": "Canary trả đúng 401 khi thiếu secret, bài DRAFT không mở, hàng việc rỗng.",
+    "open_risks": [
+      {
+        "severity": "P1",
+        "summary": "Chưa bind bản sao Classroom và kiểm toàn hành trình production."
+      }
+    ]
+  }
 }

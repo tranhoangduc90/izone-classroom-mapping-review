@@ -6,6 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
+import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -34,10 +35,11 @@ async function fixture() {
     CREATE TABLE mapping.student_mapping_review (
       public_id UUID PRIMARY KEY, erp_course_class_id BIGINT NOT NULL,
       erp_student_contact_id BIGINT NOT NULL, erp_student_name_snapshot TEXT NOT NULL,
-      status TEXT NOT NULL
+      classroom_user_id TEXT, status TEXT NOT NULL
     );
     CREATE TABLE mapping.erp_class_membership_snapshot (
-      erp_course_class_id BIGINT NOT NULL, erp_student_contact_id BIGINT NOT NULL
+      erp_course_class_id BIGINT NOT NULL, erp_student_contact_id BIGINT NOT NULL,
+      registration_status TEXT
     );
     CREATE TABLE mapping.reviewer_class_access (
       reviewer_email TEXT NOT NULL, erp_course_class_id BIGINT NOT NULL
@@ -47,9 +49,9 @@ async function fixture() {
     );
     INSERT INTO mapping.classroom_course_mapping VALUES (2304, 'IC2304', 'approved');
     INSERT INTO mapping.student_mapping_review VALUES
-      ('${studentRef}', 2304, 1, 'Học viên A', 'approved'),
-      ('${secondStudentRef}', 2304, 2, 'Học viên B', 'approved');
-    INSERT INTO mapping.erp_class_membership_snapshot VALUES (2304, 1), (2304, 2);
+      ('${studentRef}', 2304, 1, 'Học viên A', 'classroom-A', 'approved'),
+      ('${secondStudentRef}', 2304, 2, 'Học viên B', 'classroom-B', 'approved');
+    INSERT INTO mapping.erp_class_membership_snapshot VALUES (2304, 1, 'on_going'), (2304, 2, 'on_going');
   `);
   const migration = await readFile(new URL('../ops/migrations/202609270001_speaking_homework_candidate.sql', import.meta.url), 'utf8');
   await db.exec(migration);
@@ -59,10 +61,10 @@ async function fixture() {
     VALUES (2304, 'course-2304', 'lesson-2', '67-speaking-lesson-2', '67', 'Homework Lesson 2', 'open') RETURNING id`);
   const second = await pool.query(`INSERT INTO speaking_homework.assignment
     (class_id, course_id, course_work_id, assignment_code, doctor_course_key, title, status)
-    VALUES (2304, 'course-2304', 'lesson-3', '67-speaking-lam_ro', '67', 'Homework Lesson 3', 'open') RETURNING id`);
+    VALUES (2304, 'course-2304', 'lesson-3', '67-speaking-lam_ro', NULL, 'Homework Lesson 3', 'open') RETURNING id`);
   for (const [assignmentId, parts] of [
     [first.rows[0].id, [['paraphrase', 5], ['speaking', 3]]],
-    [second.rows[0].id, [['clarify_1', 3], ['clarify_2', 2], ['clarify_3', 2], ['speaking', 2]]]
+    [second.rows[0].id, [['clarify_1', 3], ['clarify_2', 2], ['clarify_3', 2], ['freestyle', 2]]]
   ]) {
     for (let i = 0; i < parts.length; i++) {
       await pool.query(`INSERT INTO speaking_homework.assignment_part
@@ -71,9 +73,10 @@ async function fixture() {
       [assignmentId, parts[i][0], parts[i][0], 'https://example.test/practice', parts[i][1], i + 1]);
     }
   }
-  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id) VALUES ($1, $2)', [first.rows[0].id, 'doc-A']);
-  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id) VALUES ($1, $2)', [second.rows[0].id, 'doc-B']);
-  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id) VALUES ($1, $2)', [second.rows[0].id, 'doc-C']);
+  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id, student_ref) VALUES ($1, $2, $3)', [first.rows[0].id, 'doc-A', studentRef]);
+  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id, student_ref) VALUES ($1, $2, $3)', [second.rows[0].id, 'doc-B', secondStudentRef]);
+  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id, student_ref) VALUES ($1, $2, $3)', [second.rows[0].id, 'doc-C', studentRef]);
+  await pool.query('INSERT INTO speaking_homework.assignment_document (assignment_id, document_id) VALUES ($1, $2)', [second.rows[0].id, 'template-doc']);
   for (const [assignmentId, ref, token, doc] of [
     [first.rows[0].id, studentRef, accessToken, 'doc-A'],
     [second.rows[0].id, secondStudentRef, secondToken, 'doc-B']
@@ -90,7 +93,8 @@ async function checkAccepted(service, token, ref, part, letter, count, fp = fing
   const job = await service.claimCheckJob();
   assert.equal(job.part, part);
   const checked = await service.completeCheck({ checkJobId: job.job_id, fingerprint: fp,
-    questionCount: count, qualityPassed: true });
+    questionCount: count, qualityPassed: true,
+    evidence: part === 'clarify_1' ? { coveredCategories: ['noun', 'verb', 'adjective'] } : {} });
   assert.equal(checked.status, 'accepted');
   return job;
 }
@@ -101,6 +105,30 @@ test('chỉ nhận đúng link Share, chuẩn hóa URL và chặn link hội tho
   assert.throws(() => parseSpeakingShareUrl('https://chatgpt.com/c/abc'), { code: 'INVALID_SHARE_URL' });
   assert.throws(() => parseSpeakingShareUrl('https://evil.test/share/' + 'a'.repeat(32)),
     { code: 'INVALID_SHARE_URL' });
+});
+
+test('lịch Classroom chỉ gom TURNED_IN thiếu bài Speaking và gửi một lần', async () => {
+  const { db, pool } = await fixture();
+  const alerts = createSpeakingAlerts({ pool });
+  const scope = { courseId: 'course-2304', courseWorkId: 'lesson-3' };
+  const returned = { id: 'sub-A', userId: 'classroom-A', state: 'RETURNED',
+    alternateLink: 'https://classroom.google.com/c/example/a/example/submissions/sub-A' };
+  const turnedIn = { id: 'sub-B', userId: 'classroom-B', state: 'TURNED_IN',
+    alternateLink: 'https://classroom.google.com/c/example/a/example/submissions/sub-B' };
+  try {
+    assert.equal((await alerts.scan({ ...scope, submissions: [returned, turnedIn] })).pending, 1);
+    const batch = await alerts.claim(scope);
+    assert.equal(batch.items.length, 1);
+    assert.equal(batch.items[0].studentName, 'Học viên B');
+    assert.equal(await alerts.claim(scope), null);
+    assert.equal((await alerts.acknowledge({ batchId: batch.batchId })).sent, 1);
+    assert.equal((await alerts.scan({ ...scope, submissions: [returned, turnedIn] })).pending, 0);
+    assert.equal(await alerts.claim(scope), null);
+    assert.equal((await alerts.scan({ ...scope,
+      submissions: [{ ...returned, state: 'TURNED_IN' }, turnedIn] })).pending, 1);
+    assert.equal((await alerts.scan({ ...scope, submissions: [returned, turnedIn] })).pending, 0);
+    assert.equal(await alerts.claim(scope), null);
+  } finally { await db.close(); }
 });
 
 test('đúng học viên mới mở được, hai link đạt mới chốt và retry chỉ có một biên nhận', async () => {
@@ -175,10 +203,62 @@ test('Lesson 3 đòi đủ bốn phần theo ngưỡng riêng của bản cũ', 
     await checkAccepted(service, secondToken, secondStudentRef, 'clarify_3', 'j', 2);
     await assert.rejects(service.finish({ accessToken: secondToken,
       studentRef: secondStudentRef }), { code: 'ALL_LINKS_REQUIRED' });
-    await checkAccepted(service, secondToken, secondStudentRef, 'speaking', 'k', 2);
+    await checkAccepted(service, secondToken, secondStudentRef, 'freestyle', 'k', 2);
     const receipt = await service.finish({ accessToken: secondToken,
       studentRef: secondStudentRef });
     assert.ok(receipt.id);
+    const jobs = await db.query('SELECT kind FROM speaking_homework.outbox WHERE receipt_id = $1 ORDER BY kind', [receipt.id]);
+    assert.deepEqual(jobs.rows.map(row => row.kind), ['grade_speaking', 'write_doc']);
+  } finally { await db.close(); }
+});
+
+test('Lesson 3 tổng hợp kết quả AI cho giảng viên và retry chấm không ghi trùng', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    await checkAccepted(service, secondToken, secondStudentRef, 'clarify_1', 'h', 3);
+    await checkAccepted(service, secondToken, secondStudentRef, 'clarify_2', 'i', 2);
+    await checkAccepted(service, secondToken, secondStudentRef, 'clarify_3', 'j', 2);
+    await checkAccepted(service, secondToken, secondStudentRef, 'freestyle', 'k', 2);
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    const job = await service.claimOutboxJob('grade_speaking');
+    assert.equal(job.kind, 'grade_speaking');
+    await service.completeGradeJob(job.job_id);
+    await service.completeGradeJob(job.job_id);
+    const grades = await pool.query('SELECT * FROM speaking_homework.grade_result WHERE receipt_id = $1', [receipt.id]);
+    assert.equal(grades.rows.length, 1);
+    assert.equal(grades.rows[0].total_questions, 9);
+    await pool.query('INSERT INTO mapping.reviewer_class_access VALUES ($1, $2)', ['teacher@example.test', 2304]);
+    const teacher = await service.getTeacherReceipt({ receiptId: receipt.id, email: 'teacher@example.test' });
+    assert.equal(teacher.grade_summary.totalQuestions, 9);
+    assert.equal(teacher.grade_summary.status, 'meets_requirements');
+  } finally { await db.close(); }
+});
+
+test('link Share không mở được được từ chối bền và có thể gửi link mới', async () => {
+  const { db, service } = await fixture();
+  try {
+    await service.requestCheck({ accessToken, studentRef, part: 'paraphrase', rawUrl: share('a') });
+    const job = await service.claimCheckJob();
+    const rejected = await service.rejectCheckJob({ checkJobId: job.job_id, checkCode: 'SHARE_UNAVAILABLE' });
+    assert.equal(rejected.status, 'rejected');
+    const opened = await service.open({ accessToken, studentRef });
+    assert.equal(opened.links[0].check_code, 'SHARE_UNAVAILABLE');
+    const next = await service.requestCheck({ accessToken, studentRef, part: 'paraphrase', rawUrl: share('b') });
+    assert.equal(next.revision, 2);
+  } finally { await db.close(); }
+});
+
+test('Làm rõ cấp 1 phải có cả danh từ, động từ và tính từ', async () => {
+  const { db, service } = await fixture();
+  try {
+    await service.requestCheck({ accessToken: secondToken, studentRef: secondStudentRef,
+      part: 'clarify_1', rawUrl: share('l') });
+    const job = await service.claimCheckJob();
+    const result = await service.completeCheck({ checkJobId: job.job_id,
+      fingerprint: fingerprint('l'), questionCount: 3, qualityPassed: true,
+      evidence: { coveredCategories: ['noun', 'verb'] } });
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.code, 'MISSING_CLARIFICATION_CATEGORY');
   } finally { await db.close(); }
 });
 
@@ -301,5 +381,10 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
       .send({ accessToken: session.body.session.accessToken, studentRef });
     assert.equal(resumed.status, 200);
     assert.equal(resumed.body.assignment.documentId, 'doc-C');
+    const templateSession = await request(app).post('/api/speaking-homework/session/start')
+      .send({ documentId: 'template-doc', assignmentCode: '67-speaking-lam_ro',
+        studentRef, identityConfirmed: true });
+    assert.equal(templateSession.status, 403);
+    assert.equal(templateSession.body.error, 'STUDENT_DOCUMENT_REQUIRED');
   } finally { await db.close(); }
 });

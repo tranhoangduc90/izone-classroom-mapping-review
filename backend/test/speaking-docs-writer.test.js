@@ -16,14 +16,14 @@ function fixture(text = '\n', link = '') {
     { startIndex: 163 + split + 8, endIndex: 163 + text.length,
       textRun: { content: text.slice(split + 8) } }
   ];
-  return { documentId, revisionId: 'revision-1', tabs: [{ tabId: 't.0', body: { content: [
+  return { documentId, revisionId: 'revision-1', tabs: [{ tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [
     { table: { tableRows: [
       { tableCells: [{ content: [{ paragraph: { elements: [
         { startIndex: 131, endIndex: 159, textRun: { content: 'TÌNH TRẠNG NỘP BÀI SPEAKING\n' } }
       ] } }] }] },
       { tableCells: [{ content: [{ startIndex: 163, paragraph: { elements } }] }] }
     ] } }
-  ] } }] };
+  ] } } }] };
 }
 
 test('writer chỉ điền ô vàng và gắn link lên đúng cụm từ, dùng revision', () => {
