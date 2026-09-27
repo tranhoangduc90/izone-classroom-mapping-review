@@ -25,7 +25,8 @@
       "Lesson 3 không có Bác sĩ AI.",
       "Không chuyển bài Speaking cũ từ Lark Base."
     ],
-    "plain_language_summary": "Bài mới kiểm từng hội thoại, chỉ báo đã nộp khi đủ bốn phần, rồi cập nhật file Homework và bản xem giảng viên."
+    "plain_language_summary": "Bài mới kiểm từng hội thoại, chỉ báo đã nộp khi đủ bốn phần, rồi cập nhật file Homework và bản xem giảng viên.",
+    "acceptance_scope": "small_complete: bốn link, CTA bản sao, biên nhận, Docs và cảnh báo IC2304."
   },
   "change_package": {
     "proposal": "Bổ sung API, bộ kiểm Share, ghi Docs và lịch kiểm bài Classroom cho một lớp pilot.",
@@ -65,12 +66,24 @@
         "test_ids": [
           "T-ALERT"
         ]
+      },
+      {
+        "id": "D-COPY",
+        "operation": "ADDED",
+        "behavior": "Đối chiếu bản sao Homework với đúng học viên Classroom và xác minh CTA riêng trước khi nhận bài.",
+        "module_ids": [
+          "M-COPY"
+        ],
+        "test_ids": [
+          "T-COPY",
+          "T-COPY-LIVE"
+        ]
       }
     ],
     "archive_status": "active"
   },
   "module_map": {
-    "revision": "lesson-3-live-v2",
+    "revision": "lesson-3-live-v3",
     "modules": [
       {
         "id": "M-SERVICE",
@@ -141,6 +154,28 @@
         "test_ids": [
           "T-ALERT"
         ]
+      },
+      {
+        "id": "M-COPY",
+        "name": "Gắn link vào bản Homework riêng",
+        "responsibility": "Ghép học viên với bản sao Classroom, sửa CTA theo Doc ID rồi đọc lại.",
+        "owns_data": [
+          "classroom_copy_binding"
+        ],
+        "public_interfaces": [
+          "/internal/classroom-copies/sync",
+          "/internal/classroom-copies/plan",
+          "/internal/classroom-copies/verify"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Chưa xác minh CTA thì không mở bài từ bản sao.",
+          "Sai học viên hoặc trùng Doc ID thì chặn."
+        ],
+        "test_ids": [
+          "T-COPY",
+          "T-COPY-LIVE"
+        ]
       }
     ],
     "integrations": [
@@ -161,16 +196,26 @@
         "test_ids": [
           "T-ALERT"
         ]
+      },
+      {
+        "id": "I-COPY-SERVICE",
+        "producer": "M-COPY",
+        "consumer": "M-SERVICE",
+        "contract": "Bài chỉ mở khi Doc ID và học viên đã ghép, CTA trong Docs đã được đọc lại.",
+        "test_ids": [
+          "T-COPY",
+          "T-COPY-LIVE"
+        ]
       }
     ]
   },
   "operational_design": {
-    "plan_revision": "lesson-3-live-v2",
+    "plan_revision": "lesson-3-live-v3",
     "signals": [
       "multi_user",
       "multi_service"
     ],
-    "critical_path": "Classroom giao bản sao Docs → học viên chọn tên → kiểm bốn Share → biên nhận → ghi Docs/chấm. Lịch 30 phút đối chiếu TURNED_IN và gửi một email khi có ca mới.",
+    "critical_path": "Classroom tạo bản sao → lịch gắn CTA đúng Doc ID → học viên chọn tên → kiểm bốn Share → biên nhận → ghi Docs/chấm. Lịch 30 phút đối chiếu TURNED_IN và gửi một email khi có ca mới.",
     "peak_load": {
       "value": 15,
       "unit": "concurrent_students",
@@ -184,18 +229,22 @@
     "failure_and_recovery": [
       "Lỗi kiểm link giữ nháp và retry tối đa năm lần.",
       "Ghi Docs phải đọc lại trước chốt.",
-      "Gmail không được xác nhận giữ lô ở sending để đối chiếu thủ công, tránh spam."
+      "Gmail không được xác nhận giữ lô ở sending để đối chiếu thủ công, tránh spam.",
+      "Bản sao chưa có CTA được chặn ở API; lịch gắn CTA thử lại mỗi phút sau khi học viên mở Classroom."
     ],
     "monitoring": [
-      "Check job quá năm phút, outbox chưa ghi Docs/chấm, alert sending chưa ack, API canary/production health và Portal attendance."
+      "Check job quá năm phút, outbox chưa ghi Docs/chấm, alert sending chưa ack, API canary/production health và Portal attendance.",
+      "Theo dõi bản sao chưa có cta_verified_at, lỗi snapshot Classroom và chênh lệch giữa bản sao đã phát với bản đã ghép."
     ],
-    "decision": "Mở Classroom chỉ sau khi bản sao có CTA đúng Doc ID và cả Pages/API/n8n đã được đọc lại.",
+    "decision": "Classroom còn DRAFT trong khi chờ quyết định phát hành; API chặn riêng từng bản sao chưa xác minh CTA.",
     "test_ids": [
       "T-PARTS",
       "T-DOC",
       "T-DUP",
       "T-ALERT",
-      "T-ROLL"
+      "T-ROLL",
+      "T-COPY",
+      "T-COPY-LIVE"
     ]
   },
   "requirements": [
@@ -219,6 +268,14 @@
       "statement": "Lịch báo một email cho ca TURNED_IN thiếu Speaking; không báo RETURNED hoặc ca đã báo.",
       "test_ids": [
         "T-ALERT"
+      ]
+    },
+    {
+      "id": "R-COPY",
+      "statement": "Mỗi bản sao Classroom phải có CTA chứa đúng Doc ID và đúng học viên trước khi webapp nhận bài.",
+      "test_ids": [
+        "T-COPY",
+        "T-COPY-LIVE"
       ]
     }
   ],
@@ -249,6 +306,14 @@
       "statement": "Một lượt Classroom chỉ có tối đa một email tự động.",
       "test_ids": [
         "T-ALERT"
+      ]
+    },
+    {
+      "id": "V-COPY-READBACK",
+      "statement": "Không cho mở bài từ bản sao khi chưa đọc lại CTA đúng Doc ID.",
+      "test_ids": [
+        "T-COPY",
+        "T-COPY-LIVE"
       ]
     }
   ],
@@ -300,7 +365,7 @@
       "category": "rollback_recovery",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Canary cùng image với SPEAKING_HOMEWORK_ENABLED=false: health 200, route Speaking 404; API production cũ vẫn health 200. Giữ image/container cũ cho lần chuyển thật."
+      "evidence": "Image v4 chạy canary và production khỏe; container v3 trước cutover còn giữ để quay lui."
     },
     {
       "id": "T-WORKER",
@@ -314,11 +379,32 @@
       "category": "lifecycle_time",
       "priority": "P1",
       "status": "passed",
-      "evidence": "PGlite: TURNED_IN thiếu biên nhận vào một batch; RETURNED, ca đã báo và ca giải quyết không gửi."
+      "evidence": "Unit/PGlite: TURNED_IN thiếu biên nhận vào một batch; RETURNED, ca đã báo và ca giải quyết không gửi. Chưa có email thật."
+    },
+    {
+      "id": "T-COPY",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Backend 209/209; n8n execution 2365652 xử lý hai Docs thử đảo thứ tự, đọc lại hai CTA đúng Doc ID; nhánh CTA đã đúng không đổi revision."
+    },
+    {
+      "id": "T-COPY-LIVE",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Classroom Lesson 3 còn DRAFT; chưa có bản sao do học viên thật mở và chưa có lượt quét theo lịch."
+    },
+    {
+      "id": "T-ALERT-LIVE",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Classroom Lesson 3 còn DRAFT; chưa có TURNED_IN thật hoặc email gộp được đối chiếu trong Gmail."
     }
   ],
   "task_graph": {
-    "plan_revision": "lesson-3-live-v2",
+    "plan_revision": "lesson-3-live-v3",
     "tasks": [
       {
         "id": "TASK-BACKEND",
@@ -352,14 +438,15 @@
           "TASK-PILOT"
         ],
         "status": "done",
-        "plan_revision": "lesson-3-live-v2"
+        "plan_revision": "lesson-3-live-v3"
       },
       {
         "id": "TASK-PILOT",
         "result": "Phát hành Pages/API, nối Docs và lịch cảnh báo, kiểm bài thật.",
         "module_ids": [
           "M-SERVICE",
-          "M-DOC"
+          "M-DOC",
+          "M-COPY"
         ],
         "depends_on": [
           "TASK-BACKEND"
@@ -374,17 +461,21 @@
         "test_ids": [
           "T-DOC",
           "T-ALERT",
-          "T-ROLL"
+          "T-ROLL",
+          "T-COPY",
+          "T-COPY-LIVE",
+          "T-ALERT-LIVE"
         ],
         "evidence_required": [
-          "Docs readback và Classroom pilot"
+          "Docs readback và Classroom pilot",
+          "Bản sao Classroom thật có CTA đúng và lượt quét cảnh báo production"
         ],
         "decision_inputs": [
           "Quyền triển khai riêng"
         ],
         "affected_future_tasks": [],
         "status": "in_progress",
-        "plan_revision": "lesson-3-live-v2"
+        "plan_revision": "lesson-3-live-v3"
       }
     ]
   },
@@ -400,10 +491,24 @@
         "severity": "P1",
         "status": "open",
         "owner": "Đức và Codex",
-        "mitigation": "Kiểm thực tế sau publish, giữ API draft cho tới khi bind và đọc lại Doc.",
+        "mitigation": "API chặn bản sao chưa xác minh; workflow chạy mỗi phút sau publish, kiểm bản sao thật và readback CTA.",
         "test_ids": [
           "T-AUTH",
           "T-DOC"
+        ]
+      },
+      {
+        "id": "RISK-ATTACHMENTS",
+        "description": "Một lượt nộp Classroom có thể chứa nhiều Drive file; bộ ghép hiện dừng khi không xác định được bản sao chính.",
+        "probability": 2,
+        "impact": 2,
+        "score": 4,
+        "severity": "P2",
+        "status": "open",
+        "owner": "Codex",
+        "mitigation": "Theo dõi lần quét Classroom đầu tiên; nếu có nhiều file, phân biệt bản sao bằng metadata hoặc giữ lỗi để xử lý trước khi cho nộp.",
+        "test_ids": [
+          "T-COPY-LIVE"
         ]
       }
     ],
@@ -447,59 +552,90 @@
       "outcome": "success",
       "readback": "verified",
       "evidence": "courseWork đã tạo DRAFT, vật liệu là Doc mẫu, chưa mở cho học viên."
+    },
+    {
+      "id": "M-API-V4",
+      "target": "API production Speaking Homework",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image v4 healthy, endpoint Classroom sync với snapshot rỗng trả 200, template Doc ID trả 404; container v3 được giữ."
+    },
+    {
+      "id": "M-DB-COPY",
+      "target": "mapping_db bổ sung ghép bản sao Classroom",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Migration 202609281100 đã áp dụng; hai cột, hai unique index và ledger checksum đọc lại."
+    },
+    {
+      "id": "M-N8N-COPY",
+      "target": "Workflow gắn CTA bản sao Classroom",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Workflow Cism2tCSmwXs8w94 có 13 node, restored Classroom source và INACTIVE; fixture hai Docs execution 2365652 đọc lại đúng."
     }
   ],
   "verification_runs": [
     {
-      "id": "V-BACKEND",
+      "id": "V-BACKEND-V4",
       "scope": "full_suite",
       "command": "npm run check; npm test",
-      "tree_revision": "uncommitted",
-      "captured_at": "2026-09-27T19:14:02Z",
+      "tree_revision": "784e940",
+      "captured_at": "2026-09-27T21:05:05Z",
       "exit_code": 0,
       "outcome": "passed",
-      "passed": 207,
+      "passed": 209,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Node check đạt; full suite backend 207/207 trên worktree sau alert."
+      "evidence": "Backend commit 5aeaf54 đã merge trong 784e940; check và full suite 209/209 đạt trước production image v4."
     }
   ],
   "convergence": {
     "status": "gaps",
-    "tree_revision": "uncommitted",
+    "tree_revision": "784e940",
     "gaps": [
-      "Chưa mở Classroom, chưa gắn CTA vào bản sao riêng, chưa kiểm Gmail và Docs end-to-end sau phát hành."
+      "Classroom còn DRAFT; chưa có bản sao học viên thật, chưa có email cảnh báo thật và chưa kiểm trực tiếp Portal attendance sau khôi phục worker."
     ],
     "unrequested_work": [],
-    "evidence": "Canary API khỏe, Pages UI mock đạt; bài thật chưa mở."
+    "evidence": "API v4, DB và Pages đã đọc lại; hai Docs thử chứng minh ghép đúng nhưng không thay thế lượt học viên thật."
   },
   "context_handoff": {
-    "summary": "Schema production và canary API đã kiểm; bài Classroom còn DRAFT.",
+    "summary": "Pages và API v4 đã lên production; workflow gắn CTA đã kiểm hai Docs thử nhưng còn inactive do Classroom DRAFT.",
     "decisions": [
       "Lesson 3 nhận bốn link riêng, không có Bác sĩ AI."
     ],
     "completed": [
       "TASK-BACKEND"
     ],
-    "next_step": "Phát hành Pages/API và ràng buộc bản sao Classroom rồi kiểm end-to-end.",
+    "next_step": "Chốt trạng thái Classroom, kiểm bản sao học viên thật và lượt quét/email cảnh báo sau phát hành.",
     "open_risks": [
-      "Bản sao Classroom có thể xuất hiện muộn."
+      "Bản sao Classroom xuất hiện muộn.",
+      "Nhiều file đính kèm cần phân định bản sao chính.",
+      "Portal attendance còn thiếu readback trực tiếp."
     ],
-    "tree_revision": "uncommitted"
+    "tree_revision": "784e940"
   },
   "release": {
     "target_environment": "production",
     "decision": "not_ready",
     "base_tree_revision": "cd6e59e",
-    "current_tree_revision": "uncommitted",
+    "current_tree_revision": "784e940",
     "production_authorized": true,
     "rollback": "Giữ image API cũ và CTA backup; tắt Speaking flag nếu lỗi, không xóa biên nhận.",
-    "deployment_readback": "Chỉ canary API đã khỏe; production vẫn image cũ.",
-    "operational_observation": "Canary trả đúng 401 khi thiếu secret, bài DRAFT không mở, hàng việc rỗng.",
+    "deployment_readback": "API production image v4 khỏe, Pages live; workflow gắn CTA và cảnh báo còn inactive vì Classroom DRAFT.",
+    "operational_observation": "Snapshot rỗng trả 200, template Doc ID bị chặn; hai Docs fixture n8n ghi và đọc lại đúng, nhưng chưa có học viên thật.",
     "open_risks": [
       {
         "severity": "P1",
-        "summary": "Chưa bind bản sao Classroom và kiểm toàn hành trình production."
+        "summary": "Chưa quan sát bản sao Classroom và CTA thật sau publish."
+      },
+      {
+        "severity": "P1",
+        "summary": "Chưa quan sát email gộp cho TURNED_IN thật."
+      },
+      {
+        "severity": "P1",
+        "summary": "Chưa đối chiếu trực tiếp ba ca điểm danh Progress Log trên Portal."
       }
     ]
   }
