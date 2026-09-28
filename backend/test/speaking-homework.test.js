@@ -377,6 +377,26 @@ test('migration bổ sung đúng một việc Bác sĩ AI cho biên nhận cũ c
   } finally { await db.close(); }
 });
 
+test('migration sửa ID nội bộ IC2304 chỉ bật Bác sĩ AI sau khi đối chiếu lớp đã duyệt', async () => {
+  const { db, pool } = await fixture();
+  try {
+    await pool.query(`UPDATE speaking_homework.assignment
+      SET class_id = 1293, doctor_course_key = NULL
+      WHERE assignment_code = '67-speaking-lam_ro'`);
+    const migration = await readFile(new URL(
+      '../ops/migrations/202609290002_speaking_doctor_ic2304_class_id.sql', import.meta.url), 'utf8');
+    await assert.rejects(db.exec(migration), /SPEAKING_DOCTOR_CLASS_MAPPING_MISMATCH/);
+    assert.equal((await pool.query(`SELECT doctor_course_key FROM speaking_homework.assignment
+      WHERE assignment_code = '67-speaking-lam_ro'`)).rows[0].doctor_course_key, null);
+    await pool.query(`UPDATE mapping.classroom_course_mapping
+      SET erp_course_class_id = 1293 WHERE erp_class_name_snapshot = 'IC2304'`);
+    await db.exec(migration);
+    await db.exec(migration);
+    assert.equal((await pool.query(`SELECT doctor_course_key FROM speaking_homework.assignment
+      WHERE assignment_code = '67-speaking-lam_ro'`)).rows[0].doctor_course_key, '67');
+  } finally { await db.close(); }
+});
+
 test('AI Bác sĩ chỉ nhận ID trong danh mục và trích dẫn đúng lời góp ý', async () => {
   const catalog = { exercises: [{ id: '60000000-0000-4000-8000-000000000009', title: 'S-V' }] };
   const conversation = { messages: [
