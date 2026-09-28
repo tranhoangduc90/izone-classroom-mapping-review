@@ -1,0 +1,125 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log khóa 56, IC2305, buổi 5",
+  "change_id": "progress-log-ic2305-session5-20260928",
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
+  "risk": "high",
+  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "personal_data", "multi_user", "multi_service"],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Phiếu có dữ liệu học viên, ghi bài nộp và chuyển điểm danh sang Portal; API cũ đang trả lỗi cho phiếu buổi 4.",
+    "user": "Học viên IC2305 và giảng viên khóa 56",
+    "problem": "Cần phiếu buổi 5 đúng tài liệu; câu tự luận phải để giảng viên đọc, trong khi contract API hiện hành làm phiếu cũ lỗi.",
+    "outcome": "Học viên mở được phiếu hai phần, giảng viên thấy bài nộp; bốn câu kiến thức có điểm, phần tự luận không chấm máy.",
+    "out_of_scope": ["Không thay giao diện Pages dùng chung.", "Không tạo bài nộp hoặc điểm danh thật bằng danh tính học viên để thử nghiệm."],
+    "plain_language_summary": "Mở phiếu buổi 5, kiểm đáp án trắc nghiệm và để nguyên phần viết tự do cho giảng viên xem; khôi phục khả năng đọc phiếu cũ.",
+    "acceptance_scope": "small_complete"
+  },
+  "change_package": {
+    "proposal": "Thêm mẫu buổi 5, cho script phát hành nạp đúng mẫu đã chọn và ghép contract Learning mới vào image API hiện hành.",
+    "behavior_baseline": "Image API trước phát hành trả HTTP 500 khi mở phiếu buổi 4 vì schema không nhận displayNumber/courseCode; chưa có phiếu buổi 5.",
+    "deltas": [
+      {"id": "DELTA-FORM", "operation": "ADDED", "behavior": "Phiếu buổi 5 có 7 câu gốc, trường phụ khi chọn Vấn đề khác, bốn câu trắc nghiệm chấm riêng và mọi câu tự luận không chấm.", "module_ids": ["MOD-TEMPLATE", "MOD-PUBLISH"], "test_ids": ["T-CONTENT", "T-GRADE", "T-UI"]},
+      {"id": "DELTA-API", "operation": "MODIFIED", "behavior": "API đọc được schema phiếu hiện hành và phiếu buổi 4 sau chuyển image.", "module_ids": ["MOD-API", "MOD-RELEASE"], "test_ids": ["T-REG", "T-READBACK"]},
+      {"id": "DELTA-ATTENDANCE", "operation": "MODIFIED", "behavior": "Lần chuyển image giữ nguyên cấu hình và consumer đồng bộ điểm danh Portal.", "module_ids": ["MOD-RELEASE"], "test_ids": ["T-ATTENDANCE", "T-RECOVERY"]}
+    ],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "plan-s5-v1",
+    "modules": [
+      {"id": "MOD-TEMPLATE", "name": "Nội dung phiếu", "responsibility": "Dựng hai phần, lựa chọn và khóa đáp án riêng.", "owns_data": ["form_definition", "grading_key"], "public_interfaces": ["buildIc2305Session5Definition", "buildIc2305Session5GradingKey"], "depends_on": [], "boundary_rules": ["Không đưa đáp án vào phiếu công khai.", "Câu tự luận có graderType none và maxScore 0."], "test_ids": ["T-CONTENT", "T-GRADE"]},
+      {"id": "MOD-PUBLISH", "name": "Phát hành assignment", "responsibility": "Chọn đúng mẫu, lớp, phiên học và giảng viên có quyền.", "owns_data": ["assignment", "roster"], "public_interfaces": ["publish-ic2305-progress-log.mjs"], "depends_on": ["MOD-TEMPLATE", "MOD-API"], "boundary_rules": ["Không thay assignment cũ khi không có cờ replace."], "test_ids": ["T-CONTENT", "T-READBACK", "T-SECURITY"]},
+      {"id": "MOD-API", "name": "API Learning", "responsibility": "Kiểm schema, lưu bài và cung cấp dữ liệu học viên, giảng viên.", "owns_data": ["attempt", "submission", "attendance_event"], "public_interfaces": ["/api/learning/assignments/public", "/api/learning/teacher"], "depends_on": [], "boundary_rules": ["Không công khai grading key.", "Ghi bài và điểm danh phải idempotent."], "test_ids": ["T-REG", "T-LIFECYCLE", "T-CONCURRENT", "T-PARTIAL", "T-SECURITY"]},
+      {"id": "MOD-RELEASE", "name": "Chuyển bản API", "responsibility": "Backup, chuyển image, giữ env điểm danh và đường quay lại.", "owns_data": ["release_backup", "container_revision"], "public_interfaces": ["deploy-api.sh", "backup-database.sh"], "depends_on": ["MOD-API"], "boundary_rules": ["Không lộ secret.", "Không xóa container cũ trước khi đọc lại bản mới."], "test_ids": ["T-ATTENDANCE", "T-RECOVERY", "T-READBACK"]}
+    ],
+    "integrations": [
+      {"id": "INT-TEMPLATE-PUBLISH", "producer": "MOD-TEMPLATE", "consumer": "MOD-PUBLISH", "contract": "Định nghĩa công khai và khóa chấm riêng dùng cùng formVersionId.", "test_ids": ["T-CONTENT", "T-GRADE"]},
+      {"id": "INT-PUBLISH-API", "producer": "MOD-API", "consumer": "MOD-PUBLISH", "contract": "Publisher dùng schema và kết nối dữ liệu Learning để ghi assignment đúng lớp và session.", "test_ids": ["T-READBACK", "T-CONCURRENT"]},
+      {"id": "INT-RELEASE-API", "producer": "MOD-API", "consumer": "MOD-RELEASE", "contract": "Bộ phát hành kiểm image API khỏe, cấu hình điểm danh và worker sau chuyển.", "test_ids": ["T-ATTENDANCE", "T-READBACK"]}
+    ]
+  },
+  "operational_design": {
+    "plan_revision": "plan-s5-v1",
+    "signals": ["multi_user", "multi_service"],
+    "critical_path": "Học viên chọn tên và gửi hai phần → API lưu bài → dashboard giảng viên đọc → hàng chờ chuyển điểm danh tới Portal.",
+    "peak_load": {"value": 18, "unit": "students_per_class", "basis": "Roster IC2305 đọc lại từ production có 18 học viên; chưa có số liệu tải đỉnh lớn hơn."},
+    "user_wait_target": "Mở phiếu và nhận xác nhận lưu trong vài giây; mất kết nối cho phép gửi lại cùng định danh mà không ghi trùng.",
+    "limits_and_cost": ["API container giới hạn 256 MB, 0.5 CPU và 100 PID; form chỉ có 8 item.", "Chưa đo tải đồng thời thực tế của lớp."],
+    "failure_and_recovery": ["API lỗi thì dừng phát hành hoặc quay về container cũ; bản dump database và container cũ còn giữ.", "Job Portal lỗi thì giữ trong outbox để xem và thử lại theo operation key."],
+    "monitoring": ["Kiểm API health và public GET.", "Theo dõi số job sync_portal_attendance, lease quá hạn và kết quả Portal sau bài nộp đầu tiên."],
+    "decision": "Dùng Pages và dashboard sẵn có; chỉ bổ sung mẫu và API contract, giữ outbox điểm danh hiện hành.",
+    "test_ids": ["T-UI", "T-CONCURRENT", "T-PARTIAL", "T-ATTENDANCE", "T-RECOVERY"]
+  },
+  "requirements": [
+    {"id": "REQ-CONTENT", "statement": "Phiếu IC2305 khóa 56 buổi 5 đúng hai phần và bảy câu trong DOCX, có trường nêu vấn đề khác khi chọn.", "test_ids": ["T-CONTENT", "T-UI", "T-READBACK"]},
+    {"id": "REQ-GRADING", "statement": "Bốn câu kiến thức chấm B, C, C, B; câu tự luận, Hedging và tự đánh giá Speaking không tự động chấm.", "test_ids": ["T-GRADE", "T-READBACK"]},
+    {"id": "REQ-TEACHER", "statement": "Giảng viên đúng quyền thấy assignment, roster và bài nộp khi có; phiếu cũ vẫn mở được.", "test_ids": ["T-SECURITY", "T-REG", "T-READBACK"]},
+    {"id": "REQ-ATTENDANCE", "statement": "Việc chuyển API không làm mất cấu hình, consumer hoặc job đồng bộ Portal.", "test_ids": ["T-ATTENDANCE", "T-PARTIAL", "T-RECOVERY"]}
+  ],
+  "invariants": [
+    {"id": "INV-PRIVATE-KEY", "statement": "API công khai không chứa đáp án chấm điểm hoặc dữ liệu học viên ngoài roster cần cho phiếu.", "test_ids": ["T-GRADE", "T-SECURITY", "T-READBACK"]},
+    {"id": "INV-NO-AUTOGRADE", "statement": "Mọi trường viết tự do và tự đánh giá có điểm tối đa 0, verdict ungraded.", "test_ids": ["T-GRADE", "T-READBACK"]},
+    {"id": "INV-IDENTITY", "statement": "Bài nộp và điểm danh gắn đúng assignment, học viên và phiên; gửi lại không ghi trùng.", "test_ids": ["T-CONCURRENT", "T-PARTIAL", "T-SECURITY"]}
+  ],
+  "tests": [
+    {"id": "T-CONTENT", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Test mẫu 3/3; DOCX đối chiếu 2 phần, 7 câu, 8 item kỹ thuật và bốn đáp án được tô vàng."},
+    {"id": "T-GRADE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "gradeLearningSubmission cho bốn câu 4/4; các item 1,6,7,8 đều none/0/ungraded; public definition không có key."},
+    {"id": "T-UI", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Playwright chạy phiếu live trên màn 390px với roster và mutation giả lập; chọn B/C/C/B, điền Hedging và Vấn đề khác, submit thành công; 0 production writes."},
+    {"id": "T-INVALID", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "learning-routes và evaluateCompleteness từ chối payload sai, thiếu kỹ thuật Hedging hoặc thiếu chi tiết Other."},
+    {"id": "T-LIFECYCLE", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "Suite Learning kiểm mở/khóa checkpoint, submit sau đóng và status theo release; production readback hai block đang open."},
+    {"id": "T-CONCURRENT", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "learning-database và attendance-sync kiểm submit/idempotency key, thao tác lặp không tạo bản ghi điểm danh thứ hai."},
+    {"id": "T-PARTIAL", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "Suite outbox/attendance-sync kiểm lỗi Portal và identity job; production queue trước/sau chuyển có 71 complete, 0 lease quá hạn."},
+    {"id": "T-RECOVERY", "category": "rollback_recovery", "priority": "P1", "status": "passed", "evidence": "Backup pg_restore list 1554 entry, container cũ được giữ; deploy script có rollback trap và health/readback gate."},
+    {"id": "T-SECURITY", "category": "security_privacy", "priority": "P1", "status": "passed", "evidence": "Publisher xác minh creator/approver có quyền lớp; tests Learning chặn giảng viên sai quyền, public API không trả grading key."},
+    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Cùng check-runtime.mjs trên image cũ lỗi session4 public GET; trên image ứng viên pass 2 block/8 item; production sau chuyển HTTP 200."},
+    {"id": "T-ATTENDANCE", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Env LEARNING_ENABLED, LEARNING_DATABASE_URL, LEARNING_ATTENDANCE_SYNC_URL, ERP_SYNC_SECRET và worker được xác minh trước/sau; hash đích Portal không đổi; queue 0 lease quá hạn."},
+    {"id": "T-READBACK", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Public GET production trả courseCode 56, IC2305, session5, 2 block, 8 item, 4 item chấm/4 không chấm; roster 18, 0 attempt lúc phát hành."}
+  ],
+  "task_graph": {
+    "plan_revision": "plan-s5-v1",
+    "tasks": [
+      {"id": "TASK-CONTENT", "result": "Mẫu và script phát hành buổi 5 hoàn chỉnh.", "module_ids": ["MOD-TEMPLATE", "MOD-PUBLISH"], "depends_on": [], "consumes": ["Buổi 5.docx và phiếu buổi 4"], "produces": ["form definition", "grading key", "publisher"], "contract": "Tự luận không chấm máy; khóa trắc nghiệm không công khai.", "test_ids": ["T-CONTENT", "T-GRADE", "T-INVALID"], "evidence_required": ["Test mẫu và đọc lại public definition."], "decision_inputs": ["Đáp án tô vàng trong DOCX."], "affected_future_tasks": ["TASK-RELEASE"], "status": "done", "plan_revision": "plan-s5-v1"},
+      {"id": "TASK-RELEASE", "result": "API và assignment buổi 5 hoạt động trên production.", "module_ids": ["MOD-API", "MOD-RELEASE", "MOD-PUBLISH"], "depends_on": ["TASK-CONTENT"], "consumes": ["Mẫu buổi 5 và image API live"], "produces": ["Image mới", "assignment buổi 5", "backup/rollback"], "contract": "Không mất khả năng đọc phiếu cũ hoặc cấu hình điểm danh.", "test_ids": ["T-REG", "T-READBACK", "T-ATTENDANCE", "T-RECOVERY"], "evidence_required": ["RED/GREEN, full suite, API readback và queue readback."], "decision_inputs": ["User cho phép production và Git main."], "affected_future_tasks": ["TASK-OBSERVE"], "status": "done", "plan_revision": "plan-s5-v1"},
+      {"id": "TASK-OBSERVE", "result": "Đường UI đã kiểm; chờ bài nộp thật đầu tiên để đối chiếu Portal.", "module_ids": ["MOD-API", "MOD-RELEASE"], "depends_on": ["TASK-RELEASE"], "consumes": ["Assignment production"], "produces": ["UI mock evidence", "vận hành đang chờ xác minh"], "contract": "Không dùng danh tính học viên thật để ghi canary.", "test_ids": ["T-UI", "T-ATTENDANCE"], "evidence_required": ["Playwright mock và queue readback."], "decision_inputs": ["Chưa có bài nộp thật."], "affected_future_tasks": [], "status": "done", "plan_revision": "plan-s5-v1"}
+    ]
+  },
+  "risk_register": {
+    "assessment": "PASS",
+    "risks": [
+      {"id": "RISK-PORTAL-OBS", "description": "Chưa có submission buổi 5 thật để quan sát kết quả điểm danh Portal.", "probability": 2, "impact": 2, "score": 4, "severity": "P2", "status": "open", "owner": "Giảng viên IC2305 và người vận hành Progress Log", "mitigation": "Sau bài nộp đầu tiên, đối chiếu submission, job sync_portal_attendance và kết quả Portal; báo lỗi nếu job không hoàn tất.", "test_ids": ["T-ATTENDANCE", "T-PARTIAL"]}
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {"id": "LEASE-PORTAL", "left": {"name": "attendance_lease_milliseconds", "value": 180000}, "operator": ">=", "right": {"name": "batch_times_timeout_plus_margin_milliseconds", "value": 180000}, "status": "passed", "evidence": "learning-attendance-worker.test.js kiểm 180 giây >= 10 job * 15 giây + 30 giây biên."},
+    {"id": "SCORE", "left": {"name": "auto_graded_items", "value": 4}, "operator": "==", "right": {"name": "grading_key_entries", "value": 4}, "status": "passed", "evidence": "Template unit test và public API production cùng báo bốn item chấm điểm."}
+  ],
+  "mutations": [
+    {"id": "M-API", "target": "production API image", "outcome": "success", "readback": "verified", "evidence": "Container healthy, session4 public GET 200 và đích attendance env hash giữ nguyên."},
+    {"id": "M-ASSIGNMENT", "target": "production IC2305 session5 assignment", "outcome": "success", "readback": "verified", "evidence": "Publisher tạo assignment một lần; public GET 200 đúng course 56/session5/2 block/8 item/roster18 và 0 bài nộp."}
+  ],
+  "red_green": {
+    "red_on_base": {"test_id": "T-REG", "command": "node check-runtime.mjs trên image live trước chuyển", "tree_revision": "sha256:6d014ef217bb448f1a0ccb912d1d37c95f63b3ed53170be8e7eac147c6c7f993", "outcome": "failed", "exit_code": 1, "failed": 1, "evidence": "Public session4 GET lỗi HTTP 500 do contract từ chối displayNumber/courseCode."},
+    "green_on_head": {"test_id": "T-REG", "command": "node check-runtime.mjs trên image ứng viên", "tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a", "outcome": "passed", "exit_code": 0, "passed": 1, "failed": 0, "skipped": 0, "evidence": "Cùng script đọc được session4: 2 block, 8 item."}
+  },
+  "verification_runs": [
+    {"id": "V-BACKEND-FULL", "scope": "full_suite", "command": "npm test trong backend", "tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a", "captured_at": "2026-09-28T12:22:13+07:00", "exit_code": 0, "outcome": "passed", "passed": 212, "failed": 0, "skipped": 0, "evidence": "Backend full suite 212/212 sau lần sửa script phát hành cuối."},
+    {"id": "V-PAGES", "scope": "focused", "command": "node --test tests/progress-log-static.mjs tests/progress-log-session3-static.mjs tests/progress-log-memory.cjs", "tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a", "captured_at": "2026-09-28T12:22:54+07:00", "exit_code": 0, "outcome": "passed", "passed": 16, "failed": 0, "skipped": 0, "evidence": "Pages checkout mới nhất, 16/16; UI Playwright live dùng mutation mock và không ghi production."}
+  ],
+  "convergence": {"status": "passed", "tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a", "gaps": [], "unrequested_work": [], "evidence": "Đối chiếu DOCX, ảnh, template, public API, UI và Git diff; chỉ sửa Learning contract cần cho phiếu hiện hành."},
+  "context_handoff": {"summary": "Phiếu buổi 5 đã mở trên production; còn chờ bài nộp thật đầu tiên để đọc lại Portal.", "decisions": ["Giữ bốn đáp án tô vàng B/C/C/B.", "Không chấm mọi trường tự luận hoặc tự đánh giá."], "completed": ["TASK-CONTENT", "TASK-RELEASE", "TASK-OBSERVE"], "next_step": "Đối chiếu submission đầu tiên với dashboard và Portal.", "open_risks": ["RISK-PORTAL-OBS"], "tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a"},
+  "release": {
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "sha256:6d014ef217bb448f1a0ccb912d1d37c95f63b3ed53170be8e7eac147c6c7f993",
+    "current_tree_revision": "sha256:3cf48db2742488bb7e52c9585b775e6a499b8b2b17551e7248deea5b1e610d1a",
+    "production_authorized": true,
+    "rollback": "Dừng container mới, đổi tên container cũ về mapping-review-api; backup database trước phát hành còn tại thư mục backups/progress-log-ic2305-session5-20260928.",
+    "deployment_readback": "verified",
+    "operational_observation": "API khỏe, phiếu buổi 4 và buổi 5 mở được, roster 18; chưa có bài nộp thật buổi 5 để xác minh Portal.",
+    "open_risks": [{"severity": "P2", "summary": "Chờ bài nộp thật đầu tiên để đọc lại điểm danh Portal; không dùng bài giả mang tên học viên."}]
+  }
+}

@@ -6,29 +6,8 @@
  */
 
 import pg from 'pg';
-import {
-  buildIc2305EntranceDefinition,
-  buildIc2305EntranceGradingKey,
-  IC2305_ENTRANCE_TEMPLATE
-} from '../src/learning-templates/ic2305-entrance-reading1-listening1.js';
-import {
-  buildIc2305Writing1Definition,
-  buildIc2305Writing1GradingKey,
-  IC2305_WRITING1_TEMPLATE
-} from '../src/learning-templates/ic2305-entrance-writing1.js';
-import {
-  buildIc2305Session3Definition,
-  buildIc2305Session3GradingKey,
-  IC2305_SESSION3_TEMPLATE
-} from '../src/learning-templates/ic2305-entrance-listening1-speaking2.js';
-import {
-  buildIc2305Session4Definition,
-  buildIc2305Session4GradingKey,
-  IC2305_SESSION4_TEMPLATE
-} from '../src/learning-templates/ic2305-session4-listening1-speaking2.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
 import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
-import { retireReplacedIc2305Session4 } from '../src/learning-replacement.js';
 
 const { Pool } = pg;
 
@@ -41,39 +20,47 @@ const apply = process.argv.includes('--apply');
 const classCode = option('class', 'IC2305').trim().toUpperCase();
 const formCode = option('form', 'writing1').trim().toLowerCase();
 const replacementAssignmentId = option('replace-assignment').trim().toLowerCase();
-const selected = {
+const choices = {
   writing1: {
-    template: IC2305_WRITING1_TEMPLATE,
-    buildDefinition: buildIc2305Writing1Definition,
-    buildGradingKey: buildIc2305Writing1GradingKey,
+    modulePath: '../src/learning-templates/ic2305-entrance-writing1.js',
+    exportPrefix: 'Ic2305Writing1',
+    templateExport: 'IC2305_WRITING1_TEMPLATE',
     defaultSession: 2
   },
   'listening1-speaking2': {
-    template: IC2305_SESSION3_TEMPLATE,
-    buildDefinition: buildIc2305Session3Definition,
-    buildGradingKey: buildIc2305Session3GradingKey,
+    modulePath: '../src/learning-templates/ic2305-entrance-listening1-speaking2.js',
+    exportPrefix: 'Ic2305Session3',
+    templateExport: 'IC2305_SESSION3_TEMPLATE',
     defaultSession: 3
   },
   'session4-listening1-speaking2': {
-    template: IC2305_SESSION4_TEMPLATE,
-    buildDefinition: buildIc2305Session4Definition,
-    buildGradingKey: buildIc2305Session4GradingKey,
+    modulePath: '../src/learning-templates/ic2305-session4-listening1-speaking2.js',
+    exportPrefix: 'Ic2305Session4',
+    templateExport: 'IC2305_SESSION4_TEMPLATE',
     defaultSession: 4
   },
+  'session5-reading-writing-speaking': {
+    modulePath: '../src/learning-templates/ic2305-session5-reading-writing-speaking.js',
+    exportPrefix: 'Ic2305Session5',
+    templateExport: 'IC2305_SESSION5_TEMPLATE',
+    defaultSession: 5
+  },
   'reading1-listening1': {
-    template: IC2305_ENTRANCE_TEMPLATE,
-    buildDefinition: buildIc2305EntranceDefinition,
-    buildGradingKey: buildIc2305EntranceGradingKey,
+    modulePath: '../src/learning-templates/ic2305-entrance-reading1-listening1.js',
+    exportPrefix: 'Ic2305Entrance',
+    templateExport: 'IC2305_ENTRANCE_TEMPLATE',
     defaultSession: 4
   }
-}[formCode];
+};
+const selected = choices[formCode];
 if (!selected) throw new Error('FORM_CODE_NOT_SUPPORTED');
+const selectedModule = await import(selected.modulePath);
 const sessionNumber = Number(option('session', String(selected.defaultSession)));
 const creatorEmail = option('creator').trim().toLowerCase();
 const approverEmail = option('approver').trim().toLowerCase();
-const template = selected.template;
-const definition = selected.buildDefinition();
-const gradingKey = selected.buildGradingKey();
+const template = selectedModule[selected.templateExport];
+const definition = selectedModule[`build${selected.exportPrefix}Definition`]();
+const gradingKey = selectedModule[`build${selected.exportPrefix}GradingKey`]();
 const definitionHash = sha256(stableStringify(definition));
 const gradingHash = sha256(stableStringify(gradingKey));
 
@@ -270,6 +257,7 @@ try {
   let replacement = null;
   if (replacementAssignmentId) {
     phase = 'replacement_check';
+    const { retireReplacedIc2305Session4 } = await import('../src/learning-replacement.js');
     replacement = await retireReplacedIc2305Session4({ client, replacementAssignmentId,
       newAssignmentId: assignment.assignment_id, classId: targetClass.class_id });
   }
