@@ -8,6 +8,13 @@ CREATE TABLE IF NOT EXISTS speaking_homework.doctor_analysis (
   analyzed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'speaking_homework_api') THEN
+    GRANT SELECT, INSERT, UPDATE ON speaking_homework.doctor_analysis TO speaking_homework_api;
+  END IF;
+END $$;
+
 UPDATE speaking_homework.assignment
 SET doctor_course_key = '67'
 WHERE assignment_code = '67-speaking-lam_ro'
