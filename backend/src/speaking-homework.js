@@ -83,9 +83,6 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       throw new SpeakingHomeworkError('STUDENT_DOCUMENT_REQUIRED',
         'Hãy mở bản Homework được Classroom tạo riêng cho bạn.', 403);
     }
-    if (assignment.bound_student_ref && assignment.bound_student_ref !== studentRef) {
-      throw new SpeakingHomeworkError('ACCESS_DENIED', 'File Homework này dành cho học viên khác.', 403);
-    }
     const student = await pool.query(`
       SELECT 1 FROM mapping.student_mapping_review m
       WHERE m.public_id = $1 AND m.erp_course_class_id = $2 AND m.status = 'approved'
@@ -132,7 +129,6 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE g.token_hash = $1 AND g.student_ref = $2 AND g.revoked_at IS NULL
         AND a.status = 'open' AND m.status = 'approved' AND c.status = 'approved'
-        AND (d.student_ref IS NULL OR d.student_ref = g.student_ref)
         AND m.classroom_user_id IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM mapping.erp_class_membership_snapshot e

@@ -120,7 +120,7 @@ test('chỉ nhận đúng link Share, chuẩn hóa URL và chặn link hội tho
     { code: 'INVALID_SHARE_URL' });
 });
 
-test('bản sao Classroom phải đúng học viên và CTA đã đọc lại mới mở được', async () => {
+test('bản sao Classroom cần CTA đã đọc lại; học viên cùng lớp có thể mở bằng Doc ID', async () => {
   const { db, pool } = await fixture();
   const service = createSpeakingHomeworkService({ pool,
     accessSecret: 'test-student-access-secret-32-characters' });
@@ -160,9 +160,21 @@ test('bản sao Classroom phải đúng học viên và CTA đã đọc lại m�
     const opened = await service.openAssignment({ documentId: copy.documentId,
       assignmentCode: '67-speaking-lam_ro', classCode: 'IC2304' });
     assert.equal(opened.students.length, 2);
-    await assert.rejects(service.startSession({ documentId: copy.documentId,
-      assignmentCode: '67-speaking-lam_ro', studentRef: secondStudentRef }),
-    { code: 'ACCESS_DENIED' });
+    const otherStudent = await service.startSession({ documentId: copy.documentId,
+      assignmentCode: '67-speaking-lam_ro', studentRef: secondStudentRef });
+    assert.equal(otherStudent.studentRef, secondStudentRef);
+    await service.open({ accessToken: otherStudent.accessToken, studentRef: secondStudentRef });
+    const grant = await pool.query(`SELECT document_id FROM speaking_homework.access_grant
+      WHERE document_id = $1 AND student_ref = $2`, [copy.documentId, secondStudentRef]);
+    assert.equal(grant.rows[0].document_id, copy.documentId);
+    await checkAccepted(service, otherStudent.accessToken, secondStudentRef, 'clarify_1', 'l', 3);
+    await checkAccepted(service, otherStudent.accessToken, secondStudentRef, 'clarify_2', 'm', 2);
+    await checkAccepted(service, otherStudent.accessToken, secondStudentRef, 'clarify_3', 'n', 2);
+    await checkAccepted(service, otherStudent.accessToken, secondStudentRef, 'freestyle', 'o', 2);
+    await service.finish({ accessToken: otherStudent.accessToken, studentRef: secondStudentRef });
+    const writeJob = await service.claimOutboxJob('write_doc');
+    assert.equal(writeJob.document_id, copy.documentId);
+    assert.equal(writeJob.student_ref, secondStudentRef);
     await assert.rejects(copies.sync({ ...scope, submissions: [{ ...copy,
       userId: 'classroom-B' }] }), { code: 'DOCUMENT_BINDING_CONFLICT' });
     await assert.rejects(copies.sync({ ...scope, submissions: [{ ...copy,
