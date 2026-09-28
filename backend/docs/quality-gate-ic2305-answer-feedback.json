@@ -2,17 +2,29 @@
   "schema_version": 3,
   "product": "Progress Log IC2305 khóa 56: kết quả chấm và bản học viên dùng thử",
   "change_id": "ic2305-answer-feedback-20260928",
-  "change_kind": "feature",
-  "escaped_user_defect": false,
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
   "risk": "high",
-  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "personal_data", "multi_user", "multi_service"],
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "personal_data",
+    "multi_user",
+    "multi_service"
+  ],
   "experience": {
     "planning_mode": "controlled",
     "mode_reason": "Đổi phản hồi của phiếu đã có bài nộp và tạo bản demo đi qua API chung, gồm hàng chờ điểm danh Portal.",
     "user": "Học viên và giảng viên IC2305 khóa 56",
     "problem": "Bốn phiếu đang chấm máy nhưng không hiện kết quả; giảng viên chưa có hồ sơ giả để tự thử giao diện học viên.",
-    "outcome": "Sau khi nộp, học viên thấy từng câu đúng/sai và đáp án; giảng viên dùng link demo buổi 5 với một hồ sơ giả mà không ghi điểm danh Portal.",
-    "out_of_scope": ["Không chấm tự luận, Hedging hay tự đánh giá Speaking.", "Không đổi bài đã nộp, lượt đang làm hoặc danh sách học viên thật."],
+    "outcome": "Sau khi nộp, học viên thấy từng câu đúng/sai và đáp án; giảng viên dùng cùng một link demo buổi 5 với sáu hồ sơ giả, mỗi hồ sơ một lượt, không ghi điểm danh Portal.",
+    "out_of_scope": [
+      "Không chấm tự luận, Hedging hay tự đánh giá Speaking.",
+      "Không đổi bài đã nộp, lượt đang làm hoặc danh sách học viên thật."
+    ],
     "plain_language_summary": "Hiện lời giải cho câu máy chấm và có một phiếu riêng để giảng viên thử như học viên.",
     "acceptance_scope": "small_complete"
   },
@@ -20,99 +32,762 @@
     "proposal": "Thêm chính sách hiện đáp án theo phiếu, giao diện kết quả và phiếu demo riêng.",
     "behavior_baseline": "Form version của IC2305 buổi 2–5 giữ chính sách hidden; giao diện chuyển khỏi phần vừa nộp và màn hoàn tất không có đáp án.",
     "deltas": [
-      {"id": "D-POLICY", "operation": "ADDED", "behavior": "Bốn phiếu IC2305 hiện đáp án sau nộp mà không đổi form version hoặc hash.", "module_ids": ["M-DB", "M-API"], "test_ids": ["T-DB", "T-SEC", "T-LIFE"]},
-      {"id": "D-UI", "operation": "MODIFIED", "behavior": "Xem đúng/sai ngay sau từng phần và trên màn hình hoàn tất.", "module_ids": ["M-UI"], "test_ids": ["T-UI", "T-REG"]},
-      {"id": "D-DEMO", "operation": "ADDED", "behavior": "Phiếu buổi 5 và hồ sơ giả riêng; không đưa điểm danh demo sang Portal.", "module_ids": ["M-DEMO", "M-API"], "test_ids": ["T-PORTAL", "T-SEC", "T-READBACK"]}
+      {
+        "id": "D-POLICY",
+        "operation": "ADDED",
+        "behavior": "Bốn phiếu IC2305 hiện đáp án sau nộp mà không đổi form version hoặc hash.",
+        "module_ids": [
+          "M-DB",
+          "M-API"
+        ],
+        "test_ids": [
+          "T-DB",
+          "T-SEC",
+          "T-LIFE"
+        ]
+      },
+      {
+        "id": "D-UI",
+        "operation": "MODIFIED",
+        "behavior": "Xem đúng/sai ngay sau từng phần và trên màn hình hoàn tất.",
+        "module_ids": [
+          "M-UI"
+        ],
+        "test_ids": [
+          "T-UI",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "D-DEMO",
+        "operation": "ADDED",
+        "behavior": "Phiếu buổi 5 và hồ sơ giả riêng; không đưa điểm danh demo sang Portal.",
+        "module_ids": [
+          "M-DEMO",
+          "M-API"
+        ],
+        "test_ids": [
+          "T-PORTAL",
+          "T-SEC",
+          "T-READBACK"
+        ]
+      },
+      {
+        "id": "D-CORS",
+        "operation": "MODIFIED",
+        "behavior": "API production cho phép PATCH khi trình duyệt lưu nháp và giữ các phương thức CORS hiện hành.",
+        "module_ids": [
+          "M-RELEASE"
+        ],
+        "test_ids": [
+          "T-CORS",
+          "T-UI",
+          "T-READBACK"
+        ]
+      }
     ],
     "archive_status": "active"
   },
   "module_map": {
     "revision": "plan-feedback-v1",
     "modules": [
-      {"id": "M-DB", "name": "Chính sách phiếu", "responsibility": "Lưu override theo assignment, giữ version bất biến.", "owns_data": ["answer_release_override"], "public_interfaces": ["learning.form_assignment"], "depends_on": [], "boundary_rules": ["NULL kế thừa chính sách version."], "test_ids": ["T-DB", "T-SEC", "T-LIFE"]},
-      {"id": "M-API", "name": "Phản hồi chấm", "responsibility": "Chỉ trả đáp án sau khi nộp; giữ outbox điểm danh của lớp thật.", "owns_data": ["checkpoint_result", "submission_result"], "public_interfaces": ["submitCheckpoint", "submit", "getResult"], "depends_on": ["M-DB"], "boundary_rules": ["Public assignment không chứa khóa.", "Demo không gửi Portal."], "test_ids": ["T-DB", "T-PORTAL", "T-IDEM", "T-SEC"]},
-      {"id": "M-UI", "name": "Trang học viên", "responsibility": "Hiện kết quả sau nộp phần và khi hoàn tất.", "owns_data": ["checkpoint_feedback_view", "final_result_view"], "public_interfaces": ["progress-log/app.js"], "depends_on": ["M-API"], "boundary_rules": ["Không hiển thị tự luận như câu được chấm."], "test_ids": ["T-UI", "T-REG"]},
-      {"id": "M-DEMO", "name": "Phiếu dùng thử", "responsibility": "Tạo một assignment và một roster giả riêng.", "owns_data": ["demo_assignment", "demo_roster"], "public_interfaces": ["create-ic2305-session5-student-demo.mjs"], "depends_on": ["M-DB"], "boundary_rules": ["Không thêm học viên giả vào IC2305 thật."], "test_ids": ["T-PORTAL", "T-SEC", "T-READBACK"]},
-      {"id": "M-RELEASE", "name": "Phát hành", "responsibility": "Sao lưu, chuyển image, giữ worker và đích Portal.", "owns_data": ["release_backup", "container_revision"], "public_interfaces": ["deploy-api.sh", "backup-database.sh"], "depends_on": ["M-API", "M-DEMO", "M-UI"], "boundary_rules": ["Rollback nếu health/env không khớp."], "test_ids": ["T-RECOVERY", "T-READBACK", "T-PORTAL"]}
+      {
+        "id": "M-DB",
+        "name": "Chính sách phiếu",
+        "responsibility": "Lưu override theo assignment, giữ version bất biến.",
+        "owns_data": [
+          "answer_release_override"
+        ],
+        "public_interfaces": [
+          "learning.form_assignment"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "NULL kế thừa chính sách version."
+        ],
+        "test_ids": [
+          "T-DB",
+          "T-SEC",
+          "T-LIFE"
+        ]
+      },
+      {
+        "id": "M-API",
+        "name": "Phản hồi chấm",
+        "responsibility": "Chỉ trả đáp án sau khi nộp; giữ outbox điểm danh của lớp thật.",
+        "owns_data": [
+          "checkpoint_result",
+          "submission_result"
+        ],
+        "public_interfaces": [
+          "submitCheckpoint",
+          "submit",
+          "getResult"
+        ],
+        "depends_on": [
+          "M-DB"
+        ],
+        "boundary_rules": [
+          "Public assignment không chứa khóa.",
+          "Demo không gửi Portal."
+        ],
+        "test_ids": [
+          "T-DB",
+          "T-PORTAL",
+          "T-IDEM",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "M-UI",
+        "name": "Trang học viên",
+        "responsibility": "Hiện kết quả sau nộp phần và khi hoàn tất.",
+        "owns_data": [
+          "checkpoint_feedback_view",
+          "final_result_view"
+        ],
+        "public_interfaces": [
+          "progress-log/app.js"
+        ],
+        "depends_on": [
+          "M-API"
+        ],
+        "boundary_rules": [
+          "Không hiển thị tự luận như câu được chấm."
+        ],
+        "test_ids": [
+          "T-UI",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "M-DEMO",
+        "name": "Phiếu dùng thử",
+        "responsibility": "Tạo một assignment và sáu hồ sơ giả riêng; mỗi hồ sơ nộp một lượt.",
+        "owns_data": [
+          "demo_assignment",
+          "demo_roster_six"
+        ],
+        "public_interfaces": [
+          "create-ic2305-session5-student-demo.mjs",
+          "add-ic2305-session5-demo-students.mjs"
+        ],
+        "depends_on": [
+          "M-DB"
+        ],
+        "boundary_rules": [
+          "Không thêm học viên giả vào IC2305 thật."
+        ],
+        "test_ids": [
+          "T-PORTAL",
+          "T-SEC",
+          "T-READBACK"
+        ]
+      },
+      {
+        "id": "M-RELEASE",
+        "name": "Phát hành",
+        "responsibility": "Sao lưu, chuyển image, giữ worker và đích Portal.",
+        "owns_data": [
+          "release_backup",
+          "container_revision"
+        ],
+        "public_interfaces": [
+          "deploy-api.sh",
+          "backup-database.sh",
+          "Dockerfile.cors",
+          "deploy-api-cors.sh"
+        ],
+        "depends_on": [
+          "M-API",
+          "M-DEMO",
+          "M-UI"
+        ],
+        "boundary_rules": [
+          "Rollback nếu health/env không khớp."
+        ],
+        "test_ids": [
+          "T-RECOVERY",
+          "T-READBACK",
+          "T-PORTAL",
+          "T-CORS"
+        ]
+      }
     ],
     "integrations": [
-      {"id": "I-DB-API", "producer": "M-DB", "consumer": "M-API", "contract": "Override áp dụng theo assignment sau nộp, không sửa public definition.", "test_ids": ["T-DB", "T-SEC"]},
-      {"id": "I-API-UI", "producer": "M-API", "consumer": "M-UI", "contract": "QuizResultV1 có verdict, expectedAnswer và answerRelease released sau nộp.", "test_ids": ["T-DB", "T-UI"]},
-      {"id": "I-DEMO-API", "producer": "M-DEMO", "consumer": "M-API", "contract": "Chỉ mã khóa DEMO-56 và class 990000567 không tạo job Portal.", "test_ids": ["T-PORTAL", "T-SEC"]},
-      {"id": "I-DB-DEMO", "producer": "M-DB", "consumer": "M-DEMO", "contract": "Phiếu demo được bật immediate mà không tạo version mới.", "test_ids": ["T-DB", "T-SEC"]},
-      {"id": "I-API-RELEASE", "producer": "M-API", "consumer": "M-RELEASE", "contract": "Image mới giữ worker và API khỏe.", "test_ids": ["T-RECOVERY", "T-READBACK"]},
-      {"id": "I-DEMO-RELEASE", "producer": "M-DEMO", "consumer": "M-RELEASE", "contract": "Phiếu giả chỉ được tạo sau guard và được đọc lại đúng roster.", "test_ids": ["T-SEC", "T-READBACK"]},
-      {"id": "I-UI-RELEASE", "producer": "M-UI", "consumer": "M-RELEASE", "contract": "Pages đã lên trước canary người học.", "test_ids": ["T-UI", "T-READBACK"]}
+      {
+        "id": "I-DB-API",
+        "producer": "M-DB",
+        "consumer": "M-API",
+        "contract": "Override áp dụng theo assignment sau nộp, không sửa public definition.",
+        "test_ids": [
+          "T-DB",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "I-API-UI",
+        "producer": "M-API",
+        "consumer": "M-UI",
+        "contract": "QuizResultV1 có verdict, expectedAnswer và answerRelease released sau nộp.",
+        "test_ids": [
+          "T-DB",
+          "T-UI"
+        ]
+      },
+      {
+        "id": "I-DEMO-API",
+        "producer": "M-DEMO",
+        "consumer": "M-API",
+        "contract": "Chỉ mã khóa DEMO-56 và class 990000567 không tạo job Portal.",
+        "test_ids": [
+          "T-PORTAL",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "I-DB-DEMO",
+        "producer": "M-DB",
+        "consumer": "M-DEMO",
+        "contract": "Phiếu demo được bật immediate mà không tạo version mới.",
+        "test_ids": [
+          "T-DB",
+          "T-SEC"
+        ]
+      },
+      {
+        "id": "I-API-RELEASE",
+        "producer": "M-API",
+        "consumer": "M-RELEASE",
+        "contract": "Image mới giữ worker và API khỏe.",
+        "test_ids": [
+          "T-RECOVERY",
+          "T-READBACK",
+          "T-CORS"
+        ]
+      },
+      {
+        "id": "I-DEMO-RELEASE",
+        "producer": "M-DEMO",
+        "consumer": "M-RELEASE",
+        "contract": "Phiếu giả chỉ được tạo sau guard và được đọc lại đúng roster.",
+        "test_ids": [
+          "T-SEC",
+          "T-READBACK"
+        ]
+      },
+      {
+        "id": "I-UI-RELEASE",
+        "producer": "M-UI",
+        "consumer": "M-RELEASE",
+        "contract": "Pages đã lên trước canary người học.",
+        "test_ids": [
+          "T-UI",
+          "T-READBACK"
+        ]
+      }
     ]
   },
   "operational_design": {
     "plan_revision": "plan-feedback-v1",
-    "signals": ["multi_user", "multi_service"],
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
     "critical_path": "Học viên nộp phần → API lưu checkpoint và trả đáp án → trang hiện đúng/sai; nộp cuối → API ghi bài/điểm danh → Portal nhận job lớp thật.",
-    "peak_load": {"value": 18, "unit": "students_per_class", "basis": "Số lượt hiện có của IC2305 dao động 16–18 trên buổi 2–4."},
+    "peak_load": {
+      "value": 18,
+      "unit": "students_per_class",
+      "basis": "Số lượt hiện có của IC2305 dao động 16–18 trên buổi 2–4."
+    },
     "user_wait_target": "Kết quả hiện ngay trong phản hồi nộp phần; các thao tác ghi và biên nhận giữ thời gian chờ hiện hành vài giây.",
-    "limits_and_cost": ["Không gọi dịch vụ ngoài mới hoặc thêm lượt truy vấn cho mỗi checkpoint.", "Demo chỉ có một hồ sơ giả và dùng form version sẵn có."],
-    "failure_and_recovery": ["Migration và chính sách chạy trong giao dịch; sai phạm vi thì rollback.", "API lỗi thì khôi phục container cũ; bài và outbox vẫn giữ.", "Portal lỗi với lớp thật thì job retry theo khóa cũ."],
-    "monitoring": ["Health API, public GET và UI sau deploy.", "Số bài/lượt IC2305 và job sync_portal_attendance trước–sau.", "Đích cấu hình Portal và worker phải giữ nguyên."],
+    "limits_and_cost": [
+      "Không gọi dịch vụ ngoài mới hoặc thêm lượt truy vấn cho mỗi checkpoint.",
+      "Demo chỉ có một hồ sơ giả và dùng form version sẵn có.",
+      "Demo có sáu hồ sơ giả sẵn có; chỉ một lượt nộp cho mỗi hồ sơ theo ràng buộc database production."
+    ],
+    "failure_and_recovery": [
+      "Migration và chính sách chạy trong giao dịch; sai phạm vi thì rollback.",
+      "API lỗi thì khôi phục container cũ; bài và outbox vẫn giữ.",
+      "Portal lỗi với lớp thật thì job retry theo khóa cũ."
+    ],
+    "monitoring": [
+      "Health API, public GET và UI sau deploy.",
+      "Số bài/lượt IC2305 và job sync_portal_attendance trước–sau.",
+      "Đích cấu hình Portal và worker phải giữ nguyên."
+    ],
     "decision": "Override cấp phiếu và phiếu demo riêng giữ nguyên form version, bài thật và danh sách lớp.",
-    "test_ids": ["T-DB", "T-UI", "T-PORTAL", "T-IDEM", "T-RECOVERY", "T-READBACK"]
+    "test_ids": [
+      "T-DB",
+      "T-UI",
+      "T-PORTAL",
+      "T-IDEM",
+      "T-RECOVERY",
+      "T-READBACK",
+      "T-CORS"
+    ]
   },
   "requirements": [
-    {"id": "R-SCORE", "statement": "Câu chấm máy buổi 2–5 hiện đúng/sai và đáp án sau nộp từng phần và cuối phiếu.", "test_ids": ["T-DB", "T-UI", "T-READBACK"]},
-    {"id": "R-ESSAY", "statement": "Tự luận, Hedging và tự đánh giá không tự động chấm.", "test_ids": ["T-DB", "T-UI", "T-REG"]},
-    {"id": "R-DEMO", "statement": "Giảng viên thử buổi 5 bằng một hồ sơ giả riêng và có thể làm lại.", "test_ids": ["T-PORTAL", "T-SEC", "T-READBACK"]},
-    {"id": "R-ATTENDANCE", "statement": "Bài thật vẫn gửi job Portal; demo không gửi; lần deploy giữ cấu hình và worker.", "test_ids": ["T-PORTAL", "T-RECOVERY", "T-READBACK"]}
+    {
+      "id": "R-SCORE",
+      "statement": "Câu chấm máy buổi 2–5 hiện đúng/sai và đáp án sau nộp từng phần và cuối phiếu.",
+      "test_ids": [
+        "T-DB",
+        "T-UI",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "R-ESSAY",
+      "statement": "Tự luận, Hedging và tự đánh giá không tự động chấm.",
+      "test_ids": [
+        "T-DB",
+        "T-UI",
+        "T-REG"
+      ]
+    },
+    {
+      "id": "R-DEMO",
+      "statement": "Giảng viên thử buổi 5 qua một link có sáu hồ sơ giả riêng, mỗi hồ sơ một lượt.",
+      "test_ids": [
+        "T-PORTAL",
+        "T-SEC",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "R-ATTENDANCE",
+      "statement": "Bài thật vẫn gửi job Portal; demo không gửi; lần deploy giữ cấu hình và worker.",
+      "test_ids": [
+        "T-PORTAL",
+        "T-RECOVERY",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "R-DRAFT",
+      "statement": "Trình duyệt được phép lưu nháp bằng PATCH trên API production.",
+      "test_ids": [
+        "T-CORS",
+        "T-UI"
+      ]
+    }
   ],
   "invariants": [
-    {"id": "V-VERSION", "statement": "Form version, hash, bài nộp và lượt đang làm không đổi khi bật đáp án.", "test_ids": ["T-DB", "T-LIFE", "T-READBACK"]},
-    {"id": "V-PRIVATE", "statement": "Đáp án không có trong API mở phiếu trước khi nộp hoặc trong trang tĩnh.", "test_ids": ["T-SEC", "T-UI", "T-READBACK"]},
-    {"id": "V-DEMO", "statement": "Hồ sơ giả không nằm trong roster lớp thật và không tạo job Portal.", "test_ids": ["T-PORTAL", "T-SEC", "T-READBACK"]},
-    {"id": "V-IDEMPOTENT", "statement": "Gửi lại checkpoint/final không tạo thêm bài hay job.", "test_ids": ["T-IDEM", "T-DB"]}
+    {
+      "id": "V-VERSION",
+      "statement": "Form version, hash, bài nộp và lượt đang làm không đổi khi bật đáp án.",
+      "test_ids": [
+        "T-DB",
+        "T-LIFE",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "V-PRIVATE",
+      "statement": "Đáp án không có trong API mở phiếu trước khi nộp hoặc trong trang tĩnh.",
+      "test_ids": [
+        "T-SEC",
+        "T-UI",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "V-DEMO",
+      "statement": "Hồ sơ giả không nằm trong roster lớp thật và không tạo job Portal.",
+      "test_ids": [
+        "T-PORTAL",
+        "T-SEC",
+        "T-READBACK"
+      ]
+    },
+    {
+      "id": "V-IDEMPOTENT",
+      "statement": "Gửi lại checkpoint/final không tạo thêm bài hay job.",
+      "test_ids": [
+        "T-IDEM",
+        "T-DB"
+      ]
+    }
   ],
   "tests": [
-    {"id": "T-DB", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "PGlite end-to-end: hidden trước override, released sau override ở checkpoint/replay/resume/final/getResult; 4 câu có điểm, 4 câu ungraded."},
-    {"id": "T-UI", "category": "happy_path", "priority": "P0", "status": "passed", "evidence": "Playwright 390px: phần 1 dừng để xem 1/2, màn cuối 4 câu, 3 đúng/1 sai, đáp án B hiện; 0 production writes, không tràn ngang."},
-    {"id": "T-INVALID", "category": "invalid_input", "priority": "P1", "status": "passed", "evidence": "Backend full suite chặn payload/checkpoint sai; script plan không cần DB và chế độ apply đòi actor/connection."},
-    {"id": "T-LIFE", "category": "lifecycle_time", "priority": "P0", "status": "passed", "evidence": "PGlite giữ attempt token, hash và checkpoint khi bật chính sách, khôi phục được; full suite kiểm block open/closed."},
-    {"id": "T-IDEM", "category": "concurrency_idempotency", "priority": "P0", "status": "passed", "evidence": "PGlite replay checkpoint/final và đếm đúng 1 attempt, 1 submission; full suite kiểm retry/outbox."},
-    {"id": "T-PORTAL", "category": "external_partial", "priority": "P0", "status": "passed", "evidence": "PGlite: bài thật course_code NULL vẫn tạo 1 job Portal, demo DEMO-56/class 990000567 tạo 0; suite kiểm retry/lỗi Portal."},
-    {"id": "T-RECOVERY", "category": "rollback_recovery", "priority": "P1", "status": "passed", "evidence": "PGlite bỏ override thì getResult lại ẩn đáp án; backup/deploy script có guard và rollback, chờ production readback."},
-    {"id": "T-SEC", "category": "security_privacy", "priority": "P0", "status": "passed", "evidence": "Public assignment trước/sau override không chứa expectedOptionId; roster thật không có demo; frontend chỉ dựng textContent."},
-    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "passed", "evidence": "Backend full suite 213/213 gồm IC2304 và IC2305; Pages focused 16/16."},
-    {"id": "T-READBACK", "category": "happy_path", "priority": "P0", "status": "not_run", "evidence": "Chờ đọc lại production sau phát hành."}
+    {
+      "id": "T-DB",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite end-to-end: hidden trước override, released sau override ở checkpoint/replay/resume/final/getResult; 4 câu có điểm, 4 câu ungraded."
+    },
+    {
+      "id": "T-UI",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Playwright 390px mock 4 câu/3 đúng/1 sai, không tràn ngang; trang production thật chọn hồ sơ giả, lưu nháp, nộp hai phần, hiện đáp án và kết quả 3/4; bài demo không vào Portal."
+    },
+    {
+      "id": "T-INVALID",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Backend full suite chặn payload/checkpoint sai; script plan không cần DB và chế độ apply đòi actor/connection."
+    },
+    {
+      "id": "T-LIFE",
+      "category": "lifecycle_time",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite giữ attempt token, hash và checkpoint khi bật chính sách, khôi phục được; full suite kiểm block open/closed."
+    },
+    {
+      "id": "T-IDEM",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite replay checkpoint/final và đếm đúng 1 attempt, 1 submission; full suite kiểm retry/outbox."
+    },
+    {
+      "id": "T-PORTAL",
+      "category": "external_partial",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: bài thật vẫn tạo 1 job Portal, demo tạo 0. Production sau nộp demo: 0 job Portal demo; hàng chờ thật 71 complete, 0 chưa hoàn tất, đích và worker giữ nguyên."
+    },
+    {
+      "id": "T-RECOVERY",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Backup PostgreSQL 303702192 byte, 1554 pg_restore entries, SHA256 đã đọc lại; container v5 và v6 được giữ làm điểm quay lui; hai deploy script kiểm health và đích Portal."
+    },
+    {
+      "id": "T-SEC",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Public assignment trước/sau override không chứa expectedOptionId; roster thật không có demo; frontend chỉ dựng textContent."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Backend full suite 213/213 trên revision cuối; Pages focused 16/16 trên revision cuối."
+    },
+    {
+      "id": "T-READBACK",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Production: bốn policy immediate; version/hash, 52 lượt và 49 bài thật giữ nguyên. getResult buổi 2/3/4 hiện lần lượt 2/3/1 đáp án, tự luận ungraded. Demo nộp thật 1 bài/2 checkpoint, 3/4 câu đúng và 0 job Portal; roster có sáu hồ sơ giả, public API trước nộp không lộ khóa."
+    },
+    {
+      "id": "T-CORS",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Cùng preflight OPTIONS PATCH từ GitHub Pages: image v6 trả 204 nhưng thiếu Allow-Methods (RED exit 1); image v7 trả 204 và có PATCH (GREEN exit 0)."
+    }
   ],
   "task_graph": {
     "plan_revision": "plan-feedback-v1",
     "tasks": [
-      {"id": "TASK-API", "result": "Migration, API và ca kiểm dữ liệu hoàn chỉnh.", "module_ids": ["M-DB", "M-API", "M-DEMO"], "depends_on": [], "consumes": ["Bốn assignment IC2305 và chính sách hidden hiện hành"], "produces": ["override, API result, demo script"], "contract": "Không đổi version/hash; demo không gửi Portal.", "test_ids": ["T-DB", "T-PORTAL", "T-SEC"], "evidence_required": ["PGlite và diff nguồn"], "decision_inputs": ["Hiện cả đáp án đúng theo lựa chọn của Đức."], "affected_future_tasks": ["TASK-UI", "TASK-RELEASE"], "status": "done", "plan_revision": "plan-feedback-v1"},
-      {"id": "TASK-UI", "result": "Trang học viên hiện kết quả sau nộp.", "module_ids": ["M-UI"], "depends_on": ["TASK-API"], "consumes": ["QuizResultV1 released"], "produces": ["checkpoint feedback và final result"], "contract": "Chỉ hiện item có maxScore > 0.", "test_ids": ["T-UI", "T-REG"], "evidence_required": ["Playwright mobile và Pages tests"], "decision_inputs": ["Giữ đáp án sau phần cuối."], "affected_future_tasks": ["TASK-RELEASE"], "status": "done", "plan_revision": "plan-feedback-v1"},
-      {"id": "TASK-RELEASE", "result": "Main và production được đọc lại.", "module_ids": ["M-RELEASE"], "depends_on": ["TASK-API", "TASK-UI"], "consumes": ["Full suite và backup"], "produces": ["Pages/API/schema/policy/demo live"], "contract": "Giữ đích điểm danh Portal và số bài thật.", "test_ids": ["T-RECOVERY", "T-READBACK", "T-PORTAL"], "evidence_required": ["Checker, backup, canary và queue readback"], "decision_inputs": ["Đức đã cho phép production và Git main sau test."], "affected_future_tasks": [], "status": "in_progress", "plan_revision": "plan-feedback-v1"}
+      {
+        "id": "TASK-API",
+        "result": "Migration, API và ca kiểm dữ liệu hoàn chỉnh.",
+        "module_ids": [
+          "M-DB",
+          "M-API",
+          "M-DEMO"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "Bốn assignment IC2305 và chính sách hidden hiện hành"
+        ],
+        "produces": [
+          "override, API result, demo script"
+        ],
+        "contract": "Không đổi version/hash; demo không gửi Portal.",
+        "test_ids": [
+          "T-DB",
+          "T-PORTAL",
+          "T-SEC"
+        ],
+        "evidence_required": [
+          "PGlite và diff nguồn"
+        ],
+        "decision_inputs": [
+          "Hiện cả đáp án đúng theo lựa chọn của Đức."
+        ],
+        "affected_future_tasks": [
+          "TASK-UI",
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "plan-feedback-v1"
+      },
+      {
+        "id": "TASK-UI",
+        "result": "Trang học viên hiện kết quả sau nộp.",
+        "module_ids": [
+          "M-UI"
+        ],
+        "depends_on": [
+          "TASK-API"
+        ],
+        "consumes": [
+          "QuizResultV1 released"
+        ],
+        "produces": [
+          "checkpoint feedback và final result"
+        ],
+        "contract": "Chỉ hiện item có maxScore > 0.",
+        "test_ids": [
+          "T-UI",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "Playwright mobile và Pages tests"
+        ],
+        "decision_inputs": [
+          "Giữ đáp án sau phần cuối."
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "plan-feedback-v1"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Main và production được đọc lại.",
+        "module_ids": [
+          "M-RELEASE"
+        ],
+        "depends_on": [
+          "TASK-API",
+          "TASK-UI"
+        ],
+        "consumes": [
+          "Full suite và backup"
+        ],
+        "produces": [
+          "Pages/API/schema/policy/demo live"
+        ],
+        "contract": "Giữ đích điểm danh Portal và số bài thật.",
+        "test_ids": [
+          "T-RECOVERY",
+          "T-READBACK",
+          "T-PORTAL",
+          "T-CORS"
+        ],
+        "evidence_required": [
+          "Checker, backup, canary và queue readback",
+          "Preflight PATCH RED/GREEN và canary demo trên production"
+        ],
+        "decision_inputs": [
+          "Đức đã cho phép production và Git main sau test."
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "plan-feedback-v1"
+      }
     ]
   },
   "risk_register": {
     "assessment": "PASS",
     "risks": [
-      {"id": "R-DEMO-PORTAL", "description": "Bài demo có thể làm bẩn điểm danh Portal.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "mitigated", "owner": "Người phát hành Progress Log", "mitigation": "Guard cặp mã khóa/lớp demo ở SQL; integration test kiểm 0 job demo và 1 job thật, readback sau production.", "test_ids": ["T-PORTAL", "T-READBACK"]}
+      {
+        "id": "R-DEMO-PORTAL",
+        "description": "Bài demo có thể làm bẩn điểm danh Portal.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Người phát hành Progress Log",
+        "mitigation": "Guard cặp mã khóa/lớp demo ở SQL; integration test kiểm 0 job demo và 1 job thật, readback sau production.",
+        "test_ids": [
+          "T-PORTAL",
+          "T-READBACK"
+        ]
+      },
+      {
+        "id": "R-DEMO-CAPACITY",
+        "description": "Sáu hồ sơ dùng thử có thể hết lượt vì mỗi hồ sơ chỉ nộp một lần.",
+        "probability": 2,
+        "impact": 2,
+        "score": 4,
+        "severity": "P2",
+        "status": "open",
+        "owner": "Người vận hành Progress Log",
+        "mitigation": "Trang hướng dẫn chọn hồ sơ demo khác sau khi hoàn tất; khi hết lượt, bổ sung hồ sơ giả bằng script có guard, không sửa lớp thật.",
+        "test_ids": [
+          "T-READBACK"
+        ]
+      }
     ],
     "waivers": []
   },
   "coverage_exemptions": {},
   "cross_constraints": [
-    {"id": "LEASE-PORTAL", "left": {"name": "attendance_lease_milliseconds", "value": 180000}, "operator": ">=", "right": {"name": "batch_times_timeout_plus_margin_milliseconds", "value": 180000}, "status": "passed", "evidence": "Backend suite kiểm worker 180 giây >= 10 job * 15 giây + 30 giây."}
+    {
+      "id": "LEASE-PORTAL",
+      "left": {
+        "name": "attendance_lease_milliseconds",
+        "value": 180000
+      },
+      "operator": ">=",
+      "right": {
+        "name": "batch_times_timeout_plus_margin_milliseconds",
+        "value": 180000
+      },
+      "status": "passed",
+      "evidence": "Backend suite kiểm worker 180 giây >= 10 job * 15 giây + 30 giây."
+    }
   ],
-  "mutations": [],
-  "verification_runs": [],
-  "convergence": {"status": "gaps", "tree_revision": "pending-release", "gaps": ["Production readback"], "unrequested_work": [], "evidence": "Nguồn và UI đã đối chiếu; chờ phát hành."},
-  "context_handoff": {"summary": "Source và test đã đạt; chờ phát hành.", "decisions": ["Hiện đáp án sau nộp; phiếu demo riêng."], "completed": ["TASK-API", "TASK-UI"], "next_step": "Backup, phát hành, readback.", "open_risks": [], "tree_revision": "pending-release"},
+  "mutations": [
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages Progress Log",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "GitHub Pages main 25d206b, action thành công; public HTML và app.js v3 HTTP 200."
+    },
+    {
+      "id": "M-DB",
+      "target": "production schema learning.form_assignment",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Migration ALTER TABLE và GRANT thành công; bốn bản ghi cũ cùng số lượt/bài/hash đã đọc lại."
+    },
+    {
+      "id": "M-API",
+      "target": "production API image",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Container healthy trên image sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff; PATCH preflight đạt, hash đích Portal và worker giữ nguyên."
+    },
+    {
+      "id": "M-POLICY",
+      "target": "bốn phiếu IC2305 buổi 2–5",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Bốn override immediate; form version/hash và 52 lượt/49 bài thật giữ nguyên; kết quả buổi 2–4 đã đọc lại."
+    },
+    {
+      "id": "M-DEMO",
+      "target": "phiếu và roster demo buổi 5",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Một phiếu riêng, sáu hồ sơ giả; một bài thử có hai checkpoint và 0 job Portal, lớp thật không đổi."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND-FULL",
+      "scope": "full_suite",
+      "command": "npm test trong backend",
+      "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
+      "captured_at": "2026-09-28T16:07:54+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 213,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Backend full suite 213/213 sau commit source cuối."
+    },
+    {
+      "id": "V-PAGES",
+      "scope": "focused",
+      "command": "node --test tests/progress-log-static.mjs tests/progress-log-session3-static.mjs tests/progress-log-memory.cjs",
+      "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
+      "captured_at": "2026-09-28T16:07:54+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Pages revision 25d206b, 16/16; public asset v3 được đọc lại."
+    },
+    {
+      "id": "V-PRODUCTION",
+      "scope": "focused",
+      "command": "Playwright CLI production demo, public API và database readback",
+      "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
+      "captured_at": "2026-09-28T16:07:54+07:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Hai phần nộp, 3/4 câu đúng, tự luận ungraded, CORS PATCH 200, sáu hồ sơ, 0 Portal demo, 71 Portal complete."
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Đối chiếu yêu cầu, DOCX/ảnh, bốn phiếu, UI, dữ liệu thật/demo, source Git và production; CORS được sửa sau ca RED trực tiếp."
+  },
+  "context_handoff": {
+    "summary": "Phản hồi đáp án và bản học viên demo đã lên production; chờ bài thật buổi 5 đầu tiên để đối chiếu Portal.",
+    "decisions": [
+      "Hiện đáp án sau nộp, tự luận không chấm.",
+      "Demo có sáu hồ sơ giả, mỗi hồ sơ một lượt."
+    ],
+    "completed": [
+      "TASK-API",
+      "TASK-UI",
+      "TASK-RELEASE"
+    ],
+    "next_step": "Sau bài nộp thật buổi 5 đầu tiên, đối chiếu job điểm danh và kết quả Portal; thêm hồ sơ demo khi hết lượt.",
+    "open_risks": [
+      "R-DEMO-CAPACITY"
+    ],
+    "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff"
+  },
   "release": {
     "target_environment": "production",
-    "decision": "not_ready",
-    "base_tree_revision": "1b5a2dd1b4a12abde163d56f9bccc3b608f952a6",
-    "current_tree_revision": "pending-release",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "sha256:92627f3c7c07972efdba1b82f043df3f815df013b3084ee0127426114fdadc5f",
+    "current_tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
     "production_authorized": true,
     "rollback": "Khôi phục container backup; tắt override có guard nếu cần; dump database trước migration vẫn giữ.",
-    "deployment_readback": "pending",
-    "operational_observation": "Chờ phát hành.",
-    "open_risks": []
+    "deployment_readback": "verified",
+    "operational_observation": "API image v7 healthy, đích Portal và worker giữ nguyên; 71 job Portal complete/0 chưa xong. Canary demo nộp thật và hiện 3/4 đáp án, 0 job Portal; sáu hồ sơ giả. Bài thật buổi 5 đầu tiên chưa có để đối chiếu Portal mới.",
+    "open_risks": [
+      {
+        "severity": "P2",
+        "summary": "Chờ bài thật buổi 5 đầu tiên để đối chiếu Portal."
+      },
+      {
+        "severity": "P2",
+        "summary": "Mỗi trong sáu hồ sơ demo chỉ nộp một lượt."
+      }
+    ]
+  },
+  "red_green": {
+    "red_on_base": {
+      "test_id": "T-CORS",
+      "command": "OPTIONS /mapping-api/api/learning/attempts/draft với Origin GitHub Pages và Access-Control-Request-Method PATCH",
+      "tree_revision": "sha256:92627f3c7c07972efdba1b82f043df3f815df013b3084ee0127426114fdadc5f",
+      "outcome": "failed",
+      "exit_code": 1,
+      "failed": 1,
+      "evidence": "HTTP 204 nhưng Access-Control-Allow-Methods rỗng; trình duyệt báo CORS và PATCH không tới API."
+    },
+    "green_on_head": {
+      "test_id": "T-CORS",
+      "command": "OPTIONS /mapping-api/api/learning/attempts/draft với Origin GitHub Pages và Access-Control-Request-Method PATCH",
+      "tree_revision": "sha256:2a13da368af67749e9dc53fb236344f13bbb5743372f44988696b60ac0ab79ff",
+      "outcome": "passed",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "HTTP 204, Access-Control-Allow-Methods gồm PATCH; canary browser lưu nháp HTTP 200."
+    }
   }
 }
