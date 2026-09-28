@@ -1,0 +1,153 @@
+{
+  "schema_version": 3,
+  "product": "Bác sĩ AI cho Speaking Homework Lesson 3 IC2304",
+  "change_id": "speaking-doctor-lesson3-20260929",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "multi_user", "multi_service", "personal_data"],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "AI đọc bốn Share và ghi danh sách riêng của học viên trong database dùng chung.",
+    "user": "Học viên Speaking 67 và giảng viên IC2304",
+    "problem": "Lesson 3 có biên nhận nhưng chưa tự phân tích lỗi để cập nhật bài luyện Bác sĩ AI.",
+    "outcome": "Sau biên nhận, bài được phân tích và đề xuất bài luyện đúng học viên; trang nộp không hiện danh sách.",
+    "out_of_scope": ["Không đổi cách nộp bốn link hoặc email cảnh báo Classroom.", "Không hiện Bác sĩ AI trên trang Lesson 3."],
+    "plain_language_summary": "Học viên nộp xong thì hệ thống đọc bốn hội thoại, tìm lỗi đã được góp ý và cập nhật danh sách bài cần luyện ở phía sau.",
+    "acceptance_scope": "small_complete: hàng xử lý, phân tích Share thật, ghép danh mục, ghi đúng học viên, chống trùng và đọc lại danh sách."
+  },
+  "change_package": {
+    "proposal": "Bổ sung worker và bảng bằng chứng; bật khóa bài luyện 67 cho Lesson 3 IC2304.",
+    "behavior_baseline": "Assignment Lesson 3 có doctor_course_key NULL; không tạo doctor_analyze, chưa có worker nhận việc.",
+    "deltas": [{
+      "id": "D-DOCTOR",
+      "operation": "ADDED",
+      "behavior": "Đọc bốn Share sau biên nhận và cập nhật Bác sĩ AI theo luật đếm hiện có.",
+      "module_ids": ["M-DOCTOR"],
+      "test_ids": ["T-DOCTOR", "T-MIGRATION", "T-SHARE"]
+    }],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "doctor-lesson3-v1",
+    "modules": [{
+      "id": "M-DOCTOR",
+      "name": "Phân tích và đề xuất bài luyện Speaking",
+      "responsibility": "Nhận doctor_analyze, đọc Share, kiểm bằng chứng, ghi đề xuất nguyên tử.",
+      "owns_data": ["doctor_analysis", "doctor_recommendation", "doctor_event"],
+      "public_interfaces": ["speaking_homework.outbox(kind=doctor_analyze)"],
+      "depends_on": [],
+      "boundary_rules": ["Một biên nhận và một bài chỉ tăng một lần.", "Share đổi sau xác nhận không được ghi đề xuất.", "Không ghi khi danh mục đổi giữa lúc phân tích."],
+      "test_ids": ["T-DOCTOR", "T-SHARE", "T-MIGRATION"]
+    }],
+    "integrations": []
+  },
+  "operational_design": {
+    "plan_revision": "doctor-lesson3-v1",
+    "signals": ["multi_user", "multi_service"],
+    "critical_path": "Bốn link đạt → biên nhận → doctor_analyze → đọc bốn Share → AI chọn bài có chứng cứ → ghi database mapping → đọc lại danh sách.",
+    "peak_load": {"value": 15, "unit": "concurrent_students", "basis": "Roster IC2304 có 15 học viên đã duyệt."},
+    "user_wait_target": "Biên nhận hiện ngay; việc phân tích bắt đầu trong khoảng 5 giây khi hàng rảnh. Danh sách được cập nhật bất đồng bộ.",
+    "limits_and_cost": ["Tối đa 60 lượt đọc Share và 60 lượt gọi AI cho 15 học viên; hai biên nhận, tối đa tám hội thoại cùng lúc.", "Mỗi phần có timeout đọc Share 90 giây và AI 45 giây."],
+    "failure_and_recovery": ["Lỗi giữ job để thử tối đa năm lần; giao dịch DB rollback toàn bộ đề xuất nửa chừng.", "Danh mục đổi hoặc dấu vân tay Share khác lần xác nhận thì không ghi đề xuất.", "Hết năm lượt phải điều tra bằng outbox và doctor_analysis."],
+    "monitoring": ["Đếm doctor_analyze theo trạng thái và attempts; so receipt với doctor_analysis.", "Sau phát hành kiểm image, Docs và hàng điểm danh Progress Log."],
+    "decision": "Backend cập nhật Bác sĩ AI; Lesson 3 giữ trang nộp hiện tại không có danh sách.",
+    "test_ids": ["T-DOCTOR", "T-MIGRATION", "T-SHARE", "T-LIVE", "T-ROLL"]
+  },
+  "requirements": [{
+    "id": "R-DOCTOR",
+    "statement": "Mỗi bài Lesson 3 đã nộp đủ bốn link được phân tích và cập nhật đề xuất đúng học viên.",
+    "test_ids": ["T-DOCTOR", "T-LIVE"]
+  }, {
+    "id": "R-NO-UI",
+    "statement": "Trang Lesson 3 không hiển thị danh sách Bác sĩ AI.",
+    "test_ids": ["T-UI"]
+  }],
+  "invariants": [{
+    "id": "V-DOCTOR-LINEAGE",
+    "statement": "Biên nhận, Doc ID, học viên, Share và bài luyện không bị trộn khi xử lý song song hoặc retry.",
+    "test_ids": ["T-DOCTOR", "T-SHARE"]
+  }, {
+    "id": "V-DOCTOR-IDEMP",
+    "statement": "Một biên nhận chỉ tăng mỗi bài được đề xuất một lần.",
+    "test_ids": ["T-DOCTOR", "T-MIGRATION"]
+  }],
+  "tests": [{
+    "id": "T-HAPPY", "category": "happy_path", "priority": "P0", "status": "passed",
+    "evidence": "PGlite: bốn link đã nhận, worker ghi doctor_analysis và listDoctor trả bài cần luyện."
+  }, {
+    "id": "T-DOCTOR", "category": "concurrency_idempotency", "priority": "P0", "status": "passed",
+    "evidence": "PGlite: bốn link, hai phần trùng một bài chỉ tăng một lần, retry không ghi lại."
+  }, {
+    "id": "T-MIGRATION", "category": "rollback_recovery", "priority": "P0", "status": "passed",
+    "evidence": "PGlite: bật đúng assignment, backfill biên nhận cũ đúng một job, danh mục đổi thì rollback."
+  }, {
+    "id": "T-SHARE", "category": "external_partial", "priority": "P0", "status": "passed",
+    "evidence": "Bốn Share thật đọc được; AI ghép 4/4 phần với danh mục 60 bài ở lượt thử local, không ghi database."
+  }, {
+    "id": "T-UI", "category": "regression", "priority": "P1", "status": "passed",
+    "evidence": "Trang Lesson 3 và test Pages xác nhận không có khu Bác sĩ AI."
+  }, {
+    "id": "T-INPUT", "category": "invalid_input", "priority": "P1", "status": "passed",
+    "evidence": "AI không trích được góp ý thật và Share đổi dấu vân tay đều bị từ chối trước khi ghi."
+  }, {
+    "id": "T-IDENTITY", "category": "security_privacy", "priority": "P0", "status": "passed",
+    "evidence": "PGlite: biên nhận của người chọn được ghi vào đúng student_ref, không sang học viên khác cùng lớp."
+  }, {
+    "id": "T-RETRY", "category": "lifecycle_time", "priority": "P1", "status": "passed",
+    "evidence": "PGlite: retry việc đã hoàn tất không tăng lại; job lỗi Share được đánh dấu failed để thử lại."
+  }, {
+    "id": "T-LIVE", "category": "external_partial", "priority": "P0", "status": "not_run",
+    "evidence": "Chờ production rollout và một biên nhận có bốn link hợp lệ để đọc lại doctor_analysis cùng danh sách."
+  }, {
+    "id": "T-ROLL", "category": "rollback_recovery", "priority": "P1", "status": "not_run",
+    "evidence": "Đã viết đường quay lại bằng image cũ và doctor_course_key NULL; chờ kiểm trước cutover."
+  }],
+  "task_graph": {
+    "plan_revision": "doctor-lesson3-v1",
+    "tasks": [{
+      "id": "TASK-BUILD", "result": "Worker, migration, test và runbook đã chuẩn bị.",
+      "module_ids": ["M-DOCTOR"], "depends_on": [], "consumes": ["Biên nhận Lesson 3 và danh mục khóa 67"],
+      "produces": ["Source backend và migration"], "contract": "Không đổi trang nộp; ghi đề xuất nguyên tử.",
+      "test_ids": ["T-DOCTOR", "T-MIGRATION", "T-SHARE", "T-UI"],
+      "evidence_required": ["Full suite backend và Share thật"], "decision_inputs": ["Backend-only Bác sĩ AI"],
+      "affected_future_tasks": ["TASK-RELEASE"], "status": "done", "plan_revision": "doctor-lesson3-v1"
+    }, {
+      "id": "TASK-RELEASE", "result": "Phát hành và đọc lại một bài thật.",
+      "module_ids": ["M-DOCTOR"], "depends_on": ["TASK-BUILD"],
+      "consumes": ["Migration, image, backup, quyền phát hành"], "produces": ["Danh sách bài luyện đã cập nhật"],
+      "contract": "Chỉ chốt khi doctor_analysis và doctor_recommendation đọc lại đúng học viên.",
+      "test_ids": ["T-LIVE", "T-ROLL"], "evidence_required": ["Production readback và Portal attendance"],
+      "decision_inputs": ["Xác nhận phát hành đúng gói"], "affected_future_tasks": [],
+      "status": "in_progress", "plan_revision": "doctor-lesson3-v1"
+    }]
+  },
+  "risk_register": {"assessment": "CONCERNS", "risks": [{
+    "id": "RISK-LIVE", "description": "Chưa có biên nhận thật để kiểm kết quả Bác sĩ AI cuối cùng.",
+    "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Codex",
+    "mitigation": "Canary một biên nhận hợp lệ, đọc lại job, bằng chứng và danh sách đúng học viên.",
+    "test_ids": ["T-LIVE"]
+  }], "waivers": []},
+  "coverage_exemptions": {},
+  "cross_constraints": [{
+    "id": "TIME-DOCTOR", "left": {"name": "outbox_lease_seconds", "value": 300},
+    "operator": ">", "right": {"name": "share_plus_ai_seconds", "value": 135},
+    "status": "passed", "evidence": "Bốn phần xử lý song song; mỗi phần đọc tối đa 90 giây và AI tối đa 45 giây."
+  }],
+  "mutations": [{
+    "id": "M-PRODUCTION", "target": "API và mapping_db production", "outcome": "unknown",
+    "readback": "not_done", "evidence": "Chưa phát hành gói này."
+  }],
+  "verification_runs": [],
+  "convergence": {"status": "gaps", "tree_revision": "pending-commit", "gaps": ["Chưa phát hành và chưa có canary production."],
+    "unrequested_work": [], "evidence": "Bốn Share thử local và PGlite; chưa có mutation production."},
+  "context_handoff": {"summary": "Bản ứng viên backend phân tích Bác sĩ AI sau biên nhận Lesson 3.",
+    "decisions": ["Backend-only; không hiện danh sách trên trang Lesson 3."],
+    "completed": ["TASK-BUILD"], "next_step": "Duyệt gói phát hành rồi backup, migration, API cutover và readback.",
+    "open_risks": ["Chưa quan sát biên nhận thật."], "tree_revision": "pending-commit"},
+  "release": {"target_environment": "production", "decision": "not_ready", "base_tree_revision": "cc15709",
+    "current_tree_revision": "pending-commit", "production_authorized": false,
+    "rollback": "Giữ image cũ; đưa đúng assignment về doctor_course_key NULL để ngừng tạo việc mới; không xóa đề xuất đã có.",
+    "deployment_readback": "Chưa phát hành.", "operational_observation": "Chưa phát hành.",
+    "open_risks": [{"severity": "P1", "summary": "Chưa có biên nhận thật và readback danh sách Bác sĩ AI trên production."}]}
+}

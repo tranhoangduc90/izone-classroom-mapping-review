@@ -9,6 +9,7 @@ import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/spe
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
   verifySpeakingCopyCta } from '../src/speaking-classroom-copies.js';
+import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -73,6 +74,10 @@ async function fixture() {
   const second = await pool.query(`INSERT INTO speaking_homework.assignment
     (class_id, course_id, course_work_id, assignment_code, doctor_course_key, title, status)
     VALUES (2304, 'course-2304', 'lesson-3', '67-speaking-lam_ro', NULL, 'Homework Lesson 3', 'open') RETURNING id`);
+  const doctorMigration = await readFile(new URL('../ops/migrations/202609290001_speaking_doctor_lesson3.sql', import.meta.url), 'utf8');
+  await db.exec(doctorMigration);
+  assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
+    [second.rows[0].id])).rows[0].doctor_course_key, '67');
   for (const [assignmentId, parts] of [
     [first.rows[0].id, [['paraphrase', 5], ['speaking', 3]]],
     [second.rows[0].id, [['clarify_1', 3], ['clarify_2', 2], ['clarify_3', 2], ['freestyle', 2]]]
@@ -276,6 +281,147 @@ test('đúng học viên mới mở được, hai link đạt mới chốt và r
   } finally { await db.close(); }
 });
 
+test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học viên và không tăng khi retry', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const exercise = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key, source_record_id, title, exercise_url)
+      VALUES ('67', 's-v', 'Hòa hợp Chủ ngữ - Vị ngữ (S-V)', 'https://example.test/s-v') RETURNING id`);
+    const messagesByUrl = new Map();
+    const lessonParts = ['clarify_1', 'clarify_2', 'clarify_3', 'freestyle'];
+    for (let index = 0; index < lessonParts.length; index++) {
+      const letter = 'cdef'[index];
+      const messages = [
+        { role: 'assistant', text: `Hỏi câu ${index + 1}` },
+        { role: 'user', text: `I goes to school ${index + 1}` },
+        { role: 'assistant', text: 'Chủ ngữ I đi với go, không dùng goes.' },
+      ];
+      const fp = crypto.createHash('sha256').update(messages.map(message =>
+        `${message.role}\u0000${message.text.trim()}`).join('\u0001')).digest('hex');
+      await checkAccepted(service, secondToken, secondStudentRef, lessonParts[index], letter,
+        lessonParts[index] === 'clarify_1' ? 3 : 2, fp);
+      messagesByUrl.set(share(letter), messages);
+    }
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    const job = await service.claimOutboxJob('doctor_analyze');
+    assert.equal(job.receipt_id, receipt.id);
+    const result = await runSpeakingDoctorJob(service, job, {
+      readShare: async url => ({ messages: messagesByUrl.get(url) }),
+      analyze: async (part, _conversation, catalog) => part === 'clarify_1' || part === 'freestyle'
+        ? [{ part, exerciseId: catalog.exercises[0].id, evidenceMessage: 3,
+          evidenceQuote: 'Chủ ngữ I đi với go', reason: 'Lỗi hòa hợp chủ ngữ và động từ.' }]
+        : [],
+    });
+    assert.equal(result.exerciseCount, 1);
+    const rows = await pool.query(`SELECT r.recommendation_count, r.waiting, r.student_ref,
+        a.matches, o.status
+      FROM speaking_homework.doctor_recommendation r
+      JOIN speaking_homework.doctor_analysis a ON a.receipt_id = $1
+      JOIN speaking_homework.outbox o ON o.receipt_id = a.receipt_id AND o.kind = 'doctor_analyze'`,
+    [receipt.id]);
+    assert.equal(rows.rows[0].recommendation_count, 1);
+    assert.equal(rows.rows[0].waiting, true);
+    assert.equal(rows.rows[0].student_ref, secondStudentRef);
+    assert.equal(rows.rows[0].matches.length, 2);
+    assert.equal(rows.rows[0].status, 'done');
+    assert.equal((await service.listDoctor({ accessToken: secondToken,
+      studentRef: secondStudentRef })).neededCount, 1);
+    assert.equal((await service.completeDoctorJob({ jobId: job.job_id,
+      catalogDigest: 'x', matches: [] })).status, 'done');
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM speaking_homework.doctor_event')).rows[0].count, 1);
+    assert.equal(exercise.rows[0].id, rows.rows[0].matches[0].exerciseId);
+  } finally { await db.close(); }
+});
+
+test('danh mục đổi giữa lúc AI đọc và lúc ghi thì rollback, kết quả không có đề xuất cũng được lưu', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key, source_record_id, title, exercise_url)
+      VALUES ('67', 'old', 'Bài cũ', 'https://example.test/old')`);
+    for (const [part, letter, count] of [
+      ['clarify_1', 'g', 3], ['clarify_2', 'h', 2], ['clarify_3', 'i', 2], ['freestyle', 'j', 2]
+    ]) await checkAccepted(service, secondToken, secondStudentRef, part, letter, count);
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    const job = await service.claimOutboxJob('doctor_analyze');
+    const before = await service.getDoctorCatalog(receipt.id);
+    await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key, source_record_id, title, exercise_url)
+      VALUES ('67', 'new', 'Bài mới', 'https://example.test/new')`);
+    await assert.rejects(service.completeDoctorJob({ jobId: job.job_id,
+      catalogDigest: before.digest, matches: [] }), { code: 'DOCTOR_CATALOG_CHANGED' });
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM speaking_homework.doctor_analysis')).rows[0].count, 0);
+    const after = await service.getDoctorCatalog(receipt.id);
+    const completed = await service.completeDoctorJob({ jobId: job.job_id,
+      catalogDigest: after.digest, matches: [] });
+    assert.equal(completed.exerciseCount, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM speaking_homework.doctor_analysis')).rows[0].count, 1);
+  } finally { await db.close(); }
+});
+
+test('migration bổ sung đúng một việc Bác sĩ AI cho biên nhận cũ chưa có việc', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    for (const [part, letter, count] of [
+      ['clarify_1', 'k', 3], ['clarify_2', 'l', 2], ['clarify_3', 'm', 2], ['freestyle', 'n', 2]
+    ]) await checkAccepted(service, secondToken, secondStudentRef, part, letter, count);
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    await pool.query(`DELETE FROM speaking_homework.outbox
+      WHERE receipt_id = $1 AND kind = 'doctor_analyze'`, [receipt.id]);
+    const migration = await readFile(new URL('../ops/migrations/202609290001_speaking_doctor_lesson3.sql', import.meta.url), 'utf8');
+    await db.exec(migration);
+    await db.exec(migration);
+    const jobs = await pool.query(`SELECT count(*)::int AS count FROM speaking_homework.outbox
+      WHERE receipt_id = $1 AND kind = 'doctor_analyze'`, [receipt.id]);
+    assert.equal(jobs.rows[0].count, 1);
+  } finally { await db.close(); }
+});
+
+test('AI Bác sĩ chỉ nhận ID trong danh mục và trích dẫn đúng lời góp ý', async () => {
+  const catalog = { exercises: [{ id: '60000000-0000-4000-8000-000000000009', title: 'S-V' }] };
+  const conversation = { messages: [
+    { role: 'user', text: 'I goes to school' },
+    { role: 'assistant', text: 'Chủ ngữ I đi với go, không dùng goes.' },
+  ] };
+  const call = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
+    matches: [{ exerciseNumber: 1, evidenceMessage: 2,
+      evidenceQuote: 'Chủ ngữ I đi với go', reason: 'S-V' }] }) }; } });
+  assert.equal((await analyzeDoctorConversation('freestyle', conversation, catalog,
+    'https://example.test/ai', call)).length, 1);
+  const forged = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
+    matches: [{ exerciseNumber: 1, evidenceMessage: 1,
+      evidenceQuote: 'Chủ ngữ I đi với go', reason: 'S-V' }] }) }; } });
+  await assert.rejects(analyzeDoctorConversation('freestyle', conversation, catalog,
+    'https://example.test/ai', forged), /DOCTOR_AI_EVIDENCE_INVALID/);
+  const markdownCall = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
+    matches: [{ exerciseNumber: 1, evidenceMessage: 2,
+      evidenceQuote: 'Chủ ngữ I đi với go, không dùng goes', reason: 'S-V' }] }) }; } });
+  const markdownConversation = { messages: [conversation.messages[0],
+    { role: 'assistant', text: 'Chủ ngữ **I** đi với **go**, không dùng goes.' }] };
+  const adapted = await analyzeDoctorConversation('freestyle', markdownConversation, catalog,
+    'https://example.test/ai', markdownCall);
+  assert.ok(markdownConversation.messages[1].text.includes(adapted[0].evidenceQuote));
+});
+
+test('hội thoại Share đổi sau lúc xác nhận thì Bác sĩ AI không ghi sai bài', async () => {
+  let failed = false;
+  let completed = false;
+  const service = {
+    async getDoctorCatalog() { return { exercises: [], digest: 'a'.repeat(64) }; },
+    async completeDoctorJob() { completed = true; },
+    async failOutboxJob() { failed = true; },
+  };
+  const result = await runSpeakingDoctorJob(service,
+    { job_id: 'job-1', receipt_id: 'receipt-1',
+      links: { freestyle: { url: share('z'), fingerprint: 'b'.repeat(64) } } },
+    { readShare: async () => ({ messages: [
+      { role: 'assistant', text: 'Question' }, { role: 'user', text: 'Answer' }
+    ] }), analyze: async () => [] });
+  assert.equal(result.status, 'retry');
+  assert.equal(failed, true);
+  assert.equal(completed, false);
+});
+
 test('nội dung trùng dù URL khác, thiếu câu và cảnh báo voice được xử lý đúng', async () => {
   const { db, service } = await fixture();
   try {
@@ -318,7 +464,7 @@ test('Lesson 3 đòi đủ bốn phần theo ngưỡng riêng của bản cũ', 
       studentRef: secondStudentRef });
     assert.ok(receipt.id);
     const jobs = await db.query('SELECT kind FROM speaking_homework.outbox WHERE receipt_id = $1 ORDER BY kind', [receipt.id]);
-    assert.deepEqual(jobs.rows.map(row => row.kind), ['grade_speaking', 'write_doc']);
+    assert.deepEqual(jobs.rows.map(row => row.kind), ['doctor_analyze', 'grade_speaking', 'write_doc']);
   } finally { await db.close(); }
 });
 

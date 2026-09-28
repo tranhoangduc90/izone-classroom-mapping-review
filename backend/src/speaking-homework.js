@@ -438,6 +438,106 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     });
   }
 
+  // Dữ liệu vào: biên nhận đã nộp; việc chính: lấy danh mục đang bật của đúng khóa.
+  // Kết quả: danh mục và dấu kiểm phiên bản để ngăn ghi theo danh mục đã thay đổi.
+  async function getDoctorCatalog(receiptId) {
+    const result = await pool.query(`SELECT e.id, e.title, e.exercise_url
+      FROM speaking_homework.receipt r
+      JOIN speaking_homework.submission s ON s.id = r.submission_id
+      JOIN speaking_homework.access_grant g ON g.id = s.access_grant_id
+      JOIN speaking_homework.assignment a ON a.id = g.assignment_id
+      JOIN speaking_homework.doctor_exercise e ON e.course_key = a.doctor_course_key
+      WHERE r.id = $1 AND s.status = 'submitted' AND e.active = true
+      ORDER BY e.id`, [receiptId]);
+    if (!result.rows.length) {
+      throw new SpeakingHomeworkError('DOCTOR_CATALOG_EMPTY', 'Chưa có danh mục bài luyện cho biên nhận này.');
+    }
+    return { exercises: result.rows, digest: hash(JSON.stringify(result.rows)) };
+  }
+
+  // Dữ liệu vào: các lỗi đã ghép với bài trong danh mục từ đúng bốn hội thoại.
+  // Việc chính: kiểm lại danh mục, ghi bằng chứng và đề xuất trong cùng giao dịch.
+  // Kết quả: retry không tăng số lần đề xuất; lỗi rollback và được hàng việc thử lại.
+  async function completeDoctorJob({ jobId, catalogDigest, matches }) {
+    if (!Array.isArray(matches) || matches.length > 80) {
+      throw new SpeakingHomeworkError('DOCTOR_RESULT_INVALID', 'Kết quả phân tích bài luyện không hợp lệ.');
+    }
+    return withTransaction(pool, async client => {
+      const found = await client.query(`SELECT o.status, r.id AS receipt_id, r.created_at,
+          s.id AS submission_id, g.student_ref, a.class_id, a.doctor_course_key
+        FROM speaking_homework.outbox o
+        JOIN speaking_homework.receipt r ON r.id = o.receipt_id
+        JOIN speaking_homework.submission s ON s.id = r.submission_id
+        JOIN speaking_homework.access_grant g ON g.id = s.access_grant_id
+        JOIN speaking_homework.assignment a ON a.id = g.assignment_id
+        WHERE o.id = $1 AND o.kind = 'doctor_analyze' FOR UPDATE OF o`, [jobId]);
+      const job = found.rows[0];
+      if (!job) throw new SpeakingHomeworkError('DOCTOR_JOB_NOT_FOUND', 'Không thấy việc phân tích bài luyện.', 404);
+      if (job.status === 'done') return { receiptId: job.receipt_id, status: 'done' };
+      if (job.status !== 'processing' || !job.doctor_course_key) {
+        throw new SpeakingHomeworkError('DOCTOR_JOB_NOT_ACTIVE', 'Việc phân tích bài luyện chưa sẵn sàng.');
+      }
+      const links = await latestLinks(job.submission_id, client);
+      const acceptedParts = new Set(links.filter(link => link.check_status === 'accepted').map(link => link.part));
+      if (!links.length || acceptedParts.size !== links.length) {
+        throw new SpeakingHomeworkError('DOCTOR_LINKS_INCOMPLETE', 'Các hội thoại chưa được kiểm đủ.');
+      }
+      const catalog = await client.query(`SELECT id, title, exercise_url
+        FROM speaking_homework.doctor_exercise
+        WHERE course_key = $1 AND active = true ORDER BY id`, [job.doctor_course_key]);
+      if (!catalog.rows.length || hash(JSON.stringify(catalog.rows)) !== catalogDigest) {
+        throw new SpeakingHomeworkError('DOCTOR_CATALOG_CHANGED', 'Danh mục bài luyện đã đổi; cần phân tích lại.');
+      }
+      const allowed = new Set(catalog.rows.map(row => row.id));
+      const seen = new Set();
+      for (const match of matches) {
+        if (!allowed.has(match?.exerciseId)
+          || !acceptedParts.has(match?.part)
+          || !Number.isInteger(match?.evidenceMessage) || match.evidenceMessage < 1
+          || typeof match?.evidenceQuote !== 'string' || match.evidenceQuote.length < 5
+          || match.evidenceQuote.length > 160
+          || typeof match?.reason !== 'string' || !match.reason.trim() || match.reason.length > 500) {
+          throw new SpeakingHomeworkError('DOCTOR_RESULT_INVALID', 'Bằng chứng bài luyện không hợp lệ.');
+        }
+        seen.add(match.exerciseId);
+      }
+      await client.query(`INSERT INTO speaking_homework.doctor_analysis
+        (receipt_id, catalog_digest, matches) VALUES ($1, $2, $3::jsonb)`,
+      [job.receipt_id, catalogDigest, JSON.stringify(matches)]);
+      for (const exerciseId of seen) {
+        await client.query(`INSERT INTO speaking_homework.doctor_recommendation
+          (class_id, student_ref, exercise_id) VALUES ($1, $2, $3)
+          ON CONFLICT (class_id, student_ref, exercise_id) DO NOTHING`,
+        [job.class_id, job.student_ref, exerciseId]);
+        const rec = await client.query(`SELECT id, recommendation_count, proposed_at, last_practiced_at
+          FROM speaking_homework.doctor_recommendation
+          WHERE class_id = $1 AND student_ref = $2 AND exercise_id = $3 FOR UPDATE`,
+        [job.class_id, job.student_ref, exerciseId]);
+        const sourceKey = `doctor:receipt:${job.receipt_id}:exercise:${exerciseId}`;
+        const event = await client.query(`INSERT INTO speaking_homework.doctor_event
+          (source_key, recommendation_id, kind, occurred_at)
+          VALUES ($1, $2, 'recommendation', $3) ON CONFLICT (source_key) DO NOTHING RETURNING id`,
+        [sourceKey, rec.rows[0].id, job.created_at]);
+        if (!event.rows.length) continue;
+        const previous = rec.rows[0];
+        const reopen = Number(previous.recommendation_count) === 0 || (
+          previous.proposed_at && previous.last_practiced_at
+          && new Date(previous.last_practiced_at).getTime()
+            - new Date(previous.proposed_at).getTime() > 5 * 86400000
+        );
+        await client.query(`UPDATE speaking_homework.doctor_recommendation
+          SET recommendation_count = recommendation_count + 1,
+            waiting = CASE WHEN $2 THEN true ELSE waiting END,
+            proposed_at = CASE WHEN $2 THEN $3 ELSE proposed_at END
+          WHERE id = $1`, [previous.id, Boolean(reopen), job.created_at]);
+      }
+      await client.query(`UPDATE speaking_homework.outbox
+        SET status = 'done', external_receipt = $2, updated_at = now()
+        WHERE id = $1`, [jobId, `doctor:${job.receipt_id}`]);
+      return { receiptId: job.receipt_id, status: 'done', exerciseCount: seen.size };
+    });
+  }
+
   async function finish({ accessToken, studentRef, voiceConfirmedParts = [] }) {
     return withTransaction(pool, async client => {
       const grant = await resolveGrant(accessToken, studentRef, client);
@@ -745,6 +845,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   return { openAssignment, startSession, open, requestCheck, claimCheckJob, completeCheck, failCheckJob,
     rejectCheckJob,
     claimOutboxJob, completeOutboxJob, failOutboxJob, completeGradeJob,
+    getDoctorCatalog, completeDoctorJob,
     finish, recordDoctorEvent, listDoctor, requestPracticeCheck, claimPracticeCheckJob,
     completePracticeCheck, confirmPracticeVoice, getTeacherReceipt, resolveGrant };
 }

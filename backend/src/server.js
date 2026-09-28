@@ -9,6 +9,7 @@ import { createLearningAttendanceSync } from './learning-attendance-sync.js';
 import { startLearningAttendanceWorker } from './learning-attendance-worker.js';
 import { startSpeakingCheckWorker } from './speaking-check-worker.js';
 import { startSpeakingGradeWorker } from './speaking-grade-worker.js';
+import { startSpeakingDoctorWorker } from './speaking-doctor-worker.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
@@ -61,6 +62,10 @@ const speakingGradeWorker = startSpeakingGradeWorker({
   pool: speakingHomeworkPool,
   enabled: config.speakingHomeworkEnabled
 });
+const speakingDoctorWorker = startSpeakingDoctorWorker({
+  pool: speakingHomeworkPool,
+  enabled: config.speakingHomeworkEnabled
+});
 
 server.requestTimeout = 15_000;
 server.headersTimeout = 16_000;
@@ -73,6 +78,7 @@ async function shutdown(signal) {
     await learningAttendanceWorker.stop();
     await speakingCheckWorker.stop();
     await speakingGradeWorker.stop();
+    await speakingDoctorWorker.stop();
     await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end()]);
     process.exit(0);
   });
