@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 name='mapping-review-api'
 backup='mapping-review-api-before-speaking-cta-white-20260928'
-old_image='izone-term-test-backend:20260928.progress-log-admins-f7c8b91'
+old_image='izone-term-test-backend:20260928.ic2304-session3-586c260'
 new_image='izone-term-test-backend:20260928.speaking-cta-white-v1'
 stopped=0
 renamed=0
