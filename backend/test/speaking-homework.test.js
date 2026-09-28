@@ -131,7 +131,9 @@ test('bản sao Classroom phải đúng học viên và CTA đã đọc lại m�
     tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [{
       paragraph: { elements: [{ startIndex: 70, endIndex: 107,
         textRun: { content: 'NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING',
-          textStyle: { link: { url } } } }] }
+          textStyle: { link: { url }, underline: false, foregroundColor: {
+            color: { rgbColor: { red: 1, green: 1, blue: 1 } }
+          } } } }] }
     }] } }
   }] });
   try {
@@ -177,6 +179,30 @@ test('CTA thiếu hoặc trùng không được đánh dấu đã cập nhật',
   assert.throws(() => planSpeakingCopyCta({ ...input, document: base }),
     /DOC_CTA_AMBIGUOUS/);
   assert.equal(verifySpeakingCopyCta({ ...input, document: base }), false);
+});
+
+test('CTA đã có đúng link nhưng đổi sang xanh gạch dưới phải được sửa về trắng', () => {
+  const input = { documentId: 'doc-1', classCode: 'IC2304',
+    assignmentCode: '67-speaking-lam_ro' };
+  const url = 'https://tranhoangduc90.github.io/izone-ai-team-pages/speaking-homework/lesson-3.html?documentId=doc-1&class=IC2304&assignmentCode=67-speaking-lam_ro';
+  const document = { documentId: 'doc-1', revisionId: 'rev-1', tabs: [{
+    tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [{
+      paragraph: { elements: [{ startIndex: 70, endIndex: 104,
+        textRun: { content: 'NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING', textStyle: {
+          link: { url }, underline: true, foregroundColor: {
+            color: { rgbColor: { red: 0.06666667, green: 0.33333334, blue: 0.8 } }
+          }
+        } } }] }
+    }] } }
+  }] };
+  assert.equal(verifySpeakingCopyCta({ ...input, document }), false);
+  const plan = planSpeakingCopyCta({ ...input, document });
+  assert.equal(plan.status, 'write');
+  const update = plan.requests[0].updateTextStyle;
+  assert.equal(update.textStyle.underline, false);
+  assert.deepEqual(update.textStyle.foregroundColor.color.rgbColor,
+    { red: 1, green: 1, blue: 1 });
+  assert.equal(update.fields, 'link,foregroundColor,underline');
 });
 
 test('lịch Classroom chỉ gom TURNED_IN thiếu bài Speaking và gửi một lần', async () => {
