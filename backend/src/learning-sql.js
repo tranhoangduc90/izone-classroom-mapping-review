@@ -59,7 +59,8 @@ export const fetchAssignmentStudentSql = `SELECT
   assignment.class_name_snapshot AS class_name,
   assignment.session_number,
   assignment.organization_key,
-  assignment.course_code
+  assignment.course_code,
+  assignment.answer_release_override
 FROM learning.form_assignment AS assignment
 JOIN learning.form_version AS version ON version.id = assignment.form_version_id
 JOIN learning.form_assignment_roster AS roster
@@ -110,8 +111,10 @@ export const fetchLearningAssignmentCheckpointScoresSql = `SELECT DISTINCT ON (c
   checkpoint.block_id::text AS block_id,
   checkpoint.response_payload,
   version.public_definition,
-  grading.private_definition
+  grading.private_definition,
+  assignment.answer_release_override
 FROM learning.checkpoint_submission AS checkpoint
+JOIN learning.form_assignment AS assignment ON assignment.id = checkpoint.assignment_id
 JOIN learning.attempt AS attempt ON attempt.id = checkpoint.attempt_id
   AND attempt.status <> 'superseded'
 JOIN learning.form_version AS version ON version.id = checkpoint.form_version_id
@@ -159,6 +162,7 @@ export const fetchLearningAttemptContextSql = `SELECT
   assignment.session_number,
   assignment.title AS assignment_title,
   assignment.status AS assignment_status,
+  assignment.answer_release_override,
   assignment.closes_at,
   roster.student_name_snapshot AS student_name,
   roster.erp_student_contact_id::text AS student_id,
@@ -204,9 +208,11 @@ export const findLearningSubmissionSql = `SELECT
   submission.submitted_at,
   run.id::text AS grading_run_id,
   run.result_json,
-  version.public_definition
+  version.public_definition,
+  assignment.answer_release_override
 FROM learning.submission AS submission
 JOIN learning.attempt AS attempt ON attempt.id = submission.attempt_id
+JOIN learning.form_assignment AS assignment ON assignment.id = attempt.assignment_id
 JOIN learning.form_version AS version ON version.id = submission.form_version_id
 LEFT JOIN learning.grading_run AS run ON run.submission_id = submission.id
 WHERE attempt.attempt_token = $1::uuid;`;
@@ -497,6 +503,7 @@ saved_attendance_job AS (
   SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
   FROM saved_evidence
   WHERE $18 = 'self_confirmed'
+    AND NOT (COALESCE($30, '') = 'DEMO-56' AND $31::bigint = 990000567)
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
 ),

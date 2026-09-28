@@ -72,6 +72,13 @@ function asArray(value) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
+function studentFeedbackDefinition(definitionInput, override) {
+  const definition = parseFormDefinition(asObject(definitionInput));
+  return override === 'immediate'
+    ? { ...definition, answerReleasePolicy: 'immediate' }
+    : definition;
+}
+
 function gradeCheckpoint(definition, gradingKey, block, responses) {
   if (definition.answerReleasePolicy !== 'immediate' || !block) return null;
   const scopedDefinition = { ...definition, blocks: [block] };
@@ -229,7 +236,7 @@ export function createLearningService({ pool }) {
           throw new LearningError('ATTEMPT_IDENTITY_MISMATCH', 'Phiên làm bài không khớp học viên.', 409);
         }
         const checkpointResult = await client.query(fetchLearningAttemptCheckpointsSql, [attempt.attempt_id]);
-        const definition = parseFormDefinition(asObject(student.public_definition));
+        const definition = studentFeedbackDefinition(student.public_definition, student.answer_release_override);
         const gradingKeyResult = checkpointResult.rowCount
           ? await client.query(fetchLearningFormGradingKeySql, [attempt.form_version_id])
           : null;
@@ -309,7 +316,7 @@ export function createLearningService({ pool }) {
         if (context.definition_hash !== definitionHash) {
           throw new LearningError('FORM_VERSION_MISMATCH', 'Form đã thay đổi; hãy tải lại đúng phiên bản.', 409);
         }
-        const definition = parseFormDefinition(asObject(context.public_definition));
+        const definition = studentFeedbackDefinition(context.public_definition, context.answer_release_override);
         const block = definition.blocks.find(item => item.blockId === blockId && item.checkpoint === checkpoint);
         if (!block) {
           throw new LearningError('CHECKPOINT_IDENTITY_MISMATCH', 'Phần nộp không thuộc đúng form.', 409);
@@ -389,7 +396,7 @@ export function createLearningService({ pool }) {
             receipt: asObject(existing.receipt),
             result: buildStudentQuizResult(
               internalResultFromRow(existing),
-              asObject(existing.public_definition)
+              studentFeedbackDefinition(existing.public_definition, existing.answer_release_override)
             ),
             replayed: true
           };
@@ -410,7 +417,7 @@ export function createLearningService({ pool }) {
           throw new LearningError('ASSIGNMENT_CLOSED', 'Phiếu đã hết thời gian nhận.', 409);
         }
 
-        const definition = parseFormDefinition(asObject(context.public_definition));
+        const definition = studentFeedbackDefinition(context.public_definition, context.answer_release_override);
         const gradingKey = parseFormGradingKey(asObject(context.private_definition));
         const completeness = evaluateCompleteness(definition, responses);
         const quizResult = gradeLearningSubmission({ definition, gradingKey, responses });
@@ -535,12 +542,13 @@ export function createLearningService({ pool }) {
         if (!finalizedRow.attempt_completed) {
           throw new LearningError('ATTEMPT_FINALIZE_FAILED', 'Không thể chốt phiên làm bài.', 409);
         }
+        const isDemoAssignment = context.course_code === 'DEMO-56' && String(context.class_id) === '990000567';
         if (Number(finalizedRow.response_item_count) !== responseItems.length
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
           || !finalizedRow.attendance_event_saved
           || !finalizedRow.evidence_saved
           || !finalizedRow.outbox_saved
-          || Boolean(finalizedRow.attendance_outbox_saved) !== completeness.complete) {
+          || Boolean(finalizedRow.attendance_outbox_saved) !== (completeness.complete && !isDemoAssignment)) {
           throw new LearningError('SUBMISSION_WRITE_INCOMPLETE', 'Bài nộp chưa được ghi đủ dữ liệu liên quan.', 500);
         }
         return {
@@ -556,7 +564,8 @@ export function createLearningService({ pool }) {
       const row = assertSingleRow(result, 'RESULT_NOT_READY', 'Chưa có bài nộp hoàn chỉnh.', 404);
       return {
         receipt: asObject(row.receipt),
-        result: buildStudentQuizResult(internalResultFromRow(row), asObject(row.public_definition))
+        result: buildStudentQuizResult(internalResultFromRow(row),
+          studentFeedbackDefinition(row.public_definition, row.answer_release_override))
       };
     },
 
@@ -802,7 +811,7 @@ export function createLearningService({ pool }) {
       const scoreRows = await pool.query(fetchLearningAssignmentCheckpointScoresSql, [assignmentId]);
       const scoresByStudent = new Map();
       for (const scoreRow of scoreRows.rows) {
-        const definition = parseFormDefinition(asObject(scoreRow.public_definition));
+        const definition = studentFeedbackDefinition(scoreRow.public_definition, scoreRow.answer_release_override);
         const block = definition.blocks.find(item => item.blockId === scoreRow.block_id);
         if (!block) continue;
         const gradingKey = parseFormGradingKey(asObject(scoreRow.private_definition));
