@@ -1,4 +1,4 @@
-FROM izone-term-test-backend:20260928.progress-log-admins-f7c8b91
+FROM izone-term-test-backend:20260928.ic2304-session3-586c260
 
 USER root
 # Đầu vào: image API đang chạy và module gắn CTA đã kiểm thử.
