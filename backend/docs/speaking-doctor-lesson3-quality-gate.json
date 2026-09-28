@@ -80,10 +80,10 @@
     "evidence": "PGlite: bốn link, hai phần trùng một bài chỉ tăng một lần, retry không ghi lại."
   }, {
     "id": "T-MIGRATION", "category": "rollback_recovery", "priority": "P0", "status": "passed",
-    "evidence": "PGlite: bật đúng assignment, backfill biên nhận cũ đúng một job, danh mục đổi thì rollback."
+    "evidence": "PGlite và production: ERP class ID 1293 được đối chiếu với IC2304 đã duyệt; hai migration có ledger, bảng và quyền được đọc lại; backfill không tạo trùng."
   }, {
     "id": "T-SHARE", "category": "external_partial", "priority": "P0", "status": "passed",
-    "evidence": "Bốn Share thật đọc được; AI ghép 4/4 phần với danh mục 60 bài ở lượt thử local, không ghi database."
+    "evidence": "Bốn Share thật đọc được từ API production; ca thử Bác sĩ AI hoàn tất với 15 bằng chứng và 10 bài luyện."
   }, {
     "id": "T-UI", "category": "regression", "priority": "P1", "status": "passed",
     "evidence": "Trang Lesson 3 và test Pages xác nhận không có khu Bác sĩ AI."
@@ -97,11 +97,11 @@
     "id": "T-RETRY", "category": "lifecycle_time", "priority": "P1", "status": "passed",
     "evidence": "PGlite: retry việc đã hoàn tất không tăng lại; job lỗi Share được đánh dấu failed để thử lại."
   }, {
-    "id": "T-LIVE", "category": "external_partial", "priority": "P0", "status": "not_run",
-    "evidence": "Chờ production rollout và một biên nhận có bốn link hợp lệ để đọc lại doctor_analysis cùng danh sách."
+    "id": "T-LIVE", "category": "external_partial", "priority": "P0", "status": "passed",
+    "evidence": "Production canary bằng hồ sơ kỹ thuật và bốn Share thật: doctor_analyze done ở lần đầu, doctor_analysis 15 bằng chứng, 10 đề xuất/10 event; đã xóa dữ liệu thử và đọc lại về 0."
   }, {
-    "id": "T-ROLL", "category": "rollback_recovery", "priority": "P1", "status": "not_run",
-    "evidence": "Đã viết đường quay lại bằng image cũ và doctor_course_key NULL; chờ kiểm trước cutover."
+    "id": "T-ROLL", "category": "rollback_recovery", "priority": "P1", "status": "passed",
+    "evidence": "Image v1 không khởi động, script tự quay lại container nền và API đọc lại healthy; v2 chỉ patch server live đã khóa hash và chuyển thành công."
   }],
   "task_graph": {
     "plan_revision": "doctor-lesson3-v1",
@@ -113,19 +113,19 @@
       "evidence_required": ["Full suite backend và Share thật"], "decision_inputs": ["Backend-only Bác sĩ AI"],
       "affected_future_tasks": ["TASK-RELEASE"], "status": "done", "plan_revision": "doctor-lesson3-v1"
     }, {
-      "id": "TASK-RELEASE", "result": "Phát hành và đọc lại một bài thật.",
+      "id": "TASK-RELEASE", "result": "Phát hành và đọc lại ca thử production bằng bốn Share thật.",
       "module_ids": ["M-DOCTOR"], "depends_on": ["TASK-BUILD"],
       "consumes": ["Migration, image, backup, quyền phát hành"], "produces": ["Danh sách bài luyện đã cập nhật"],
       "contract": "Chỉ chốt khi doctor_analysis và doctor_recommendation đọc lại đúng học viên.",
       "test_ids": ["T-LIVE", "T-ROLL"], "evidence_required": ["Production readback và Portal attendance"],
       "decision_inputs": ["Xác nhận phát hành đúng gói"], "affected_future_tasks": [],
-      "status": "in_progress", "plan_revision": "doctor-lesson3-v1"
+      "status": "done", "plan_revision": "doctor-lesson3-v1"
     }]
   },
   "risk_register": {"assessment": "CONCERNS", "risks": [{
-    "id": "RISK-LIVE", "description": "Chưa có biên nhận thật để kiểm kết quả Bác sĩ AI cuối cùng.",
-    "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Codex",
-    "mitigation": "Canary một biên nhận hợp lệ, đọc lại job, bằng chứng và danh sách đúng học viên.",
+    "id": "RISK-LIVE", "description": "Chưa quan sát lượt nộp tự nhiên đầu tiên của học viên IC2304.",
+    "probability": 2, "impact": 2, "score": 4, "severity": "P2", "status": "open", "owner": "Codex",
+    "mitigation": "Ca production bằng bốn Share thật đã đạt; kiểm receipt, việc phân tích và danh sách của lượt học viên tự nhiên đầu tiên.",
     "test_ids": ["T-LIVE"]
   }], "waivers": []},
   "coverage_exemptions": {},
@@ -135,19 +135,32 @@
     "status": "passed", "evidence": "Bốn phần xử lý song song; mỗi phần đọc tối đa 90 giây và AI tối đa 45 giây."
   }],
   "mutations": [{
-    "id": "M-PRODUCTION", "target": "API và mapping_db production", "outcome": "unknown",
-    "readback": "not_done", "evidence": "Chưa phát hành gói này."
+    "id": "M-PRODUCTION", "target": "API và mapping_db production", "outcome": "success",
+    "readback": "verified", "evidence": "Hai migration có ledger; image v2 healthy, cấu hình điểm danh giữ nguyên; canary bốn Share tạo 15 bằng chứng và 10 bài rồi xóa sạch; API public ok."
   }],
-  "verification_runs": [],
-  "convergence": {"status": "gaps", "tree_revision": "pending-commit", "gaps": ["Chưa phát hành và chưa có canary production."],
-    "unrequested_work": [], "evidence": "Bốn Share thử local và PGlite; chưa có mutation production."},
-  "context_handoff": {"summary": "Bản ứng viên backend phân tích Bác sĩ AI sau biên nhận Lesson 3.",
+  "verification_runs": [{
+    "id": "VR-BACKEND-220", "scope": "full_suite", "command": "npm test",
+    "tree_revision": "sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e",
+    "captured_at": "2026-09-28T19:32:11Z", "outcome": "passed", "passed": 220,
+    "failed": 0, "skipped": 0, "exit_code": 0,
+    "evidence": "Full backend suite trên source image v2: 220/220."
+  }, {
+    "id": "VR-PRODUCTION-CANARY", "scope": "behavioral",
+    "command": "Canary doctor_analyze bằng bốn ChatGPT Share; đọc lại database rồi xóa dữ liệu thử",
+    "tree_revision": "sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e",
+    "captured_at": "2026-09-28T19:39:02Z", "outcome": "passed", "passed": 1,
+    "failed": 0, "skipped": 0, "exit_code": 0,
+    "evidence": "Job done attempts=1, 15 matches, 10 recommendations/event; cleanup transaction và readback các bảng ca thử đều 0."
+  }],
+  "convergence": {"status": "passed", "tree_revision": "sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e", "gaps": [],
+    "unrequested_work": [], "evidence": "Phạm vi backend Bác sĩ AI đã có production canary, Pages readback, full suite và đường quay lại đạt."},
+  "context_handoff": {"summary": "Backend Bác sĩ AI Lesson 3 đã lên production và ca thử bốn Share đã đạt; trang nộp không hiện danh sách.",
     "decisions": ["Backend-only; không hiện danh sách trên trang Lesson 3."],
-    "completed": ["TASK-BUILD"], "next_step": "Duyệt gói phát hành rồi backup, migration, API cutover và readback.",
-    "open_risks": ["Chưa quan sát biên nhận thật."], "tree_revision": "pending-commit"},
-  "release": {"target_environment": "production", "decision": "not_ready", "base_tree_revision": "cc15709",
-    "current_tree_revision": "pending-commit", "production_authorized": false,
+    "completed": ["TASK-BUILD", "TASK-RELEASE"], "next_step": "Theo dõi lượt nộp tự nhiên đầu tiên và đối chiếu đúng học viên cùng outcome Docs/Portal liên quan.",
+    "open_risks": ["Chưa quan sát biên nhận tự nhiên đầu tiên."], "tree_revision": "sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e"},
+  "release": {"target_environment": "production", "decision": "deployed_awaiting_validation", "base_tree_revision": "cc15709",
+    "current_tree_revision": "sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e", "production_authorized": true,
     "rollback": "Giữ image cũ; đưa đúng assignment về doctor_course_key NULL để ngừng tạo việc mới; không xóa đề xuất đã có.",
-    "deployment_readback": "Chưa phát hành.", "operational_observation": "Chưa phát hành.",
-    "open_risks": [{"severity": "P1", "summary": "Chưa có biên nhận thật và readback danh sách Bác sĩ AI trên production."}]}
+    "deployment_readback": "verified", "operational_observation": "Ca kỹ thuật production đã hoàn tất; chưa có học viên tự nhiên nộp Lesson 3.",
+    "open_risks": [{"severity": "P2", "summary": "Chưa có biên nhận học viên tự nhiên để đối chiếu toàn hành trình Docs và điểm danh Portal nếu phát sinh."}]}
 }

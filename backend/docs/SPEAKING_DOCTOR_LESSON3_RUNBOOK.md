@@ -1,6 +1,6 @@
 # Phân tích bài Speaking Lesson 3 và cập nhật Bác sĩ AI
 
-Ngày chuẩn bị: 29/09/2026. Phạm vi: Homework Lesson 3 lớp IC2304, mã bài `67-speaking-lam_ro`. Phần này đang ở nhánh thử; chưa áp dụng migration hoặc bản API mới lên production.
+Ngày phát hành: 29/09/2026. Phạm vi: Homework Lesson 3 lớp IC2304, mã bài `67-speaking-lam_ro`. Backend và database production đã bật Bác sĩ AI; trang nộp Lesson 3 không hiện danh sách.
 
 ## Học viên và giảng viên sẽ thấy gì
 
@@ -34,8 +34,16 @@ Theo dõi: đếm `doctor_analyze` theo `pending/processing/failed/done`, đặc
 
 Quay lại: dùng image API trước phát hành; tạm đưa `doctor_course_key` của đúng assignment về `NULL` để không tạo việc mới, giữ nguyên việc/bằng chứng đã có để điều tra. Migration tạo bảng có thể để nguyên khi rollback ứng dụng; không xóa đề xuất đã ghi nếu chưa có quyết định xử lý dữ liệu.
 
-## Bằng chứng hiện có
+## Đọc lại production ngày 29/09/2026
 
-- Bộ test Speaking trên PGlite: gồm ghép bốn link, backfill biên nhận cũ, rollback khi danh mục đổi, idempotency, kiểm trích dẫn và Share đổi sau xác nhận.
-- Bộ test backend đầy đủ trên bản ứng viên cuối: 219/219 đạt; `npm run check` đạt.
-- Bốn ChatGPT Share được Đức cung cấp đều đọc trực tiếp được; lần thử AI gần nhất ghép thành công cả bốn phần với danh mục thật, không ghi database. Kết quả AI có thể thay đổi giữa các lượt nên canary production vẫn bắt buộc.
+- Hai migration `202609290001` và `202609290002` đã ghi sổ cùng checksum. Bài Lesson 3 thuộc ERP class ID `1293` có `doctor_course_key='67'`; bảng `doctor_analysis` và quyền của role Speaking đọc lại đạt. Database được sao lưu trước thay đổi trên VPS và ổ E, cùng SHA-256 và 1.596 mục trong bản dump.
+- Image v1 không khởi động vì `server.js` trong Git gọi module chưa có ở image nền; script đã quay lại image cũ và kiểm API khỏe. Image v2 chỉ chèn ba điểm khởi động/dừng Bác sĩ AI vào `server.js` live đã khóa hash, không phủ toàn file. Canary v2 khỏe khi bật worker; sau chuyển API chính, image `izone-term-test-backend:20260929.speaking-doctor-v2` khỏe, đích cấu hình điểm danh giữ nguyên.
+- Ca thử dùng bốn Share thật của Đức với hồ sơ kỹ thuật và Doc ID giả, không tạo việc ghi Docs. Job `doctor_analyze` hoàn tất ở lần đầu, ghi 15 bằng chứng, 10 bài luyện và 10 dấu chống trùng; danh sách xếp theo `Chờ luyện`, `Số lần đề xuất`, tên bài. Dữ liệu thử đã được xóa theo transaction; đọc lại 0 job, 0 phân tích, 0 đề xuất và 0 dấu của hồ sơ kỹ thuật. Không sửa hồ sơ học viên thật.
+- Hàng điểm danh Progress Log sau chuyển có 102 việc `complete`, 0 việc đến hạn hoặc hết lease; worker vẫn hiện diện, đủ biến cấu hình và API công khai trả `ok=true`. Chưa phát sinh ca điểm danh Portal mới trong lần phát hành này để đối chiếu outcome cuối.
+- Bài Lesson 3 hiện chưa có biên nhận học viên thật. Ca đầu tiên cần kiểm `receipt → doctor_analyze done → doctor_analysis → doctor_recommendation` đúng student_ref, đồng thời theo dõi luồng Docs và Portal nếu có sự kiện tương ứng. Trạng thái toàn tuyến là `deployed_awaiting_validation` đối với lượt học viên tự nhiên đầu tiên.
+
+## Bằng chứng kiểm thử trước phát hành
+
+- Bộ test Speaking trên PGlite: gồm ghép bốn link, ERP class ID thực, backfill biên nhận cũ, rollback khi danh mục đổi, idempotency, kiểm trích dẫn và Share đổi sau xác nhận.
+- Bộ test backend đầy đủ trên bản ứng viên cuối: 220/220 đạt; `npm run check` đạt.
+- Bốn ChatGPT Share được Đức cung cấp đều đọc trực tiếp được; ca production đã ghi và đọc lại kết quả với hồ sơ kỹ thuật, rồi xóa sạch dữ liệu thử.
