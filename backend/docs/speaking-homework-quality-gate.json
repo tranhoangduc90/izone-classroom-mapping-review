@@ -88,7 +88,7 @@
       {
         "id": "M-SERVICE",
         "name": "Nhận và kiểm bài Speaking",
-        "responsibility": "Khóa đúng học viên/Doc, đọc Share, giữ biên nhận và đánh giá.",
+        "responsibility": "Kiểm Doc thuộc bài/lớp, học viên được duyệt trong lớp, đọc Share, giữ biên nhận và đánh giá.",
         "owns_data": [
           "submission",
           "receipt",
@@ -201,7 +201,7 @@
         "id": "I-COPY-SERVICE",
         "producer": "M-COPY",
         "consumer": "M-SERVICE",
-        "contract": "Bài chỉ mở khi Doc ID và học viên đã ghép, CTA trong Docs đã được đọc lại.",
+        "contract": "Bài chỉ mở khi Doc ID thuộc bài/lớp và CTA đã đọc lại; học viên được chọn thuộc lớp, có thể khác chủ Docs.",
         "test_ids": [
           "T-COPY",
           "T-COPY-LIVE"
@@ -272,7 +272,7 @@
     },
     {
       "id": "R-COPY",
-      "statement": "Mỗi bản sao Classroom phải có CTA chứa đúng Doc ID và đúng học viên trước khi webapp nhận bài.",
+      "statement": "Mỗi bản sao Classroom phải có CTA chứa đúng Doc ID; học viên được chọn phải thuộc lớp của bài.",
       "test_ids": [
         "T-COPY",
         "T-COPY-LIVE"
@@ -282,7 +282,7 @@
   "invariants": [
     {
       "id": "V-IDENTITY",
-      "statement": "Doc ID, học viên, lớp và bài phải khớp trước khi cấp phiên.",
+      "statement": "Doc ID phải thuộc đúng bài/lớp và đã xác minh CTA; học viên được chọn phải là thành viên đã duyệt của lớp, không cần là chủ Docs.",
       "test_ids": [
         "T-AUTH"
       ]
@@ -337,7 +337,7 @@
       "category": "security_privacy",
       "priority": "P0",
       "status": "passed",
-      "evidence": "PGlite: Doc ID và học viên sai bị chặn; giảng viên ngoài lớp không xem được."
+      "evidence": "Test PGlite: Doc sai bài/lớp và học viên ngoài lớp bị chặn; học viên khác chủ Docs cùng lớp được mở phiên, job ghi Docs giữ đúng docID. Cùng test đỏ trên base, xanh trên head; image production mới chạy transaction kiểm trên dữ liệu thật rồi rollback."
     },
     {
       "id": "T-BAD",
