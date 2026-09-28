@@ -12,7 +12,8 @@ function textRuns(document) {
       for (const part of element.paragraph?.elements || []) {
         if (part.textRun) runs.push({ text: part.textRun.content || '',
           start: part.startIndex, end: part.endIndex,
-          url: part.textRun.textStyle?.link?.url || '', tabId });
+          url: part.textRun.textStyle?.link?.url || '',
+          style: part.textRun.textStyle || {}, tabId });
       }
       for (const row of element.table?.tableRows || []) {
         for (const cell of row.tableCells || []) walk(cell.content, tabId);
@@ -23,6 +24,12 @@ function textRuns(document) {
     walk(tab.documentTab?.body?.content, tab.tabProperties?.tabId);
   }
   return runs;
+}
+
+function hasWhiteCtaStyle(style) {
+  const color = style?.foregroundColor?.color?.rgbColor;
+  return color?.red === 1 && color?.green === 1 && color?.blue === 1
+    && style?.underline !== true;
 }
 
 export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
@@ -44,13 +51,15 @@ export function planSpeakingCopyCta({ document, documentId, classCode, assignmen
     throw new Error('DOC_CTA_AMBIGUOUS');
   }
   const run = matches[0];
-  if (run.url === url) return { status: 'already_current', url,
+  if (run.url === url && hasWhiteCtaStyle(run.style)) return { status: 'already_current', url,
     revisionId: document.revisionId, requests: [] };
   const startIndex = run.start + run.text.indexOf(CTA_TEXT);
   return { status: 'write', url, revisionId: document.revisionId,
     requests: [{ updateTextStyle: {
       range: { startIndex, endIndex: startIndex + CTA_TEXT.length, tabId: run.tabId },
-      textStyle: { link: { url }, underline: true }, fields: 'link,underline'
+      textStyle: { link: { url }, underline: false, foregroundColor: {
+        color: { rgbColor: { red: 1, green: 1, blue: 1 } }
+      } }, fields: 'link,foregroundColor,underline'
     } }] };
 }
 
@@ -58,7 +67,8 @@ export function verifySpeakingCopyCta({ document, documentId, classCode, assignm
   if (document.documentId !== documentId) return false;
   const url = speakingCopyUrl({ documentId, classCode, assignmentCode });
   const matches = textRuns(document).filter(run => run.text.includes(CTA_TEXT));
-  return matches.length === 1 && matches[0].url === url;
+  return matches.length === 1 && matches[0].url === url
+    && hasWhiteCtaStyle(matches[0].style);
 }
 
 export function createSpeakingClassroomCopies({ pool }) {
