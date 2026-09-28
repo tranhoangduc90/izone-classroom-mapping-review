@@ -1,0 +1,10 @@
+# Dữ liệu nhận vào: image phản hồi đáp án đã kiểm và app.js có hash đã chốt.
+# Việc chính: bổ sung phương thức CORS cho thao tác lưu nháp thực tế.
+# Kết quả: image hotfix giữ nguyên Learning và cấu hình điểm danh.
+# Khi lỗi: guard dừng build, không thay container production.
+FROM izone-term-test-backend:20260928.6-ic2305-answer-feedback
+
+COPY scripts/patch-learning-cors.mjs /app/scripts/patch-learning-cors.mjs
+RUN node /app/scripts/patch-learning-cors.mjs \
+ && node --check /app/src/app.js \
+ && grep -q "GET, POST, PUT, PATCH, DELETE, OPTIONS" /app/src/app.js
