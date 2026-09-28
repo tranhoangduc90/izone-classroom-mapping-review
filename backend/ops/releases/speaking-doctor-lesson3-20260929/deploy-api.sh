@@ -13,7 +13,7 @@ fi
 name='mapping-review-api'
 backup='mapping-review-api-before-speaking-doctor-20260929'
 old_image='izone-term-test-backend:20260929.speaking-cross-doc-v1'
-new_image='izone-term-test-backend:20260929.speaking-doctor-v1'
+new_image='izone-term-test-backend:20260929.speaking-doctor-v2'
 stopped=0
 renamed=0
 
@@ -50,6 +50,8 @@ attendance_hash=$(docker exec "$name" sh -c 'printf %s "$LEARNING_ATTENDANCE_SYN
 docker exec "$name" sh -c "grep -q 'startLearningAttendanceWorker' /app/src/server.js"
 test "$(docker run --rm --entrypoint sha256sum "$new_image" /app/src/learning-attendance-worker.js | cut -d' ' -f1)" = \
   'fbfee853fecf12d1ae55aeb750b245b71934438f3dbfa55c67cd670335eaae2d'
+test "$(docker run --rm --entrypoint sha256sum "$new_image" /app/src/server.js | cut -d' ' -f1)" = \
+  'b0e00393457d773fea15dd05ba1ee96487dbf8d848b812c4587c0a6ffc4ec9ef'
 if [[ "$mode" == '--check' ]]; then
   printf 'speaking_doctor_deploy_check_passed image=%s\n' "$new_image"
   trap - ERR
