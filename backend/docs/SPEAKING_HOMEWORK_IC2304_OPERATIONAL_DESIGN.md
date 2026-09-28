@@ -4,9 +4,9 @@ Ngày đối chiếu: 28/09/2026. Phạm vi phát hành `large_phased`, chế đ
 
 ## Hành trình và chủ ghi
 
-Classroom giao bản sao Google Doc cho từng học viên → CTA trong **bản sao** mang Doc ID của chính bản sao, lớp và mã bài → Pages lấy danh sách học viên đã ghép với Classroom → học viên xác nhận đúng tên → API ràng buộc Doc ID với học viên → học viên xác nhận bốn link Share → bộ kiểm đọc hội thoại, kiểm khối lượng và trùng lặp → database tạo một biên nhận → hai việc độc lập ghi ô vàng Docs và chấm Speaking. Trang giảng viên dùng phiên Google và quyền lớp của Mapping API, chỉ đọc biên nhận. Database là nguồn chuẩn của bài đã nộp; Docs là bản xác nhận hiển thị.
+Classroom giao bản sao Google Doc cho từng học viên → CTA trong **bản sao** mang Doc ID của chính bản sao, lớp và mã bài → Pages lấy danh sách học viên đã ghép với Classroom → học viên chọn tên → API kiểm Doc đã ghép với một bản sao của bài và tên được chọn thuộc lớp → học viên xác nhận bốn link Share → bộ kiểm đọc hội thoại, kiểm khối lượng và trùng lặp → database tạo một biên nhận → hai việc độc lập ghi ô vàng Docs và chấm Speaking. Trang giảng viên dùng phiên Google và quyền lớp của Mapping API, chỉ đọc biên nhận. Database là nguồn chuẩn của bài đã nộp; Docs là bản xác nhận hiển thị.
 
-Không chấp nhận Doc mẫu chung làm đích nộp; không ghi trạng thái của một học viên vào mẫu chung. Mã lớp trong URL chỉ chọn sẵn giao diện. Nếu Doc ID, học viên và bản sao Classroom không khớp, API từ chối trước khi nhận link.
+Không chấp nhận Doc mẫu chung làm đích nộp; không ghi trạng thái vào mẫu chung. Mã lớp trong URL chỉ chọn sẵn giao diện. Doc ID phải thuộc bài/lớp này và CTA đã được đọc lại. Theo chỉ đạo ngày 29/09, tên học viên được chọn không bắt buộc trùng chủ bản sao Classroom: biên nhận/chấm bài mang tên được chọn, còn việc ghi trạng thái dùng Doc ID từ CTA. Vì vậy nếu một học viên chọn tên khác trên bản sao của bạn cùng lớp, dòng xác nhận xuất hiện trong bản sao đã mở nhưng dashboard/cảnh báo thiếu bài tra biên nhận theo tên được chọn. Đây là hệ quả vận hành cần theo dõi khi thử nghiệm.
 
 ## Tải, thời gian chờ và chi phí
 
