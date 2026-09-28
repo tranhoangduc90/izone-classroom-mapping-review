@@ -1,6 +1,6 @@
 # Thiết kế vận hành Speaking Homework Lesson 3 · IC2304
 
-Ngày đối chiếu: 28/09/2026. Phạm vi phát hành `large_phased`, chế độ `controlled`: chỉ Lesson 3 của IC2304, bốn hội thoại; không có Bác sĩ AI trong bài này. Nguồn nội dung là Google Doc cũ; Google Doc mới là mẫu Classroom để tạo bản sao riêng cho từng học viên. Chưa bật nhận bài cho học viên cho tới khi các cổng bên dưới đạt.
+Ngày đối chiếu: 28/09/2026. Phạm vi phát hành `large_phased`, chế độ `controlled`: Lesson 3 của IC2304, bốn hội thoại. Từ 29/09/2026, yêu cầu mới bổ sung phân tích Bác sĩ AI ở backend; trang nộp vẫn không hiển thị danh sách bài luyện. Nguồn nội dung là Google Doc cũ; Google Doc mới là mẫu Classroom để tạo bản sao riêng cho từng học viên. Trạng thái thực tế của phần Bác sĩ AI xem phụ lục ngày 29/09 bên dưới.
 
 ## Hành trình và chủ ghi
 

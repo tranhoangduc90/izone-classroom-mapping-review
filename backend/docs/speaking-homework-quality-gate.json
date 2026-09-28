@@ -22,7 +22,7 @@
     "problem": "Học viên cần nộp bốn hội thoại được kiểm ngay; giảng viên cần bản xem và email gộp khi Classroom đã nộp nhưng thiếu Speaking.",
     "outcome": "Bốn link riêng được kiểm, biên nhận bền, Docs ghi đúng ô vàng, giảng viên xem bản chỉ đọc và nhận một email cho ca mới.",
     "out_of_scope": [
-      "Lesson 3 không có Bác sĩ AI.",
+      "Lesson 3 chưa hiển thị danh sách Bác sĩ AI trên trang nộp; đề xuất được cập nhật ở backend.",
       "Không chuyển bài Speaking cũ từ Lark Base."
     ],
     "plain_language_summary": "Bài mới kiểm từng hội thoại, chỉ báo đã nộp khi đủ bốn phần, rồi cập nhật file Homework và bản xem giảng viên.",
@@ -616,7 +616,7 @@
   "context_handoff": {
     "summary": "Pages, API v4 và hai lịch n8n đã lên production; Classroom PUBLISHED, 15/15 CTA bản sao thật đã đọc lại đúng.",
     "decisions": [
-      "Lesson 3 nhận bốn link riêng, không có Bác sĩ AI."
+      "Lesson 3 nhận bốn link riêng; sau biên nhận, backend phân tích và cập nhật Bác sĩ AI nhưng trang nộp không hiển thị danh sách."
     ],
     "completed": [
       "TASK-BACKEND"
