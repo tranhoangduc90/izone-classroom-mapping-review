@@ -236,7 +236,7 @@
       "Check job quá năm phút, outbox chưa ghi Docs/chấm, alert sending chưa ack, API canary/production health và Portal attendance.",
       "Theo dõi bản sao chưa có cta_verified_at, lỗi snapshot Classroom và chênh lệch giữa bản sao đã phát với bản đã ghép."
     ],
-    "decision": "Classroom còn DRAFT trong khi chờ quyết định phát hành; API chặn riêng từng bản sao chưa xác minh CTA.",
+    "decision": "Classroom đã PUBLISHED cho IC2304; API chặn riêng từng bản sao chưa xác minh CTA.",
     "test_ids": [
       "T-PARTS",
       "T-DOC",
@@ -392,15 +392,15 @@
       "id": "T-COPY-LIVE",
       "category": "external_partial",
       "priority": "P1",
-      "status": "not_run",
-      "evidence": "Classroom Lesson 3 còn DRAFT; chưa có bản sao do học viên thật mở và chưa có lượt quét theo lịch."
+      "status": "passed",
+      "evidence": "Classroom courseWork 873498085287 đã PUBLISHED; execution 2367298 gắn CTA cho 15 bản sao và Google Docs readback độc lập đạt 15/15 đúng Doc ID, lớp IC2304, mã bài. Lịch 2367356, 2367361, 2367365 chạy thành công. Browser production mở một bản sao thật: tên sai bị chặn, tên đúng vào biểu mẫu bốn link."
     },
     {
       "id": "T-ALERT-LIVE",
       "category": "lifecycle_time",
       "priority": "P1",
       "status": "not_run",
-      "evidence": "Classroom Lesson 3 còn DRAFT; chưa có TURNED_IN thật hoặc email gộp được đối chiếu trong Gmail."
+      "evidence": "Workflow cảnh báo đã active; execution 2367346 và lịch 2367465 chạy thành công. Cả 15 bài Classroom ở trạng thái CREATED nên không phát email, đúng quy tắc chống spam. Chưa có TURNED_IN thật để kiểm nhánh gửi và đối chiếu Gmail."
     }
   ],
   "task_graph": {
@@ -551,7 +551,7 @@
       "target": "Classroom IC2304 Lesson 3",
       "outcome": "success",
       "readback": "verified",
-      "evidence": "courseWork đã tạo DRAFT, vật liệu là Doc mẫu, chưa mở cho học viên."
+      "evidence": "courseWork 873498085287 đã PUBLISHED cho IC2304; 15 bản sao Classroom hiện ở trạng thái CREATED."
     },
     {
       "id": "M-API-V4",
@@ -572,7 +572,21 @@
       "target": "Workflow gắn CTA bản sao Classroom",
       "outcome": "success",
       "readback": "verified",
-      "evidence": "Workflow Cism2tCSmwXs8w94 có 13 node, restored Classroom source và INACTIVE; fixture hai Docs execution 2365652 đọc lại đúng."
+      "evidence": "Workflow Cism2tCSmwXs8w94 đã active; execution 2367298 xác minh 15/15 CTA bản sao thật và các lượt lịch 2367356, 2367361, 2367365 thành công."
+    },
+    {
+      "id": "M-N8N-ALERT",
+      "target": "Workflow đối chiếu bài đã nộp Classroom và gửi email gộp",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Workflow WONeogswS5r5p4Sm đã active; execution 2367346 và lịch 2367465 thành công. Cả 15 bài vẫn CREATED nên không gửi email; nhánh TURNED_IN thật còn chờ kiểm."
+    },
+    {
+      "id": "M-ASSIGNMENT-OPEN",
+      "target": "Trạng thái bài Speaking Lesson 3 trong mapping_db",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Sau khi đọc lại 15/15 CTA, assignment đổi draft sang open lúc 2026-09-28T01:03:58.359Z; bản ghi trước thay đổi lưu riêng tại ổ E."
     }
   ],
   "verification_runs": [
@@ -594,22 +608,22 @@
     "status": "gaps",
     "tree_revision": "784e940",
     "gaps": [
-      "Classroom còn DRAFT; chưa có bản sao học viên thật, chưa có email cảnh báo thật và chưa kiểm trực tiếp Portal attendance sau khôi phục worker."
+      "Chưa có học viên nộp đủ bốn Share hợp lệ để kiểm biên nhận và ô vàng trên bản sao thật; chưa có TURNED_IN để kiểm email cảnh báo thật; chưa kiểm trực tiếp Portal attendance sau khôi phục worker."
     ],
     "unrequested_work": [],
-    "evidence": "API v4, DB và Pages đã đọc lại; hai Docs thử chứng minh ghép đúng nhưng không thay thế lượt học viên thật."
+    "evidence": "API v4 và Pages đang chạy; 15/15 CTA bản sao Classroom thật đọc lại đúng. Browser production kiểm được chặn sai học viên và cảnh báo link /c/ không biến mất sau tự làm mới; các nhánh cần lượt nộp thật còn chờ."
   },
   "context_handoff": {
-    "summary": "Pages và API v4 đã lên production; workflow gắn CTA đã kiểm hai Docs thử nhưng còn inactive do Classroom DRAFT.",
+    "summary": "Pages, API v4 và hai lịch n8n đã lên production; Classroom PUBLISHED, 15/15 CTA bản sao thật đã đọc lại đúng.",
     "decisions": [
       "Lesson 3 nhận bốn link riêng, không có Bác sĩ AI."
     ],
     "completed": [
       "TASK-BACKEND"
     ],
-    "next_step": "Chốt trạng thái Classroom, kiểm bản sao học viên thật và lượt quét/email cảnh báo sau phát hành.",
+    "next_step": "Khi có lượt nộp thật, kiểm bốn Share, biên nhận và ô vàng; khi có TURNED_IN thiếu biên nhận, đối chiếu email gộp trong Gmail; đọc trực tiếp ba ca điểm danh trên Portal.",
     "open_risks": [
-      "Bản sao Classroom xuất hiện muộn.",
+      "Chưa có lượt nộp đủ bốn Share hợp lệ trên bản sao thật.",
       "Nhiều file đính kèm cần phân định bản sao chính.",
       "Portal attendance còn thiếu readback trực tiếp."
     ],
@@ -622,12 +636,12 @@
     "current_tree_revision": "784e940",
     "production_authorized": true,
     "rollback": "Giữ image API cũ và CTA backup; tắt Speaking flag nếu lỗi, không xóa biên nhận.",
-    "deployment_readback": "API production image v4 khỏe, Pages live; workflow gắn CTA và cảnh báo còn inactive vì Classroom DRAFT.",
-    "operational_observation": "Snapshot rỗng trả 200, template Doc ID bị chặn; hai Docs fixture n8n ghi và đọc lại đúng, nhưng chưa có học viên thật.",
+    "deployment_readback": "API production image v4 khỏe, Pages live; Classroom PUBLISHED; workflow gắn CTA và cảnh báo active, lịch chạy thành công; 15/15 CTA bản sao thật đọc lại đúng.",
+    "operational_observation": "Browser production mở đúng bản sao thật và chặn tên học viên sai; cảnh báo link /c/ giữ nguyên sau tự làm mới. Lịch cảnh báo thấy 15 CREATED và không gửi email. Chưa có bốn Share hợp lệ hoặc TURNED_IN thật.",
     "open_risks": [
       {
         "severity": "P1",
-        "summary": "Chưa quan sát bản sao Classroom và CTA thật sau publish."
+        "summary": "Chưa quan sát lượt nộp đủ bốn Share hợp lệ, biên nhận và ô vàng trên bản sao học viên thật."
       },
       {
         "severity": "P1",
