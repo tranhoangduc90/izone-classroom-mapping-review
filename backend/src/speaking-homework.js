@@ -39,6 +39,18 @@ export function parseSpeakingShareUrl(raw) {
 
 function rowCount(result) { return result.rowCount ?? result.rows.length; }
 
+// Mốc 5 ngày lấy từ lần đề xuất/luyện gần nhất như field Timestamp trong Lark.
+// Bài vừa luyện không quay lại Chờ luyện vì một lượt phân tích mới đến sau đó.
+function shouldPrioritizeRecommendation(row, occurredAt) {
+  const eventTime = new Date(occurredAt).getTime();
+  const lastTimes = [row.proposed_at, row.last_practiced_at]
+    .filter(Boolean).map(value => new Date(value).getTime());
+  if (!Number.isFinite(eventTime) || lastTimes.some(value => !Number.isFinite(value))) {
+    throw new SpeakingHomeworkError('DOCTOR_TIME_INVALID', 'Thời điểm bài luyện không hợp lệ.');
+  }
+  return lastTimes.length === 0 || eventTime - Math.max(...lastTimes) > 5 * 86400000;
+}
+
 export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   async function resolveAssignmentDocument(documentId, assignmentCode, classCode = '') {
     const result = await pool.query(`
@@ -555,11 +567,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         [sourceKey, rec.rows[0].id, job.created_at]);
         if (!event.rows.length) continue;
         const previous = rec.rows[0];
-        const reopen = Number(previous.recommendation_count) === 0 || (
-          previous.proposed_at && previous.last_practiced_at
-          && new Date(previous.last_practiced_at).getTime()
-            - new Date(previous.proposed_at).getTime() > 5 * 86400000
-        );
+        const reopen = shouldPrioritizeRecommendation(previous, job.created_at);
         await client.query(`UPDATE speaking_homework.doctor_recommendation
           SET recommendation_count = recommendation_count + 1,
             waiting = CASE WHEN $2 THEN true ELSE waiting END,
@@ -681,10 +689,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         [rec.id, occurredAt]);
       } else {
         // Lark chỉ mở lại nếu lần luyện trước cách Timestamp đề xuất hơn 5 ngày.
-        const reopen = Number(rec.recommendation_count) === 0 || (
-          rec.proposed_at && rec.last_practiced_at
-          && new Date(rec.last_practiced_at).getTime() - new Date(rec.proposed_at).getTime() > 5 * 86400000
-        );
+        const reopen = shouldPrioritizeRecommendation(rec, occurredAt);
         await client.query(`UPDATE speaking_homework.doctor_recommendation
           SET recommendation_count = recommendation_count + 1,
               waiting = CASE WHEN $2 THEN true ELSE waiting END,
@@ -1022,10 +1027,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         [sourceKey, rec.rows[0].id, job.created_at]);
         if (!event.rows.length) continue;
         const previous = rec.rows[0];
-        const reopen = Number(previous.recommendation_count) === 0 || (
-          previous.proposed_at && previous.last_practiced_at
-          && new Date(previous.last_practiced_at).getTime()
-            - new Date(previous.proposed_at).getTime() > 5 * 86400000);
+        const reopen = shouldPrioritizeRecommendation(previous, job.created_at);
         await client.query(`UPDATE speaking_homework.doctor_recommendation
           SET recommendation_count = recommendation_count + 1,
             waiting = CASE WHEN $2 THEN true ELSE waiting END,

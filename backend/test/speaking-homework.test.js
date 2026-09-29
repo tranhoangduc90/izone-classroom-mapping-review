@@ -337,6 +337,43 @@ test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học v
   } finally { await db.close(); }
 });
 
+test('phân tích Speaking sau bài vừa luyện không đưa bài đó lên ưu tiên lại', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const exercise = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key, source_record_id, title, exercise_url)
+      VALUES ('67', 'recent-practice', 'Bài vừa luyện', 'https://example.test/recent') RETURNING id`);
+    for (const [part, letter, count] of [
+      ['clarify_1', 'q', 3], ['clarify_2', 'r', 2],
+      ['clarify_3', 's', 2], ['freestyle', 't', 2]
+    ]) await checkAccepted(service, secondToken, secondStudentRef, part, letter, count);
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    const job = await service.claimOutboxJob('doctor_analyze');
+    const created = await pool.query('SELECT created_at FROM speaking_homework.outbox WHERE id = $1',
+      [job.job_id]);
+    const submittedAt = new Date(created.rows[0].created_at).getTime();
+    await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
+      (class_id, student_ref, exercise_id, recommendation_count, practice_count,
+        waiting, proposed_at, last_practiced_at)
+      VALUES (2304, $1, $2, 1, 1, false, $3, $4)`,
+    [secondStudentRef, exercise.rows[0].id,
+      new Date(submittedAt - 10 * 86400000).toISOString(),
+      new Date(submittedAt - 86400000).toISOString()]);
+    const catalog = await service.getDoctorCatalog(receipt.id);
+    await service.completeDoctorJob({ jobId: job.job_id, catalogDigest: catalog.digest,
+      matches: [{ part: 'freestyle', exerciseId: exercise.rows[0].id,
+        evidenceMessage: 3, evidenceQuote: 'Please review your sentence.',
+        reason: 'Cần luyện thêm câu trả lời.' }] });
+    const row = (await pool.query(`SELECT recommendation_count, waiting
+      FROM speaking_homework.doctor_recommendation WHERE exercise_id = $1`,
+    [exercise.rows[0].id])).rows[0];
+    assert.equal(row.recommendation_count, 2);
+    assert.equal(row.waiting, false);
+    assert.equal((await service.listDoctor({ accessToken: secondToken,
+      studentRef: secondStudentRef })).neededCount, 0);
+  } finally { await db.close(); }
+});
+
 test('danh mục đổi giữa lúc AI đọc và lúc ghi thì rollback, kết quả không có đề xuất cũng được lưu', async () => {
   const { db, pool, service } = await fixture();
   try {
@@ -559,17 +596,51 @@ test('Bác sĩ AI giữ đúng Số lần đề xuất, Chờ luyện và điề
     let row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
     assert.equal(row.recommendation_count, 2);
     assert.equal(row.practice_count, 1);
-    assert.equal(row.waiting, true);
+    assert.equal(row.waiting, false);
     assert.equal((await event('receipt-00000002:ex-1', 'recommendation', '2026-09-08T00:00:00.000Z')).duplicate, true);
-    await event('practice-0000002:ex-1', 'practice', '2026-09-09T00:00:00.000Z');
-    await event('receipt-00000003:ex-1', 'recommendation', '2026-09-10T00:00:00.000Z');
+    await event('receipt-00000003:ex-1', 'recommendation', '2026-09-12T00:00:00.000Z');
     row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
-    assert.equal(row.recommendation_count, 3);
+    assert.equal(row.waiting, false);
+    await event('receipt-00000004:ex-1', 'recommendation', '2026-09-12T00:00:00.001Z');
+    row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
+    assert.equal(row.waiting, true);
+    await event('practice-0000002:ex-1', 'practice', '2026-09-13T00:00:00.000Z');
+    await event('receipt-00000005:ex-1', 'recommendation', '2026-09-14T00:00:00.000Z');
+    row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
+    assert.equal(row.recommendation_count, 5);
     assert.equal(row.practice_count, 2);
     assert.equal(row.waiting, false);
     const list = await service.listDoctor({ accessToken, studentRef });
     assert.equal(list.neededCount, 0);
     assert.equal(list.practiced.length, 1);
+  } finally { await db.close(); }
+});
+
+test('danh sách Bác sĩ AI ưu tiên Chờ luyện rồi Số lần đề xuất giảm dần', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const exerciseIds = [];
+    for (const [key, title] of [['a', 'Bài A'], ['b', 'Bài B'], ['c', 'Bài C']]) {
+      const created = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+        (course_key, source_record_id, title, exercise_url)
+        VALUES ('67', $1, $2, 'https://example.test/exercise') RETURNING id`,
+      [`priority-${key}`, title]);
+      exerciseIds.push(created.rows[0].id);
+    }
+    for (const [index, count] of [[0, 1], [1, 3], [2, 4]]) {
+      for (let number = 1; number <= count; number += 1) {
+        await service.recordDoctorEvent({ sourceKey: `priority-${index}-${number}`,
+          kind: 'recommendation', classId: '2304', studentRef,
+          exerciseId: exerciseIds[index], occurredAt: '2026-09-01T00:00:00.000Z' });
+      }
+    }
+    await service.recordDoctorEvent({ sourceKey: 'priority-c-practiced', kind: 'practice',
+      classId: '2304', studentRef, exerciseId: exerciseIds[2],
+      occurredAt: '2026-09-02T00:00:00.000Z' });
+    const list = await service.listDoctor({ accessToken, studentRef });
+    assert.deepEqual(list.needed.map(row => row.exercise_id), [exerciseIds[1], exerciseIds[0]]);
+    assert.deepEqual(list.practiced.map(row => row.exercise_id), [exerciseIds[2]]);
+    assert.equal(list.neededCount, 2);
   } finally { await db.close(); }
 });
 
@@ -790,6 +861,16 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
     const after = await service.listDoctor({ accessToken: token, studentRef });
     assert.equal(after.needed[0].exercise_id, ids[2]);
     assert.equal(after.needed[0].recommendation_count, 1);
+    const fallbackAnalysis = await service.claimPracticeAnalysisJob();
+    const fallbackCatalog = await service.getPracticeDoctorCatalog(fallbackAnalysis.link_id);
+    await service.completePracticeAnalysisJob({
+      jobId: fallbackAnalysis.job_id, catalogDigest: fallbackCatalog.digest,
+      matches: [{ exerciseId: ids[1], evidenceMessage: 2,
+        evidenceQuote: 'Please review the example.', reason: 'Cần luyện thêm ví dụ.' }]
+    });
+    const fallbackAfterAnalysis = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(fallbackAfterAnalysis.practiced.find(row => row.exercise_id === ids[1])?.waiting, false);
+    assert.equal(fallbackAfterAnalysis.needed.some(row => row.exercise_id === ids[1]), false);
     await service.requestPracticeCheck({
       accessToken: token, studentRef, slot: null, exerciseId: ids[0], rawUrl: share('e')
     });

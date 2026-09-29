@@ -10,7 +10,7 @@ Sau khi đã nộp Homework, ô “Luyện thêm” trên cùng trang nhận t�
 
 1. Trang và API chỉ nhận `https://chatgpt.com/share/<id>`. Link `/c/` là hội thoại riêng; link `/s/t_…` chỉ chia sẻ một phản hồi. Hai loại này bị chặn trước khi nhận bài.
 2. API lưu link với mã lớp, hồ sơ học viên đã chọn và Doc ID. Hàng kiểm đọc hội thoại ChatGPT Share, dùng AI xác định bài cá nhân đã được luyện thật và áp dụng vào một câu Speaking có câu trả lời, góp ý, rồi nói lại đầy đủ. Nếu nội dung không đạt hoặc link không mở được, học viên thấy lỗi và nộp lại.
-3. Khi bài bổ trợ đạt, API tăng **Số lần luyện**, đưa bài đó khỏi **Chờ luyện**. Hàng phân tích tiếp tục ghép lỗi có dẫn chứng với danh mục Bác sĩ AI khóa 67, tăng **Số lần đề xuất** và mở lại **Chờ luyện** theo đúng luật năm ngày hiện hành. Khóa nguồn duy nhất ngăn lần thử lại cộng trùng.
+3. Khi bài bổ trợ đạt, API tăng **Số lần luyện**, đưa bài đó khỏi **Chờ luyện**. Danh sách ưu tiên các bài đang chờ, rồi xếp theo **Số lần đề xuất** giảm dần. Hàng phân tích tiếp tục ghép lỗi có dẫn chứng với danh mục Bác sĩ AI khóa 67 và tăng **Số lần đề xuất**. Trong đúng năm ngày sau lần luyện gần nhất, đề xuất mới không đưa bài vừa luyện trở lại **Chờ luyện**; chỉ đề xuất mới sau hơn năm ngày mới làm việc đó. Hết năm ngày mà không có đề xuất mới thì bài vẫn không tự quay lại đầu danh sách. Khóa nguồn duy nhất ngăn lần thử lại cộng trùng.
 4. Giáo viên mở link trong dòng xác nhận ở Docs, đăng nhập bằng quyền lớp để xem hai bài Speaking, hai bài bổ trợ bắt buộc, các lượt luyện thêm và tình trạng phân tích.
 
 ## Kích hoạt cho IC2304
