@@ -51,6 +51,28 @@ test('một job đến hạn đánh thức đúng một lần, lỗi HTTP không
   await notifier.close();
 });
 
+test('giữ nhịp tối đa một lượt ghi Docs mỗi phút như lịch cũ', async () => {
+  const clock = timers();
+  let sends = 0;
+  let moment = 100_000;
+  const notifier = createSpeakingDocsNotifier({
+    pool: { async query() { return { rows: [{ due: 2, next_at: new Date(), server_now: new Date() }] }; } },
+    url: 'https://example.test/webhook/speaking-docs', secret: 's'.repeat(32),
+    fetchImpl: async () => { sends += 1; return { ok: true, body: { async cancel() {} } }; },
+    now: () => moment, log() {}, ...clock
+  });
+  await notifier.pump();
+  assert.equal(sends, 1);
+  assert.equal(clock.one.at(-1).delay, 60_000);
+  moment += 30_000;
+  await notifier.pump();
+  assert.equal(sends, 1);
+  moment += 30_000;
+  await notifier.pump();
+  assert.equal(sends, 2);
+  await notifier.close();
+});
+
 test('hai backend chỉ một bên giữ khóa điều phối', async () => {
   let sends = 0;
   const clock = timers();

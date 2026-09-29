@@ -5,7 +5,7 @@
 export const speakingDocsChannel = 'speaking_homework_write_doc_ready';
 export const speakingDocsFallbackMs = 5 * 60 * 1000;
 const LEADER_LOCK_ID = 79202368;
-const MIN_SEND_GAP_MS = 10_000;
+const MIN_SEND_GAP_MS = 60_000;
 
 export const speakingDocsStatusSql = `SELECT
   count(*) FILTER (WHERE status='pending'
