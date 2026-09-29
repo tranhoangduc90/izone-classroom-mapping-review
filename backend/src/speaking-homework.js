@@ -592,6 +592,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         await client.query('INSERT INTO speaking_homework.outbox (receipt_id, kind) VALUES ($1, $2)',
           [receipt.rows[0].id, kind]);
       }
+      // Tín hiệu nằm trong cùng transaction; PostgreSQL chỉ phát sau commit.
+      // Mất tín hiệu không làm mất việc vì hàng vẫn được lưu và quét bù.
+      if (kinds.includes('write_doc')) {
+        await client.query("SELECT pg_notify('speaking_homework_write_doc_ready', '')");
+      }
       return receipt.rows[0];
     });
   }

@@ -10,12 +10,18 @@ import { startLearningAttendanceWorker } from './learning-attendance-worker.js';
 import { startSpeakingCheckWorker } from './speaking-check-worker.js';
 import { startSpeakingGradeWorker } from './speaking-grade-worker.js';
 import { startSpeakingDoctorWorker } from './speaking-doctor-worker.js';
+import { createSpeakingDocsNotifier } from './speaking-docs-notifier.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
 const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
+const speakingDocsNotifier = createSpeakingDocsNotifier({
+  pool: speakingHomeworkPool,
+  url: process.env.SPEAKING_DOCS_NOTIFY_URL || '',
+  secret: process.env.SPEAKING_DOCS_NOTIFY_SECRET || ''
+});
 const syncErpGrades = createErpGradeSync({ config });
 const termTestAssetService = config.termTestAssetDir
   ? createTermTestAssetService({
@@ -48,6 +54,7 @@ const app = createApp({
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Mapping review API đang lắng nghe tại cổng ${config.port}.`);
   writingNotifier.kick();
+  void speakingDocsNotifier.start();
 });
 const learningAttendanceWorker = startLearningAttendanceWorker({
   pool: learningPool,
@@ -73,6 +80,7 @@ server.keepAliveTimeout = 5_000;
 
 async function shutdown(signal) {
   writingNotifier.close();
+  await speakingDocsNotifier.close();
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   server.close(async () => {
     await learningAttendanceWorker.stop();
