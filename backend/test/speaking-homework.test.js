@@ -8,8 +8,10 @@ import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
-  verifySpeakingCopyCta } from '../src/speaking-classroom-copies.js';
+  verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
+import { validInsertionStages, checkSubmission } from '../src/speaking-checker.js';
+import { runPracticeCheckJob, runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -76,6 +78,8 @@ async function fixture() {
     VALUES (2304, 'course-2304', 'lesson-3', '67-speaking-lam_ro', NULL, 'Homework Lesson 3', 'open') RETURNING id`);
   const doctorMigration = await readFile(new URL('../ops/migrations/202609290001_speaking_doctor_lesson3.sql', import.meta.url), 'utf8');
   await db.exec(doctorMigration);
+  const lesson4Migration = await readFile(new URL('../ops/migrations/202609290003_speaking_lesson4_practice.sql', import.meta.url), 'utf8');
+  await db.exec(lesson4Migration);
   assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
     [second.rows[0].id])).rows[0].doctor_course_key, '67');
   for (const [assignmentId, parts] of [
@@ -672,4 +676,152 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
     assert.equal(templateSession.status, 404);
     assert.equal(templateSession.body.error, 'ASSIGNMENT_NOT_FOUND');
   } finally { await db.close(); }
+});
+
+
+test('CTA của mã bài buổi 4 mở đúng trang buổi 4 và giữ Doc ID cùng lớp', () => {
+  const url = new URL(speakingCopyUrl({ documentId: 'lesson4-doc', classCode: 'IC2304',
+    assignmentCode: '67-speaking-chen_diem_giua' }));
+  assert.equal(url.pathname.endsWith('/lesson-4.html'), true);
+  assert.equal(url.searchParams.get('documentId'), 'lesson4-doc');
+  assert.equal(url.searchParams.get('class'), 'IC2304');
+});
+
+test('link /s/t_ chỉ chia sẻ một phản hồi bị chặn với lời giải thích riêng', () => {
+  assert.throws(() => parseSpeakingShareUrl('https://chatgpt.com/s/t_6ab7c876892881919d9c9cfff0af4c32'),
+    error => error.code === 'SINGLE_RESPONSE_SHARE'
+      && /một phản hồi/.test(error.message));
+});
+
+test('Chèn điểm giữa chỉ đạt khi ba giai đoạn có dẫn chứng theo thứ tự', async () => {
+  const messages = [
+    { role: 'assistant', text: 'Giới thiệu cấu trúc' },
+    { role: 'user', text: 'Em thử ví dụ' },
+    { role: 'assistant', text: 'Nối dài câu này' },
+    { role: 'user', text: 'Em nối dài câu' },
+    { role: 'assistant', text: 'Bây giờ tự trả lời' },
+    { role: 'user', text: 'Em tự trả lời' }
+  ];
+  const stages = [
+    { name: 'introduction', evidenceMessage: 2 },
+    { name: 'guided', evidenceMessage: 4 },
+    { name: 'free', evidenceMessage: 6 }
+  ];
+  assert.equal(validInsertionStages(messages, { confidence: .9, stages }).length, 3);
+  assert.equal(validInsertionStages(messages, { confidence: .9, stages: stages.slice(0, 2) }).length, 0);
+  const result = await checkSubmission({
+    section: 'insert_middle', url: share('a'), minimum: 3
+  }, { readShare: async () => ({ messages }), analyzeStages: async () => ({ confidence: .9, stages }) });
+  assert.equal(result.kind, 'pass');
+  assert.equal(result.count, 3);
+});
+
+test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể luyện thêm và cập nhật Bác sĩ AI', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const created = await pool.query(`INSERT INTO speaking_homework.assignment
+      (class_id, course_id, course_work_id, assignment_code, doctor_course_key,
+        required_practice_count, title, status)
+      VALUES (2304, 'course-2304', 'lesson-4', '67-speaking-chen_diem_giua',
+        '67', 2, 'Homework Lesson 4', 'open') RETURNING id`);
+    const assignmentId = created.rows[0].id;
+    for (const [position, key, minimum] of [[1, 'insert_middle', 3], [2, 'freestyle', 3]]) {
+      await pool.query(`INSERT INTO speaking_homework.assignment_part
+        (assignment_id, part_key, display_title, practice_url, min_questions, position)
+        VALUES ($1, $2, $3, $4, $5, $6)`,
+      [assignmentId, key, key, 'https://example.test/practice', minimum, position]);
+    }
+    await pool.query(`INSERT INTO speaking_homework.assignment_document
+      (assignment_id, document_id, student_ref, cta_verified_at)
+      VALUES ($1, 'lesson4-doc', $2, now())`, [assignmentId, studentRef]);
+    const token = 'lesson4-access-token-with-32-characters';
+    await pool.query(`INSERT INTO speaking_homework.access_grant
+      (assignment_id, student_ref, document_id, token_hash)
+      VALUES ($1, $2, 'lesson4-doc', $3)`,
+    [assignmentId, studentRef, crypto.createHash('sha256').update(token).digest('hex')]);
+    const ids = [];
+    for (const [number, title] of [[1, 'Luyện trọng âm'], [2, 'Luyện nối ý'], [3, 'Luyện ví dụ']]) {
+      const exercise = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+        (course_key, source_record_id, title, exercise_url)
+        VALUES ('67', $1, $2, $3) RETURNING id`,
+      [`lesson4-exercise-${number}`, title, 'https://example.test/practice']);
+      ids.push(exercise.rows[0].id);
+    }
+    for (const id of ids.slice(0, 2)) await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
+      (class_id, student_ref, exercise_id, recommendation_count, waiting)
+      VALUES (2304, $1, $2, 2, true)`, [studentRef, id]);
+    await checkAccepted(service, token, studentRef, 'insert_middle', 'a', 3);
+    await checkAccepted(service, token, studentRef, 'freestyle', 'b', 3);
+    await assert.rejects(service.finish({ accessToken: token, studentRef }),
+      error => error.code === 'PRACTICE_LINKS_REQUIRED');
+    for (const [slot, id, letter] of [[1, ids[0], 'c'], [2, ids[1], 'd']]) {
+      await service.requestPracticeCheck({
+        accessToken: token, studentRef, slot, exerciseId: id, rawUrl: share(letter)
+      });
+      const job = await service.claimPracticeCheckJob();
+      assert.equal(job.slot, slot);
+      const checked = await service.completePracticeCheck({
+        checkJobId: job.job_id, fingerprint: fingerprint(letter), questionCount: 1,
+        qualityPassed: true, matchedExerciseId: id
+      });
+      assert.equal(checked.status, 'accepted');
+    }
+    const receipt = await service.finish({ accessToken: token, studentRef });
+    assert.ok(receipt.id);
+    const before = await service.open({ accessToken: token, studentRef });
+    assert.equal(before.practiceLinks.length, 2);
+    const analysis = await service.claimPracticeAnalysisJob();
+    assert.ok(analysis);
+    const catalog = await service.getPracticeDoctorCatalog(analysis.link_id);
+    await service.completePracticeAnalysisJob({
+      jobId: analysis.job_id, catalogDigest: catalog.digest,
+      matches: [{ exerciseId: ids[2], evidenceMessage: 2,
+        evidenceQuote: 'This point needs improvement.', reason: 'Cần thêm ví dụ.' }]
+    });
+    const after = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(after.needed[0].exercise_id, ids[2]);
+    assert.equal(after.needed[0].recommendation_count, 1);
+    await service.requestPracticeCheck({
+      accessToken: token, studentRef, slot: null, exerciseId: ids[0], rawUrl: share('e')
+    });
+    const extra = await service.claimPracticeCheckJob();
+    assert.equal(extra.slot, 3);
+    await service.completePracticeCheck({
+      checkJobId: extra.job_id, fingerprint: fingerprint('e'), questionCount: 1,
+      qualityPassed: true, matchedExerciseId: ids[0]
+    });
+    const afterExtra = await service.open({ accessToken: token, studentRef });
+    assert.equal(afterExtra.receipt.id, receipt.id);
+    assert.equal(afterExtra.practiceLinks.length, 3);
+    assert.equal(afterExtra.practiceLinks.find(row => row.slot === 3).status, 'accepted');
+    await pool.query('INSERT INTO mapping.reviewer_class_access VALUES ($1, $2)',
+      ['lesson4-teacher@example.test', 2304]);
+    const teacher = await service.getTeacherReceipt({ receiptId: receipt.id,
+      email: 'lesson4-teacher@example.test' });
+    assert.equal(teacher.practice_links.length, 3);
+    assert.equal(teacher.practice_links[2].slot, 3);
+    assert.equal(teacher.practice_links[2].exerciseTitle, 'Luyện trọng âm');
+  } finally { await db.close(); }
+});
+
+test('worker bài bổ trợ kiểm hội thoại và giữ lỗi AI để thử lại', async () => {
+  const calls = [];
+  const service = {
+    completePracticeCheck: async payload => { calls.push(payload); return { status: 'accepted' }; },
+    failPracticeCheckJob: async payload => { calls.push(payload); }
+  };
+  const job = { job_id: 'job-1', share_url: share('f'), exercise_id: 'exercise-1',
+    exercise_title: 'Luyện nối ý' };
+  const messages = [{ role: 'assistant', text: 'Question?' }, { role: 'user', text: 'Answer.' }];
+  const accepted = await runPracticeCheckJob(service, job, {
+    readShare: async () => ({ messages }),
+    analyze: async () => ({ completed: true, typingEvidence: [] })
+  });
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(calls[0].qualityPassed, true);
+  const retried = await runPracticeCheckJob(service, job, {
+    readShare: async () => { throw new Error('SHARE_DOWN'); }
+  });
+  assert.equal(retried.status, 'retry');
+  assert.equal(calls[1].errorCode, 'PRACTICE_CHECK_ERROR');
 });

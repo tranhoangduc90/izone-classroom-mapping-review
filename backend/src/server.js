@@ -11,6 +11,7 @@ import { startSpeakingCheckWorker } from './speaking-check-worker.js';
 import { startSpeakingGradeWorker } from './speaking-grade-worker.js';
 import { startSpeakingDoctorWorker } from './speaking-doctor-worker.js';
 import { createSpeakingDocsNotifier } from './speaking-docs-notifier.js';
+import { startSpeakingPracticeWorker } from './speaking-practice-worker.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
@@ -73,6 +74,10 @@ const speakingDoctorWorker = startSpeakingDoctorWorker({
   pool: speakingHomeworkPool,
   enabled: config.speakingHomeworkEnabled
 });
+const speakingPracticeWorker = startSpeakingPracticeWorker({
+  pool: speakingHomeworkPool,
+  enabled: config.speakingHomeworkEnabled
+});
 
 server.requestTimeout = 15_000;
 server.headersTimeout = 16_000;
@@ -87,6 +92,7 @@ async function shutdown(signal) {
     await speakingCheckWorker.stop();
     await speakingGradeWorker.stop();
     await speakingDoctorWorker.stop();
+    await speakingPracticeWorker.stop();
     await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end()]);
     process.exit(0);
   });
