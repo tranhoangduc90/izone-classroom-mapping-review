@@ -1310,7 +1310,15 @@ export function createApp({
     throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
   }
   if (config.learningEnabled) {
-    app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
+    app.use('/api/learning', (req, res, next) => {
+      if (req.get('x-progress-log-demo') === '1') {
+        return res.status(403).json({ ok: false, error: 'DEMO_REQUEST_ON_LIVE_API', message: 'Trang thử đang kết nối sai dịch vụ.' });
+      }
+      return next();
+    });
+    app.use('/api/learning', createLearningRouter({
+      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret
+    }));
   }
   if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');

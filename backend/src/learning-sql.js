@@ -47,6 +47,44 @@ WHERE assignment.public_token = $1::uuid
   AND (assignment.opens_at IS NULL OR assignment.opens_at <= now())
   AND (assignment.closes_at IS NULL OR assignment.closes_at > now());`;
 
+// Chỉ dịch vụ demo có khóa máy chủ mới được đọc đáp án riêng. Không truy vấn roster/bài làm.
+export const fetchLearningDemoSourceSql = `SELECT
+  assignment.id::text AS source_assignment_id,
+  assignment.class_name_snapshot AS class_name,
+  assignment.course_code,
+  assignment.session_number,
+  assignment.title,
+  assignment.answer_release_override,
+  version.definition_hash,
+  version.public_definition,
+  grading.private_definition,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('blockId', release.block_id::text,
+    'checkpoint', release.checkpoint, 'status', release.status) ORDER BY release.checkpoint)
+    FROM learning.assignment_block_release AS release
+    WHERE release.assignment_id = assignment.id), '[]'::jsonb) AS block_releases
+FROM learning.form_assignment AS assignment
+JOIN learning.form_version AS version ON version.id = assignment.form_version_id
+JOIN learning.form_grading_key AS grading ON grading.form_version_id = version.id
+WHERE assignment.public_token = $1::uuid
+  AND assignment.status IN ('published', 'closed')
+  AND version.status = 'published';`;
+
+// Chỉ cấp link xem thử khi giảng viên có quyền với lớp của đúng phiếu đã phát hành.
+export const fetchTeacherLearningDemoGrantSql = `SELECT
+  assignment.id::text AS assignment_id,
+  assignment.public_token::text AS public_token,
+  version.definition_hash
+FROM learning.form_assignment AS assignment
+JOIN learning.form_version AS version ON version.id = assignment.form_version_id
+WHERE assignment.id = $1::uuid
+  AND assignment.status IN ('published', 'closed')
+  AND version.status = 'published'
+  AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
+  AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
+  AND ($3::boolean OR ${buildTeacherClassAccessPredicate({
+    reviewerEmailSql: '$2', classIdSql: 'assignment.erp_course_class_id'
+  })});`;
+
 export const fetchAssignmentStudentSql = `SELECT
   assignment.id::text AS assignment_id,
   assignment.form_version_id::text AS form_version_id,
@@ -551,6 +589,8 @@ assignments AS (
   FROM learning.form_assignment AS assignment
   JOIN allowed_classes ON allowed_classes.class_id = assignment.erp_course_class_id::text
   WHERE assignment.status <> 'retired'
+    AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
+    AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
 )
 SELECT jsonb_build_object(
   'classes', COALESCE((SELECT jsonb_agg(to_jsonb(allowed_classes) ORDER BY class_name) FROM allowed_classes), '[]'::jsonb),

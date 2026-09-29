@@ -9,6 +9,7 @@ const envSchema = z.object({
   LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   LEARNING_DATABASE_URL: z.string().optional().default(''),
   LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
+  LEARNING_DEMO_SOURCE_SECRET: z.string().optional().default(''),
   SPEAKING_HOMEWORK_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   SPEAKING_HOMEWORK_DATABASE_URL: z.string().optional().default(''),
   SPEAKING_HOMEWORK_DB_POOL_MAX: z.coerce.number().int().min(1).max(20).default(5),
@@ -75,6 +76,9 @@ const envSchema = z.object({
   if (value.LEARNING_ENABLED && !value.LEARNING_DATABASE_URL) {
     context.addIssue({ code: 'custom', path: ['LEARNING_DATABASE_URL'], message: 'LEARNING_DATABASE_URL là bắt buộc khi bật Progress Log.' });
   }
+  if (value.LEARNING_DEMO_SOURCE_SECRET && value.LEARNING_DEMO_SOURCE_SECRET.length < 32) {
+    context.addIssue({ code: 'custom', path: ['LEARNING_DEMO_SOURCE_SECRET'], message: 'Khóa dịch vụ demo phải có ít nhất 32 ký tự.' });
+  }
   if (value.SPEAKING_HOMEWORK_ENABLED && !value.SPEAKING_HOMEWORK_DATABASE_URL) {
     context.addIssue({ code: 'custom', path: ['SPEAKING_HOMEWORK_DATABASE_URL'],
       message: 'Cần database URL riêng khi bật Speaking Homework.' });
@@ -122,6 +126,7 @@ export function loadConfig(env = process.env) {
     databaseUrl: parsed.DATABASE_URL,
     dbPoolMax: parsed.DB_POOL_MAX,
     learningEnabled: parsed.LEARNING_ENABLED,
+    learningDemoSourceSecret: parsed.LEARNING_DEMO_SOURCE_SECRET,
     learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
     learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,
     speakingHomeworkEnabled: parsed.SPEAKING_HOMEWORK_ENABLED,

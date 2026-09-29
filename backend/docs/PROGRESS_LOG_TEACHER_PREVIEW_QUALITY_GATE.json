@@ -1,0 +1,64 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log — Xem thử như học viên từ dashboard giảng viên",
+  "change_id": "progress-log-teacher-preview-20260929",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "personal_data", "multi_user", "multi_service"],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Bản thử phải dùng đúng phiếu thật nhưng không ghi bài, điểm danh hoặc đáp án vào môi trường lớp.",
+    "user": "Giảng viên có quyền với lớp Progress Log",
+    "problem": "Mỗi buổi phải tạo thêm một phiếu demo và sáu tên giả; link và lượt thử ngày càng khó quản lý.",
+    "outcome": "Từ phiếu đang chọn, giảng viên mở bản học viên thử và làm lại nhiều lần mà không ảnh hưởng lớp thật.",
+    "out_of_scope": ["Không đổi bài học viên thật", "Không phát hành phiếu đang soạn", "Không thay cơ chế điểm danh Portal"],
+    "plain_language_summary": "Phần phát hành small_complete: một nút xem thử chung cho mọi phiếu đã phát hành."
+  },
+  "requirements": [
+    {"id": "REQ-OPEN", "statement": "Giảng viên mở đúng phiếu đang chọn và có thể làm lại.", "test_ids": ["T-UI", "T-RUN"]},
+    {"id": "REQ-ISOLATE", "statement": "Lượt thử không ghi dữ liệu lớp thật, Portal, AI hoặc thống kê.", "test_ids": ["T-ISOLATE", "T-PORTAL"]},
+    {"id": "REQ-ACCESS", "statement": "Chỉ giảng viên có quyền lớp được cấp vé mở thử; link học viên không đủ quyền.", "test_ids": ["T-AUTH", "T-INVALID"]}
+  ],
+  "invariants": [
+    {"id": "INV-KEY", "statement": "Khóa chấm riêng không đi vào Pages hoặc API công khai.", "test_ids": ["T-AUTH", "T-ISOLATE"]},
+    {"id": "INV-ATTENDANCE", "statement": "Luồng điểm danh lớp thật giữ nguyên qua lần phát hành API.", "test_ids": ["T-PORTAL", "T-REG"]}
+  ],
+  "tests": [
+    {"id": "T-UI", "category": "happy_path", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm browser."},
+    {"id": "T-RUN", "category": "lifecycle_time", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm lưu nháp, nộp và làm lại."},
+    {"id": "T-ISOLATE", "category": "security_privacy", "priority": "P0", "status": "not_run", "evidence": "Chờ readback database thật."},
+    {"id": "T-AUTH", "category": "security_privacy", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm quyền lớp và vé thử."},
+    {"id": "T-INVALID", "category": "invalid_input", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm vé giả/hết hạn."},
+    {"id": "T-PORTAL", "category": "external_partial", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm consumer/cấu hình/đích Portal."},
+    {"id": "T-CON", "category": "concurrency_idempotency", "priority": "P1", "status": "not_run", "evidence": "Chờ kiểm hai tab reset."},
+    {"id": "T-ROLL", "category": "rollback_recovery", "priority": "P1", "status": "not_run", "evidence": "Chờ backup và đường rollback."},
+    {"id": "T-REG", "category": "regression", "priority": "P0", "status": "not_run", "evidence": "Chờ full suite cuối."}
+  ],
+  "operational_design": {
+    "plan_revision": "preview-v1",
+    "signals": ["multi_user", "multi_service"],
+    "critical_path": "Dashboard có quyền → vé thử → dịch vụ demo → kho thử → phiếu học viên → kết quả; lớp thật chỉ đọc nguồn phiếu.",
+    "peak_load": {"value": 20, "unit": "teachers_per_60_seconds", "basis": "Giả định bằng ngưỡng một lớp Progress Log; xác nhận bằng ca đồng thời trước phát hành."},
+    "user_wait_target": "Mở lượt trong vài giây; lỗi nguồn/demo báo rõ và không cản dashboard thật.",
+    "limits_and_cost": ["Vé ngắn hạn, lượt thử 24 giờ, rate limit và dung lượng kho demo riêng; không thêm dịch vụ trả phí."],
+    "failure_and_recovery": ["Reset đồng thời chỉ một lượt thắng; demo lỗi rollback route và Pages; lớp thật không bị ghi."],
+    "monitoring": ["Health demo, lỗi tạo lượt, kích thước kho; API thật và hàng chờ Portal được so trước/sau."],
+    "decision": "Dùng dịch vụ demo và kho riêng, tái sử dụng renderer/contract Progress Log hiện có.",
+    "test_ids": ["T-UI", "T-RUN", "T-ISOLATE", "T-PORTAL", "T-CON"]
+  },
+  "coverage_exemptions": {},
+  "mutations": [],
+  "verification_runs": [],
+  "release": {
+    "target_environment": "production",
+    "decision": "not_ready",
+    "base_tree_revision": "8fab5d3+6ecc823",
+    "current_tree_revision": "unknown",
+    "production_authorized": true,
+    "rollback": "Giữ image API và Pages trước phát hành; rollback riêng route demo, API, Pages sau readback.",
+    "deployment_readback": "not_done",
+    "operational_observation": "Chưa build hoặc deploy.",
+    "open_risks": [{"severity": "P0", "summary": "Chưa chứng minh quyền và cách ly dữ liệu bản thử."}]
+  }
+}
