@@ -7,3 +7,7 @@ COPY src/config.js /app/src/config.js
 COPY src/learning-routes.js /app/src/learning-routes.js
 COPY src/learning-sql.js /app/src/learning-sql.js
 COPY src/learning-demo-grant.js /app/src/learning-demo-grant.js
+RUN test "$(sha256sum /app/src/auth.js | cut -d' ' -f1)" = "af50eac4d39f0c0c4e9c5042e672b3fbd34d52a18e9f094072e0d8451858394b" \
+ && AUTH_MODULE_PATH=/app/src/auth.js node --test /app/release-checks/teacher-session-duration.mjs \
+ && node --check /app/src/app.js \
+ && node --check /app/src/learning-routes.js

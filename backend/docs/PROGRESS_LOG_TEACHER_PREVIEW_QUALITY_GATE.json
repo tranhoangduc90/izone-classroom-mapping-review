@@ -144,7 +144,7 @@
       "category": "rollback_recovery",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Patch áp đúng năm file snapshot live, Node syntax đạt, test demo 9/9 trên source overlay; guard từ chối file app.js đổi hash."
+      "evidence": "Bản vá áp đúng trên source image phiên 90 ngày, hash bốn file nguồn khớp; kiểm demo 9/9 và kiểm phiên 90 ngày 1/1 trên bản sao đạt. Dockerfile image ứng viên đã gắn lại cổng phiên; build production còn chờ."
     },
     {
       "id": "T-LEGACY",
@@ -193,20 +193,20 @@
       "id": "V-BACKEND-FULL",
       "scope": "full_suite",
       "command": "npm test",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T08:54:00+07:00",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T03:45:41.834766+00:00",
       "exit_code": 0,
       "outcome": "passed",
       "passed": 236,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Full backend suite trên nhánh đã tích hợp quyền admin và IC2304 buổi 3."
+      "evidence": "Full backend suite 236/236, không skip, trên nhánh API demo sau khi cập nhật overlay image 90 ngày."
     },
     {
       "id": "V-FOCUSED",
       "scope": "focused",
       "command": "node --test test/learning-demo.test.js test/learning-ic2304-session3.test.js",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
       "captured_at": "2026-09-29T08:35:00+07:00",
       "exit_code": 0,
       "outcome": "passed",
@@ -219,7 +219,7 @@
       "id": "V-PAGES",
       "scope": "focused",
       "command": "node --test tests/progress-log-* (trừ live smoke)",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
       "captured_at": "2026-09-29T08:51:00+07:00",
       "exit_code": 0,
       "outcome": "passed",
@@ -232,25 +232,38 @@
       "id": "V-OVERLAY",
       "scope": "behavioral",
       "command": "prepare-live-overlay.py + node --test test/learning-demo.test.js",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T08:46:00+07:00",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T03:45:41.834766+00:00",
       "exit_code": 0,
       "outcome": "passed",
       "passed": 9,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Source live snapshot hash guard, patch năm file, syntax và focused test đạt."
+      "evidence": "prepare-live-overlay.py trên bản sao image hiện hành thành công; 9/9 ca demo chạy qua source overlay."
+    },
+    {
+      "id": "V-SESSION-LOCAL",
+      "scope": "behavioral",
+      "command": "AUTH_MODULE_PATH=<candidate>/src/auth.js node --test <candidate>/release-checks/teacher-session-duration.mjs",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T03:45:41.834766+00:00",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Source auth của image hiện hành giữ cookie 90 ngày/Partitioned; cổng tương tự đã được thêm vào Dockerfile overlay."
     }
   ],
   "release": {
     "target_environment": "production",
     "decision": "not_ready",
     "base_tree_revision": "8fab5d3+6ecc823",
-    "current_tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "current_tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
     "production_authorized": false,
     "rollback": "Giữ image API và Pages trước phát hành; rollback riêng route demo, API, Pages sau readback.",
     "deployment_readback": "not_done",
-    "operational_observation": "Production chưa đổi; local browser và overlay đã kiểm.",
+    "operational_observation": "Production hiện chỉ có dashboard cũ; nút xem thử chưa hiện. Overlay mới chỉ qua kiểm cục bộ.",
     "open_risks": [
       {
         "severity": "P0",
@@ -632,16 +645,16 @@
   ],
   "convergence": {
     "status": "gaps",
-    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
     "gaps": [
-      "Chưa có production readback Portal và rollback",
-      "Full Pages suite gồm test ngoài phạm vi cần environment"
+      "Chưa build image ứng viên và phát hành production để kiểm Chrome/Portal.",
+      "Chưa diễn tập rollback; full Pages suite có ca ngoài phạm vi cần môi trường riêng."
     ],
     "unrequested_work": [],
-    "evidence": "Diff hai nhánh so với yêu cầu; source live đã so hash và chuẩn bị overlay."
+    "evidence": "Gói overlay đã khóa lại theo image phiên 90 ngày và kiểm 9/9 demo, 1/1 phiên, backend 236/236; production chưa đổi."
   },
   "context_handoff": {
-    "summary": "Feature code, local demo và live overlay đã kiểm; production chưa đổi.",
+    "summary": "Nút xem thử đã có trong code Pages; API overlay đã cập nhật theo image 90 ngày và qua kiểm cục bộ. Production chưa phát hành.",
     "decisions": [
       "Một lượt PGlite riêng cho mỗi lần xem thử; không tạo assignment demo thật mỗi buổi."
     ],
@@ -649,12 +662,12 @@
       "TASK-BUILD",
       "TASK-VERIFY"
     ],
-    "next_step": "Xin approval phát hành production rồi backup/canary/readback.",
+    "next_step": "Phân loại full Pages suite, xác minh image/hash live, xin quyền phát hành riêng rồi backup/build/canary/readback.",
     "open_risks": [
       "R-LIVE",
       "R-PORTAL",
       "R-STORAGE"
     ],
-    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:bdb23ed1e030ae74bd0a62969befab5353cf86e7|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b"
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b"
   }
 }
