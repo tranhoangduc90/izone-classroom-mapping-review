@@ -24,3 +24,7 @@ Kho thử không kết nối database lớp thật, Portal, AI hoặc n8n. Dữ 
 ## Nghiệm thu và đường lui
 
 Kiểm quyền đúng/sai lớp, vé giả/hết hạn, không lộ khóa chấm, nội dung và trạng thái phần đúng phiên bản, autosave/reload, feedback đúng/sai, nộp cuối, làm lại, song song, responsive, bộ nhớ học viên thật không bị ghi đè, và database/Portal thật không phát sinh side effect. Chạy full suite trên revision cuối, canary trên bản chạy và đọc lại đích. Giữ snapshot image API và Pages trước chuyển; rollback riêng từng phần, không xóa dữ liệu lớp thật.
+
+## Đối chiếu bản chạy ngày 29/09
+
+API `mapping-review-api` hiện chạy image ID `sha256:e843b80c21d51929a8ce0ecf801f488a77952f611353cf92eb51c161c013ed4e`, trạng thái `healthy`. Các tên biến `LEARNING_ENABLED`, `LEARNING_DATABASE_URL`, `LEARNING_ATTENDANCE_SYNC_URL` và `ERP_SYNC_SECRET` đều có; `LEARNING_DEMO_SOURCE_SECRET` chưa có. Giá trị bí mật không được đọc ra báo cáo. Source image có phần đăng nhập chưa nằm trong `origin/main`; vì vậy gói phát hành dùng bản vá năm file có hash guard tại `ops/learning-demo/` trên chính image này. Bản vá đã được áp vào bản sao source và 9 ca demo đạt; trước khi phát hành phải kiểm lại image ID/hash, thêm secret đúng nơi, backup rồi đối chiếu Portal và hàng chờ sau canary. Production hiện chưa thay đổi.
