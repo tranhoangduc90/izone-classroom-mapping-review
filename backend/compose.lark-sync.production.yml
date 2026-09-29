@@ -1,0 +1,39 @@
+name: mapping-lark-replica
+
+services:
+  mapping-lark-sync:
+    build:
+      context: .
+    container_name: mapping-lark-sync
+    profiles: ["retired"]
+    command: ["node", "src/lark-replica-worker.js", "--schedule"]
+    restart: "no"
+    init: true
+    stop_grace_period: 20s
+    env_file:
+      - /opt/mapping-lark-sync/.env
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+    networks:
+      - mapping-api-net
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  mapping-api-net:
+    external: true
