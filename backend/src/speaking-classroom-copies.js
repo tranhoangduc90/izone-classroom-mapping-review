@@ -4,6 +4,7 @@ import { SpeakingHomeworkError } from './speaking-homework.js';
 const CTA_TEXT = 'NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING';
 const PAGE_ORIGIN = 'https://tranhoangduc90.github.io';
 const PAGE_PATH = '/izone-ai-team-pages/speaking-homework/lesson-3.html';
+const LESSON_4_CODE = '67-speaking-diem_giua';
 
 function textRuns(document) {
   const runs = [];
@@ -33,7 +34,9 @@ function hasWhiteCtaStyle(style) {
 }
 
 export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
-  const url = new URL(PAGE_PATH, PAGE_ORIGIN);
+  const page = assignmentCode === LESSON_4_CODE
+    ? '/izone-ai-team-pages/speaking-homework/lesson-4.html' : PAGE_PATH;
+  const url = new URL(page, PAGE_ORIGIN);
   url.searchParams.set('documentId', documentId);
   url.searchParams.set('class', classCode);
   url.searchParams.set('assignmentCode', assignmentCode);
