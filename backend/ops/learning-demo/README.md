@@ -12,8 +12,12 @@ Giảng viên chọn phiếu đã phát hành trong dashboard rồi bấm **Xem 
 
 ## Cấu hình phát hành
 
+### Giữ nguyên image API đang chạy
+
+Image API production hiện tại có thay đổi đăng nhập chưa nằm trong nhánh Git nền. Không dựng lại toàn bộ API từ nhánh này để thay image đang chạy. File [live-api-overlay.patch](live-api-overlay.patch) chỉ thêm năm file API liên quan bản thử trên snapshot source đã đọc từ image live; [live-api-baseline-sha256.json](live-api-baseline-sha256.json) khóa hash bốn file gốc. Chạy [prepare-live-overlay.py](prepare-live-overlay.py) với thư mục source vừa đọc từ image và một thư mục đầu ra trống: script so hash, áp patch, kiểm cú pháp rồi tạo build context; nếu source thay đổi, nó báo `LIVE_SOURCE_CHANGED` và dừng. Bản vá đã được áp vào bản sao image source và 9/9 ca test demo đạt. Trước phát hành, đọc lại hash image/container và source; nếu khác bất kỳ hash nào thì dựng/kiểm lại patch. [Dockerfile.live-api-overlay](Dockerfile.live-api-overlay) nhận `LIVE_API_IMAGE` là image ID/digest đã kiểm và năm file trong build context, tạo image mới giữ nguyên phần đăng nhập/điểm danh của image cũ; build lỗi thì không thay container. Giữ nguyên cấu hình điểm danh, quyền, image cũ và rollback trước khi thay container. Không chạy migration trên database lớp thật cho tính năng này.
+
 1. Sau khi duyệt phát hành, tạo khóa ngẫu nhiên ít nhất 32 ký tự ở nơi giữ bí mật. Đặt cùng giá trị vào `LEARNING_DEMO_SOURCE_SECRET` của API thật và `DEMO_SOURCE_SECRET` trong `/opt/progress-log-demo/.env`. Không ghi giá trị vào Git, log hoặc tài liệu.
-2. Dựng image API thật từ đúng revision đã kiểm thử, backup cấu hình/image hiện hành, bổ sung biến môi trường rồi thay container theo runbook của bản phát hành. Đọc lại `/mapping-api/health` và kiểm các API Progress Log cũ.
+2. Dựng image API thật từ bản vá có hash guard ở trên, backup cấu hình/image hiện hành, bổ sung biến môi trường rồi thay container theo runbook của bản phát hành. Đọc lại `/mapping-api/health` và kiểm các API Progress Log cũ.
 3. Dựng dịch vụ riêng bằng [compose.yml](compose.yml). File [.env.example](.env.example) ghi tên biến cần có. Volume `progress-log-demo-data` chỉ chứa dữ liệu mẫu. Đọc lại `/health` tại cổng nội bộ `8797`.
 4. Thêm [nginx-location.conf.example](nginx-location.conf.example) vào server HTTPS, chạy `nginx -t`, reload và đọc lại `https://ducizone.ddns.net/mapping-api-progress-log-demo/health`.
 5. Chỉ sau các bước trên, phát hành Pages. Kiểm một phiếu đã phát hành có phần khóa, mở phần trong demo, lưu nháp, bài nộp, phản hồi và nút làm lại bằng dữ liệu mẫu; xác nhận không có dòng nào được ghi vào database lớp thật. Kiểm nút xem thử không hiện phiếu demo cũ trong danh sách, nhưng link cũ vẫn mở được.

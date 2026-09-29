@@ -1,0 +1,9 @@
+ARG LIVE_API_IMAGE
+FROM ${LIVE_API_IMAGE}
+
+# Build context chỉ chứa năm file đã áp bản vá và kiểm hash từ image đang chạy.
+COPY src/app.js /app/src/app.js
+COPY src/config.js /app/src/config.js
+COPY src/learning-routes.js /app/src/learning-routes.js
+COPY src/learning-sql.js /app/src/learning-sql.js
+COPY src/learning-demo-grant.js /app/src/learning-demo-grant.js
