@@ -1,5 +1,21 @@
 import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
 
+// Dữ liệu nhận vào: email đã xác thực và mã lớp trong câu SQL.
+// Việc chính: dùng phân công lớp hoặc quyền quản trị chỉ của Progress Log.
+// Kết quả: mọi thao tác Learning cùng kiểm một phạm vi quyền; ứng dụng khác không nhận quyền này.
+// Khi lỗi: thiếu bảng/quyền đọc làm truy vấn dừng, không tự mở quyền rộng.
+export function buildLearningClassAccessPredicate({ reviewerEmailSql, classIdSql }) {
+  const teacherAccess = buildTeacherClassAccessPredicate({ reviewerEmailSql, classIdSql });
+  return `(${teacherAccess} OR EXISTS (
+    SELECT 1
+    FROM learning.progress_log_admin AS progress_admin
+    JOIN mapping.reviewer_account AS account
+      ON account.email = progress_admin.reviewer_email AND account.status = 'active'
+    WHERE progress_admin.reviewer_email = ${reviewerEmailSql}
+      AND progress_admin.status = 'active'
+  ))`;
+}
+
 // Mọi truy vấn dùng placeholder PostgreSQL; không ghép input học viên/giảng viên vào chuỗi SQL.
 
 export const fetchPublicLearningAssignmentSql = `SELECT
@@ -81,7 +97,7 @@ WHERE assignment.id = $1::uuid
   AND version.status = 'published'
   AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
   AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
-  AND ($3::boolean OR ${buildTeacherClassAccessPredicate({
+  AND ($3::boolean OR ${buildLearningClassAccessPredicate({
     reviewerEmailSql: '$2', classIdSql: 'assignment.erp_course_class_id'
   })});`;
 
@@ -571,7 +587,7 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
     course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
       classIdSql: 'course.erp_course_class_id'
     })}
@@ -627,7 +643,7 @@ FROM mapping.classroom_course_mapping AS course
 WHERE course.erp_course_class_id = $3::bigint
   AND (
     $2::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
       classIdSql: 'course.erp_course_class_id'
     })}
@@ -793,7 +809,7 @@ export const updateLearningBlockReleaseSql = `WITH target AS (
     AND release.block_id = $2::uuid
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -842,7 +858,7 @@ export const markLearningReportDeliveredSql = `WITH target AS (
     AND report.status IN ('approved', 'published')
     AND (
       $7::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$6',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -881,7 +897,7 @@ export const upsertLearningTeacherHumanNoteSql = `WITH target AS (
     AND report.status IN ('ready_for_review', 'approved', 'published')
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -919,7 +935,7 @@ JOIN learning.form_assignment_roster AS roster
 WHERE assignment.id = $1::uuid
   AND (
     $4::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$3',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -967,7 +983,7 @@ JOIN learning.form_assignment_roster AS roster
 WHERE assignment.id = $1::uuid
   AND (
     $4::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$3',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -1267,7 +1283,7 @@ LEFT JOIN LATERAL (
 WHERE assignment.id = $1::uuid
   AND (
     $3::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$2',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -1280,7 +1296,7 @@ export const fetchLearningTeacherLiveDraftsSql = `WITH authorized_assignment AS 
   WHERE assignment.id = $1::uuid
     AND (
       $3::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$2',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -1356,7 +1372,7 @@ export const overrideLearningAttendanceSql = `WITH target AS (
     )
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}

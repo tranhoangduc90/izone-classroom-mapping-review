@@ -250,6 +250,17 @@ test('dashboard chỉ cấp vé cho giảng viên có quyền lớp của phiế
     const verified = verifyLearningDemoGrant(allowed.body.grant, grantSecret);
     assert.equal(verified.assignmentId, body.assignmentId);
     assert.equal(verified.publicToken, assignment.rows[0].public_token);
+    await pool.query(`INSERT INTO mapping.reviewer_account (email, status)
+      VALUES ('progress-admin@example.invalid', 'active')`);
+    await pool.query(`INSERT INTO learning.progress_log_admin
+      (reviewer_email, status, grant_reference)
+      VALUES ('progress-admin@example.invalid', 'active', 'local-test-grant')`);
+    reviewer = { email: 'progress-admin@example.invalid', canAccessAllClasses: false };
+    await request(app).post('/api/learning/teacher/demo-grants').send(body).expect(200);
+    await pool.query(`UPDATE learning.progress_log_admin SET status = 'revoked'
+      WHERE reviewer_email = 'progress-admin@example.invalid'`);
+    await request(app).post('/api/learning/teacher/demo-grants').send(body).expect(404);
+    reviewer = { email: 'allowed@example.invalid', canAccessAllClasses: false };
     await request(app).post('/api/learning/teacher/demo-grants')
       .send({ assignmentId: legacyDemo.rows[0].assignment_id }).expect(404);
     reviewer = { email: 'denied@example.invalid', canAccessAllClasses: false };

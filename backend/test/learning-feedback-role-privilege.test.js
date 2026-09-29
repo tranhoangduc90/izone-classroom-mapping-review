@@ -18,6 +18,12 @@ test('API khóa đúng phiếu để gửi nhận xét với quyền production 
         assignment_id uuid NOT NULL, student_ref uuid NOT NULL,
         PRIMARY KEY (assignment_id, student_ref)
       );
+      CREATE TABLE mapping.reviewer_account (
+        email text PRIMARY KEY, status text NOT NULL
+      );
+      CREATE TABLE learning.progress_log_admin (
+        reviewer_email text PRIMARY KEY, status text NOT NULL
+      );
       CREATE TABLE mapping.reviewer_class_access (
         reviewer_email text, erp_course_class_id bigint
       );

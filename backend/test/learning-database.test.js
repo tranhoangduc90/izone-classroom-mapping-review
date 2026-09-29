@@ -127,6 +127,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(authorityMigration);
+  const progressAdminMigration = await readFile(
+    new URL('../ops/learning-migrations/202609280001_progress_log_admin_scope.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(progressAdminMigration);
   const journeyMigration = await readFile(
     new URL('../ops/learning-migrations/202609150003_student_course_journey.sql', import.meta.url),
     'utf8'
@@ -388,8 +393,45 @@ test('migration tạo đủ bảng lõi và không làm lộ grading key qua pub
   await database.close();
 });
 
+test('quản trị Progress Log thấy và công bố ở lớp khác mà không nhận quyền toàn hệ thống', async () => {
+  const { database, service } = await setupDatabase();
+  await database.exec(`
+    INSERT INTO mapping.classroom_course_mapping VALUES (2140, 'IC2140');
+    INSERT INTO mapping.student_mapping_review (
+      public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot
+    ) VALUES ('60000000-0000-4000-8000-000000000004', 2140, 9004, 'Học viên lớp khác');
+    INSERT INTO mapping.reviewer_account VALUES ('admin@example.test', 'active');
+    INSERT INTO learning.progress_log_admin (reviewer_email, grant_reference)
+    VALUES ('admin@example.test', 'Đức cấp quyền quản trị Progress Log để kiểm thử');
+  `);
+  const admin = { email: 'admin@example.test', canAccessAllClasses: false };
+  const classes = await service.listTeacherOptions(admin);
+  assert.deepEqual(classes.classes.map(item => item.class_id), ['2139', '2140']);
+  const teacher = { email: 'other@example.test', canAccessAllClasses: false };
+  await assert.rejects(() => service.publishReflectionForm({
+    reviewer: teacher, title: 'Phiếu lớp khác', courseCode: '56', classId: '2140',
+    sessionNumber: 1, opensAt: null, closesAt: null,
+    items: [{ libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true }]
+  }), error => error instanceof LearningError && error.code === 'CLASS_ACCESS_DENIED');
+  const published = await service.publishReflectionForm({
+    reviewer: admin, title: 'Phiếu lớp khác', courseCode: '56', classId: '2140',
+    sessionNumber: 1, opensAt: null, closesAt: null,
+    items: [{ libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true }]
+  });
+  assert.equal(published.rosterCount, 1);
+  await database.exec("UPDATE learning.progress_log_admin SET status = 'revoked', revoked_at = now() WHERE reviewer_email = 'admin@example.test';");
+  assert.equal((await service.listTeacherOptions(admin)).classes.length, 0);
+  await database.exec("UPDATE learning.progress_log_admin SET status = 'active', revoked_at = NULL WHERE reviewer_email = 'admin@example.test'; UPDATE mapping.reviewer_account SET status = 'inactive' WHERE email = 'admin@example.test';");
+  assert.equal((await service.listTeacherOptions(admin)).classes.length, 0);
+  await database.close();
+});
+
 test('quiz có điểm chỉ cho tự duyệt khi lead có quyền đúng khóa', async () => {
   const { database } = await setupDatabase();
+  // Quyền quản trị Progress Log không tự cấp quyền duyệt nội dung có điểm.
+  await database.exec(`INSERT INTO mapping.reviewer_account (email) VALUES ('author@example.test');
+    INSERT INTO learning.progress_log_admin (reviewer_email, grant_reference)
+    VALUES ('author@example.test', 'Được quyền quản trị Progress Log để kiểm thử');`);
   await database.query(`INSERT INTO learning.form_template (id, title, kind, created_by_email)
     VALUES ('23000000-0000-4000-8000-000000000001', 'Quiz cần duyệt', 'quiz', 'author@example.test');`);
   const definition = {

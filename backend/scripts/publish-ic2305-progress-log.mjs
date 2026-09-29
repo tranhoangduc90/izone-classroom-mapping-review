@@ -7,7 +7,7 @@
 
 import pg from 'pg';
 import { sha256, stableStringify } from '../src/learning-domain.js';
-import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
+import { buildLearningClassAccessPredicate, fetchLearningRosterForClassSql } from '../src/learning-sql.js';
 
 const { Pool } = pg;
 
@@ -126,11 +126,9 @@ try {
       course.erp_class_name_snapshot AS class_name
     FROM mapping.classroom_course_mapping AS course
     WHERE upper(trim(course.erp_class_name_snapshot)) = $1
-      AND EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $2
-          AND access.erp_course_class_id = course.erp_course_class_id
-      );`, [classCode, creatorEmail]);
+      AND ${buildLearningClassAccessPredicate({
+        reviewerEmailSql: '$2', classIdSql: 'course.erp_course_class_id'
+      })};`, [classCode, creatorEmail]);
   if (classResult.rowCount !== 1) throw new Error('CLASS_NOT_FOUND_OR_CREATOR_NOT_ASSIGNED');
   const targetClass = classResult.rows[0];
   phase = 'advisory_lock';

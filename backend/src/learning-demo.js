@@ -27,7 +27,8 @@ const demoMigrations = [
   '202609160003_portal_attendance_outbox.sql',
   '202609160006_portal_attendance_dashboard_index.sql',
   '202609240001_teacher_session_speaking_feedback.sql',
-  '202609280001_assignment_answer_release.sql'
+  '202609280001_assignment_answer_release.sql',
+  '202609280001_progress_log_admin_scope.sql'
 ];
 
 function sqlResult(result) {
