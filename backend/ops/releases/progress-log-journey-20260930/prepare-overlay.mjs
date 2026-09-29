@@ -19,7 +19,7 @@ const expected = {
   'learning-service.js': '1dfbb7ae672b0085a17840730dc14b38ff1b57c9e2d1583157623141149907d6',
   'learning-sql.js': '33499d8ca6d2b4029d17e0a49c7505a4bf541ec0351665cef20a5275c1bf60bd',
   'auth.js': 'af50eac4d39f0c0c4e9c5042e672b3fbd34d52a18e9f094072e0d8451858394b',
-  'server.js': 'fd5288050a1c771e15d8e70d12592e406fab7b6bd5a9cb43a1ac7e7b6a707e41',
+  'server.js': '5aa0068436adfaf1b1ea1b815ffa59a5c5011d6bf7ae045415fc181c182234e5',
   'learning-attendance-worker.js': 'fbfee853fecf12d1ae55aeb750b245b71934438f3dbfa55c67cd670335eaae2d'
 };
 const hash = data => createHash('sha256').update(data).digest('hex');

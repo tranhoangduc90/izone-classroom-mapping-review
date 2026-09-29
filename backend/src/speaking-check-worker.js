@@ -8,7 +8,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Kết quả: accepted/rejected hoặc failed có retry; chỉ ghi mã lỗi vào log, không ghi nội dung chat.
 export async function runSpeakingCheckJob(service, job, check = checkSubmission) {
   try {
-    const result = await check({ section: job.part, url: job.share_url });
+    const result = await check({ section: job.part, url: job.share_url, minimum: Number(job.min_questions) });
     if (result.kind === 'error') {
       await service.failCheckJob({ checkJobId: job.job_id, errorCode: 'CONTENT_CHECK_UNAVAILABLE' });
       return 'retry';

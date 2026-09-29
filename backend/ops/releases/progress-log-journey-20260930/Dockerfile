@@ -1,4 +1,4 @@
-FROM speaking-docs-event:20260929-fix2
+FROM speaking-lesson4:20260930-v1
 
 USER root
 # Đầu vào: image production đã đọc lại. Kiểm từng module trước khi phủ Journey.
@@ -9,7 +9,7 @@ RUN test "$(sha256sum /app/src/app.js | cut -d' ' -f1)" = '1c34d61a44fe7124ef04e
  && test "$(sha256sum /app/src/learning-service.js | cut -d' ' -f1)" = '1dfbb7ae672b0085a17840730dc14b38ff1b57c9e2d1583157623141149907d6' \
  && test "$(sha256sum /app/src/learning-sql.js | cut -d' ' -f1)" = '33499d8ca6d2b4029d17e0a49c7505a4bf541ec0351665cef20a5275c1bf60bd' \
  && test "$(sha256sum /app/src/auth.js | cut -d' ' -f1)" = 'af50eac4d39f0c0c4e9c5042e672b3fbd34d52a18e9f094072e0d8451858394b' \
- && test "$(sha256sum /app/src/server.js | cut -d' ' -f1)" = 'fd5288050a1c771e15d8e70d12592e406fab7b6bd5a9cb43a1ac7e7b6a707e41' \
+ && test "$(sha256sum /app/src/server.js | cut -d' ' -f1)" = '5aa0068436adfaf1b1ea1b815ffa59a5c5011d6bf7ae045415fc181c182234e5' \
  && test "$(sha256sum /app/src/learning-attendance-worker.js | cut -d' ' -f1)" = 'fbfee853fecf12d1ae55aeb750b245b71934438f3dbfa55c67cd670335eaae2d'
 COPY src/ /app/src/
 RUN node --check /app/src/app.js \

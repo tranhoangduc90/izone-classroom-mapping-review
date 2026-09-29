@@ -84,6 +84,7 @@ const practiceRequest = identity.extend({
   slot: z.number().int().min(1).max(2), exerciseId: z.string().uuid(),
   url: z.string().trim().url().max(500)
 }).strict();
+const extraPracticeRequest = practiceRequest.omit({ slot: true });
 const practiceResult = checkResult.extend({ matchedExerciseId: z.string().uuid() }).strict();
 const voiceConfirmation = identity.extend({ linkId: z.string().uuid() }).strict();
 
@@ -116,7 +117,7 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   const docsJobs = createSpeakingDocsJobs({ pool });
   const alerts = createSpeakingAlerts({ pool });
   const classroomCopies = createSpeakingClassroomCopies({ pool });
-  router.use(rateLimit({ windowMs: 60_000, limit: 120,
+  router.use(rateLimit({ windowMs: 60_000, limit: 360,
     standardHeaders: 'draft-8', legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng chờ.' } }));
 
@@ -159,6 +160,14 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     res.status(202).json({ ok: true, check: await service.requestPracticeCheck({
       accessToken: input.accessToken, studentRef: input.studentRef,
       slot: input.slot, exerciseId: input.exerciseId, rawUrl: input.url
+    }) });
+  }));
+  router.post('/doctor/practice/extra/request', asyncRoute(async (req, res) => {
+    const input = parseOrReply(extraPracticeRequest, req.body, res);
+    if (!input) return;
+    res.status(202).json({ ok: true, check: await service.requestPracticeCheck({
+      accessToken: input.accessToken, studentRef: input.studentRef,
+      slot: null, exerciseId: input.exerciseId, rawUrl: input.url
     }) });
   }));
   router.post('/doctor/practice/confirm-voice', asyncRoute(async (req, res) => {

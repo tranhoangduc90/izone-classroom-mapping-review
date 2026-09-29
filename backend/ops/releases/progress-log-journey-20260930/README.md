@@ -1,6 +1,6 @@
 # Gói phát hành Journey trong Progress Log
 
-Gói này ghép Journey lên image API `speaking-docs-event:20260929-fix2` đang chạy ngày 30/09/2026. `prepare-overlay.mjs` dừng nếu mã băm của một module nền thay đổi; Dockerfile kiểm lại chính image trước khi build. Chỉ tám module Journey được phủ. Phiên giảng viên, worker điểm danh, Speaking và các cấu hình hiện hành được giữ từ image nền.
+Gói này ghép Journey lên image API `speaking-lesson4:20260930-v1` đang chạy ngày 30/09/2026. `prepare-overlay.mjs` dừng nếu mã băm của một module nền thay đổi; Dockerfile kiểm lại chính image trước khi build. Chỉ tám module Journey được phủ. Phiên giảng viên, worker điểm danh, Speaking và các cấu hình hiện hành được giữ từ image nền.
 
 ## Đầu vào và đầu ra
 

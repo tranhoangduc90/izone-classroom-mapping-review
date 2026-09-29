@@ -8,8 +8,10 @@ import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
-  verifySpeakingCopyCta } from '../src/speaking-classroom-copies.js';
+  verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
+import { validInsertionStages, checkSubmission } from '../src/speaking-checker.js';
+import { runPracticeCheckJob, runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -76,6 +78,8 @@ async function fixture() {
     VALUES (2304, 'course-2304', 'lesson-3', '67-speaking-lam_ro', NULL, 'Homework Lesson 3', 'open') RETURNING id`);
   const doctorMigration = await readFile(new URL('../ops/migrations/202609290001_speaking_doctor_lesson3.sql', import.meta.url), 'utf8');
   await db.exec(doctorMigration);
+  const lesson4Migration = await readFile(new URL('../ops/migrations/202609290003_speaking_lesson4_practice.sql', import.meta.url), 'utf8');
+  await db.exec(lesson4Migration);
   assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
     [second.rows[0].id])).rows[0].doctor_course_key, '67');
   for (const [assignmentId, parts] of [
@@ -333,6 +337,43 @@ test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học v
   } finally { await db.close(); }
 });
 
+test('phân tích Speaking sau bài vừa luyện không đưa bài đó lên ưu tiên lại', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const exercise = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key, source_record_id, title, exercise_url)
+      VALUES ('67', 'recent-practice', 'Bài vừa luyện', 'https://example.test/recent') RETURNING id`);
+    for (const [part, letter, count] of [
+      ['clarify_1', 'q', 3], ['clarify_2', 'r', 2],
+      ['clarify_3', 's', 2], ['freestyle', 't', 2]
+    ]) await checkAccepted(service, secondToken, secondStudentRef, part, letter, count);
+    const receipt = await service.finish({ accessToken: secondToken, studentRef: secondStudentRef });
+    const job = await service.claimOutboxJob('doctor_analyze');
+    const created = await pool.query('SELECT created_at FROM speaking_homework.outbox WHERE id = $1',
+      [job.job_id]);
+    const submittedAt = new Date(created.rows[0].created_at).getTime();
+    await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
+      (class_id, student_ref, exercise_id, recommendation_count, practice_count,
+        waiting, proposed_at, last_practiced_at)
+      VALUES (2304, $1, $2, 1, 1, false, $3, $4)`,
+    [secondStudentRef, exercise.rows[0].id,
+      new Date(submittedAt - 10 * 86400000).toISOString(),
+      new Date(submittedAt - 86400000).toISOString()]);
+    const catalog = await service.getDoctorCatalog(receipt.id);
+    await service.completeDoctorJob({ jobId: job.job_id, catalogDigest: catalog.digest,
+      matches: [{ part: 'freestyle', exerciseId: exercise.rows[0].id,
+        evidenceMessage: 3, evidenceQuote: 'Please review your sentence.',
+        reason: 'Cần luyện thêm câu trả lời.' }] });
+    const row = (await pool.query(`SELECT recommendation_count, waiting
+      FROM speaking_homework.doctor_recommendation WHERE exercise_id = $1`,
+    [exercise.rows[0].id])).rows[0];
+    assert.equal(row.recommendation_count, 2);
+    assert.equal(row.waiting, false);
+    assert.equal((await service.listDoctor({ accessToken: secondToken,
+      studentRef: secondStudentRef })).neededCount, 0);
+  } finally { await db.close(); }
+});
+
 test('danh mục đổi giữa lúc AI đọc và lúc ghi thì rollback, kết quả không có đề xuất cũng được lưu', async () => {
   const { db, pool, service } = await fixture();
   try {
@@ -555,17 +596,51 @@ test('Bác sĩ AI giữ đúng Số lần đề xuất, Chờ luyện và điề
     let row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
     assert.equal(row.recommendation_count, 2);
     assert.equal(row.practice_count, 1);
-    assert.equal(row.waiting, true);
+    assert.equal(row.waiting, false);
     assert.equal((await event('receipt-00000002:ex-1', 'recommendation', '2026-09-08T00:00:00.000Z')).duplicate, true);
-    await event('practice-0000002:ex-1', 'practice', '2026-09-09T00:00:00.000Z');
-    await event('receipt-00000003:ex-1', 'recommendation', '2026-09-10T00:00:00.000Z');
+    await event('receipt-00000003:ex-1', 'recommendation', '2026-09-12T00:00:00.000Z');
     row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
-    assert.equal(row.recommendation_count, 3);
+    assert.equal(row.waiting, false);
+    await event('receipt-00000004:ex-1', 'recommendation', '2026-09-12T00:00:00.001Z');
+    row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
+    assert.equal(row.waiting, true);
+    await event('practice-0000002:ex-1', 'practice', '2026-09-13T00:00:00.000Z');
+    await event('receipt-00000005:ex-1', 'recommendation', '2026-09-14T00:00:00.000Z');
+    row = (await pool.query('SELECT * FROM speaking_homework.doctor_recommendation')).rows[0];
+    assert.equal(row.recommendation_count, 5);
     assert.equal(row.practice_count, 2);
     assert.equal(row.waiting, false);
     const list = await service.listDoctor({ accessToken, studentRef });
     assert.equal(list.neededCount, 0);
     assert.equal(list.practiced.length, 1);
+  } finally { await db.close(); }
+});
+
+test('danh sách Bác sĩ AI ưu tiên Chờ luyện rồi Số lần đề xuất giảm dần', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const exerciseIds = [];
+    for (const [key, title] of [['a', 'Bài A'], ['b', 'Bài B'], ['c', 'Bài C']]) {
+      const created = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+        (course_key, source_record_id, title, exercise_url)
+        VALUES ('67', $1, $2, 'https://example.test/exercise') RETURNING id`,
+      [`priority-${key}`, title]);
+      exerciseIds.push(created.rows[0].id);
+    }
+    for (const [index, count] of [[0, 1], [1, 3], [2, 4]]) {
+      for (let number = 1; number <= count; number += 1) {
+        await service.recordDoctorEvent({ sourceKey: `priority-${index}-${number}`,
+          kind: 'recommendation', classId: '2304', studentRef,
+          exerciseId: exerciseIds[index], occurredAt: '2026-09-01T00:00:00.000Z' });
+      }
+    }
+    await service.recordDoctorEvent({ sourceKey: 'priority-c-practiced', kind: 'practice',
+      classId: '2304', studentRef, exerciseId: exerciseIds[2],
+      occurredAt: '2026-09-02T00:00:00.000Z' });
+    const list = await service.listDoctor({ accessToken, studentRef });
+    assert.deepEqual(list.needed.map(row => row.exercise_id), [exerciseIds[1], exerciseIds[0]]);
+    assert.deepEqual(list.practiced.map(row => row.exercise_id), [exerciseIds[2]]);
+    assert.equal(list.neededCount, 2);
   } finally { await db.close(); }
 });
 
@@ -672,4 +747,186 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
     assert.equal(templateSession.status, 404);
     assert.equal(templateSession.body.error, 'ASSIGNMENT_NOT_FOUND');
   } finally { await db.close(); }
+});
+
+
+test('CTA của mã bài buổi 4 mở đúng trang buổi 4 và giữ Doc ID cùng lớp', () => {
+  const url = new URL(speakingCopyUrl({ documentId: 'lesson4-doc', classCode: 'IC2304',
+    assignmentCode: '67-speaking-diem_giua' }));
+  assert.equal(url.pathname.endsWith('/lesson-4.html'), true);
+  assert.equal(url.searchParams.get('documentId'), 'lesson4-doc');
+  assert.equal(url.searchParams.get('class'), 'IC2304');
+});
+
+test('link /s/t_ chỉ chia sẻ một phản hồi bị chặn với lời giải thích riêng', () => {
+  assert.throws(() => parseSpeakingShareUrl('https://chatgpt.com/s/t_6ab7c876892881919d9c9cfff0af4c32'),
+    error => error.code === 'SINGLE_RESPONSE_SHARE'
+      && /một phản hồi/.test(error.message));
+});
+
+test('Chèn điểm giữa chỉ đạt khi ba giai đoạn có dẫn chứng theo thứ tự', async () => {
+  const messages = [
+    { role: 'assistant', text: 'Giới thiệu cấu trúc' },
+    { role: 'user', text: 'Em thử ví dụ' },
+    { role: 'assistant', text: 'Nối dài câu này' },
+    { role: 'user', text: 'Em nối dài câu' },
+    { role: 'assistant', text: 'Bây giờ tự trả lời' },
+    { role: 'user', text: 'Em tự trả lời' }
+  ];
+  const stages = [
+    { name: 'introduction', evidenceMessage: 2 },
+    { name: 'guided', evidenceMessage: 4 },
+    { name: 'free', evidenceMessage: 6 }
+  ];
+  assert.equal(validInsertionStages(messages, { confidence: .9, stages }).length, 3);
+  assert.equal(validInsertionStages(messages, { confidence: .9, stages: stages.slice(0, 2) }).length, 0);
+  const result = await checkSubmission({
+    section: 'insert_middle', url: share('a'), minimum: 3
+  }, { readShare: async () => ({ messages }), analyzeStages: async () => ({ confidence: .9, stages }) });
+  assert.equal(result.kind, 'pass');
+  assert.equal(result.count, 3);
+});
+
+test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể luyện thêm và cập nhật Bác sĩ AI', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const created = await pool.query(`INSERT INTO speaking_homework.assignment
+      (class_id, course_id, course_work_id, assignment_code, doctor_course_key,
+        required_practice_count, title, status)
+      VALUES (2304, 'course-2304', 'lesson-4', '67-speaking-diem_giua',
+        '67', 2, 'Homework Lesson 4', 'open') RETURNING id`);
+    const assignmentId = created.rows[0].id;
+    for (const [position, key, minimum] of [[1, 'insert_middle', 3], [2, 'freestyle', 3]]) {
+      await pool.query(`INSERT INTO speaking_homework.assignment_part
+        (assignment_id, part_key, display_title, practice_url, min_questions, position)
+        VALUES ($1, $2, $3, $4, $5, $6)`,
+      [assignmentId, key, key, 'https://example.test/practice', minimum, position]);
+    }
+    await pool.query(`INSERT INTO speaking_homework.assignment_document
+      (assignment_id, document_id, student_ref, cta_verified_at)
+      VALUES ($1, 'lesson4-doc', $2, now())`, [assignmentId, studentRef]);
+    const accessSecret = 'lesson4-access-secret-with-32-characters';
+    const token = crypto.createHmac('sha256', accessSecret)
+      .update(`${assignmentId}:lesson4-doc:${studentRef}`, 'utf8').digest('base64url');
+    await pool.query(`INSERT INTO speaking_homework.access_grant
+      (assignment_id, student_ref, document_id, token_hash)
+      VALUES ($1, $2, 'lesson4-doc', $3)`,
+    [assignmentId, studentRef, crypto.createHash('sha256').update(token).digest('hex')]);
+    const ids = [];
+    for (const [number, title] of [[1, 'Luyện trọng âm'], [2, 'Luyện nối ý'], [3, 'Luyện ví dụ']]) {
+      const exercise = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+        (course_key, source_record_id, title, exercise_url)
+        VALUES ('67', $1, $2, $3) RETURNING id`,
+      [`lesson4-exercise-${number}`, title, 'https://example.test/practice']);
+      ids.push(exercise.rows[0].id);
+    }
+    for (const id of ids.slice(0, 1)) await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
+      (class_id, student_ref, exercise_id, recommendation_count, waiting)
+      VALUES (2304, $1, $2, 2, true)`, [studentRef, id]);
+    const initialDoctor = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(initialDoctor.personalCount, 1);
+    assert.equal(initialDoctor.sharedCatalog.length, 2);
+    await checkAccepted(service, token, studentRef, 'insert_middle', 'a', 3);
+    await checkAccepted(service, token, studentRef, 'freestyle', 'b', 3);
+    await assert.rejects(service.finish({ accessToken: token, studentRef }),
+      error => error.code === 'PRACTICE_LINKS_REQUIRED');
+    for (const [slot, id, letter] of [[1, ids[0], 'c'], [2, ids[1], 'd']]) {
+      await service.requestPracticeCheck({
+        accessToken: token, studentRef, slot, exerciseId: id, rawUrl: share(letter)
+      });
+      const job = await service.claimPracticeCheckJob();
+      assert.equal(job.slot, slot);
+      const checked = await service.completePracticeCheck({
+        checkJobId: job.job_id, fingerprint: fingerprint(letter), questionCount: 1,
+        qualityPassed: true, matchedExerciseId: id
+      });
+      assert.equal(checked.status, 'accepted');
+    }
+    const practicedFallback = await pool.query(`SELECT practice_count FROM speaking_homework.doctor_recommendation
+      WHERE class_id = 2304 AND student_ref = $1 AND exercise_id = $2`,
+    [studentRef, ids[1]]);
+    assert.equal(practicedFallback.rows[0].practice_count, 1);
+    const receipt = await service.finish({ accessToken: token, studentRef });
+    assert.ok(receipt.id);
+    const before = await service.open({ accessToken: token, studentRef });
+    assert.equal(before.practiceLinks.length, 2);
+    const analysis = await service.claimPracticeAnalysisJob();
+    assert.ok(analysis);
+    const catalog = await service.getPracticeDoctorCatalog(analysis.link_id);
+    await service.completePracticeAnalysisJob({
+      jobId: analysis.job_id, catalogDigest: catalog.digest,
+      matches: [{ exerciseId: ids[2], evidenceMessage: 2,
+        evidenceQuote: 'This point needs improvement.', reason: 'Cần thêm ví dụ.' }]
+    });
+    const after = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(after.needed[0].exercise_id, ids[2]);
+    assert.equal(after.needed[0].recommendation_count, 1);
+    const fallbackAnalysis = await service.claimPracticeAnalysisJob();
+    const fallbackCatalog = await service.getPracticeDoctorCatalog(fallbackAnalysis.link_id);
+    await service.completePracticeAnalysisJob({
+      jobId: fallbackAnalysis.job_id, catalogDigest: fallbackCatalog.digest,
+      matches: [{ exerciseId: ids[1], evidenceMessage: 2,
+        evidenceQuote: 'Please review the example.', reason: 'Cần luyện thêm ví dụ.' }]
+    });
+    const fallbackAfterAnalysis = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(fallbackAfterAnalysis.practiced.find(row => row.exercise_id === ids[1])?.waiting, false);
+    assert.equal(fallbackAfterAnalysis.needed.some(row => row.exercise_id === ids[1]), false);
+    await service.requestPracticeCheck({
+      accessToken: token, studentRef, slot: null, exerciseId: ids[0], rawUrl: share('e')
+    });
+    const extra = await service.claimPracticeCheckJob();
+    assert.equal(extra.slot, 3);
+    await service.completePracticeCheck({
+      checkJobId: extra.job_id, fingerprint: fingerprint('e'), questionCount: 1,
+      qualityPassed: true, matchedExerciseId: ids[0]
+    });
+    const afterExtra = await service.open({ accessToken: token, studentRef });
+    assert.equal(afterExtra.receipt.id, receipt.id);
+    assert.equal(afterExtra.practiceLinks.length, 3);
+    assert.equal(afterExtra.practiceLinks.find(row => row.slot === 3).status, 'accepted');
+    await pool.query('INSERT INTO mapping.reviewer_class_access VALUES ($1, $2)',
+      ['lesson4-teacher@example.test', 2304]);
+    const teacher = await service.getTeacherReceipt({ receiptId: receipt.id,
+      email: 'lesson4-teacher@example.test' });
+    assert.equal(teacher.practice_links.length, 3);
+    assert.equal(teacher.practice_links[2].slot, 3);
+    assert.equal(teacher.practice_links[2].exerciseTitle, 'Luyện trọng âm');
+    await pool.query("UPDATE speaking_homework.assignment SET status = 'closed' WHERE id = $1", [assignmentId]);
+    const resumedService = createSpeakingHomeworkService({ pool, accessSecret });
+    const closedPage = await service.openAssignment({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-diem_giua' });
+    assert.equal(closedPage.assignmentStatus, 'closed');
+    await assert.rejects(resumedService.startSession({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-diem_giua', studentRef: secondStudentRef }),
+    { code: 'HOMEWORK_CLOSED' });
+    const resumed = await resumedService.startSession({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-diem_giua', studentRef });
+    assert.equal((await resumedService.open({ accessToken: resumed.accessToken, studentRef })).receipt.id,
+      receipt.id);
+    const later = await resumedService.requestPracticeCheck({ accessToken: resumed.accessToken,
+      studentRef, slot: null, exerciseId: ids[0], rawUrl: share('f') });
+    assert.equal(later.slot, 4);
+  } finally { await db.close(); }
+});
+
+test('worker bài bổ trợ kiểm hội thoại và giữ lỗi AI để thử lại', async () => {
+  const calls = [];
+  const service = {
+    completePracticeCheck: async payload => { calls.push(payload); return { status: 'accepted' }; },
+    failPracticeCheckJob: async payload => { calls.push(payload); }
+  };
+  const job = { job_id: 'job-1', share_url: share('f'), exercise_id: 'exercise-1',
+    exercise_title: 'Luyện nối ý' };
+  const messages = [{ role: 'assistant', text: 'Question?' }, { role: 'user', text: 'Answer.' }];
+  const accepted = await runPracticeCheckJob(service, job, {
+    readShare: async () => ({ messages }),
+    analyze: async () => ({ completed: true, typingEvidence: [] })
+  });
+  assert.equal(accepted.status, 'accepted');
+  assert.equal(calls[0].qualityPassed, true);
+  const retried = await runPracticeCheckJob(service, job, {
+    readShare: async () => { throw new Error('SHARE_DOWN'); }
+  });
+  assert.equal(retried.status, 'retry');
+  assert.equal(calls[1].errorCode, 'PRACTICE_CHECK_ERROR');
 });
