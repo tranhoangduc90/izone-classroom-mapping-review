@@ -27,4 +27,7 @@ Kiểm quyền đúng/sai lớp, vé giả/hết hạn, không lộ khóa chấm
 
 ## Đối chiếu bản chạy ngày 29/09
 
-Sau bản sửa phiên đăng nhập, API `mapping-review-api` chạy image ID `sha256:86415d13eccebb0936edcd3911be2ed5471906b111a15f8a9003d9bfaf98aefb` và đã được đọc lại ở trạng thái `healthy`. Image này giữ phiên 90 ngày; bản overlay demo đã cập nhật hash `app.js` theo image mới và áp thành công lên bản sao source. Cả 9/9 ca demo trên bản sao, bài kiểm phiên 90 ngày và bộ test backend 236/236 đều đạt. Dockerfile overlay nay chạy lại bài kiểm phiên ngay trên image demo ứng viên để không tái phát lỗi 8 giờ. Các biến `LEARNING_ENABLED`, `LEARNING_DATABASE_URL`, `LEARNING_ATTENDANCE_SYNC_URL`, `ERP_SYNC_SECRET` đã được kiểm về sự hiện diện; `LEARNING_DEMO_SOURCE_SECRET` chưa được thêm. Trước phát hành phải kiểm lại image ID/hash live, thêm secret đúng nơi, backup rồi đối chiếu Portal và hàng chờ sau canary. **Tính năng xem thử vẫn chưa phát hành lên production.**
+
+Đã phát hành API `sha256:1876b7b6c03add8ced91c2f117a278a1343829f9a3f69a6b27f4784a572091de`, dịch vụ demo `sha256:c4a2f67ba94534c05ad0b2e6485626474f20724636e9b1826e74876673e615c1` và Pages commit `85296ea`. Chrome của giảng viên mở được phiếu IC2304 buổi 3, nộp đủ ba phần, hiện Reading 1/2 với câu đúng/sai và làm lại thành lượt sạch.
+
+Dịch vụ demo cần giới hạn RAM 1 GiB: mức 384 MiB ban đầu làm PGlite hết bộ nhớ khi khởi tạo. Sau điều chỉnh, cả API thật và dịch vụ demo đều khỏe, không có lượt restart. Đích đồng bộ điểm danh giữ cùng SHA-256 `03e9ff1c3a668ff8168346fa98063b5552191c48d410ec19d6ec9af0c7ff8cb8`; hàng chờ Portal vẫn có 102 việc hoàn tất. Chưa có sự kiện điểm danh thật mới sau phát hành để đối chiếu Portal; trạng thái kiểm chứng phần này còn chờ.

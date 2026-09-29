@@ -29,6 +29,12 @@ Image API production ngày 29/09 đã khôi phục phiên giảng viên 90 ngày
 - Lượt thử hết hạn sau 24 giờ nhưng PGlite giữ dữ liệu cũ cho đến đợt dọn kho. Theo dõi kích thước volume. Khi cần làm sạch: dừng riêng container demo, xác nhận volume đúng tên và marker demo, backup nếu cần điều tra, rồi tạo lại volume riêng theo quy trình vận hành. Không xóa khi còn lượt đang dùng.
 - Link xem thử chứa vé 5 phút trong fragment URL. Không chia sẻ hoặc chụp fragment; sau khi mở, trang thay vé bằng mã lượt thử riêng.
 
+## Trạng thái phát hành ngày 29/09/2026
+
+Dịch vụ demo chạy riêng bằng image `izone-progress-log-demo:20260929.1`, volume `progress-log-demo_progress-log-demo-data` và cổng nội bộ 8797. Giới hạn RAM là **1024 MiB**. Lần dựng đầu với 384 MiB làm PGlite hết bộ nhớ; cấu hình mới đã khởi động khỏe, không có lượt restart sau thay đổi. API thật dùng image `izone-term-test-backend:20260929.progress-log-preview-v1`; image/container cũ và cấu hình Nginx đã được giữ để quay lui. Route HTTPS riêng trả health 200.
+
+Trong Chrome, giảng viên đã đi qua Reading, Writing, Speaking, nộp bản thử rồi bấm làm lại. Database lớp thật không có job Portal mới; outbox điểm danh vẫn 102 việc hoàn tất. Cần đọc lại Portal khi có bài nộp thật mới sau lần chuyển API này trước khi xác nhận toàn bộ luồng điểm danh.
+
 ## Kiểm thử cục bộ
 
 Chạy `node scripts/preview-learning-demo.mjs` trong thư mục `backend`, rồi mở link `#grant=` mà script in ra trên Pages `localhost:5173`. Máy chủ preview chỉ chứa dữ liệu giả, không gọi production.

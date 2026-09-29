@@ -81,21 +81,21 @@
       "category": "happy_path",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Playwright CLI trên localhost: trang mẫu mở đúng phiếu, chọn học viên, nộp một phần, reset, mở phần; console 0 lỗi; Pages Progress Log 26/26."
+      "evidence": "Chrome production: giảng viên đã đăng nhập mở đúng IC2304 buổi 3 từ nút Xem thử như học viên; Reading, Writing, Speaking và nút làm lại đều hiện đúng; Pages Progress Log 26/26."
     },
     {
       "id": "T-RUN",
       "category": "lifecycle_time",
       "priority": "P0",
       "status": "passed",
-      "evidence": "PGlite demo: mở, lưu draft, nộp, phản hồi, reset và lượt cũ 410; browser reset tạo token mới."
+      "evidence": "Chrome production: chọn học viên mẫu, lưu/nộp ba phần, nhận kết quả 1/2, làm lại tạo lượt sạch; PGlite local 9/9 và reset đồng thời chỉ một lượt thắng."
     },
     {
       "id": "T-ISOLATE",
       "category": "security_privacy",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Demo dùng PGlite riêng; live API từ chối x-progress-log-demo; source endpoint chỉ trả definition/key cho khóa máy chủ và không trả roster."
+      "evidence": "Sau nộp bản thử, API demo không có biến kết nối database/Portal thật; outbox Portal vẫn 102 job complete, API và demo đều healthy/restarts 0; nguồn chỉ đọc definition/key bằng secret máy chủ."
     },
     {
       "id": "T-AUTH",
@@ -116,7 +116,7 @@
       "category": "external_partial",
       "priority": "P0",
       "status": "not_run",
-      "evidence": "Chờ approval và canary production: đối chiếu cấu hình sync_portal_attendance, hàng chờ và readback Portal trước/sau."
+      "evidence": "Đã giữ nguyên SHA-256 đích LEARNING_ATTENDANCE_SYNC_URL 03e9ff1c... và outbox sync_portal_attendance 102 complete sau chuyển image; chưa có sự kiện điểm danh thật mới để đọc lại Portal sau phát hành."
     },
     {
       "id": "T-CON",
@@ -130,21 +130,21 @@
       "category": "rollback_recovery",
       "priority": "P1",
       "status": "not_run",
-      "evidence": "Đã chuẩn bị patch và hash guard; chờ backup image/config và diễn tập rollback trong release window."
+      "evidence": "Image/container API cũ và cấu hình Nginx đã backup; chưa diễn tập chuyển về image/route cũ trên production."
     },
     {
       "id": "T-REG",
       "category": "regression",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Full backend suite 236/236 trên source cuối; Pages Progress Log 26/26. Toàn repo Pages có test sản phẩm khác cần environment và một lỗi baseline nên không dùng làm bằng chứng cho Progress Log."
+      "evidence": "Backend full suite chạy serial trên source/ops cuối 236/236, không skip; Pages applicable serial suite 332/332; lỗi full Pages ngoài phạm vi đã tái hiện trên baseline main."
     },
     {
       "id": "T-OVERLAY",
       "category": "rollback_recovery",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Bản vá áp đúng trên source image phiên 90 ngày, hash bốn file nguồn khớp; kiểm demo 9/9 và kiểm phiên 90 ngày 1/1 trên bản sao đạt. Dockerfile image ứng viên đã gắn lại cổng phiên; build production còn chờ."
+      "evidence": "Image API mới sha256:1876b7b6... chạy healthy, cổng phiên 90 ngày đạt trong image; mã nguồn overlay khớp guard và API health 200."
     },
     {
       "id": "T-LEGACY",
@@ -187,91 +187,107 @@
     ]
   },
   "coverage_exemptions": {},
-  "mutations": [],
+  "mutations": [
+    {
+      "id": "M-API",
+      "target": "mapping-review-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image sha256:1876b7b6c03add8ced91c2f117a278a1343829f9a3f69a6b27f4784a572091de, health healthy, restart 0, đích điểm danh giữ cùng SHA-256."
+    },
+    {
+      "id": "M-DEMO",
+      "target": "progress-log-demo-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image sha256:c4a2f67ba94534c05ad0b2e6485626474f20724636e9b1826e74876673e615c1, health healthy, restart 0, kho/biến môi trường riêng; nộp và reset từ Chrome đạt."
+    },
+    {
+      "id": "M-ROUTE",
+      "target": "Nginx /mapping-api-progress-log-demo/",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "nginx -t, reload đạt; health HTTPS 200 và CORS preflight 204."
+    },
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages progress-log",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Commit 85296ea đã build; teacher.html, teacher.js, demo/index.html, demo/config.js trả 200; nút dùng được trong Chrome giảng viên."
+    }
+  ],
   "verification_runs": [
     {
-      "id": "V-BACKEND-FULL",
+      "id": "V-BACKEND-SERIAL-RELEASE",
       "scope": "full_suite",
-      "command": "npm test",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T03:45:41.834766+00:00",
+      "command": "node --test --test-concurrency=1 test/*.test.js",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:28:23Z",
       "exit_code": 0,
       "outcome": "passed",
       "passed": 236,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Full backend suite 236/236, không skip, trên nhánh API demo sau khi cập nhật overlay image 90 ngày."
+      "evidence": "backend-serial-final.txt: 236/236 đạt. Lần npm test mặc định trước đó có một file demo hết thời gian khi chạy song song; file demo riêng 9/9 và full serial 236/236."
     },
     {
-      "id": "V-FOCUSED",
-      "scope": "focused",
-      "command": "node --test test/learning-demo.test.js test/learning-ic2304-session3.test.js",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T08:35:00+07:00",
+      "id": "V-PAGES-APPLICABLE",
+      "scope": "full_suite",
+      "command": "node --test --test-concurrency=1 <applicable offline suite>",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:28:23Z",
       "exit_code": 0,
       "outcome": "passed",
-      "passed": 13,
+      "passed": 332,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Grant, PGlite, race, 20 giảng viên và buổi 3 đạt."
+      "evidence": "Pages source tree không đổi sau ca này; pages-applicable-serial-test.txt có 332/332. Ba lỗi ngoài phạm vi tái hiện trên origin/main; hai live-env tests không thuộc ca offline."
     },
     {
-      "id": "V-PAGES",
-      "scope": "focused",
-      "command": "node --test tests/progress-log-* (trừ live smoke)",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T08:51:00+07:00",
-      "exit_code": 0,
-      "outcome": "passed",
-      "passed": 26,
-      "failed": 0,
-      "skipped": 0,
-      "evidence": "Trang dashboard, student memory, buổi 3 và bản thử đạt."
-    },
-    {
-      "id": "V-OVERLAY",
+      "id": "V-PRODUCTION-BROWSER",
       "scope": "behavioral",
-      "command": "prepare-live-overlay.py + node --test test/learning-demo.test.js",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T03:45:41.834766+00:00",
-      "exit_code": 0,
-      "outcome": "passed",
-      "passed": 9,
-      "failed": 0,
-      "skipped": 0,
-      "evidence": "prepare-live-overlay.py trên bản sao image hiện hành thành công; 9/9 ca demo chạy qua source overlay."
-    },
-    {
-      "id": "V-SESSION-LOCAL",
-      "scope": "behavioral",
-      "command": "AUTH_MODULE_PATH=<candidate>/src/auth.js node --test <candidate>/release-checks/teacher-session-duration.mjs",
-      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-      "captured_at": "2026-09-29T03:45:41.834766+00:00",
+      "command": "Chrome teacher dashboard → demo IC2304 buổi 3 → submit → reset",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:21:00Z",
       "exit_code": 0,
       "outcome": "passed",
       "passed": 1,
       "failed": 0,
       "skipped": 0,
-      "evidence": "Source auth của image hiện hành giữ cookie 90 ngày/Partitioned; cổng tương tự đã được thêm vào Dockerfile overlay."
+      "evidence": "Phiên giảng viên tự khôi phục; bản thử hiện A sai, B đúng, 7 ô Writing, Speaking, kết quả nộp và lượt reset mới."
+    },
+    {
+      "id": "V-PRODUCTION-HEALTH",
+      "scope": "behavioral",
+      "command": "HTTPS health + docker inspect + read-only SQL outbox",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:21:00Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Hai container healthy/restarts 0; demo không có biến kết nối lớp thật; outbox sync_portal_attendance 102 complete; API đích Portal hash giữ nguyên."
     }
   ],
   "release": {
     "target_environment": "production",
-    "decision": "not_ready",
+    "decision": "deployed_awaiting_validation",
     "base_tree_revision": "8fab5d3+6ecc823",
-    "current_tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
-    "production_authorized": false,
-    "rollback": "Giữ image API và Pages trước phát hành; rollback riêng route demo, API, Pages sau readback.",
-    "deployment_readback": "not_done",
-    "operational_observation": "Production hiện chỉ có dashboard cũ; nút xem thử chưa hiện. Overlay mới chỉ qua kiểm cục bộ.",
+    "current_tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "production_authorized": true,
+    "rollback": "Image API cũ/tag backup và container cũ được giữ; backup Nginx và Pages commit trước phát hành. Có thể trả riêng route, API, Pages về bản trước; không có migration production.",
+    "deployment_readback": "verified",
+    "operational_observation": "Chrome giảng viên tự khôi phục phiên 90 ngày, mở bản thử IC2304 buổi 3, nộp đủ ba phần, thấy đúng/sai và reset; API/demo healthy, outbox Portal không đổi. Chưa có attendance event thật mới sau phát hành để đọc lại Portal.",
     "open_risks": [
       {
-        "severity": "P0",
-        "summary": "Cần production approval và readback Portal sau khi áp overlay live."
+        "severity": "P1",
+        "summary": "Chưa có sự kiện điểm danh thật mới sau chuyển API để đọc lại Portal; cấu hình và hàng chờ đã được đối chiếu."
       },
       {
         "severity": "P1",
-        "summary": "Full Pages suite có test ngoài phạm vi cần environment; cần phân loại baseline trước cổng phát hành."
+        "summary": "Đã giữ đầy đủ image/container/config cũ nhưng chưa diễn tập rollback production."
       }
     ]
   },
@@ -543,7 +559,7 @@
           "Giữ image production cũ bằng overlay hash guard"
         ],
         "affected_future_tasks": [],
-        "status": "planned",
+        "status": "in_progress",
         "plan_revision": "preview-v2-live-overlay"
       }
     ]
@@ -558,9 +574,9 @@
         "impact": 3,
         "score": 9,
         "severity": "P0",
-        "status": "open",
+        "status": "mitigated",
         "owner": "Codex và Đức",
-        "mitigation": "Overlay năm file trên hash image live; kiểm canary và rollback image trước phát hành.",
+        "mitigation": "Overlay hash guard đã build/deploy trên image phiên 90 ngày, cổng auth trong image đạt, backup image/container và health production đạt.",
         "test_ids": [
           "T-OVERLAY",
           "T-ROLL"
@@ -575,7 +591,7 @@
         "severity": "P1",
         "status": "open",
         "owner": "Codex và Đức",
-        "mitigation": "Đối chiếu env name/đích consumer và outbox/Portal trước sau chuyển.",
+        "mitigation": "Đích đồng bộ hash khớp trước/sau, worker/consumer giữ nguyên, outbox 102 complete; chờ readback Portal từ attendance event thật mới.",
         "test_ids": [
           "T-PORTAL",
           "T-REG"
@@ -645,16 +661,16 @@
   ],
   "convergence": {
     "status": "gaps",
-    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
     "gaps": [
-      "Chưa build image ứng viên và phát hành production để kiểm Chrome/Portal.",
-      "Chưa diễn tập rollback; full Pages suite có ca ngoài phạm vi cần môi trường riêng."
+      "Chưa có sự kiện điểm danh thật mới để đọc lại Portal sau lần chuyển API.",
+      "Chưa diễn tập rollback production; artifact quay lui đã được giữ."
     ],
     "unrequested_work": [],
-    "evidence": "Gói overlay đã khóa lại theo image phiên 90 ngày và kiểm 9/9 demo, 1/1 phiên, backend 236/236; production chưa đổi."
+    "evidence": "Bản thử đã phát hành và đi trọn hành trình trong Chrome; API/demo healthy và Pages build. Backend 236/236, Pages applicable 332/332; luồng Portal mới và rollback drill còn chờ."
   },
   "context_handoff": {
-    "summary": "Nút xem thử đã có trong code Pages; API overlay đã cập nhật theo image 90 ngày và qua kiểm cục bộ. Production chưa phát hành.",
+    "summary": "Bản thử chung đã phát hành; Chrome giảng viên dùng được cho IC2304 buổi 3, dữ liệu demo tách riêng. Luồng Portal chưa có event mới sau phát hành để đối chiếu đích.",
     "decisions": [
       "Một lượt PGlite riêng cho mỗi lần xem thử; không tạo assignment demo thật mỗi buổi."
     ],
@@ -662,12 +678,11 @@
       "TASK-BUILD",
       "TASK-VERIFY"
     ],
-    "next_step": "Phân loại full Pages suite, xác minh image/hash live, xin quyền phát hành riêng rồi backup/build/canary/readback.",
+    "next_step": "Khi có điểm danh thật mới, đối chiếu outbox với Portal; diễn tập rollback trong cửa sổ bảo trì nếu cần, rồi cập nhật cổng từ deployed_awaiting_validation.",
     "open_risks": [
-      "R-LIVE",
       "R-PORTAL",
       "R-STORAGE"
     ],
-    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:fdbbf28332556b227df5df4abdf0a2547c1e18bb|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b"
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b"
   }
 }

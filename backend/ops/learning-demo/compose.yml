@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: ops/learning-demo/Dockerfile
-    image: izone-progress-log-demo:20260924.1
+    image: izone-progress-log-demo:20260929.1
     container_name: progress-log-demo-api
     restart: unless-stopped
     init: true
@@ -23,7 +23,7 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 100
-    mem_limit: 384m
+    mem_limit: 1024m
     cpus: 0.75
     logging:
       driver: json-file
