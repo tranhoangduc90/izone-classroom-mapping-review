@@ -1,0 +1,688 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log — Xem thử như học viên từ dashboard giảng viên",
+  "change_id": "progress-log-teacher-preview-20260929",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "personal_data",
+    "multi_user",
+    "multi_service"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Bản thử phải dùng đúng phiếu thật nhưng không ghi bài, điểm danh hoặc đáp án vào môi trường lớp.",
+    "user": "Giảng viên có quyền với lớp Progress Log",
+    "problem": "Mỗi buổi phải tạo thêm một phiếu demo và sáu tên giả; link và lượt thử ngày càng khó quản lý.",
+    "outcome": "Từ phiếu đang chọn, giảng viên mở bản học viên thử và làm lại nhiều lần mà không ảnh hưởng lớp thật.",
+    "out_of_scope": [
+      "Không đổi bài học viên thật",
+      "Không phát hành phiếu đang soạn",
+      "Không thay cơ chế điểm danh Portal"
+    ],
+    "plain_language_summary": "Phần phát hành small_complete: một nút xem thử chung cho mọi phiếu đã phát hành."
+  },
+  "requirements": [
+    {
+      "id": "REQ-OPEN",
+      "statement": "Giảng viên mở đúng phiếu đang chọn và có thể làm lại.",
+      "test_ids": [
+        "T-UI",
+        "T-RUN",
+        "T-CON"
+      ]
+    },
+    {
+      "id": "REQ-ISOLATE",
+      "statement": "Lượt thử không ghi dữ liệu lớp thật, Portal, AI hoặc thống kê.",
+      "test_ids": [
+        "T-ISOLATE",
+        "T-PORTAL"
+      ]
+    },
+    {
+      "id": "REQ-ACCESS",
+      "statement": "Chỉ giảng viên có quyền lớp được cấp vé mở thử; link học viên không đủ quyền.",
+      "test_ids": [
+        "T-AUTH",
+        "T-INVALID"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-KEY",
+      "statement": "Khóa chấm riêng không đi vào Pages hoặc API công khai.",
+      "test_ids": [
+        "T-AUTH",
+        "T-INVALID",
+        "T-ISOLATE"
+      ]
+    },
+    {
+      "id": "INV-ATTENDANCE",
+      "statement": "Luồng điểm danh lớp thật giữ nguyên qua lần phát hành API.",
+      "test_ids": [
+        "T-PORTAL",
+        "T-REG",
+        "T-LEGACY"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-UI",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Chrome production: giảng viên đã đăng nhập mở đúng IC2304 buổi 3 từ nút Xem thử như học viên; Reading, Writing, Speaking và nút làm lại đều hiện đúng; Pages Progress Log 26/26."
+    },
+    {
+      "id": "T-RUN",
+      "category": "lifecycle_time",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Chrome production: chọn học viên mẫu, lưu/nộp ba phần, nhận kết quả 1/2, làm lại tạo lượt sạch; PGlite local 9/9 và reset đồng thời chỉ một lượt thắng."
+    },
+    {
+      "id": "T-ISOLATE",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Sau nộp bản thử, API demo không có biến kết nối database/Portal thật; outbox Portal vẫn 102 job complete, API và demo đều healthy/restarts 0; nguồn chỉ đọc definition/key bằng secret máy chủ."
+    },
+    {
+      "id": "T-AUTH",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite SQL/route: quyền lớp đúng cấp vé, sai lớp 404; Progress Log admin active được cấp, revoked bị từ chối."
+    },
+    {
+      "id": "T-INVALID",
+      "category": "invalid_input",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Vé giả, sai khóa, hết hạn và source ID sai bị từ chối; chỉ public student token trả 403 và không tạo run."
+    },
+    {
+      "id": "T-PORTAL",
+      "category": "external_partial",
+      "priority": "P0",
+      "status": "not_run",
+      "evidence": "Đã giữ nguyên SHA-256 đích LEARNING_ATTENDANCE_SYNC_URL 03e9ff1c... và outbox sync_portal_attendance 102 complete sau chuyển image; chưa có sự kiện điểm danh thật mới để đọc lại Portal sau phát hành."
+    },
+    {
+      "id": "T-CON",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "20 yêu cầu mở đồng thời tạo 20 run riêng trong 3,4 giây; hai reset đồng thời chỉ một thắng."
+    },
+    {
+      "id": "T-ROLL",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Image/container API cũ và cấu hình Nginx đã backup; chưa diễn tập chuyển về image/route cũ trên production."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Backend full suite chạy serial trên source/ops cuối 236/236, không skip; Pages applicable serial suite 332/332; lỗi full Pages ngoài phạm vi đã tái hiện trên baseline main."
+    },
+    {
+      "id": "T-OVERLAY",
+      "category": "rollback_recovery",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Image API mới sha256:1876b7b6... chạy healthy, cổng phiên 90 ngày đạt trong image; mã nguồn overlay khớp guard và API health 200."
+    },
+    {
+      "id": "T-LEGACY",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "SQL options ẩn DEMO-56; grant từ chối demo cũ; public open query vẫn giữ hành vi link cũ."
+    }
+  ],
+  "operational_design": {
+    "plan_revision": "preview-v2-live-overlay",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
+    "critical_path": "Dashboard có quyền → vé thử → dịch vụ demo → kho thử → phiếu học viên → kết quả; lớp thật chỉ đọc nguồn phiếu.",
+    "peak_load": {
+      "value": 20,
+      "unit": "teachers_per_60_seconds",
+      "basis": "20 giảng viên giả cùng mở trong ca PGlite 3,4 giây; rate limit demo 90 request/IP/phút."
+    },
+    "user_wait_target": "Mở lượt trong vài giây; lỗi nguồn/demo báo rõ và không cản dashboard thật.",
+    "limits_and_cost": [
+      "Vé ngắn hạn, lượt thử 24 giờ, rate limit và dung lượng kho demo riêng; không thêm dịch vụ trả phí."
+    ],
+    "failure_and_recovery": [
+      "Reset đồng thời chỉ một lượt thắng; demo lỗi rollback route và Pages; lớp thật không bị ghi."
+    ],
+    "monitoring": [
+      "Health demo, lỗi tạo lượt, kích thước kho; API thật và hàng chờ Portal được so trước/sau."
+    ],
+    "decision": "Dùng dịch vụ demo và kho riêng, tái sử dụng renderer/contract Progress Log hiện có.",
+    "test_ids": [
+      "T-UI",
+      "T-RUN",
+      "T-ISOLATE",
+      "T-PORTAL",
+      "T-CON",
+      "T-OVERLAY"
+    ]
+  },
+  "coverage_exemptions": {},
+  "mutations": [
+    {
+      "id": "M-API",
+      "target": "mapping-review-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image sha256:1876b7b6c03add8ced91c2f117a278a1343829f9a3f69a6b27f4784a572091de, health healthy, restart 0, đích điểm danh giữ cùng SHA-256."
+    },
+    {
+      "id": "M-DEMO",
+      "target": "progress-log-demo-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image sha256:c4a2f67ba94534c05ad0b2e6485626474f20724636e9b1826e74876673e615c1, health healthy, restart 0, kho/biến môi trường riêng; nộp và reset từ Chrome đạt."
+    },
+    {
+      "id": "M-ROUTE",
+      "target": "Nginx /mapping-api-progress-log-demo/",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "nginx -t, reload đạt; health HTTPS 200 và CORS preflight 204."
+    },
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages progress-log",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Commit 85296ea đã build; teacher.html, teacher.js, demo/index.html, demo/config.js trả 200; nút dùng được trong Chrome giảng viên."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND-SERIAL-RELEASE",
+      "scope": "full_suite",
+      "command": "node --test --test-concurrency=1 test/*.test.js",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:28:23Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 236,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "backend-serial-final.txt: 236/236 đạt. Lần npm test mặc định trước đó có một file demo hết thời gian khi chạy song song; file demo riêng 9/9 và full serial 236/236."
+    },
+    {
+      "id": "V-PAGES-APPLICABLE",
+      "scope": "full_suite",
+      "command": "node --test --test-concurrency=1 <applicable offline suite>",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:28:23Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 332,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Pages source tree không đổi sau ca này; pages-applicable-serial-test.txt có 332/332. Ba lỗi ngoài phạm vi tái hiện trên origin/main; hai live-env tests không thuộc ca offline."
+    },
+    {
+      "id": "V-PRODUCTION-BROWSER",
+      "scope": "behavioral",
+      "command": "Chrome teacher dashboard → demo IC2304 buổi 3 → submit → reset",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:21:00Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Phiên giảng viên tự khôi phục; bản thử hiện A sai, B đúng, 7 ô Writing, Speaking, kết quả nộp và lượt reset mới."
+    },
+    {
+      "id": "V-PRODUCTION-HEALTH",
+      "scope": "behavioral",
+      "command": "HTTPS health + docker inspect + read-only SQL outbox",
+      "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+      "captured_at": "2026-09-29T04:21:00Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Hai container healthy/restarts 0; demo không có biến kết nối lớp thật; outbox sync_portal_attendance 102 complete; API đích Portal hash giữ nguyên."
+    }
+  ],
+  "release": {
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "8fab5d3+6ecc823",
+    "current_tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "production_authorized": true,
+    "rollback": "Image API cũ/tag backup và container cũ được giữ; backup Nginx và Pages commit trước phát hành. Có thể trả riêng route, API, Pages về bản trước; không có migration production.",
+    "deployment_readback": "verified",
+    "operational_observation": "Chrome giảng viên tự khôi phục phiên 90 ngày, mở bản thử IC2304 buổi 3, nộp đủ ba phần, thấy đúng/sai và reset; API/demo healthy, outbox Portal không đổi. Chưa có attendance event thật mới sau phát hành để đọc lại Portal.",
+    "open_risks": [
+      {
+        "severity": "P1",
+        "summary": "Chưa có sự kiện điểm danh thật mới sau chuyển API để đọc lại Portal; cấu hình và hàng chờ đã được đối chiếu."
+      },
+      {
+        "severity": "P1",
+        "summary": "Đã giữ đầy đủ image/container/config cũ nhưng chưa diễn tập rollback production."
+      }
+    ]
+  },
+  "change_package": {
+    "proposal": "Một nút xem thử dùng cho mọi phiếu đã phát hành, không cần hồ sơ demo mỗi buổi.",
+    "behavior_baseline": "Mỗi phiếu cũ có assignment và sáu tên demo cố định; không có đường xem thử chung.",
+    "deltas": [
+      {
+        "id": "D-GRANT",
+        "operation": "ADDED",
+        "behavior": "Giảng viên có quyền lớp nhận vé 5 phút cho phiếu đã chọn.",
+        "module_ids": [
+          "MOD-API",
+          "MOD-WEB"
+        ],
+        "test_ids": [
+          "T-AUTH",
+          "T-INVALID"
+        ]
+      },
+      {
+        "id": "D-RUN",
+        "operation": "ADDED",
+        "behavior": "Kho riêng tạo lượt học viên mẫu, lưu/nộp/chấm, mở phần và làm lại.",
+        "module_ids": [
+          "MOD-DEMO",
+          "MOD-WEB"
+        ],
+        "test_ids": [
+          "T-RUN",
+          "T-CON",
+          "T-ISOLATE"
+        ]
+      },
+      {
+        "id": "D-HIDE",
+        "operation": "MODIFIED",
+        "behavior": "Ẩn hai phiếu demo cũ khỏi danh sách giảng viên; link cũ vẫn hoạt động.",
+        "module_ids": [
+          "MOD-API"
+        ],
+        "test_ids": [
+          "T-LEGACY"
+        ]
+      },
+      {
+        "id": "D-OVERLAY",
+        "operation": "ADDED",
+        "behavior": "Bản vá chỉ năm file giữ nguyên đăng nhập API live và chặn source đổi hash.",
+        "module_ids": [
+          "MOD-API"
+        ],
+        "test_ids": [
+          "T-OVERLAY",
+          "T-ROLL",
+          "T-PORTAL"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "preview-v2-live-overlay",
+    "modules": [
+      {
+        "id": "MOD-API",
+        "name": "API lớp thật",
+        "responsibility": "Kiểm quyền và xuất bản phiếu cho dịch vụ thử.",
+        "owns_data": [
+          "preview_grant"
+        ],
+        "public_interfaces": [
+          "POST /teacher/demo-grants",
+          "POST /assignments/demo-source"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Chỉ đọc phiếu thật, không tạo bài học viên."
+        ],
+        "test_ids": [
+          "T-AUTH",
+          "T-INVALID",
+          "T-OVERLAY",
+          "T-PORTAL"
+        ]
+      },
+      {
+        "id": "MOD-DEMO",
+        "name": "Kho bản thử",
+        "responsibility": "Lưu run, bài nộp và điểm danh mô phỏng.",
+        "owns_data": [
+          "demo_run",
+          "demo_attempt",
+          "demo_attendance"
+        ],
+        "public_interfaces": [
+          "POST /api/demo/runs",
+          "POST /api/demo/runs/reset",
+          "POST /api/demo/runs/open-blocks"
+        ],
+        "depends_on": [
+          "MOD-API"
+        ],
+        "boundary_rules": [
+          "Không kết nối database, Portal hoặc n8n thật."
+        ],
+        "test_ids": [
+          "T-RUN",
+          "T-CON",
+          "T-ISOLATE"
+        ]
+      },
+      {
+        "id": "MOD-WEB",
+        "name": "Giao diện giảng viên và học viên",
+        "responsibility": "Mở bản thử từ phiếu đang chọn và hiển thị hành trình học viên.",
+        "owns_data": [
+          "selected_assignment",
+          "preview_tab_state"
+        ],
+        "public_interfaces": [
+          "Xem thử như học viên",
+          "Làm lại từ đầu"
+        ],
+        "depends_on": [
+          "MOD-API",
+          "MOD-DEMO"
+        ],
+        "boundary_rules": [
+          "Tắt student memory thật trong bản thử."
+        ],
+        "test_ids": [
+          "T-UI",
+          "T-ISOLATE",
+          "T-LEGACY"
+        ]
+      }
+    ],
+    "integrations": [
+      {
+        "id": "I-SOURCE",
+        "producer": "MOD-API",
+        "consumer": "MOD-DEMO",
+        "contract": "Chỉ dịch vụ có secret đọc definition và grading key, không roster.",
+        "test_ids": [
+          "T-AUTH",
+          "T-ISOLATE"
+        ]
+      },
+      {
+        "id": "I-GRANT",
+        "producer": "MOD-API",
+        "consumer": "MOD-WEB",
+        "contract": "Trang giảng viên nhận grant cho assignment được phân quyền.",
+        "test_ids": [
+          "T-UI",
+          "T-AUTH"
+        ]
+      },
+      {
+        "id": "I-STUDENT",
+        "producer": "MOD-DEMO",
+        "consumer": "MOD-WEB",
+        "contract": "Trang thử dùng publicToken/run riêng và thao tác reset có teacher token riêng.",
+        "test_ids": [
+          "T-RUN",
+          "T-UI"
+        ]
+      }
+    ]
+  },
+  "task_graph": {
+    "plan_revision": "preview-v2-live-overlay",
+    "tasks": [
+      {
+        "id": "TASK-BUILD",
+        "result": "Source API, kho thử và Pages trên nhánh riêng",
+        "module_ids": [
+          "MOD-API",
+          "MOD-DEMO",
+          "MOD-WEB"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "Yêu cầu xem thử và ranh giới dữ liệu"
+        ],
+        "produces": [
+          "Source API, kho thử và Pages trên nhánh riêng"
+        ],
+        "contract": "Không ảnh hưởng bài và điểm danh của lớp thật.",
+        "test_ids": [
+          "T-AUTH",
+          "T-RUN",
+          "T-UI"
+        ],
+        "evidence_required": [
+          "Test và readback đúng source revision"
+        ],
+        "decision_inputs": [
+          "Giữ image production cũ bằng overlay hash guard"
+        ],
+        "affected_future_tasks": [
+          "TASK-VERIFY"
+        ],
+        "status": "done",
+        "plan_revision": "preview-v2-live-overlay"
+      },
+      {
+        "id": "TASK-VERIFY",
+        "result": "Test local và patch image live",
+        "module_ids": [
+          "MOD-API",
+          "MOD-DEMO",
+          "MOD-WEB"
+        ],
+        "depends_on": [
+          "TASK-BUILD"
+        ],
+        "consumes": [
+          "Yêu cầu xem thử và ranh giới dữ liệu"
+        ],
+        "produces": [
+          "Test local và patch image live"
+        ],
+        "contract": "Không ảnh hưởng bài và điểm danh của lớp thật.",
+        "test_ids": [
+          "T-OVERLAY",
+          "T-CON",
+          "T-REG"
+        ],
+        "evidence_required": [
+          "Test và readback đúng source revision"
+        ],
+        "decision_inputs": [
+          "Giữ image production cũ bằng overlay hash guard"
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "preview-v2-live-overlay"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Backup, phát hành, canary và Portal readback",
+        "module_ids": [
+          "MOD-API",
+          "MOD-DEMO",
+          "MOD-WEB"
+        ],
+        "depends_on": [
+          "TASK-VERIFY"
+        ],
+        "consumes": [
+          "Yêu cầu xem thử và ranh giới dữ liệu"
+        ],
+        "produces": [
+          "Backup, phát hành, canary và Portal readback"
+        ],
+        "contract": "Không ảnh hưởng bài và điểm danh của lớp thật.",
+        "test_ids": [
+          "T-PORTAL",
+          "T-ROLL"
+        ],
+        "evidence_required": [
+          "Test và readback đúng source revision"
+        ],
+        "decision_inputs": [
+          "Giữ image production cũ bằng overlay hash guard"
+        ],
+        "affected_future_tasks": [],
+        "status": "in_progress",
+        "plan_revision": "preview-v2-live-overlay"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "CONCERNS",
+    "risks": [
+      {
+        "id": "R-LIVE",
+        "description": "Image production có login ngoài Git base; build lại từ main có thể đổi phiên giảng viên.",
+        "probability": 3,
+        "impact": 3,
+        "score": 9,
+        "severity": "P0",
+        "status": "mitigated",
+        "owner": "Codex và Đức",
+        "mitigation": "Overlay hash guard đã build/deploy trên image phiên 90 ngày, cổng auth trong image đạt, backup image/container và health production đạt.",
+        "test_ids": [
+          "T-OVERLAY",
+          "T-ROLL"
+        ]
+      },
+      {
+        "id": "R-PORTAL",
+        "description": "Chuyển image API có thể mất cấu hình đồng bộ Portal.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Codex và Đức",
+        "mitigation": "Đích đồng bộ hash khớp trước/sau, worker/consumer giữ nguyên, outbox 102 complete; chờ readback Portal từ attendance event thật mới.",
+        "test_ids": [
+          "T-PORTAL",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "R-KEY",
+        "description": "Link công khai có thể bị dùng để đọc đáp án chấm.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Grant HMAC 5 phút và source endpoint chỉ nhận secret máy chủ; test public token 403.",
+        "test_ids": [
+          "T-AUTH",
+          "T-INVALID"
+        ]
+      },
+      {
+        "id": "R-STORAGE",
+        "description": "Kho PGlite giữ run đã hết hạn đến đợt dọn.",
+        "probability": 1,
+        "impact": 3,
+        "score": 3,
+        "severity": "P2",
+        "status": "open",
+        "owner": "Vận hành Progress Log",
+        "mitigation": "Theo dõi kích thước volume và dọn trong maintenance có backup.",
+        "test_ids": [
+          "T-RUN"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "cross_constraints": [
+    {
+      "id": "TIME-GRANT",
+      "left": {
+        "name": "grant_ttl_seconds",
+        "value": 300
+      },
+      "operator": ">",
+      "right": {
+        "name": "fetch_timeout_plus_margin_seconds",
+        "value": 27
+      },
+      "status": "passed",
+      "evidence": "Code grant 300 giây, fetch timeout 7 giây + biên 20 giây."
+    },
+    {
+      "id": "RATE-CLASS",
+      "left": {
+        "name": "demo_requests_per_ip_minute",
+        "value": 90
+      },
+      "operator": ">=",
+      "right": {
+        "name": "teachers_three_actions",
+        "value": 60
+      },
+      "status": "passed",
+      "evidence": "Code limit 90 và ca 20 giảng viên đồng thời."
+    }
+  ],
+  "convergence": {
+    "status": "gaps",
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b",
+    "gaps": [
+      "Chưa có sự kiện điểm danh thật mới để đọc lại Portal sau lần chuyển API.",
+      "Chưa diễn tập rollback production; artifact quay lui đã được giữ."
+    ],
+    "unrequested_work": [],
+    "evidence": "Bản thử đã phát hành và đi trọn hành trình trong Chrome; API/demo healthy và Pages build. Backend 236/236, Pages applicable 332/332; luồng Portal mới và rollback drill còn chờ."
+  },
+  "context_handoff": {
+    "summary": "Bản thử chung đã phát hành; Chrome giảng viên dùng được cho IC2304 buổi 3, dữ liệu demo tách riêng. Luồng Portal chưa có event mới sau phát hành để đối chiếu đích.",
+    "decisions": [
+      "Một lượt PGlite riêng cho mỗi lần xem thử; không tạo assignment demo thật mỗi buổi."
+    ],
+    "completed": [
+      "TASK-BUILD",
+      "TASK-VERIFY"
+    ],
+    "next_step": "Khi có điểm danh thật mới, đối chiếu outbox với Portal; diễn tập rollback trong cửa sổ bảo trì nếu cần, rồi cập nhật cổng từ deployed_awaiting_validation.",
+    "open_risks": [
+      "R-PORTAL",
+      "R-STORAGE"
+    ],
+    "tree_revision": "api-src:c71332716785517099b759daf3eaeb121b353025|api-ops:0213fe87d064d4e3c725e2c54620a7a65b0e76bf|pages:8cca738f16187402be4bcf243f2004a62c8a6a4b"
+  }
+}

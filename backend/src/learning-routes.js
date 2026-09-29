@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { LearningError, createLearningService } from './learning-service.js';
+import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
+import { createLearningDemoGrant } from './learning-demo-grant.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -184,7 +186,7 @@ function attemptRateKey(req) {
 }
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
-  testSourceReader = null, testResultReader = null }) {
+  testSourceReader = null, testResultReader = null, demoSourceSecret = '' }) {
   const router = express.Router();
   const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader });
   const coarseLimiter = rateLimit({
@@ -238,6 +240,34 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   });
 
   router.use(coarseLimiter);
+
+  if (demoSourceSecret) router.post('/assignments/demo-source', asyncRoute(async (req, res) => {
+    const supplied = Buffer.from(String(req.get('x-learning-demo-source') || ''));
+    const expected = Buffer.from(demoSourceSecret);
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+    }
+    const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
+    if (!input) return;
+    const source = await pool.query(fetchLearningDemoSourceSql, [input.publicToken]);
+    if (source.rowCount !== 1) {
+      return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
+    }
+    const row = source.rows[0];
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, source: {
+      sourceAssignmentId: row.source_assignment_id,
+      className: row.class_name,
+      courseCode: row.course_code,
+      sessionNumber: Number(row.session_number),
+      title: row.title,
+      answerReleaseOverride: row.answer_release_override,
+      blockReleases: row.block_releases,
+      definitionHash: row.definition_hash,
+      definition: row.public_definition,
+      gradingKey: row.private_definition
+    } });
+  }));
 
   router.post('/assignments/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
@@ -378,6 +408,18 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const dashboard = await service.getTeacherDashboard({ assignmentId: input.assignment, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, dashboard });
+  }));
+
+  if (demoSourceSecret) router.post('/teacher/demo-grants', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(z.object({ assignmentId: uuidSchema }).strict(), req.body, res, 'INVALID_ASSIGNMENT');
+    if (!input) return;
+    const result = await pool.query(fetchTeacherLearningDemoGrantSql,
+      [input.assignmentId, req.reviewer.email, req.reviewer.canAccessAllClasses]);
+    if (result.rowCount !== 1) return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
+    const row = result.rows[0];
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, grant: createLearningDemoGrant({ assignmentId: row.assignment_id,
+      publicToken: row.public_token, definitionHash: row.definition_hash, secret: demoSourceSecret }) });
   }));
 
   router.get('/teacher/live-drafts', authenticate, asyncRoute(async (req, res) => {

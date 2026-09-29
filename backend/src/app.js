@@ -1320,8 +1320,15 @@ export function createApp({
       password: config.learningErpScheduleMetabasePassword,
       timeoutMs: config.learningErpScheduleTimeoutMs
     });
+    app.use('/api/learning', (req, res, next) => {
+      if (req.get('x-progress-log-demo') === '1') {
+        return res.status(403).json({ ok: false, error: 'DEMO_REQUEST_ON_LIVE_API', message: 'Trang thử đang kết nối sai dịch vụ.' });
+      }
+      return next();
+    });
     app.use('/api/learning', createLearningRouter({
-      pool: learningPool, authenticate, erpScheduleReader: scheduleReader,
+      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret,
+      erpScheduleReader: scheduleReader,
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: createLearningTestResultReader({ pool })
     }));

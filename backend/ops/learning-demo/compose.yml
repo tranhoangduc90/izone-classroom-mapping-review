@@ -1,0 +1,39 @@
+services:
+  progress-log-demo-api:
+    build:
+      context: ../..
+      dockerfile: ops/learning-demo/Dockerfile
+    image: izone-progress-log-demo:20260929.1
+    container_name: progress-log-demo-api
+    restart: unless-stopped
+    init: true
+    env_file:
+      - /opt/progress-log-demo/.env
+    volumes:
+      - progress-log-demo-data:/app/demo-data
+    ports:
+      - "127.0.0.1:8797:8797"
+    networks:
+      - mapping-api-net
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 1024m
+    cpus: 0.75
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  progress-log-demo-data:
+
+networks:
+  mapping-api-net:
+    external: true

@@ -579,7 +579,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         if (!finalizedRow.attempt_completed) {
           throw new LearningError('ATTEMPT_FINALIZE_FAILED', 'Không thể chốt phiên làm bài.', 409);
         }
-        const isDemoAssignment = context.course_code === 'DEMO-56' && String(context.class_id) === '990000567';
+        const isDemoAssignment = ['DEMO-56', 'DEMO-67'].includes(context.course_code)
+          && String(context.class_id) === '990000567';
         if (Number(finalizedRow.response_item_count) !== responseItems.length
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
           || !finalizedRow.attendance_event_saved

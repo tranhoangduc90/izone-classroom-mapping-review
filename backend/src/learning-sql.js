@@ -1,5 +1,21 @@
 import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
 
+// Dữ liệu nhận vào: email đã xác thực và mã lớp trong câu SQL.
+// Việc chính: dùng phân công lớp hoặc quyền quản trị chỉ của Progress Log.
+// Kết quả: mọi thao tác Learning cùng kiểm một phạm vi quyền; ứng dụng khác không nhận quyền này.
+// Khi lỗi: thiếu bảng/quyền đọc làm truy vấn dừng, không tự mở quyền rộng.
+export function buildLearningClassAccessPredicate({ reviewerEmailSql, classIdSql }) {
+  const teacherAccess = buildTeacherClassAccessPredicate({ reviewerEmailSql, classIdSql });
+  return `(${teacherAccess} OR EXISTS (
+    SELECT 1
+    FROM learning.progress_log_admin AS progress_admin
+    JOIN mapping.reviewer_account AS account
+      ON account.email = progress_admin.reviewer_email AND account.status = 'active'
+    WHERE progress_admin.reviewer_email = ${reviewerEmailSql}
+      AND progress_admin.status = 'active'
+  ))`;
+}
+
 // Mọi truy vấn dùng placeholder PostgreSQL; không ghép input học viên/giảng viên vào chuỗi SQL.
 
 export const fetchPublicLearningAssignmentSql = `SELECT
@@ -66,6 +82,44 @@ export const fetchLearningJourneyContextSql = `SELECT
 FROM learning.form_assignment AS assignment
 WHERE assignment.public_token = $1::uuid
   AND assignment.status IN ('published', 'closed');`;
+
+// Chỉ dịch vụ demo có khóa máy chủ mới được đọc đáp án riêng. Không truy vấn roster/bài làm.
+export const fetchLearningDemoSourceSql = `SELECT
+  assignment.id::text AS source_assignment_id,
+  assignment.class_name_snapshot AS class_name,
+  assignment.course_code,
+  assignment.session_number,
+  assignment.title,
+  assignment.answer_release_override,
+  version.definition_hash,
+  version.public_definition,
+  grading.private_definition,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('blockId', release.block_id::text,
+    'checkpoint', release.checkpoint, 'status', release.status) ORDER BY release.checkpoint)
+    FROM learning.assignment_block_release AS release
+    WHERE release.assignment_id = assignment.id), '[]'::jsonb) AS block_releases
+FROM learning.form_assignment AS assignment
+JOIN learning.form_version AS version ON version.id = assignment.form_version_id
+JOIN learning.form_grading_key AS grading ON grading.form_version_id = version.id
+WHERE assignment.public_token = $1::uuid
+  AND assignment.status IN ('published', 'closed')
+  AND version.status = 'published';`;
+
+// Chỉ cấp link xem thử khi giảng viên có quyền với lớp của đúng phiếu đã phát hành.
+export const fetchTeacherLearningDemoGrantSql = `SELECT
+  assignment.id::text AS assignment_id,
+  assignment.public_token::text AS public_token,
+  version.definition_hash
+FROM learning.form_assignment AS assignment
+JOIN learning.form_version AS version ON version.id = assignment.form_version_id
+WHERE assignment.id = $1::uuid
+  AND assignment.status IN ('published', 'closed')
+  AND version.status = 'published'
+  AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
+  AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
+  AND ($3::boolean OR ${buildLearningClassAccessPredicate({
+    reviewerEmailSql: '$2', classIdSql: 'assignment.erp_course_class_id'
+  })});`;
 
 export const fetchAssignmentStudentSql = `SELECT
   assignment.id::text AS assignment_id,
@@ -523,7 +577,7 @@ saved_attendance_job AS (
   SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
   FROM saved_evidence
   WHERE $18 = 'self_confirmed'
-    AND NOT (COALESCE($30, '') = 'DEMO-56' AND $31::bigint = 990000567)
+    AND NOT (COALESCE($30, '') IN ('DEMO-56', 'DEMO-67') AND $31::bigint = 990000567)
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
 ),
@@ -553,7 +607,7 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
     course.erp_class_name_snapshot AS class_name
   FROM mapping.classroom_course_mapping AS course
   WHERE $2::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
       classIdSql: 'course.erp_course_class_id'
     })}
@@ -571,6 +625,8 @@ assignments AS (
   FROM learning.form_assignment AS assignment
   JOIN allowed_classes ON allowed_classes.class_id = assignment.erp_course_class_id::text
   WHERE assignment.status <> 'retired'
+    AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
+    AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
 )
 SELECT jsonb_build_object(
   'classes', COALESCE((SELECT jsonb_agg(to_jsonb(allowed_classes) ORDER BY class_name) FROM allowed_classes), '[]'::jsonb),
@@ -607,7 +663,7 @@ FROM mapping.classroom_course_mapping AS course
 WHERE course.erp_course_class_id = $3::bigint
   AND (
     $2::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
       classIdSql: 'course.erp_course_class_id'
     })}
@@ -773,7 +829,7 @@ export const updateLearningBlockReleaseSql = `WITH target AS (
     AND release.block_id = $2::uuid
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -822,7 +878,7 @@ export const markLearningReportDeliveredSql = `WITH target AS (
     AND report.status IN ('approved', 'published')
     AND (
       $7::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$6',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -861,7 +917,7 @@ export const upsertLearningTeacherHumanNoteSql = `WITH target AS (
     AND report.status IN ('ready_for_review', 'approved', 'published')
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -899,7 +955,7 @@ JOIN learning.form_assignment_roster AS roster
 WHERE assignment.id = $1::uuid
   AND (
     $4::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$3',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -947,7 +1003,7 @@ JOIN learning.form_assignment_roster AS roster
 WHERE assignment.id = $1::uuid
   AND (
     $4::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$3',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -1368,7 +1424,7 @@ LEFT JOIN LATERAL (
 WHERE assignment.id = $1::uuid
   AND (
     $3::boolean
-    OR ${buildTeacherClassAccessPredicate({
+    OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$2',
       classIdSql: 'assignment.erp_course_class_id'
     })}
@@ -1381,7 +1437,7 @@ export const fetchLearningTeacherLiveDraftsSql = `WITH authorized_assignment AS 
   WHERE assignment.id = $1::uuid
     AND (
       $3::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$2',
         classIdSql: 'assignment.erp_course_class_id'
       })}
@@ -1457,7 +1513,7 @@ export const overrideLearningAttendanceSql = `WITH target AS (
     )
     AND (
       $6::boolean
-      OR ${buildTeacherClassAccessPredicate({
+      OR ${buildLearningClassAccessPredicate({
         reviewerEmailSql: '$5',
         classIdSql: 'assignment.erp_course_class_id'
       })}

@@ -7,7 +7,7 @@
 
 import pg from 'pg';
 import { sha256, stableStringify } from '../src/learning-domain.js';
-import { fetchLearningRosterForClassSql } from '../src/learning-sql.js';
+import { buildLearningClassAccessPredicate, fetchLearningRosterForClassSql } from '../src/learning-sql.js';
 
 const { Pool } = pg;
 
@@ -45,6 +45,12 @@ const choices = {
     templateExport: 'IC2305_SESSION5_TEMPLATE',
     defaultSession: 5
   },
+  'session3-reading-writing-speaking': {
+    modulePath: '../src/learning-templates/ic2304-session3-reading-writing-speaking.js',
+    exportPrefix: 'Ic2304Session3',
+    templateExport: 'IC2304_SESSION3_TEMPLATE',
+    defaultSession: 3
+  },
   'reading1-listening1': {
     modulePath: '../src/learning-templates/ic2305-entrance-reading1-listening1.js',
     exportPrefix: 'Ic2305Entrance',
@@ -60,9 +66,14 @@ const creatorEmail = option('creator').trim().toLowerCase();
 const approverEmail = option('approver').trim().toLowerCase();
 const template = selectedModule[selected.templateExport];
 const definition = selectedModule[`build${selected.exportPrefix}Definition`]();
-const gradingKey = selectedModule[`build${selected.exportPrefix}GradingKey`]();
+const readingAnswers = (process.env.IC2304_SESSION3_READING_ANSWERS || '').trim();
+const gradingKey = formCode === 'session3-reading-writing-speaking' && !readingAnswers
+  ? null
+  : selectedModule[`build${selected.exportPrefix}GradingKey`](
+    formCode === 'session3-reading-writing-speaking'
+      ? readingAnswers.split(',').map(value => value.trim()) : undefined);
 const definitionHash = sha256(stableStringify(definition));
-const gradingHash = sha256(stableStringify(gradingKey));
+const gradingHash = gradingKey ? sha256(stableStringify(gradingKey)) : null;
 
 if (!Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 100) {
   throw new Error('INVALID_SESSION_NUMBER');
@@ -93,6 +104,7 @@ if (!apply) {
 }
 
 if (!process.env.LEARNING_DATABASE_URL) throw new Error('LEARNING_DATABASE_URL_REQUIRED');
+if (!gradingKey) throw new Error('IC2304_SESSION3_READING_ANSWERS_REQUIRED');
 if (!creatorEmail || !approverEmail) throw new Error('CREATOR_AND_APPROVER_REQUIRED');
 
 const pool = new Pool({
@@ -126,11 +138,9 @@ try {
       course.erp_class_name_snapshot AS class_name
     FROM mapping.classroom_course_mapping AS course
     WHERE upper(trim(course.erp_class_name_snapshot)) = $1
-      AND EXISTS (
-        SELECT 1 FROM mapping.reviewer_class_access AS access
-        WHERE access.reviewer_email = $2
-          AND access.erp_course_class_id = course.erp_course_class_id
-      );`, [classCode, creatorEmail]);
+      AND ${buildLearningClassAccessPredicate({
+        reviewerEmailSql: '$2', classIdSql: 'course.erp_course_class_id'
+      })};`, [classCode, creatorEmail]);
   if (classResult.rowCount !== 1) throw new Error('CLASS_NOT_FOUND_OR_CREATOR_NOT_ASSIGNED');
   const targetClass = classResult.rows[0];
   phase = 'advisory_lock';
@@ -140,6 +150,14 @@ try {
   phase = 'roster';
   const roster = await client.query(fetchLearningRosterForClassSql, [targetClass.class_id]);
   if (!roster.rowCount) throw new Error('CLASS_ROSTER_EMPTY');
+  if (formCode === 'session3-reading-writing-speaking') {
+    const conflicts = await client.query(`SELECT id FROM learning.form_assignment
+      WHERE erp_course_class_id = $1::bigint AND session_number = $2
+        AND form_version_id <> $3::uuid
+        AND status IN ('draft', 'published', 'closed') LIMIT 1;`,
+    [targetClass.class_id, sessionNumber, definition.formVersionId]);
+    if (conflicts.rowCount) throw new Error('OTHER_ASSIGNMENT_FOR_SESSION_EXISTS');
+  }
 
   phase = 'template';
   await client.query(`INSERT INTO learning.form_template (

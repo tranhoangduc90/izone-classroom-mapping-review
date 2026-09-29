@@ -1,0 +1,220 @@
+--- a/src/app.js
++++ b/src/app.js
+@@ -1304,7 +1304,15 @@
+     throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
+   }
+   if (config.learningEnabled) {
+-    app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
++    app.use('/api/learning', (req, res, next) => {
++      if (req.get('x-progress-log-demo') === '1') {
++        return res.status(403).json({ ok: false, error: 'DEMO_REQUEST_ON_LIVE_API', message: 'Trang thử đang kết nối sai dịch vụ.' });
++      }
++      return next();
++    });
++    app.use('/api/learning', createLearningRouter({
++      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret
++    }));
+   }
+   if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
+     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');
+--- a/src/config.js
++++ b/src/config.js
+@@ -9,6 +9,7 @@
+   LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+   LEARNING_DATABASE_URL: z.string().optional().default(''),
+   LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
++  LEARNING_DEMO_SOURCE_SECRET: z.string().optional().default(''),
+   SPEAKING_HOMEWORK_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+   SPEAKING_HOMEWORK_DATABASE_URL: z.string().optional().default(''),
+   SPEAKING_HOMEWORK_DB_POOL_MAX: z.coerce.number().int().min(1).max(20).default(5),
+@@ -39,6 +40,9 @@
+   }
+   if (value.ERP_SYNC_SECRET && value.ERP_SYNC_SECRET.length < 32) {
+     context.addIssue({ code: 'custom', path: ['ERP_SYNC_SECRET'], message: 'ERP_SYNC_SECRET phải có ít nhất 32 ký tự.' });
++  }
++  if (value.LEARNING_DEMO_SOURCE_SECRET && value.LEARNING_DEMO_SOURCE_SECRET.length < 32) {
++    context.addIssue({ code: 'custom', path: ['LEARNING_DEMO_SOURCE_SECRET'], message: 'Khóa dịch vụ demo phải có ít nhất 32 ký tự.' });
+   }
+   if (value.MINI_TEST_SYNC_SECRET && value.MINI_TEST_SYNC_SECRET.length < 32) {
+     context.addIssue({ code: 'custom', path: ['MINI_TEST_SYNC_SECRET'], message: 'MINI_TEST_SYNC_SECRET phải có ít nhất 32 ký tự.' });
+@@ -86,6 +90,7 @@
+     learningEnabled: parsed.LEARNING_ENABLED,
+     learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
+     learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,
++    learningDemoSourceSecret: parsed.LEARNING_DEMO_SOURCE_SECRET,
+     speakingHomeworkEnabled: parsed.SPEAKING_HOMEWORK_ENABLED,
+     speakingHomeworkDatabaseUrl: parsed.SPEAKING_HOMEWORK_DATABASE_URL,
+     speakingHomeworkDbPoolMax: parsed.SPEAKING_HOMEWORK_DB_POOL_MAX,
+--- a/src/learning-routes.js
++++ b/src/learning-routes.js
+@@ -1,8 +1,10 @@
+-import { createHash } from 'node:crypto';
++import { createHash, timingSafeEqual } from 'node:crypto';
+ import express from 'express';
+ import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
+ import { z } from 'zod';
+ import { LearningError, createLearningService } from './learning-service.js';
++import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
++import { createLearningDemoGrant } from './learning-demo-grant.js';
+ 
+ const uuidSchema = z.string().uuid();
+ const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
+@@ -138,7 +140,7 @@
+     : `ip:${ipKeyGenerator(req.ip)}`;
+ }
+ 
+-export function createLearningRouter({ pool, authenticate }) {
++export function createLearningRouter({ pool, authenticate, demoSourceSecret = '' }) {
+   const router = express.Router();
+   const service = createLearningService({ pool });
+   const coarseLimiter = rateLimit({
+@@ -192,6 +194,34 @@
+ 
+   router.use(coarseLimiter);
+ 
++  if (demoSourceSecret) router.post('/assignments/demo-source', asyncRoute(async (req, res) => {
++    const supplied = Buffer.from(String(req.get('x-learning-demo-source') || ''));
++    const expected = Buffer.from(demoSourceSecret);
++    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
++      return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
++    }
++    const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
++    if (!input) return;
++    const source = await pool.query(fetchLearningDemoSourceSql, [input.publicToken]);
++    if (source.rowCount !== 1) {
++      return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
++    }
++    const row = source.rows[0];
++    res.set('Cache-Control', 'no-store');
++    return res.json({ ok: true, source: {
++      sourceAssignmentId: row.source_assignment_id,
++      className: row.class_name,
++      courseCode: row.course_code,
++      sessionNumber: Number(row.session_number),
++      title: row.title,
++      answerReleaseOverride: row.answer_release_override,
++      blockReleases: row.block_releases,
++      definitionHash: row.definition_hash,
++      definition: row.public_definition,
++      gradingKey: row.private_definition
++    } });
++  }));
++
+   router.post('/assignments/open', asyncRoute(async (req, res) => {
+     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
+     if (!input) return;
+@@ -287,6 +317,18 @@
+     return res.json({ ok: true, dashboard });
+   }));
+ 
++  if (demoSourceSecret) router.post('/teacher/demo-grants', authenticate, asyncRoute(async (req, res) => {
++    const input = parseOrReply(z.object({ assignmentId: uuidSchema }).strict(), req.body, res, 'INVALID_ASSIGNMENT');
++    if (!input) return;
++    const result = await pool.query(fetchTeacherLearningDemoGrantSql,
++      [input.assignmentId, req.reviewer.email, req.reviewer.canAccessAllClasses]);
++    if (result.rowCount !== 1) return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
++    const row = result.rows[0];
++    res.set('Cache-Control', 'no-store');
++    return res.json({ ok: true, grant: createLearningDemoGrant({ assignmentId: row.assignment_id,
++      publicToken: row.public_token, definitionHash: row.definition_hash, secret: demoSourceSecret }) });
++  }));
++
+   router.get('/teacher/live-drafts', authenticate, asyncRoute(async (req, res) => {
+     const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
+     if (!input) return;
+--- a/src/learning-sql.js
++++ b/src/learning-sql.js
+@@ -63,6 +63,44 @@
+   AND (assignment.opens_at IS NULL OR assignment.opens_at <= now())
+   AND (assignment.closes_at IS NULL OR assignment.closes_at > now());`;
+ 
++// Chỉ dịch vụ demo có khóa máy chủ mới được đọc đáp án riêng. Không truy vấn roster/bài làm.
++export const fetchLearningDemoSourceSql = `SELECT
++  assignment.id::text AS source_assignment_id,
++  assignment.class_name_snapshot AS class_name,
++  assignment.course_code,
++  assignment.session_number,
++  assignment.title,
++  assignment.answer_release_override,
++  version.definition_hash,
++  version.public_definition,
++  grading.private_definition,
++  COALESCE((SELECT jsonb_agg(jsonb_build_object('blockId', release.block_id::text,
++    'checkpoint', release.checkpoint, 'status', release.status) ORDER BY release.checkpoint)
++    FROM learning.assignment_block_release AS release
++    WHERE release.assignment_id = assignment.id), '[]'::jsonb) AS block_releases
++FROM learning.form_assignment AS assignment
++JOIN learning.form_version AS version ON version.id = assignment.form_version_id
++JOIN learning.form_grading_key AS grading ON grading.form_version_id = version.id
++WHERE assignment.public_token = $1::uuid
++  AND assignment.status IN ('published', 'closed')
++  AND version.status = 'published';`;
++
++// Chỉ cấp link xem thử khi giảng viên có quyền với lớp của đúng phiếu đã phát hành.
++export const fetchTeacherLearningDemoGrantSql = `SELECT
++  assignment.id::text AS assignment_id,
++  assignment.public_token::text AS public_token,
++  version.definition_hash
++FROM learning.form_assignment AS assignment
++JOIN learning.form_version AS version ON version.id = assignment.form_version_id
++WHERE assignment.id = $1::uuid
++  AND assignment.status IN ('published', 'closed')
++  AND version.status = 'published'
++  AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
++  AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
++  AND ($3::boolean OR ${buildLearningClassAccessPredicate({
++    reviewerEmailSql: '$2', classIdSql: 'assignment.erp_course_class_id'
++  })});`;
++
+ export const fetchAssignmentStudentSql = `SELECT
+   assignment.id::text AS assignment_id,
+   assignment.form_version_id::text AS form_version_id,
+@@ -567,6 +605,8 @@
+   FROM learning.form_assignment AS assignment
+   JOIN allowed_classes ON allowed_classes.class_id = assignment.erp_course_class_id::text
+   WHERE assignment.status <> 'retired'
++    AND assignment.course_code IS DISTINCT FROM 'DEMO-56'
++    AND assignment.course_code IS DISTINCT FROM 'DEMO-67'
+ )
+ SELECT jsonb_build_object(
+   'classes', COALESCE((SELECT jsonb_agg(to_jsonb(allowed_classes) ORDER BY class_name) FROM allowed_classes), '[]'::jsonb),
+--- /dev/null
++++ b/src/learning-demo-grant.js
+@@ -0,0 +1,37 @@
++import { createHmac, timingSafeEqual } from 'node:crypto';
++
++const MAX_AGE_SECONDS = 300;
++
++function signature(payload, secret) {
++  return createHmac('sha256', secret).update(payload).digest('base64url');
++}
++
++// Dữ liệu nhận vào: định danh phiếu đã được giảng viên có quyền chọn.
++// Việc chính: ký link sống trong 5 phút; người giữ link không thể đổi phiếu hoặc bản chấm.
++// Kết quả: dịch vụ demo chỉ tạo lượt thử cho phiếu đã được cấp quyền.
++// Khi lỗi: từ chối link thiếu, hết hạn hoặc bị sửa.
++export function createLearningDemoGrant({ assignmentId, publicToken, definitionHash, secret, now = Date.now() }) {
++  if (typeof secret !== 'string' || secret.length < 32) throw new Error('Thiếu khóa cấp quyền demo.');
++  const payload = Buffer.from(JSON.stringify({ assignmentId, publicToken, definitionHash,
++    expiresAt: Math.floor(now / 1000) + MAX_AGE_SECONDS })).toString('base64url');
++  return `${payload}.${signature(payload, secret)}`;
++}
++
++export function verifyLearningDemoGrant(grant, secret, now = Date.now()) {
++  if (typeof grant !== 'string' || grant.length > 2048 || typeof secret !== 'string' || secret.length < 32) return null;
++  const parts = grant.split('.');
++  if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]+$/.test(parts[1])) return null;
++  const received = Buffer.from(parts[1]);
++  const expected = Buffer.from(signature(parts[0], secret));
++  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
++  try {
++    const value = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
++    if (!/^[0-9a-f-]{36}$/i.test(value.assignmentId)
++      || !/^[0-9a-f-]{36}$/i.test(value.publicToken)
++      || !/^[0-9a-f]{64}$/.test(value.definitionHash)
++      || !Number.isInteger(value.expiresAt)
++      || value.expiresAt <= Math.floor(now / 1000)
++      || value.expiresAt > Math.floor(now / 1000) + MAX_AGE_SECONDS) return null;
++    return value;
++  } catch { return null; }
++}
