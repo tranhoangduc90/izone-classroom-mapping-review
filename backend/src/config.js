@@ -9,6 +9,10 @@ const envSchema = z.object({
   LEARNING_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   LEARNING_DATABASE_URL: z.string().optional().default(''),
   LEARNING_DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(20),
+  LEARNING_ERP_SCHEDULE_METABASE_URL: z.union([z.literal(''), z.url()]).default(''),
+  LEARNING_ERP_SCHEDULE_METABASE_USERNAME: z.string().optional().default(''),
+  LEARNING_ERP_SCHEDULE_METABASE_PASSWORD: z.string().optional().default(''),
+  LEARNING_ERP_SCHEDULE_TIMEOUT_MS: z.coerce.number().int().min(2000).max(15000).default(7000),
   SPEAKING_HOMEWORK_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   SPEAKING_HOMEWORK_DATABASE_URL: z.string().optional().default(''),
   SPEAKING_HOMEWORK_DB_POOL_MAX: z.coerce.number().int().min(1).max(20).default(5),
@@ -40,6 +44,15 @@ const envSchema = z.object({
   APP_VERSION: z.string().trim().max(100).default('1.0.0'),
   BUILD_SHA: z.string().trim().regex(/^(?:unknown|[0-9a-f]{7,64})$/i).default('unknown')
 }).superRefine((value, context) => {
+  const scheduleFields = [value.LEARNING_ERP_SCHEDULE_METABASE_URL,
+    value.LEARNING_ERP_SCHEDULE_METABASE_USERNAME, value.LEARNING_ERP_SCHEDULE_METABASE_PASSWORD];
+  if (scheduleFields.some(Boolean) && !scheduleFields.every(Boolean)) {
+    context.addIssue({ code: 'custom', message: 'Cấu hình đọc lịch ERP phải có đủ URL, tài khoản và mật khẩu.' });
+  }
+  if (value.LEARNING_ERP_SCHEDULE_METABASE_URL
+    && !value.LEARNING_ERP_SCHEDULE_METABASE_URL.startsWith('https://')) {
+    context.addIssue({ code: 'custom', message: 'Nguồn lịch ERP phải dùng HTTPS.' });
+  }
   if (Boolean(value.ERP_SYNC_URL) !== Boolean(value.ERP_SYNC_SECRET)) {
     context.addIssue({ code: 'custom', message: 'ERP_SYNC_URL và ERP_SYNC_SECRET phải được cấu hình cùng nhau.' });
   }
@@ -124,6 +137,10 @@ export function loadConfig(env = process.env) {
     learningEnabled: parsed.LEARNING_ENABLED,
     learningDatabaseUrl: parsed.LEARNING_DATABASE_URL,
     learningDbPoolMax: parsed.LEARNING_DB_POOL_MAX,
+    learningErpScheduleMetabaseUrl: parsed.LEARNING_ERP_SCHEDULE_METABASE_URL,
+    learningErpScheduleMetabaseUsername: parsed.LEARNING_ERP_SCHEDULE_METABASE_USERNAME,
+    learningErpScheduleMetabasePassword: parsed.LEARNING_ERP_SCHEDULE_METABASE_PASSWORD,
+    learningErpScheduleTimeoutMs: parsed.LEARNING_ERP_SCHEDULE_TIMEOUT_MS,
     speakingHomeworkEnabled: parsed.SPEAKING_HOMEWORK_ENABLED,
     speakingHomeworkDatabaseUrl: parsed.SPEAKING_HOMEWORK_DATABASE_URL,
     speakingHomeworkDbPoolMax: parsed.SPEAKING_HOMEWORK_DB_POOL_MAX,

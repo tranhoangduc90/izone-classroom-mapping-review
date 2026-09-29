@@ -43,9 +43,14 @@ const submitSchema = z.object({
   responses: draftSchema.shape.responses
 }).strict();
 const resultSchema = z.object({ attemptToken: uuidSchema }).strict();
-const studentJourneySchema = z.object({
-  accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/)
-}).strict();
+const studentJourneySchema = z.union([
+  z.object({ accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/) }).strict(),
+  z.object({
+    publicToken: uuidSchema,
+    studentRef: uuidSchema,
+    identityConfirmed: z.literal(true)
+  }).strict()
+]);
 const publishReflectionSchema = z.object({
   title: z.string().trim().min(3).max(200),
   courseCode: z.string().trim().max(80).optional().default(''),
@@ -78,6 +83,46 @@ const publishQuizSchema = z.object({
   }
 });
 const dashboardQuerySchema = z.object({ assignment: uuidSchema }).strict();
+const teacherJourneyPlanSchema = z.object({
+  assignmentId: uuidSchema,
+  totalSessions: z.number().int().min(1).max(100),
+  testSessionNumbers: z.array(z.number().int().min(1).max(100)).max(100),
+  testSources: z.array(z.object({
+    sessionNumber: z.number().int().min(1).max(100),
+    testSlug: z.string().regex(/^(?:term-test-[1-9]\d*|mini-test-[a-z0-9-]+)$/)
+  }).strict()).max(100).optional(),
+  sessionDates: z.array(z.object({
+    sessionNumber: z.number().int().min(1).max(100),
+    date: z.iso.date(),
+    erpSessionId: z.string().regex(/^\d{1,18}$/).optional()
+  }).strict()).max(100).optional(),
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+}).strict().superRefine((value, context) => {
+  const numbers = value.testSessionNumbers;
+  if (numbers.some((number, index) => number > value.totalSessions
+    || (index > 0 && number <= numbers[index - 1]))) {
+    context.addIssue({ code: 'custom', path: ['testSessionNumbers'],
+      message: 'Các buổi Test phải tăng dần, không trùng và nằm trong tổng số buổi.' });
+  }
+  if ((value.sessionDates || []).some((item, index) => item.sessionNumber > value.totalSessions
+    || (index > 0 && item.sessionNumber <= value.sessionDates[index - 1].sessionNumber))) {
+    context.addIssue({ code: 'custom', path: ['sessionDates'],
+      message: 'Ngày học phải gắn với buổi tăng dần, không trùng và nằm trong tổng số buổi.' });
+  }
+  const erpIds = (value.sessionDates || []).map(item => item.erpSessionId).filter(Boolean);
+  if (new Set(erpIds).size !== erpIds.length) {
+    context.addIssue({ code: 'custom', path: ['sessionDates'],
+      message: 'Một dòng lịch ERP chỉ được ghép với một buổi.' });
+  }
+  const testSources = value.testSources || [];
+  if (testSources.some((item, index) => item.sessionNumber > value.totalSessions
+    || !numbers.includes(item.sessionNumber)
+    || (index > 0 && item.sessionNumber <= testSources[index - 1].sessionNumber))
+    || new Set(testSources.map(item => item.testSlug)).size !== testSources.length) {
+    context.addIssue({ code: 'custom', path: ['testSources'],
+      message: 'Mỗi bài Test phải ghép với một buổi Test duy nhất, theo thứ tự tăng dần.' });
+  }
+});
 const attendanceOverrideSchema = z.object({
   assignmentId: uuidSchema,
   studentRef: uuidSchema,
@@ -138,9 +183,10 @@ function attemptRateKey(req) {
     : `ip:${ipKeyGenerator(req.ip)}`;
 }
 
-export function createLearningRouter({ pool, authenticate }) {
+export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
+  testSourceReader = null, testResultReader = null }) {
   const router = express.Router();
-  const service = createLearningService({ pool });
+  const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader });
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
     limit: 12_000,
@@ -183,9 +229,10 @@ export function createLearningRouter({ pool, authenticate }) {
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     keyGenerator: req => {
-      const accessToken = String(req.body?.accessToken || '');
-      if (!accessToken) return `journey-ip:${ipKeyGenerator(req.ip)}`;
-      return `journey:${createHash('sha256').update(accessToken, 'utf8').digest('hex')}`;
+      const scope = req.body?.accessToken || (req.body?.publicToken && req.body?.studentRef
+        ? `${req.body.publicToken}:${req.body.studentRef}` : '');
+      if (!scope) return `journey-ip:${ipKeyGenerator(req.ip)}`;
+      return `journey:${createHash('sha256').update(scope, 'utf8').digest('hex')}`;
     },
     message: { ok: false, error: 'RATE_LIMITED', message: 'Link đang được mở quá nhiều lần; hãy chờ một phút.' }
   });
@@ -196,6 +243,14 @@ export function createLearningRouter({ pool, authenticate }) {
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
     const assignment = await service.getPublicAssignment(input.publicToken);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, assignment });
+  }));
+
+  router.post('/student/journey-context', journeyLimiter, asyncRoute(async (req, res) => {
+    const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
+    if (!input) return;
+    const assignment = await service.getLearningJourneyContext(input.publicToken);
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, assignment });
   }));
@@ -277,6 +332,44 @@ export function createLearningRouter({ pool, authenticate }) {
     const published = await service.publishQuizForm({ ...input, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.status(201).json({ ok: true, published });
+  }));
+
+  router.get('/teacher/journey-plan', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_JOURNEY_PLAN_QUERY');
+    if (!input) return;
+    const plan = await service.getTeacherJourneyPlan({
+      assignmentId: input.assignment, reviewer: req.reviewer
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, plan });
+  }));
+
+  router.get('/teacher/erp-schedule', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_ERP_SCHEDULE_QUERY');
+    if (!input) return;
+    const schedule = await service.getTeacherErpSchedule({
+      assignmentId: input.assignment, reviewer: req.reviewer
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, schedule });
+  }));
+
+  router.get('/teacher/test-sources', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_TEST_SOURCES_QUERY');
+    if (!input) return;
+    const sources = await service.getTeacherTestSources({
+      assignmentId: input.assignment, reviewer: req.reviewer
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, sources });
+  }));
+
+  router.put('/teacher/journey-plan', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(teacherJourneyPlanSchema, req.body, res, 'INVALID_JOURNEY_PLAN');
+    if (!input) return;
+    const plan = await service.saveTeacherJourneyPlan({ ...input, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, plan });
   }));
 
   router.get('/teacher/dashboard', authenticate, asyncRoute(async (req, res) => {

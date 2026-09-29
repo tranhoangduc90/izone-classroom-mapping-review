@@ -47,6 +47,26 @@ WHERE assignment.public_token = $1::uuid
   AND (assignment.opens_at IS NULL OR assignment.opens_at <= now())
   AND (assignment.closes_at IS NULL OR assignment.closes_at > now());`;
 
+export const fetchLearningJourneyContextSql = `SELECT
+  assignment.id::text AS assignment_id,
+  assignment.erp_course_class_id::text AS class_id,
+  assignment.class_name_snapshot AS class_name,
+  assignment.course_code,
+  assignment.session_number,
+  assignment.title,
+  COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'studentRef', roster.student_ref::text,
+      'name', roster.student_name_snapshot,
+      'discriminator', roster.display_discriminator
+    ) ORDER BY roster.student_name_snapshot, roster.student_ref)
+    FROM learning.form_assignment_roster AS roster
+    WHERE roster.assignment_id = assignment.id
+  ), '[]'::jsonb) AS roster
+FROM learning.form_assignment AS assignment
+WHERE assignment.public_token = $1::uuid
+  AND assignment.status IN ('published', 'closed');`;
+
 export const fetchAssignmentStudentSql = `SELECT
   assignment.id::text AS assignment_id,
   assignment.form_version_id::text AS form_version_id,
@@ -953,12 +973,63 @@ export const insertLearningSessionFeedbackSql = `INSERT INTO learning.teacher_se
 RETURNING id::text, assignment_id::text, student_ref::text, skill_code,
   revision, note_text, sent_by_email, sent_at, operation_id::text;`;
 
+export const authorizeLearningJourneyPlanAssignmentSql = `SELECT
+  assignment.erp_course_class_id::text AS class_id,
+  assignment.class_name_snapshot AS class_name,
+  GREATEST(
+    COALESCE((SELECT max(candidate.session_number) FROM learning.form_assignment AS candidate
+      WHERE candidate.erp_course_class_id = assignment.erp_course_class_id
+        AND candidate.status IN ('published', 'closed')), 0),
+    COALESCE((SELECT max(event.session_number) FROM learning.evidence_event AS event
+      WHERE event.erp_course_class_id = assignment.erp_course_class_id
+        AND (event.visibility = 'student_visible'
+          OR event.source_system IN ('term_test', 'mini_test'))), 0),
+    COALESCE((SELECT max(report.to_session_number) FROM learning.periodic_report AS report
+      WHERE report.erp_course_class_id = assignment.erp_course_class_id
+        AND report.status = 'published'), 0)
+  ) AS highest_known_session
+FROM learning.form_assignment AS assignment
+WHERE assignment.id = $1::uuid
+  AND ($3::boolean OR ${buildTeacherClassAccessPredicate({
+    reviewerEmailSql: '$2',
+    classIdSql: 'assignment.erp_course_class_id'
+  })});`;
+
+export const fetchLearningJourneyPlanSql = `SELECT
+  erp_course_class_id::text AS class_id,
+  total_sessions, test_session_numbers, test_sources, session_dates, revision, confirmed_by_email, confirmed_at
+FROM learning.class_journey_plan
+WHERE erp_course_class_id = $1::bigint;`;
+
+export const saveLearningJourneyPlanSql = `INSERT INTO learning.class_journey_plan (
+  erp_course_class_id, total_sessions, test_session_numbers, test_sources, session_dates, revision,
+  confirmed_by_email, confirmed_at
+) VALUES ($1::bigint, $2, $3::integer[], $7::jsonb, $6::jsonb, 1, $5, now())
+ON CONFLICT (erp_course_class_id) DO UPDATE SET
+  total_sessions = EXCLUDED.total_sessions,
+  test_session_numbers = EXCLUDED.test_session_numbers,
+  test_sources = EXCLUDED.test_sources,
+  session_dates = EXCLUDED.session_dates,
+  revision = learning.class_journey_plan.revision + 1,
+  confirmed_by_email = EXCLUDED.confirmed_by_email,
+  confirmed_at = now()
+WHERE learning.class_journey_plan.revision = $4
+RETURNING erp_course_class_id::text AS class_id, total_sessions,
+  test_session_numbers, test_sources, session_dates, revision, confirmed_by_email, confirmed_at;`;
+
 export const fetchStudentCourseJourneySql = `WITH access AS (
   SELECT erp_course_class_id, student_ref, expires_at
   FROM learning.student_progress_access
   WHERE token_hash = $1
     AND status = 'active'
     AND expires_at > now()
+  UNION ALL
+  SELECT assignment.erp_course_class_id, roster.student_ref, NULL::timestamptz AS expires_at
+  FROM learning.form_assignment AS assignment
+  JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id
+  WHERE assignment.public_token = $2::uuid
+    AND roster.student_ref = $3::uuid
+    AND assignment.status IN ('published', 'closed')
 ), identity_snapshot AS (
   SELECT
     access.erp_course_class_id,
@@ -980,17 +1051,50 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
   JOIN learning.form_assignment_roster AS roster
     ON roster.assignment_id = assignment.id
     AND roster.student_ref = access.student_ref
+), session_numbers AS (
+  SELECT generate_series(1, GREATEST(
+    COALESCE((SELECT max(a.session_number) FROM learning.form_assignment AS a
+      WHERE a.erp_course_class_id = access.erp_course_class_id
+        AND a.status IN ('published', 'closed')), 0),
+    COALESCE((SELECT max(e.session_number) FROM learning.evidence_event AS e
+      WHERE e.erp_course_class_id = access.erp_course_class_id
+        AND e.student_ref = access.student_ref
+        AND (e.visibility = 'student_visible' OR e.source_system IN ('term_test', 'mini_test'))), 0),
+    COALESCE((SELECT max(r.to_session_number) FROM learning.periodic_report AS r
+      WHERE r.erp_course_class_id = access.erp_course_class_id
+        AND r.student_ref = access.student_ref AND r.status = 'published'), 0),
+    COALESCE(plan.total_sessions, 0)
+  )) AS session_number
+  FROM access
+  LEFT JOIN learning.class_journey_plan AS plan
+    ON plan.erp_course_class_id = access.erp_course_class_id
 ), session_rows AS (
   SELECT
     assignment.id,
-    assignment.session_number,
-    assignment.title,
+    session_numbers.session_number,
+    COALESCE(test_event.title,
+      CASE WHEN session_numbers.session_number = ANY(plan.test_session_numbers)
+        THEN 'Buổi Test' END,
+      assignment.title, 'Buổi ' || session_numbers.session_number::text) AS title,
+    CASE WHEN test_event.title IS NOT NULL
+      OR session_numbers.session_number = ANY(plan.test_session_numbers)
+      THEN 'test' ELSE 'lesson' END AS session_kind,
     assignment.status AS assignment_status,
+    (SELECT date_item->>'date' FROM jsonb_array_elements(COALESCE(plan.session_dates, '[]'::jsonb)) AS date_item
+      WHERE (date_item->>'sessionNumber')::integer = session_numbers.session_number
+      LIMIT 1) AS session_date,
+    CASE WHEN assignment.id IS NOT NULL THEN 'progress_log'
+      WHEN test_event.title IS NOT NULL THEN 'test_evidence'
+      WHEN plan.erp_course_class_id IS NOT NULL THEN 'confirmed_plan'
+      ELSE 'inferred_gap' END AS data_origin,
     student_status.attempt_status,
     student_status.completeness,
     student_status.grading_status,
     student_status.submitted_at,
     student_status.attendance_status,
+    CASE WHEN portal_job.status IS NULL THEN NULL ELSE jsonb_build_object(
+      'status', portal_job.status, 'updatedAt', portal_job.updated_at
+    ) END AS portal_sync,
     COALESCE(evidence.evidence_count, 0) AS evidence_count,
     COALESCE(evidence.source_systems, '[]'::jsonb) AS evidence_sources,
     CASE WHEN after_report.id IS NULL THEN NULL ELSE jsonb_build_object(
@@ -1008,14 +1112,44 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
       'sentAt', speaking_feedback.sent_at
     ) END AS teacher_session_feedback
   FROM access
-  JOIN learning.form_assignment AS assignment
-    ON assignment.erp_course_class_id = access.erp_course_class_id
-  JOIN learning.form_assignment_roster AS roster
-    ON roster.assignment_id = assignment.id
-    AND roster.student_ref = access.student_ref
+  JOIN session_numbers ON true
+  LEFT JOIN learning.class_journey_plan AS plan
+    ON plan.erp_course_class_id = access.erp_course_class_id
+  LEFT JOIN LATERAL (
+    SELECT candidate.*
+    FROM learning.form_assignment AS candidate
+    JOIN learning.form_assignment_roster AS candidate_roster
+      ON candidate_roster.assignment_id = candidate.id
+      AND candidate_roster.student_ref = access.student_ref
+    WHERE candidate.erp_course_class_id = access.erp_course_class_id
+      AND candidate.session_number = session_numbers.session_number
+      AND candidate.status IN ('published', 'closed')
+    ORDER BY candidate.created_at DESC, candidate.id DESC
+    LIMIT 1
+  ) AS assignment ON true
+  LEFT JOIN LATERAL (
+    SELECT CASE event.source_system WHEN 'mini_test' THEN 'Mini Test' ELSE 'Term Test' END AS title
+    FROM learning.evidence_event AS event
+    WHERE event.erp_course_class_id = access.erp_course_class_id
+      AND event.student_ref = access.student_ref
+      AND event.session_number = session_numbers.session_number
+      AND event.source_system IN ('term_test', 'mini_test')
+    ORDER BY event.occurred_at DESC, event.id DESC
+    LIMIT 1
+  ) AS test_event ON true
   LEFT JOIN learning.assignment_student_status AS student_status
     ON student_status.assignment_id = assignment.id
     AND student_status.student_ref = access.student_ref
+  LEFT JOIN LATERAL (
+    SELECT job.status, job.updated_at
+    FROM learning.outbox_job AS job
+    WHERE job.job_type = 'sync_portal_attendance'
+      AND job.entity_key = 'student:' || access.student_ref::text
+      AND job.unit_key = 'portal-attendance:' || assignment.id::text
+        || ':session:' || session_numbers.session_number::text
+    ORDER BY job.created_at DESC, job.id DESC
+    LIMIT 1
+  ) AS portal_job ON true
   LEFT JOIN LATERAL (
     SELECT
       count(*)::integer AS evidence_count,
@@ -1023,7 +1157,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     FROM learning.evidence_event AS event
     WHERE event.erp_course_class_id = access.erp_course_class_id
       AND event.student_ref = access.student_ref
-      AND event.session_number = assignment.session_number
+      AND event.session_number = session_numbers.session_number
       AND (event.assignment_id IS NULL OR event.assignment_id = assignment.id)
       AND event.visibility = 'student_visible'
   ) AS evidence ON true
@@ -1047,18 +1181,21 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
       AND feedback.skill_code = 'speaking'
     ORDER BY feedback.revision DESC LIMIT 1
   ) AS speaking_feedback ON true
-  WHERE assignment.status IN ('published', 'closed')
 ), sessions AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'assignmentId', id::text,
     'sessionNumber', session_number,
+    'sessionDate', session_date,
+    'sessionKind', session_kind,
     'title', title,
     'assignmentStatus', assignment_status,
+    'dataOrigin', data_origin,
     'attemptStatus', attempt_status,
     'completeness', completeness,
     'gradingStatus', grading_status,
     'submittedAt', submitted_at,
     'attendanceStatus', attendance_status,
+    'portalSync', portal_sync,
     'evidenceCount', evidence_count,
     'evidenceSources', evidence_sources,
     'afterSessionReport', after_session_report,
@@ -1090,9 +1227,13 @@ SELECT
   identity_snapshot.erp_course_class_id::text AS class_id,
   identity_snapshot.class_name,
   identity_snapshot.expires_at,
+  plan.total_sessions AS planned_sessions,
+  plan.test_sources AS test_sources,
   sessions.items AS sessions,
   reports.items AS reports
 FROM identity_snapshot
+LEFT JOIN learning.class_journey_plan AS plan
+  ON plan.erp_course_class_id = identity_snapshot.erp_course_class_id
 CROSS JOIN sessions
 CROSS JOIN reports;`;
 

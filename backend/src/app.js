@@ -5,6 +5,9 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
+import { createLearningErpScheduleReader } from './learning-erp-schedule.js';
+import { createLearningTestSourceReader } from './learning-test-sources.js';
+import { createLearningTestResultReader } from './learning-test-results.js';
 import { createSpeakingHomeworkRouter } from './speaking-homework-routes.js';
 import {
   completeReadingAttemptSql,
@@ -399,6 +402,7 @@ export function createApp({
   config,
   pool,
   learningPool = null,
+  learningErpScheduleReader = null,
   speakingHomeworkPool = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
@@ -1310,7 +1314,17 @@ export function createApp({
     throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
   }
   if (config.learningEnabled) {
-    app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
+    const scheduleReader = learningErpScheduleReader ?? createLearningErpScheduleReader({
+      url: config.learningErpScheduleMetabaseUrl,
+      username: config.learningErpScheduleMetabaseUsername,
+      password: config.learningErpScheduleMetabasePassword,
+      timeoutMs: config.learningErpScheduleTimeoutMs
+    });
+    app.use('/api/learning', createLearningRouter({
+      pool: learningPool, authenticate, erpScheduleReader: scheduleReader,
+      testSourceReader: createLearningTestSourceReader({ pool }),
+      testResultReader: createLearningTestResultReader({ pool })
+    }));
   }
   if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');

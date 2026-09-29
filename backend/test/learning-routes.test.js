@@ -66,6 +66,86 @@ test('link hành trình sai định dạng bị từ chối trước khi chạm 
   assert.equal(response.body.error, 'INVALID_PROGRESS_LINK');
 });
 
+test('kế hoạch Journey chặn buổi Test trùng, sai thứ tự hoặc vượt tổng buổi', async () => {
+  for (const testSessionNumbers of [[5, 5], [7, 5], [31]]) {
+    const response = await request(appWithPool(failIfQueriedPool()))
+      .put('/api/learning/teacher/journey-plan')
+      .send({
+        assignmentId: '11111111-1111-4111-8111-111111111111',
+        totalSessions: 30, testSessionNumbers, expectedRevision: 0
+      });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'INVALID_JOURNEY_PLAN');
+  }
+});
+
+test('kế hoạch Journey từ chối ngày trùng, ngày sai và buổi vượt tổng', async () => {
+  for (const sessionDates of [
+    [{ sessionNumber: 2, date: '2026-09-01' }, { sessionNumber: 2, date: '2026-09-02' }],
+    [{ sessionNumber: 31, date: '2026-09-01' }],
+    [{ sessionNumber: 2, date: '2026-02-30' }]
+  ]) {
+    const response = await request(appWithPool(failIfQueriedPool()))
+      .put('/api/learning/teacher/journey-plan')
+      .send({
+        assignmentId: '11111111-1111-4111-8111-111111111111',
+        totalSessions: 30, testSessionNumbers: [], sessionDates, expectedRevision: 0
+      });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'INVALID_JOURNEY_PLAN');
+  }
+});
+
+test('ghép lịch ERP từ chối ID trùng và query lịch sai trước database', async () => {
+  const assignmentId = '11111111-1111-4111-8111-111111111111';
+  const badPlan = await request(appWithPool(failIfQueriedPool()))
+    .put('/api/learning/teacher/journey-plan').send({
+      assignmentId, totalSessions: 8, testSessionNumbers: [], expectedRevision: 0,
+      sessionDates: [
+        { sessionNumber: 1, date: '2026-09-14', erpSessionId: '35811' },
+        { sessionNumber: 2, date: '2026-09-17', erpSessionId: '35811' }
+      ]
+    });
+  assert.equal(badPlan.status, 400);
+  assert.equal(badPlan.body.error, 'INVALID_JOURNEY_PLAN');
+  const badQuery = await request(appWithPool(failIfQueriedPool()))
+    .get('/api/learning/teacher/erp-schedule?assignment=not-a-uuid');
+  assert.equal(badQuery.status, 400);
+  assert.equal(badQuery.body.error, 'INVALID_ERP_SCHEDULE_QUERY');
+  const badTestQuery = await request(appWithPool(failIfQueriedPool()))
+    .get('/api/learning/teacher/test-sources?assignment=not-a-uuid');
+  assert.equal(badTestQuery.status, 400);
+  assert.equal(badTestQuery.body.error, 'INVALID_TEST_SOURCES_QUERY');
+  const badTestMapping = await request(appWithPool(failIfQueriedPool()))
+    .put('/api/learning/teacher/journey-plan').send({
+      assignmentId, totalSessions: 8, testSessionNumbers: [5], expectedRevision: 0,
+      testSources: [{ sessionNumber: 6, testSlug: 'mini-test-lesson-5' }]
+    });
+  assert.equal(badTestMapping.status, 400);
+  assert.equal(badTestMapping.body.error, 'INVALID_JOURNEY_PLAN');
+});
+
+test('ngữ cảnh Journey của phiếu cũ từ chối token sai trước database', async () => {
+  const response = await request(appWithPool(failIfQueriedPool()))
+    .post('/api/learning/student/journey-context').send({ publicToken: 'sai' });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'INVALID_ASSIGNMENT_TOKEN');
+});
+
+test('Journey trong Progress Log bắt buộc xác nhận tên và UUID hợp lệ', async () => {
+  for (const body of [
+    { publicToken: '11111111-1111-4111-8111-111111111111',
+      studentRef: '22222222-2222-4222-8222-222222222222' },
+    { publicToken: 'khong-hop-le', studentRef: '22222222-2222-4222-8222-222222222222',
+      identityConfirmed: true }
+  ]) {
+    const response = await request(appWithPool(failIfQueriedPool()))
+      .post('/api/learning/student/course-journey').send(body);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, 'INVALID_PROGRESS_LINK');
+  }
+});
+
 test('tạo link hành trình bắt buộc identity và token đủ mạnh', async () => {
   const response = await request(appWithPool(failIfQueriedPool()))
     .post('/api/learning/teacher/student-progress-links')
