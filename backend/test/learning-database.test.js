@@ -964,7 +964,7 @@ test('Listening IC2304 chấm khi nộp phần, khôi phục được và hiện
   await database.close();
 });
 
-test('IC2305 hiện đáp án sau checkpoint theo phiếu, giữ bản cũ và không chấm tự luận', async () => {
+test('IC2305 hiện đáp án sau checkpoint và cả demo 56/67 đều không ghi Portal', async () => {
   const { database, service } = await setupDatabase();
   const definition = buildIc2305Session5Definition();
   const gradingKey = buildIc2305Session5GradingKey();
@@ -1105,6 +1105,26 @@ test('IC2305 hiện đáp án sau checkpoint theo phiếu, giữ bản cũ và k
   const demoJobs = await database.query(`SELECT count(*)::int AS total FROM learning.outbox_job
     WHERE job_type = 'sync_portal_attendance' AND entity_key = $1`, [`student:${demoStudentRef}`]);
   assert.equal(demoJobs.rows[0].total, 0);
+  await database.query(`UPDATE learning.form_assignment
+    SET course_code = 'DEMO-67', class_name_snapshot = 'IC2304 · Bản dùng thử',
+      session_number = 3 WHERE id = $1::uuid`, [demoAssignmentId]);
+  const demo67Attempt = await service.startAttempt({ publicToken: demoToken.rows[0].public_token,
+    studentRef: demoStudentRef, clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true });
+  await service.saveDraft({ attemptToken: demo67Attempt.attemptToken, revision: 1,
+    definitionHash: demo67Attempt.definitionHash, responses });
+  for (const block of definition.blocks) {
+    await service.submitCheckpoint({ attemptToken: demo67Attempt.attemptToken,
+      checkpointSubmissionId: crypto.randomUUID(), blockId: block.blockId,
+      checkpoint: block.checkpoint, draftRevision: 1, definitionHash: demo67Attempt.definitionHash,
+      responses, idempotencyKey: `demo67:${crypto.randomUUID()}` });
+  }
+  const demo67Final = await service.submit({ attemptToken: demo67Attempt.attemptToken,
+    submissionId: crypto.randomUUID(), definitionHash: demo67Attempt.definitionHash,
+    draftRevision: 1, responses });
+  assert.equal(demo67Final.result.answerRelease, 'released');
+  const demo67Jobs = await database.query(`SELECT count(*)::int AS total FROM learning.outbox_job
+    WHERE job_type = 'sync_portal_attendance' AND entity_key = $1`, [`student:${demoStudentRef}`]);
+  assert.equal(demo67Jobs.rows[0].total, 0);
   const realRoster = await database.query(`SELECT count(*)::int AS total FROM learning.form_assignment_roster
     WHERE assignment_id = $1::uuid AND student_ref = $2::uuid`, [assignmentId, demoStudentRef]);
   assert.equal(realRoster.rows[0].total, 0);

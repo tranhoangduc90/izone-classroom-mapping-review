@@ -557,7 +557,7 @@ saved_attendance_job AS (
   SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
   FROM saved_evidence
   WHERE $18 = 'self_confirmed'
-    AND NOT (COALESCE($30, '') = 'DEMO-56' AND $31::bigint = 990000567)
+    AND NOT (COALESCE($30, '') IN ('DEMO-56', 'DEMO-67') AND $31::bigint = 990000567)
   ON CONFLICT (idempotency_key) DO NOTHING
   RETURNING id
 ),
