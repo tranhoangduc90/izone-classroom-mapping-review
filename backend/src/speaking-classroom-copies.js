@@ -4,7 +4,7 @@ import { SpeakingHomeworkError } from './speaking-homework.js';
 const CTA_TEXT = 'NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING';
 const PAGE_ORIGIN = 'https://tranhoangduc90.github.io';
 const PAGE_PATH = '/izone-ai-team-pages/speaking-homework/lesson-3.html';
-const LESSON_4_CODE = '67-speaking-chen_diem_giua';
+const LESSON_4_CODE = '67-speaking-diem_giua';
 
 function textRuns(document) {
   const runs = [];

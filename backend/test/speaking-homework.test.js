@@ -681,7 +681,7 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
 
 test('CTA của mã bài buổi 4 mở đúng trang buổi 4 và giữ Doc ID cùng lớp', () => {
   const url = new URL(speakingCopyUrl({ documentId: 'lesson4-doc', classCode: 'IC2304',
-    assignmentCode: '67-speaking-chen_diem_giua' }));
+    assignmentCode: '67-speaking-diem_giua' }));
   assert.equal(url.pathname.endsWith('/lesson-4.html'), true);
   assert.equal(url.searchParams.get('documentId'), 'lesson4-doc');
   assert.equal(url.searchParams.get('class'), 'IC2304');
@@ -722,7 +722,7 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
     const created = await pool.query(`INSERT INTO speaking_homework.assignment
       (class_id, course_id, course_work_id, assignment_code, doctor_course_key,
         required_practice_count, title, status)
-      VALUES (2304, 'course-2304', 'lesson-4', '67-speaking-chen_diem_giua',
+      VALUES (2304, 'course-2304', 'lesson-4', '67-speaking-diem_giua',
         '67', 2, 'Homework Lesson 4', 'open') RETURNING id`);
     const assignmentId = created.rows[0].id;
     for (const [position, key, minimum] of [[1, 'insert_middle', 3], [2, 'freestyle', 3]]) {
@@ -813,13 +813,13 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
     await pool.query("UPDATE speaking_homework.assignment SET status = 'closed' WHERE id = $1", [assignmentId]);
     const resumedService = createSpeakingHomeworkService({ pool, accessSecret });
     const closedPage = await service.openAssignment({ documentId: 'lesson4-doc',
-      assignmentCode: '67-speaking-chen_diem_giua' });
+      assignmentCode: '67-speaking-diem_giua' });
     assert.equal(closedPage.assignmentStatus, 'closed');
     await assert.rejects(resumedService.startSession({ documentId: 'lesson4-doc',
-      assignmentCode: '67-speaking-chen_diem_giua', studentRef: secondStudentRef }),
+      assignmentCode: '67-speaking-diem_giua', studentRef: secondStudentRef }),
     { code: 'HOMEWORK_CLOSED' });
     const resumed = await resumedService.startSession({ documentId: 'lesson4-doc',
-      assignmentCode: '67-speaking-chen_diem_giua', studentRef });
+      assignmentCode: '67-speaking-diem_giua', studentRef });
     assert.equal((await resumedService.open({ accessToken: resumed.accessToken, studentRef })).receipt.id,
       receipt.id);
     const later = await resumedService.requestPracticeCheck({ accessToken: resumed.accessToken,
