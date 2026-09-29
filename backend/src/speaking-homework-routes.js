@@ -117,7 +117,7 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   const docsJobs = createSpeakingDocsJobs({ pool });
   const alerts = createSpeakingAlerts({ pool });
   const classroomCopies = createSpeakingClassroomCopies({ pool });
-  router.use(rateLimit({ windowMs: 60_000, limit: 120,
+  router.use(rateLimit({ windowMs: 60_000, limit: 360,
     standardHeaders: 'draft-8', legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng chờ.' } }));
 

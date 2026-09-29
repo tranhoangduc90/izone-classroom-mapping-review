@@ -734,7 +734,9 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
     await pool.query(`INSERT INTO speaking_homework.assignment_document
       (assignment_id, document_id, student_ref, cta_verified_at)
       VALUES ($1, 'lesson4-doc', $2, now())`, [assignmentId, studentRef]);
-    const token = 'lesson4-access-token-with-32-characters';
+    const accessSecret = 'lesson4-access-secret-with-32-characters';
+    const token = crypto.createHmac('sha256', accessSecret)
+      .update(`${assignmentId}:lesson4-doc:${studentRef}`, 'utf8').digest('base64url');
     await pool.query(`INSERT INTO speaking_homework.access_grant
       (assignment_id, student_ref, document_id, token_hash)
       VALUES ($1, $2, 'lesson4-doc', $3)`,
@@ -747,9 +749,12 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
       [`lesson4-exercise-${number}`, title, 'https://example.test/practice']);
       ids.push(exercise.rows[0].id);
     }
-    for (const id of ids.slice(0, 2)) await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
+    for (const id of ids.slice(0, 1)) await pool.query(`INSERT INTO speaking_homework.doctor_recommendation
       (class_id, student_ref, exercise_id, recommendation_count, waiting)
       VALUES (2304, $1, $2, 2, true)`, [studentRef, id]);
+    const initialDoctor = await service.listDoctor({ accessToken: token, studentRef });
+    assert.equal(initialDoctor.personalCount, 1);
+    assert.equal(initialDoctor.sharedCatalog.length, 2);
     await checkAccepted(service, token, studentRef, 'insert_middle', 'a', 3);
     await checkAccepted(service, token, studentRef, 'freestyle', 'b', 3);
     await assert.rejects(service.finish({ accessToken: token, studentRef }),
@@ -766,6 +771,10 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
       });
       assert.equal(checked.status, 'accepted');
     }
+    const practicedFallback = await pool.query(`SELECT practice_count FROM speaking_homework.doctor_recommendation
+      WHERE class_id = 2304 AND student_ref = $1 AND exercise_id = $2`,
+    [studentRef, ids[1]]);
+    assert.equal(practicedFallback.rows[0].practice_count, 1);
     const receipt = await service.finish({ accessToken: token, studentRef });
     assert.ok(receipt.id);
     const before = await service.open({ accessToken: token, studentRef });
@@ -801,6 +810,21 @@ test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể 
     assert.equal(teacher.practice_links.length, 3);
     assert.equal(teacher.practice_links[2].slot, 3);
     assert.equal(teacher.practice_links[2].exerciseTitle, 'Luyện trọng âm');
+    await pool.query("UPDATE speaking_homework.assignment SET status = 'closed' WHERE id = $1", [assignmentId]);
+    const resumedService = createSpeakingHomeworkService({ pool, accessSecret });
+    const closedPage = await service.openAssignment({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-chen_diem_giua' });
+    assert.equal(closedPage.assignmentStatus, 'closed');
+    await assert.rejects(resumedService.startSession({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-chen_diem_giua', studentRef: secondStudentRef }),
+    { code: 'HOMEWORK_CLOSED' });
+    const resumed = await resumedService.startSession({ documentId: 'lesson4-doc',
+      assignmentCode: '67-speaking-chen_diem_giua', studentRef });
+    assert.equal((await resumedService.open({ accessToken: resumed.accessToken, studentRef })).receipt.id,
+      receipt.id);
+    const later = await resumedService.requestPracticeCheck({ accessToken: resumed.accessToken,
+      studentRef, slot: null, exerciseId: ids[0], rawUrl: share('f') });
+    assert.equal(later.slot, 4);
   } finally { await db.close(); }
 });
 

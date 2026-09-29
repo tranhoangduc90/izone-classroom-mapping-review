@@ -44,13 +44,14 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     const result = await pool.query(`
       SELECT d.document_id, d.student_ref AS bound_student_ref,
         a.id AS assignment_id, a.class_id, a.title, a.assignment_code,
+        a.status AS assignment_status,
         a.required_practice_count, a.doctor_course_key,
         c.erp_class_name_snapshot AS class_code
       FROM speaking_homework.assignment_document d
       JOIN speaking_homework.assignment a ON a.id = d.assignment_id
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE d.document_id = $1 AND a.assignment_code = $2
-        AND a.status = 'open' AND c.status = 'approved'
+        AND a.status IN ('open', 'closed') AND c.status = 'approved'
         AND d.cta_verified_at IS NOT NULL`, [documentId, assignmentCode]);
     if (result.rows.length !== 1) {
       throw new SpeakingHomeworkError('ASSIGNMENT_NOT_FOUND', 'File Homework chưa được đăng ký cho bài này.', 404);
@@ -80,7 +81,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     [assignment.assignment_id]);
     return { title: assignment.title, classCode: assignment.class_code,
       assignmentCode: assignment.assignment_code, students: roster.rows, parts: parts.rows,
-      requiredPracticeCount: assignment.required_practice_count, doctorEnabled: Boolean(assignment.doctor_course_key) };
+      requiredPracticeCount: assignment.required_practice_count,
+      assignmentStatus: assignment.assignment_status,
+      doctorEnabled: Boolean(assignment.doctor_course_key) };
   }
 
   // Tên được nhớ ở browser chỉ giúp bỏ bước chọn lại; server vẫn kiểm Doc ID và roster.
@@ -102,6 +105,17 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     [studentRef, assignment.class_id]);
     if (!student.rows.length) {
       throw new SpeakingHomeworkError('STUDENT_NOT_FOUND', 'Học viên không thuộc lớp của bài này.', 403);
+    }
+    if (assignment.assignment_status === 'closed') {
+      const previous = await pool.query(`SELECT 1 FROM speaking_homework.access_grant g
+        JOIN speaking_homework.submission s ON s.access_grant_id = g.id
+        WHERE g.assignment_id = $1 AND g.document_id = $2 AND g.student_ref = $3
+          AND g.revoked_at IS NULL AND s.status = 'submitted' LIMIT 1`,
+      [assignment.assignment_id, documentId, studentRef]);
+      if (!previous.rows.length) {
+        throw new SpeakingHomeworkError('HOMEWORK_CLOSED',
+          'Bài Homework đã đóng. Chỉ học viên đã nộp bài mới có thể vào luyện thêm.', 403);
+      }
     }
     const accessToken = cryptoToken(accessSecret, `${assignment.assignment_id}:${documentId}:${studentRef}`);
     const inserted = await pool.query(`
@@ -136,7 +150,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         ON m.public_id = g.student_ref AND m.erp_course_class_id = a.class_id
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE g.token_hash = $1 AND g.student_ref = $2 AND g.revoked_at IS NULL
-        AND a.status = 'open' AND m.status = 'approved' AND c.status = 'approved'
+        AND (a.status = 'open' OR (a.status = 'closed' AND EXISTS (
+          SELECT 1 FROM speaking_homework.submission s
+          WHERE s.access_grant_id = g.id AND s.status = 'submitted'
+        ))) AND m.status = 'approved' AND c.status = 'approved'
         AND m.classroom_user_id IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM mapping.erp_class_membership_snapshot e
@@ -690,8 +707,16 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       ORDER BY r.waiting DESC, r.recommendation_count DESC, e.title, e.id`,
     [grant.class_id, studentRef, grant.doctor_course_key]);
     const needed = result.rows.filter(row => row.waiting);
+    const catalog = Number(grant.required_practice_count) > 0
+      ? await pool.query(`SELECT id AS exercise_id, title, exercise_url
+          FROM speaking_homework.doctor_exercise
+          WHERE course_key = $1 AND active = true ORDER BY title, id`,
+        [grant.doctor_course_key]) : { rows: [] };
+    const assigned = new Set(result.rows.map(row => row.exercise_id));
     return { needed: needed.slice(0, 5), neededCount: needed.length,
-      allNeeded: needed, practiced: result.rows.filter(row => !row.waiting) };
+      allNeeded: needed, practiced: result.rows.filter(row => !row.waiting),
+      sharedCatalog: catalog.rows.filter(row => !assigned.has(row.exercise_id)),
+      personalCount: result.rows.length };
   }
 
   async function requestPracticeCheck({ accessToken, studentRef, slot, exerciseId, rawUrl }) {
@@ -703,10 +728,13 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         throw new SpeakingHomeworkError('DOCTOR_NOT_READY', 'Bài luyện bổ trợ chưa được mở cho bài này.');
       }
       const exercise = await client.query(`SELECT 1 FROM speaking_homework.doctor_exercise e
-        JOIN speaking_homework.doctor_recommendation r ON r.exercise_id = e.id
         WHERE e.id = $1 AND e.course_key = $2 AND e.active = true
-          AND r.class_id = $3 AND r.student_ref = $4`,
-      [exerciseId, grant.doctor_course_key, grant.class_id, studentRef]);
+          AND ($5::integer > 0 OR EXISTS (
+            SELECT 1 FROM speaking_homework.doctor_recommendation r
+            WHERE r.exercise_id = e.id AND r.class_id = $3 AND r.student_ref = $4
+          ))`,
+      [exerciseId, grant.doctor_course_key, grant.class_id, studentRef,
+        grant.required_practice_count]);
       if (!exercise.rows.length) {
         throw new SpeakingHomeworkError('EXERCISE_NOT_ASSIGNED', 'Bài luyện này chưa có trong danh sách của bạn.');
       }
@@ -809,6 +837,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
           VALUES ($1, $2, $3, 'practice', $4, $5) ON CONFLICT DO NOTHING RETURNING id`,
         [row.course_id, row.share_id, fingerprint, row.link_id, row.assignment_id]);
         if (!claim.rows.length) { status = 'rejected'; code = 'REUSED_CONVERSATION'; }
+        else await client.query(`INSERT INTO speaking_homework.doctor_recommendation
+          (class_id, student_ref, exercise_id) VALUES ($1, $2, $3)
+          ON CONFLICT (class_id, student_ref, exercise_id) DO NOTHING`,
+        [row.class_id, row.student_ref, row.exercise_id]);
       }
       await client.query(`UPDATE speaking_homework.practice_link
         SET fingerprint = $2, question_count = $3, status = $4, check_code = $5,
@@ -853,6 +885,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       [grant.course_id, row.share_id, row.fingerprint, row.id, grant.assignment_id]);
       if (!claim.rows.length) throw new SpeakingHomeworkError('REUSED_CONVERSATION',
         'Hội thoại đã được nộp cho bài khác. Hãy luyện bằng hội thoại mới.');
+      await client.query(`INSERT INTO speaking_homework.doctor_recommendation
+        (class_id, student_ref, exercise_id) VALUES ($1, $2, $3)
+        ON CONFLICT (class_id, student_ref, exercise_id) DO NOTHING`,
+      [grant.class_id, studentRef, row.exercise_id]);
       await client.query(`UPDATE speaking_homework.practice_link
         SET status = 'accepted', voice_confirmed = true WHERE id = $1`, [row.id]);
       await client.query(`INSERT INTO speaking_homework.practice_analysis_job

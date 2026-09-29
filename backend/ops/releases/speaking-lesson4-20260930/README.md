@@ -2,9 +2,9 @@
 
 ## Học viên nhìn thấy gì
 
-Học viên mở nút trong bản Docs của mình, chọn tên lớp IC2304 hoặc dùng tên đã nhớ từ Progress Log. Trang yêu cầu hai hội thoại Speaking: Chèn điểm giữa và Freestyle. Phần Bác sĩ AI hiện năm bài cần luyện đầu tiên theo thứ tự **Chờ luyện → Số lần đề xuất giảm dần → tên bài**; nút “Xem tất cả” mở phần còn lại. Học viên chọn hai bài cá nhân khác nhau và nộp mỗi bài bằng một ChatGPT Share riêng. Bốn link đạt thì hệ thống cấp biên nhận và ghi về đúng Doc ID trong URL.
+Học viên mở nút trong bản Docs của mình, chọn tên lớp IC2304 hoặc dùng tên đã nhớ từ Progress Log. Trang yêu cầu hai hội thoại Speaking: Chèn điểm giữa và Freestyle. Phần Bác sĩ AI hiện năm bài cần luyện đầu tiên theo thứ tự **Chờ luyện → Số lần đề xuất giảm dần → tên bài**; nút “Xem tất cả” mở phần còn lại. Học viên chọn hai bài tập khác nhau và nộp mỗi bài bằng một ChatGPT Share riêng. Nếu danh sách cá nhân chưa đủ hai bài, ô chọn có thêm **Kho bài chung** theo lựa chọn của Đức. Bài từ kho chung chỉ vào hồ sơ cá nhân khi hội thoại đạt. Bốn link đạt thì hệ thống cấp biên nhận và ghi về đúng Doc ID trong URL.
 
-Sau khi đã nộp Homework, ô “Luyện thêm” trên cùng trang nhận từng hội thoại bổ trợ mới. Mỗi lượt có lịch sử riêng, không sửa biên nhận Homework. Trang vẫn cần bài Classroom ở trạng thái mở để học viên vào lại; nếu cần nhận bài sau khi bài đã đóng, phải xây cổng Bác sĩ AI độc lập và xác định lại quyền truy cập.
+Sau khi đã nộp Homework, ô “Luyện thêm” trên cùng trang nhận từng hội thoại bổ trợ mới. Mỗi lượt có lịch sử riêng, không sửa biên nhận Homework. Khi bài Classroom đã đóng, chỉ học viên có biên nhận cũ gắn đúng Doc ID mới được vào lại để luyện thêm; học viên chưa nộp không thể bắt đầu mới.
 
 ## Hệ thống xử lý thế nào
 
@@ -17,7 +17,7 @@ Sau khi đã nộp Homework, ô “Luyện thêm” trên cùng trang nhận t�
 
 Nguồn Docs cũ: `1ndj3S00OxlwJ39HxrQIgZVnGa5hI1hkz8Fy4hHzPUnk`. Đây chưa phải mẫu mới có CTA và ô trạng thái; không dùng Doc nguồn cũ làm bản sao giao bài. Chờ mẫu Docs mới do Đức gửi, rồi tạo bài Homework Lesson 4 trong Classroom và xác định `course_work_id` thật.
 
-Trước khi mở: backup database mapping; áp dụng migration `202609290003_speaking_lesson4_practice.sql` trước bản API mới; xác minh hai phần `insert_middle` và `freestyle` đều có `min_questions=3`, `required_practice_count=2`, `doctor_course_key='67'`, class ID lấy từ mapping IC2304 đã duyệt. Gắn CTA theo sự kiện bản sao Classroom với `assignmentCode=67-speaking-chen_diem_giua`, `class=IC2304` và Doc ID của chính bản sao. Đọc lại nút CTA giữ chữ trắng không gạch dưới và ô vàng dưới “TÌNH TRẠNG NỘP BÀI SPEAKING”. Không mở assignment nếu một học viên chưa có ít nhất hai bài cá nhân trong danh sách, hoặc cần chốt cách xử lý ngoại lệ đó trước.
+Trước khi mở: backup database mapping; áp dụng migration `202609290003_speaking_lesson4_practice.sql` trước bản API mới; xác minh hai phần `insert_middle` và `freestyle` đều có `min_questions=3`, `required_practice_count=2`, `doctor_course_key='67'`, class ID lấy từ mapping IC2304 đã duyệt. Gắn CTA theo sự kiện bản sao Classroom với `assignmentCode=67-speaking-chen_diem_giua`, `class=IC2304` và Doc ID của chính bản sao. Đọc lại nút CTA giữ chữ trắng không gạch dưới và ô vàng dưới “TÌNH TRẠNG NỘP BÀI SPEAKING”. Kiểm Kho bài chung có đủ hai bài đang hoạt động để mọi học viên đều chọn được hai bài khác nhau. Lúc kiểm 30/09, 6/15 học viên IC2304 có dưới hai đề xuất cá nhân.
 
 API dùng chung với Progress Log. Trước và sau chuyển bản phải đối chiếu image, cấu hình điểm danh, worker `sync_portal_attendance`, hàng chờ và kết quả Portal; giữ container cũ để quay lại. Sau chuyển, thử một bản sao Docs và bốn Share hợp lệ bằng hồ sơ được phép thử, đọc lại biên nhận, đúng file Docs, teacher view và `doctor_recommendation`. Không tuyên bố đã vận hành thật khi chưa có bài Classroom/mẫu Docs mới và phép thử hoàn chỉnh.
 
@@ -25,5 +25,5 @@ API dùng chung với Progress Log. Trước và sau chuyển bản phải đố
 
 - Link chưa đạt: học viên sửa hoặc nộp hội thoại mới; bài chưa có biên nhận.
 - Hàng AI lỗi: link đã lưu, trạng thái đang xử lý/lỗi; người vận hành xem `practice_check_job` và `practice_analysis_job`, thử lại theo job ID, không tự cộng đề xuất bằng tay.
-- Danh sách Bác sĩ AI chưa đủ hai bài: dừng phát bài cho học viên đó; kiểm dữ liệu đề xuất nguồn và làm rõ cách bổ sung, không hiển thị bài ngẫu nhiên.
+- Danh sách Bác sĩ AI chưa đủ hai bài: hiển thị Kho bài chung có nhãn riêng; học viên tự chọn bài phù hợp, không tự ghi thành đề xuất cá nhân trước khi họ luyện đạt.
 - Cần quay lại API: dùng container và bản database đã backup; dữ liệu học viên phát sinh sau chuyển phải được đối chiếu trước, không xóa hàng loạt.
