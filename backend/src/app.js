@@ -5,6 +5,9 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
+import { createLearningErpScheduleReader } from './learning-erp-schedule.js';
+import { createLearningTestSourceReader } from './learning-test-sources.js';
+import { createLearningTestResultReader } from './learning-test-results.js';
 import { createSpeakingHomeworkRouter } from './speaking-homework-routes.js';
 import {
   completeReadingAttemptSql,
@@ -67,7 +70,8 @@ const decisionSchema = z.object({
   }
 });
 
-const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
+// Mã lớp ERP như CS.070626 có dấu chấm; giữ nguyên hợp đồng production.
+const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
 const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
 const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
 const temporaryStudentRegistrationSchema = z.object({
@@ -399,6 +403,7 @@ export function createApp({
   config,
   pool,
   learningPool = null,
+  learningErpScheduleReader = null,
   speakingHomeworkPool = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
@@ -1310,7 +1315,24 @@ export function createApp({
     throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
   }
   if (config.learningEnabled) {
-    app.use('/api/learning', createLearningRouter({ pool: learningPool, authenticate }));
+    const scheduleReader = learningErpScheduleReader ?? createLearningErpScheduleReader({
+      url: config.learningErpScheduleMetabaseUrl,
+      username: config.learningErpScheduleMetabaseUsername,
+      password: config.learningErpScheduleMetabasePassword,
+      timeoutMs: config.learningErpScheduleTimeoutMs
+    });
+    app.use('/api/learning', (req, res, next) => {
+      if (req.get('x-progress-log-demo') === '1') {
+        return res.status(403).json({ ok: false, error: 'DEMO_REQUEST_ON_LIVE_API', message: 'Trang thử đang kết nối sai dịch vụ.' });
+      }
+      return next();
+    });
+    app.use('/api/learning', createLearningRouter({
+      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret,
+      erpScheduleReader: scheduleReader,
+      testSourceReader: createLearningTestSourceReader({ pool }),
+      testResultReader: createLearningTestResultReader({ pool })
+    }));
   }
   if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');

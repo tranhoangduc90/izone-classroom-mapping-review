@@ -127,6 +127,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(authorityMigration);
+  const progressAdminMigration = await readFile(
+    new URL('../ops/learning-migrations/202609280001_progress_log_admin_scope.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(progressAdminMigration);
   const journeyMigration = await readFile(
     new URL('../ops/learning-migrations/202609150003_student_course_journey.sql', import.meta.url),
     'utf8'
@@ -142,6 +147,11 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(answerReleaseMigration);
+  const journeyPlanMigration = await readFile(
+    new URL('../ops/learning-migrations/202609290001_teacher_confirmed_journey_plan.sql', import.meta.url),
+    'utf8'
+  );
+  await database.exec(journeyPlanMigration);
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
 
@@ -262,16 +272,233 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
     FROM learning.periodic_report WHERE id = $1::uuid;`, [sample.latestReport.reportId]);
   assert.deepEqual(publishedReport.rows[0], { status: 'published', has_published_at: true });
 
+  await database.query(`INSERT INTO learning.evidence_event (
+    id, source_system, source_record_id, source_revision, entity_key, unit_key,
+    operation_key, idempotency_key, organization_key, course_code,
+    erp_course_class_id, session_number, student_ref, visibility, payload,
+    content_hash, renderer_version, markdown, occurred_at
+  ) VALUES (
+    '24000000-0000-4000-8000-000000000005', 'mini_test', 'mini-5-student-3', 1,
+    'student:21000000-0000-4000-8000-000000000003', 'class:990000567:session:5',
+    'mini-5-student-3-op', 'mini-5-student-3-idem', 'izone', 'DEMO-56',
+    990000567, 5, '21000000-0000-4000-8000-000000000003', 'analysis_allowed',
+    '{"test":{"title":"Mini Test buổi 5"}}'::jsonb,
+    repeat('a', 64), 'fixture-v1', '', now()
+  );`);
   const journey = await service.getStudentCourseJourney({
     accessToken: 'demo-progress-567-00000000-0000-4000-8000-000000000003'
   });
   assert.equal(journey.student.studentRef, sample.studentRef);
   assert.equal(journey.class.classId, '990000567');
   assert.equal(journey.latestReport.reportId, sample.latestReport.reportId);
-  assert.equal(journey.sessions.length, 1);
-  assert.equal(journey.sessions[0].evidenceCount, 1);
-  assert.deepEqual(journey.sessions[0].evidenceSources, ['progress_form']);
+  assert.equal(journey.sessions.length, 6);
+  assert.equal(journey.sessions[4].sessionNumber, 5);
+  assert.equal(journey.sessions[4].assignmentId, null);
+  assert.equal(journey.sessions[4].completeness, null);
+  assert.equal(journey.sessions[4].sessionKind, 'test');
+  assert.equal(journey.sessions[4].dataOrigin, 'test_evidence');
+  assert.equal(journey.sessions[3].dataOrigin, 'inferred_gap');
+  assert.equal(journey.sessions[4].title, 'Mini Test');
+  assert.deepEqual(journey.coverage, {
+    knownThroughSession: 6, schedule: 'not_connected', plannedSessions: null,
+    planOutdated: false, testResults: 'not_connected'
+  });
+  assert.equal(journey.sessions[5].evidenceCount, 1);
+  assert.deepEqual(journey.sessions[5].evidenceSources, ['progress_form']);
   assert.equal(JSON.stringify(journey).includes('Nhầm FALSE và NOT GIVEN'), false);
+  const integratedJourney = await service.getStudentCourseJourney({
+    publicToken: dashboard.publicToken, studentRef: sample.studentRef
+  });
+  assert.equal(integratedJourney.student.studentRef, sample.studentRef);
+  assert.equal(integratedJourney.class.classId, journey.class.classId);
+  assert.equal(integratedJourney.sessions.length, journey.sessions.length);
+  const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };
+  const emptyPlan = await service.getTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, reviewer
+  });
+  assert.equal(emptyPlan.totalSessions, null);
+  assert.equal(emptyPlan.revision, 0);
+  assert.deepEqual(emptyPlan.sessionDates, []);
+  await assert.rejects(
+    () => service.saveTeacherJourneyPlan({
+      assignmentId: dashboard.assignmentId, totalSessions: 5,
+      testSessionNumbers: [], expectedRevision: 0, reviewer
+    }),
+    error => error instanceof LearningError && error.code === 'JOURNEY_PLAN_TOO_SHORT'
+  );
+  const savedPlan = await service.saveTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, totalSessions: 8,
+    testSessionNumbers: [5, 7],
+    sessionDates: [{ sessionNumber: 1, date: '2026-09-01' },
+      { sessionNumber: 7, date: '2026-09-30' }],
+    expectedRevision: 0, reviewer
+  });
+  assert.equal(savedPlan.revision, 1);
+  assert.equal(savedPlan.replayed, false);
+  const planReadback = await service.getTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, reviewer
+  });
+  assert.deepEqual(planReadback.testSessionNumbers, [5, 7]);
+  assert.deepEqual(planReadback.sessionDates, [
+    { sessionNumber: 1, date: '2026-09-01' },
+    { sessionNumber: 7, date: '2026-09-30' }
+  ]);
+  const planReplay = await service.saveTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, totalSessions: 8,
+    testSessionNumbers: [5, 7],
+    sessionDates: [{ sessionNumber: 1, date: '2026-09-01' },
+      { sessionNumber: 7, date: '2026-09-30' }],
+    expectedRevision: 0, reviewer
+  });
+  assert.equal(planReplay.replayed, true);
+  const legacySave = await service.saveTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, totalSessions: 8,
+    testSessionNumbers: [5, 7], expectedRevision: 1, reviewer
+  });
+  assert.equal(legacySave.revision, 2);
+  assert.deepEqual(legacySave.sessionDates, planReadback.sessionDates);
+  const erpCalls = [];
+  const erpService = createLearningService({ pool: poolFrom(database),
+    erpScheduleReader: async classId => {
+      erpCalls.push(String(classId));
+      return { sessions: [{ erpSessionId: '35811', date: '2026-09-14',
+        startsAt: '2026-09-14 18:30:00', endsAt: '2026-09-14 21:00:00', statusCode: 1 }],
+      fetchedAt: '2026-09-30T00:00:00.000Z' };
+    }
+  });
+  const erpSchedule = await erpService.getTeacherErpSchedule({
+    assignmentId: dashboard.assignmentId, reviewer
+  });
+  assert.equal(erpSchedule.classId, '990000567');
+  assert.deepEqual(erpCalls, ['990000567']);
+  await assert.rejects(
+    () => erpService.getTeacherErpSchedule({ assignmentId: dashboard.assignmentId,
+      reviewer: { email: 'unauthorized@example.test', canAccessAllClasses: false } }),
+    error => error instanceof LearningError && error.code === 'ASSIGNMENT_ACCESS_DENIED'
+  );
+  assert.deepEqual(erpCalls, ['990000567']);
+  await assert.rejects(
+    () => erpService.saveTeacherJourneyPlan({ assignmentId: dashboard.assignmentId,
+      totalSessions: 8, testSessionNumbers: [5, 7],
+      sessionDates: [{ sessionNumber: 2, date: '2026-09-15', erpSessionId: '35811' }],
+      expectedRevision: 2, reviewer }),
+    error => error instanceof LearningError && error.code === 'ERP_SCHEDULE_MAPPING_CHANGED'
+  );
+  const mappedPlan = await erpService.saveTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, totalSessions: 8, testSessionNumbers: [5, 7],
+    sessionDates: [{ sessionNumber: 1, date: '2026-09-01' },
+      { sessionNumber: 2, date: '2026-09-14', erpSessionId: '35811' },
+      { sessionNumber: 7, date: '2026-09-30' }],
+    expectedRevision: 2, reviewer
+  });
+  assert.equal(mappedPlan.revision, 3);
+  assert.deepEqual((await erpService.getTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, reviewer
+  })).sessionDates, mappedPlan.sessionDates);
+  const testSourceCalls = [];
+  const testSourceService = createLearningService({ pool: poolFrom(database),
+    testSourceReader: async classId => {
+      testSourceCalls.push(String(classId));
+      return [{ testSlug: 'mini-test-lesson-5', title: 'Mini Test',
+        definitionVersion: 1, studentsWithResult: 3,
+        latestResultAt: '2026-09-29T10:00:00.000Z' }];
+    }
+  });
+  const sources = await testSourceService.getTeacherTestSources({
+    assignmentId: dashboard.assignmentId, reviewer
+  });
+  assert.equal(sources.tests[0].studentsWithResult, 3);
+  assert.deepEqual(testSourceCalls, ['990000567']);
+  const mappedTestPlan = await testSourceService.saveTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, totalSessions: 8, testSessionNumbers: [5, 7],
+    testSources: [{ sessionNumber: 5, testSlug: 'mini-test-lesson-5' }],
+    expectedRevision: 3, reviewer
+  });
+  assert.equal(mappedTestPlan.revision, 4);
+  assert.deepEqual((await testSourceService.getTeacherJourneyPlan({
+    assignmentId: dashboard.assignmentId, reviewer
+  })).testSources, [{ sessionNumber: 5, testSlug: 'mini-test-lesson-5' }]);
+  const testResultService = createLearningService({ pool: poolFrom(database),
+    testResultReader: async input => {
+      assert.deepEqual(input, { classId: '990000567', studentRef: sample.studentRef,
+        testSlugs: ['mini-test-lesson-5'] });
+      return [{ testSlug: 'mini-test-lesson-5', title: 'Mini Test',
+        completedAt: '2026-09-29T10:00:00.000Z',
+        listening: { correct: 15, total: 20, band: 7 },
+        reading: { correct: 9, total: 13, band: 7 }, writing: null }];
+    }
+  });
+  const journeyWithTest = await testResultService.getStudentCourseJourney({
+    publicToken: dashboard.publicToken, studentRef: sample.studentRef
+  });
+  assert.equal(journeyWithTest.coverage.testResults, 'connected');
+  assert.equal(journeyWithTest.sessions[4].testResult.listening.correct, 15);
+  assert.equal(journeyWithTest.sessions[3].testResult, undefined);
+  await assert.rejects(() => testSourceService.getTeacherTestSources({
+    assignmentId: dashboard.assignmentId,
+    reviewer: { email: 'unauthorized@example.test', canAccessAllClasses: false }
+  }), error => error instanceof LearningError && error.code === 'ASSIGNMENT_ACCESS_DENIED');
+  assert.deepEqual(testSourceCalls, ['990000567', '990000567']);
+  await assert.rejects(
+    () => service.saveTeacherJourneyPlan({
+      assignmentId: dashboard.assignmentId, totalSessions: 9,
+      testSessionNumbers: [5, 7], expectedRevision: 0, reviewer
+    }),
+    error => error instanceof LearningError && error.code === 'JOURNEY_PLAN_STALE'
+  );
+  await assert.rejects(
+    () => service.getTeacherJourneyPlan({
+      assignmentId: dashboard.assignmentId,
+      reviewer: { email: 'unauthorized@example.test', canAccessAllClasses: false }
+    }),
+    error => error instanceof LearningError && error.code === 'ASSIGNMENT_ACCESS_DENIED'
+  );
+  const plannedJourney = await service.getStudentCourseJourney({
+    publicToken: dashboard.publicToken, studentRef: sample.studentRef
+  });
+  assert.equal(plannedJourney.sessions.length, 8);
+  assert.deepEqual(plannedJourney.coverage, {
+    knownThroughSession: 8, schedule: 'teacher_confirmed',
+    plannedSessions: 8, planOutdated: false, testResults: 'temporarily_unavailable'
+  });
+  assert.equal(plannedJourney.sessions[6].sessionKind, 'test');
+  assert.equal(plannedJourney.sessions[6].dataOrigin, 'confirmed_plan');
+  assert.equal(plannedJourney.sessions[6].assignmentId, null);
+  assert.equal(plannedJourney.sessions[6].title, 'Buổi Test');
+  assert.equal(plannedJourney.sessions[0].sessionDate, '2026-09-01');
+  assert.equal(plannedJourney.sessions[6].sessionDate, '2026-09-30');
+  assert.equal(plannedJourney.sessions[4].sessionDate, null);
+  assert.equal(plannedJourney.sessions[7].dataOrigin, 'confirmed_plan');
+  await database.query(`INSERT INTO learning.evidence_event (
+    id, source_system, source_record_id, source_revision, entity_key, unit_key,
+    operation_key, idempotency_key, organization_key, course_code,
+    erp_course_class_id, session_number, student_ref, visibility, payload,
+    content_hash, renderer_version, markdown, occurred_at
+  ) VALUES (
+    '24000000-0000-4000-8000-000000000009', 'mini_test', 'late-mini-9', 1,
+    'student:21000000-0000-4000-8000-000000000003', 'class:990000567:session:9',
+    'late-mini-9-op', 'late-mini-9-idem', 'izone', 'DEMO-56',
+    990000567, 9, '21000000-0000-4000-8000-000000000003', 'analysis_allowed',
+    '{}'::jsonb, repeat('b', 64), 'fixture-v1', '', now()
+  );`);
+  await assert.rejects(
+    () => service.saveTeacherJourneyPlan({
+      assignmentId: dashboard.assignmentId, totalSessions: 8,
+      testSessionNumbers: [5, 7], expectedRevision: 1, reviewer
+    }),
+    error => error instanceof LearningError && error.code === 'JOURNEY_PLAN_TOO_SHORT'
+  );
+  const outdatedJourney = await service.getStudentCourseJourney({
+    publicToken: dashboard.publicToken, studentRef: sample.studentRef
+  });
+  assert.equal(outdatedJourney.sessions.length, 9);
+  assert.equal(outdatedJourney.coverage.planOutdated, true);
+  await assert.rejects(
+    () => service.getStudentCourseJourney({
+      publicToken: dashboard.publicToken, studentRef: '21000000-0000-4000-8000-000000000099'
+    }),
+    error => error instanceof LearningError && error.code === 'PROGRESS_LINK_INVALID'
+  );
 
   const firstGeneratedToken = 'generated-progress-link-00000000-0000-4000-8000-000000000001';
   const generated = await service.createStudentProgressLink({
@@ -317,6 +544,16 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
     () => service.getStudentCourseJourney({ accessToken: replacementToken }),
     error => error instanceof LearningError && error.code === 'PROGRESS_LINK_INVALID'
   );
+  await database.query(`UPDATE learning.form_assignment SET status = 'closed'
+    WHERE public_token = $1::uuid;`, [dashboard.publicToken]);
+  const closedContext = await service.getLearningJourneyContext(dashboard.publicToken);
+  assert.equal(closedContext.class.id, journey.class.classId);
+  assert.equal(closedContext.roster.length, 6);
+  await assert.rejects(() => service.getPublicAssignment(dashboard.publicToken));
+  const closedJourney = await service.getStudentCourseJourney({
+    publicToken: dashboard.publicToken, studentRef: sample.studentRef
+  });
+  assert.equal(closedJourney.sessions.length, 9);
   await database.close();
 });
 
@@ -388,8 +625,45 @@ test('migration tạo đủ bảng lõi và không làm lộ grading key qua pub
   await database.close();
 });
 
+test('quản trị Progress Log thấy và công bố ở lớp khác mà không nhận quyền toàn hệ thống', async () => {
+  const { database, service } = await setupDatabase();
+  await database.exec(`
+    INSERT INTO mapping.classroom_course_mapping VALUES (2140, 'IC2140');
+    INSERT INTO mapping.student_mapping_review (
+      public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot
+    ) VALUES ('60000000-0000-4000-8000-000000000004', 2140, 9004, 'Học viên lớp khác');
+    INSERT INTO mapping.reviewer_account VALUES ('admin@example.test', 'active');
+    INSERT INTO learning.progress_log_admin (reviewer_email, grant_reference)
+    VALUES ('admin@example.test', 'Đức cấp quyền quản trị Progress Log để kiểm thử');
+  `);
+  const admin = { email: 'admin@example.test', canAccessAllClasses: false };
+  const classes = await service.listTeacherOptions(admin);
+  assert.deepEqual(classes.classes.map(item => item.class_id), ['2139', '2140']);
+  const teacher = { email: 'other@example.test', canAccessAllClasses: false };
+  await assert.rejects(() => service.publishReflectionForm({
+    reviewer: teacher, title: 'Phiếu lớp khác', courseCode: '56', classId: '2140',
+    sessionNumber: 1, opensAt: null, closesAt: null,
+    items: [{ libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true }]
+  }), error => error instanceof LearningError && error.code === 'CLASS_ACCESS_DENIED');
+  const published = await service.publishReflectionForm({
+    reviewer: admin, title: 'Phiếu lớp khác', courseCode: '56', classId: '2140',
+    sessionNumber: 1, opensAt: null, closesAt: null,
+    items: [{ libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true }]
+  });
+  assert.equal(published.rosterCount, 1);
+  await database.exec("UPDATE learning.progress_log_admin SET status = 'revoked', revoked_at = now() WHERE reviewer_email = 'admin@example.test';");
+  assert.equal((await service.listTeacherOptions(admin)).classes.length, 0);
+  await database.exec("UPDATE learning.progress_log_admin SET status = 'active', revoked_at = NULL WHERE reviewer_email = 'admin@example.test'; UPDATE mapping.reviewer_account SET status = 'inactive' WHERE email = 'admin@example.test';");
+  assert.equal((await service.listTeacherOptions(admin)).classes.length, 0);
+  await database.close();
+});
+
 test('quiz có điểm chỉ cho tự duyệt khi lead có quyền đúng khóa', async () => {
   const { database } = await setupDatabase();
+  // Quyền quản trị Progress Log không tự cấp quyền duyệt nội dung có điểm.
+  await database.exec(`INSERT INTO mapping.reviewer_account (email) VALUES ('author@example.test');
+    INSERT INTO learning.progress_log_admin (reviewer_email, grant_reference)
+    VALUES ('author@example.test', 'Được quyền quản trị Progress Log để kiểm thử');`);
   await database.query(`INSERT INTO learning.form_template (id, title, kind, created_by_email)
     VALUES ('23000000-0000-4000-8000-000000000001', 'Quiz cần duyệt', 'quiz', 'author@example.test');`);
   const definition = {
@@ -601,6 +875,17 @@ test('giảng viên xác nhận có mặt tạo đúng một job Portal cho đú
   const otherStudent = dashboard.students.find(student => student.studentRef !== common.studentRef);
   assert.equal(targetStudent.portalSync.status, 'queued');
   assert.equal(otherStudent.portalSync, null);
+  const queuedJourney = await service.getStudentCourseJourney({
+    publicToken: published.publicToken, studentRef: common.studentRef
+  });
+  const queuedSession = queuedJourney.sessions.find(session => session.sessionNumber === 3);
+  assert.equal(queuedSession.dataOrigin, 'progress_log');
+  assert.equal(queuedSession.portalSync.status, 'queued');
+  await database.query("UPDATE learning.outbox_job SET status = 'review_required' WHERE job_type = 'sync_portal_attendance';");
+  const reviewJourney = await service.getStudentCourseJourney({
+    publicToken: published.publicToken, studentRef: common.studentRef
+  });
+  assert.equal(reviewJourney.sessions.find(session => session.sessionNumber === 3).portalSync.status, 'review_required');
   const replay = await service.overrideAttendance({
     ...common, status: 'teacher_confirmed',
     operationKey: 'attendance-override:70000000-0000-4000-8000-000000000010'
@@ -922,7 +1207,7 @@ test('Listening IC2304 chấm khi nộp phần, khôi phục được và hiện
   await database.close();
 });
 
-test('IC2305 hiện đáp án sau checkpoint theo phiếu, giữ bản cũ và không chấm tự luận', async () => {
+test('IC2305 hiện đáp án sau checkpoint và cả demo 56/67 đều không ghi Portal', async () => {
   const { database, service } = await setupDatabase();
   const definition = buildIc2305Session5Definition();
   const gradingKey = buildIc2305Session5GradingKey();
@@ -1063,6 +1348,26 @@ test('IC2305 hiện đáp án sau checkpoint theo phiếu, giữ bản cũ và k
   const demoJobs = await database.query(`SELECT count(*)::int AS total FROM learning.outbox_job
     WHERE job_type = 'sync_portal_attendance' AND entity_key = $1`, [`student:${demoStudentRef}`]);
   assert.equal(demoJobs.rows[0].total, 0);
+  await database.query(`UPDATE learning.form_assignment
+    SET course_code = 'DEMO-67', class_name_snapshot = 'IC2304 · Bản dùng thử',
+      session_number = 3 WHERE id = $1::uuid`, [demoAssignmentId]);
+  const demo67Attempt = await service.startAttempt({ publicToken: demoToken.rows[0].public_token,
+    studentRef: demoStudentRef, clientIdempotencyKey: crypto.randomUUID(), identityConfirmed: true });
+  await service.saveDraft({ attemptToken: demo67Attempt.attemptToken, revision: 1,
+    definitionHash: demo67Attempt.definitionHash, responses });
+  for (const block of definition.blocks) {
+    await service.submitCheckpoint({ attemptToken: demo67Attempt.attemptToken,
+      checkpointSubmissionId: crypto.randomUUID(), blockId: block.blockId,
+      checkpoint: block.checkpoint, draftRevision: 1, definitionHash: demo67Attempt.definitionHash,
+      responses, idempotencyKey: `demo67:${crypto.randomUUID()}` });
+  }
+  const demo67Final = await service.submit({ attemptToken: demo67Attempt.attemptToken,
+    submissionId: crypto.randomUUID(), definitionHash: demo67Attempt.definitionHash,
+    draftRevision: 1, responses });
+  assert.equal(demo67Final.result.answerRelease, 'released');
+  const demo67Jobs = await database.query(`SELECT count(*)::int AS total FROM learning.outbox_job
+    WHERE job_type = 'sync_portal_attendance' AND entity_key = $1`, [`student:${demoStudentRef}`]);
+  assert.equal(demo67Jobs.rows[0].total, 0);
   const realRoster = await database.query(`SELECT count(*)::int AS total FROM learning.form_assignment_roster
     WHERE assignment_id = $1::uuid AND student_ref = $2::uuid`, [assignmentId, demoStudentRef]);
   assert.equal(realRoster.rows[0].total, 0);
@@ -1383,12 +1688,14 @@ test('nhận xét Speaking gửi đúng học viên, đọc lại và chặn g�
   const journey = await service.getStudentCourseJourney({
     accessToken: 'demo-progress-567-00000000-0000-4000-8000-000000000003'
   });
-  assert.equal(journey.sessions[0].teacherSessionFeedback.noteText, input.noteText);
+  assert.equal(journey.sessions.find(session => session.sessionNumber === 6)
+    .teacherSessionFeedback.noteText, input.noteText);
   const otherAccessToken = 'generated-progress-link-00000000-0000-4000-8000-000000000004';
   await service.createStudentProgressLink({ assignmentId, studentRef: otherStudentRef,
     accessToken: otherAccessToken, expiresInDays: 30, reviewer, operationId: crypto.randomUUID() });
   const otherJourney = await service.getStudentCourseJourney({ accessToken: otherAccessToken });
-  assert.equal(otherJourney.sessions[0].teacherSessionFeedback, null);
+  assert.equal(otherJourney.sessions.find(session => session.sessionNumber === 6)
+    .teacherSessionFeedback, null);
   const saved = await database.query(`SELECT count(*)::int AS total FROM learning.teacher_session_feedback;`);
   assert.equal(saved.rows[0].total, 1);
   await database.query(`INSERT INTO mapping.reviewer_class_assignment (reviewer_email, class_name)

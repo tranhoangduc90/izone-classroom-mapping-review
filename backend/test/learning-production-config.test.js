@@ -21,3 +21,22 @@ test('production Progress Log không khởi động khi thiếu URL điểm danh
   }).learningAttendanceSyncUrl, 'https://example.test/attendance');
   assert.equal(loadConfig({ ...baseEnv, NODE_ENV: 'test' }).learningAttendanceSyncUrl, '');
 });
+
+test('cấu hình đọc lịch ERP là tùy chọn nhưng phải đầy đủ và dùng HTTPS', () => {
+  const env = { ...baseEnv, NODE_ENV: 'test',
+    LEARNING_ERP_SCHEDULE_METABASE_URL: '' };
+  assert.equal(loadConfig(env).learningErpScheduleMetabaseUrl, '');
+  assert.throws(() => loadConfig({ ...env,
+    LEARNING_ERP_SCHEDULE_METABASE_URL: 'https://metabase.example.test'
+  }), /Cấu hình đọc lịch ERP/);
+  assert.throws(() => loadConfig({ ...env,
+    LEARNING_ERP_SCHEDULE_METABASE_URL: 'http://metabase.example.test',
+    LEARNING_ERP_SCHEDULE_METABASE_USERNAME: 'schedule-reader',
+    LEARNING_ERP_SCHEDULE_METABASE_PASSWORD: 'private-test-value'
+  }), /HTTPS/);
+  assert.equal(loadConfig({ ...env,
+    LEARNING_ERP_SCHEDULE_METABASE_URL: 'https://metabase.example.test',
+    LEARNING_ERP_SCHEDULE_METABASE_USERNAME: 'schedule-reader',
+    LEARNING_ERP_SCHEDULE_METABASE_PASSWORD: 'private-test-value'
+  }).learningErpScheduleMetabaseUsername, 'schedule-reader');
+});

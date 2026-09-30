@@ -151,6 +151,11 @@ test('roster công khai không cần Google token và không trả ID ERP/email'
     name: 'Học viên A'
   });
   assert.equal(JSON.stringify(response.body).includes('erpStudentId'), false);
+  const dottedClass = await request(app)
+    .get('/api/term-tests/roster?class=cs.070626&test=term-test-1')
+    .set('Origin', 'https://tranhoangduc90.github.io');
+  assert.equal(dottedClass.status, 200);
+  assert.equal(pool.calls.at(-1).params[0], 'CS.070626');
 });
 
 test('Mini Test tạo hoặc lấy lại đúng hồ sơ học viên tạm mà không trả mã tạm', async () => {

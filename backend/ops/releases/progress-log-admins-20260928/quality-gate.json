@@ -1,0 +1,461 @@
+{
+  "schema_version": 3,
+  "product": "Progress Log: quản trị riêng cho bốn đồng nghiệp",
+  "change_id": "progress-log-admins-20260928",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "multi_user",
+    "multi_service",
+    "stateful",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "personal_data"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Cấp quyền trên sản phẩm có dữ liệu lớp và deployment API dùng chung.",
+    "user": "Bốn đồng nghiệp được Đức chỉ định",
+    "problem": "Chưa thể quản trị mọi lớp Progress Log mà không mở quyền các hệ thống khác.",
+    "outcome": "Đăng nhập Google, thấy mọi lớp Progress Log, tạo và công bố phiếu đúng quy tắc nội dung.",
+    "out_of_scope": [
+      "Không cấp quyền Mapping, Term Test, Speaking, GitHub hoặc SSH.",
+      "Không thay đổi phiếu và bài làm hiện có."
+    ],
+    "plain_language_summary": "Thêm danh sách quản trị riêng để bốn đồng nghiệp làm việc trên mọi lớp Progress Log."
+  },
+  "change_package": {
+    "proposal": "Thêm bảng quyền riêng và kiểm nó trong mọi truy vấn lớp của Progress Log.",
+    "behavior_baseline": "Quyền mọi lớp hiện dựa trên role/cờ dùng chung hoặc phân công từng lớp.",
+    "deltas": [
+      {
+        "id": "D-SCOPE",
+        "operation": "ADDED",
+        "behavior": "Tài khoản trong danh sách quyền riêng thấy và quản lý mọi lớp Progress Log.",
+        "module_ids": [
+          "M-AUTH",
+          "M-GRANT"
+        ],
+        "test_ids": [
+          "T-HAPPY",
+          "T-SEC",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "D-GRANT",
+        "operation": "ADDED",
+        "behavior": "Cấp và thu hồi đúng bốn quyền qua transaction có readback.",
+        "module_ids": [
+          "M-GRANT"
+        ],
+        "test_ids": [
+          "T-CON",
+          "T-PART",
+          "T-ROLL"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "plan-progress-admin-v1",
+    "modules": [
+      {
+        "id": "M-AUTH",
+        "name": "Kiểm quyền lớp Progress Log",
+        "responsibility": "Quyết định phạm vi lớp cho trang giảng viên và publisher.",
+        "owns_data": [],
+        "public_interfaces": [
+          "buildLearningClassAccessPredicate"
+        ],
+        "depends_on": [
+          "M-GRANT"
+        ],
+        "boundary_rules": [
+          "Không đổi auth/cờ quyền của sản phẩm khác."
+        ],
+        "test_ids": [
+          "T-HAPPY",
+          "T-SEC",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "M-GRANT",
+        "name": "Danh sách quyền và gói cấp quyền",
+        "responsibility": "Lưu, cấp, thu hồi và đọc lại quyền scoped.",
+        "owns_data": [
+          "learning.progress_log_admin"
+        ],
+        "public_interfaces": [
+          "grant.sql",
+          "rollback.sql"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Tài khoản Mapping vẫn teacher, không bật can_access_all_classes."
+        ],
+        "test_ids": [
+          "T-CON",
+          "T-PART",
+          "T-ROLL"
+        ]
+      }
+    ],
+    "integrations": [
+      {
+        "id": "I-GRANT-AUTH",
+        "producer": "M-GRANT",
+        "consumer": "M-AUTH",
+        "contract": "Quyền chỉ hợp lệ khi tài khoản và bản ghi scoped cùng active.",
+        "test_ids": [
+          "T-HAPPY",
+          "T-BAD",
+          "T-TIME"
+        ]
+      }
+    ]
+  },
+  "operational_design": {
+    "plan_revision": "plan-progress-admin-v1",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
+    "critical_path": "Google login → API Progress Log → PostgreSQL kiểm quyền → danh sách lớp/tạo phiếu → kết quả trang giảng viên.",
+    "peak_load": {
+      "value": 4,
+      "unit": "new_admin_users",
+      "basis": "Bốn email được Đức cung cấp; hệ thống chung khoảng 110 lớp × 15 học viên theo contract."
+    },
+    "user_wait_target": "Danh sách lớp hiện trong vài giây như baseline; publish trả receipt hoặc lỗi rõ ràng.",
+    "limits_and_cost": [
+      "Một EXISTS trên bảng email có khóa chính cho mỗi truy vấn lớp; không thêm dịch vụ ngoài hoặc phí API."
+    ],
+    "failure_and_recovery": [
+      "Thiếu migration làm truy vấn fail rõ; migration đi trước image.",
+      "Grant có transaction; rollback chỉ thu hồi quyền scoped, giữ tài khoản cũ."
+    ],
+    "monitoring": [
+      "Đọc lại bốn quyền và tài khoản, lỗi API, health, worker điểm danh và outcome Portal sau deployment."
+    ],
+    "decision": "Dùng bảng quyền riêng ở learning và giữ cổng nội dung có điểm độc lập.",
+    "test_ids": [
+      "T-HAPPY",
+      "T-BAD",
+      "T-PART",
+      "T-ROLL",
+      "T-ATTENDANCE"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "statement": "Bốn tài khoản quản trị mọi lớp Progress Log để tạo và công bố phiếu.",
+      "test_ids": [
+        "T-HAPPY",
+        "T-CON",
+        "T-UI"
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "statement": "Không mở quyền Mapping, Term Test, Speaking hoặc tự duyệt phiếu có điểm.",
+      "test_ids": [
+        "T-SEC",
+        "T-REG"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-SCOPE",
+      "statement": "Quyền Progress Log không đổi role/cờ quyền toàn hệ thống.",
+      "test_ids": [
+        "T-SEC",
+        "T-REG"
+      ]
+    },
+    {
+      "id": "INV-REVOKE",
+      "statement": "Thu hồi quyền hoặc khóa tài khoản chặn truy cập mọi lớp.",
+      "test_ids": [
+        "T-BAD",
+        "T-TIME",
+        "T-ROLL"
+      ]
+    },
+    {
+      "id": "INV-ATTEND",
+      "statement": "Đổi image API không làm mất đồng bộ điểm danh Portal.",
+      "test_ids": [
+        "T-ATTENDANCE"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T-HAPPY",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite: admin không được phân công vẫn thấy hai lớp và công bố phiếu lớp khác."
+    },
+    {
+      "id": "T-BAD",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Giảng viên không được cấp nhận CLASS_ACCESS_DENIED."
+    },
+    {
+      "id": "T-TIME",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Quyền revoked hoặc account inactive làm danh sách lớp rỗng."
+    },
+    {
+      "id": "T-CON",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Grant SQL chạy hai lần vẫn đúng bốn bản ghi nhờ khóa email và upsert."
+    },
+    {
+      "id": "T-PART",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Tài khoản có quyền rộng làm grant báo lỗi và transaction rollback, 0 quyền scoped."
+    },
+    {
+      "id": "T-ROLL",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Rollback SQL chuyển đúng bốn quyền sang revoked."
+    },
+    {
+      "id": "T-SEC",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Role vẫn teacher/cờ global false; admin Progress Log không tự duyệt quiz có điểm."
+    },
+    {
+      "id": "T-REG",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Backend full suite 215/215, gồm Term Test, Speaking và điểm danh."
+    },
+    {
+      "id": "T-ATTENDANCE",
+      "category": "regression",
+      "priority": "P0",
+      "status": "not_run",
+      "evidence": "Chờ cổng cấu hình/worker/Portal trước và sau phát hành production."
+    },
+    {
+      "id": "T-UI",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Chờ một đồng nghiệp đăng nhập và đọc lại danh sách lớp trên production."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "plan-progress-admin-v1",
+    "tasks": [
+      {
+        "id": "TASK-BUILD",
+        "result": "Bảng quyền, publisher và gói cấp quyền có test.",
+        "module_ids": [
+          "M-AUTH",
+          "M-GRANT"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "Yêu cầu của Đức",
+          "source Progress Log hiện hành"
+        ],
+        "produces": [
+          "migration",
+          "source",
+          "grant/rollback"
+        ],
+        "contract": "Quyền chỉ thuộc Progress Log.",
+        "test_ids": [
+          "T-HAPPY",
+          "T-BAD",
+          "T-SEC"
+        ],
+        "evidence_required": [
+          "Test và diff."
+        ],
+        "decision_inputs": [
+          "Không dùng role admin toàn hệ thống."
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "plan-progress-admin-v1"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Bốn tài khoản hoạt động ở production với điểm danh được bảo vệ.",
+        "module_ids": [
+          "M-AUTH",
+          "M-GRANT"
+        ],
+        "depends_on": [
+          "TASK-BUILD"
+        ],
+        "consumes": [
+          "Bản đã kiểm",
+          "backup production"
+        ],
+        "produces": [
+          "readback quyền",
+          "image và Portal readback"
+        ],
+        "contract": "Migration trước image; giữ env/worker.",
+        "test_ids": [
+          "T-ATTENDANCE",
+          "T-UI"
+        ],
+        "evidence_required": [
+          "Backup",
+          "DB readback",
+          "API và Portal readback"
+        ],
+        "decision_inputs": [
+          "Quyền sửa production theo AGENTS.md"
+        ],
+        "affected_future_tasks": [],
+        "status": "planned",
+        "plan_revision": "plan-progress-admin-v1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "FAIL",
+    "risks": [
+      {
+        "id": "R-SCOPE",
+        "description": "Quyền lan sang sản phẩm khác.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Đức",
+        "mitigation": "Bảng scoped, role teacher, test full suite.",
+        "test_ids": [
+          "T-SEC",
+          "T-REG"
+        ]
+      },
+      {
+        "id": "R-ATTEND",
+        "description": "Triển khai API làm mất cấu hình điểm danh.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Đức",
+        "mitigation": "So env/worker trước sau và đọc lại Portal.",
+        "test_ids": [
+          "T-ATTENDANCE"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "COUNT-4",
+      "left": {
+        "name": "quyền Progress Log sau grant fixture",
+        "value": 4
+      },
+      "operator": "==",
+      "right": {
+        "name": "email đã được Đức chỉ định",
+        "value": 4
+      },
+      "status": "passed",
+      "evidence": "Grant/rollback test đọc lại đúng bốn bản ghi; production chưa chạy."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-LOCAL",
+      "target": "PostgreSQL PGlite fixture",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Grant/rollback fixture và scope readback đạt."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-FULL",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "sha256:34d49ec63ac9e40b89500395f34b4e24e87ddcc7c5b07fe2647e97acee0e7d77",
+      "captured_at": "2026-09-28T08:11:03.957551Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 215,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Backend full suite 215/215 sau khi sửa fixture quyền."
+    }
+  ],
+  "convergence": {
+    "status": "gaps",
+    "tree_revision": "sha256:34d49ec63ac9e40b89500395f34b4e24e87ddcc7c5b07fe2647e97acee0e7d77",
+    "gaps": [
+      "Chưa phát hành/readback production."
+    ],
+    "unrequested_work": [],
+    "evidence": "Diff và test chỉ thay quyền Progress Log; production còn chờ."
+  },
+  "context_handoff": {
+    "summary": "Source và gói cấp quyền đã kiểm local; production chưa đổi.",
+    "decisions": [
+      "Dùng quyền scoped; không mở role/cờ toàn hệ thống."
+    ],
+    "completed": [
+      "TASK-BUILD"
+    ],
+    "next_step": "Xin phép phát hành production rồi làm theo README.",
+    "open_risks": [
+      "Cổng điểm danh API/Portal phải đạt."
+    ],
+    "tree_revision": "sha256:34d49ec63ac9e40b89500395f34b4e24e87ddcc7c5b07fe2647e97acee0e7d77"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "not_ready",
+    "base_tree_revision": "1b5a2dd1b4a12abde163d56f9bccc3b608f952a6",
+    "current_tree_revision": "sha256:34d49ec63ac9e40b89500395f34b4e24e87ddcc7c5b07fe2647e97acee0e7d77",
+    "production_authorized": false,
+    "rollback": "Thu hồi qua rollback.sql và quay về image API trước nếu cần.",
+    "deployment_readback": "not_run",
+    "operational_observation": "not_run",
+    "open_risks": [
+      {
+        "severity": "P1",
+        "summary": "Chưa kiểm điểm danh/Portal sau deployment."
+      }
+    ]
+  }
+}

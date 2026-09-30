@@ -12,6 +12,7 @@ import {
 import { parseFormDefinition, parseFormGradingKey, parseResponses } from './learning-contracts.js';
 import {
   authorizeLearningClassSql,
+  authorizeLearningJourneyPlanAssignmentSql,
   authorizeLearningProgressLinkTargetSql,
   authorizeLearningSessionFeedbackTargetSql,
   fetchAssignmentStudentSql,
@@ -25,6 +26,8 @@ import {
   fetchLearningTeacherDashboardSql,
   fetchLearningTeacherLiveDraftsSql,
   fetchPublicLearningAssignmentSql,
+  fetchLearningJourneyContextSql,
+  fetchLearningJourneyPlanSql,
   fetchStudentCourseJourneySql,
   fetchLatestLearningSessionFeedbackSql,
   findLearningSessionFeedbackByOperationSql,
@@ -49,6 +52,7 @@ import {
   revokeLearningProgressAccessSql,
   rotateLearningProgressAccessSql,
   saveLearningDraftSql,
+  saveLearningJourneyPlanSql,
   updateLearningBlockReleaseSql,
   upsertLearningTeacherHumanNoteSql
 } from './learning-sql.js';
@@ -179,6 +183,19 @@ function parseQuizPublishInput({ title, definition: rawDefinition, gradingKey: r
   return { definition, gradingKey };
 }
 
+function normalizeJourneySessionDates(value) {
+  return asArray(value).map(item => ({
+    sessionNumber: Number(item.sessionNumber), date: item.date,
+    ...(item.erpSessionId ? { erpSessionId: String(item.erpSessionId) } : {})
+  }));
+}
+
+function normalizeJourneyTestSources(value) {
+  return asArray(value).map(item => ({
+    sessionNumber: Number(item.sessionNumber), testSlug: String(item.testSlug)
+  }));
+}
+
 function buildStudentCourseJourney(row) {
   const sessions = asArray(row.sessions);
   const reports = asArray(row.reports);
@@ -188,6 +205,13 @@ function buildStudentCourseJourney(row) {
     student: { studentRef: row.student_ref, name: row.student_name },
     class: { classId: row.class_id, name: row.class_name },
     access: { expiresAt: row.expires_at },
+    coverage: {
+      knownThroughSession: sessions.at(-1)?.sessionNumber || 0,
+      schedule: row.planned_sessions ? 'teacher_confirmed' : 'not_connected',
+      plannedSessions: row.planned_sessions ? Number(row.planned_sessions) : null,
+      planOutdated: Boolean(row.planned_sessions && sessions.length > Number(row.planned_sessions)),
+      testResults: 'not_connected'
+    },
     summary: {
       totalSessions: sessions.length,
       submittedComplete: sessions.filter(item => item.completeness === 'complete').length,
@@ -200,8 +224,21 @@ function buildStudentCourseJourney(row) {
   };
 }
 
-export function createLearningService({ pool }) {
+export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
+  testResultReader = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
+
+  async function readErpSchedule(classId) {
+    if (!erpScheduleReader) {
+      throw new LearningError('ERP_SCHEDULE_NOT_CONFIGURED',
+        'Nguồn lịch ERP chưa được cấu hình; bạn vẫn có thể xác nhận ngày thủ công.', 503);
+    }
+    try { return await erpScheduleReader(classId); }
+    catch {
+      throw new LearningError('ERP_SCHEDULE_UNAVAILABLE',
+        'Chưa đọc được lịch ERP; hãy thử lại hoặc xác nhận ngày thủ công.', 503);
+    }
+  }
 
   return {
     async getPublicAssignment(publicToken) {
@@ -542,7 +579,8 @@ export function createLearningService({ pool }) {
         if (!finalizedRow.attempt_completed) {
           throw new LearningError('ATTEMPT_FINALIZE_FAILED', 'Không thể chốt phiên làm bài.', 409);
         }
-        const isDemoAssignment = context.course_code === 'DEMO-56' && String(context.class_id) === '990000567';
+        const isDemoAssignment = ['DEMO-56', 'DEMO-67'].includes(context.course_code)
+          && String(context.class_id) === '990000567';
         if (Number(finalizedRow.response_item_count) !== responseItems.length
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
           || !finalizedRow.attendance_event_saved
@@ -569,15 +607,52 @@ export function createLearningService({ pool }) {
       };
     },
 
-    async getStudentCourseJourney({ accessToken }) {
-      const result = await pool.query(fetchStudentCourseJourneySql, [sha256(accessToken)]);
+    async getLearningJourneyContext(publicToken) {
+      const result = await pool.query(fetchLearningJourneyContextSql, [publicToken]);
+      const row = assertSingleRow(result, 'PROGRESS_LINK_INVALID',
+        'Link phiếu không còn mở được hành trình.', 404);
+      return {
+        assignmentId: row.assignment_id,
+        class: { id: row.class_id, name: row.class_name },
+        courseCode: row.course_code || null,
+        sessionNumber: Number(row.session_number),
+        title: row.title,
+        roster: asArray(row.roster)
+      };
+    },
+
+    async getStudentCourseJourney({ accessToken, publicToken, studentRef }) {
+      const result = await pool.query(fetchStudentCourseJourneySql, [
+        accessToken ? sha256(accessToken) : null, publicToken || null, studentRef || null
+      ]);
       const row = assertSingleRow(
         result,
         'PROGRESS_LINK_INVALID',
-        'Link hành trình không hợp lệ, đã hết hạn hoặc đã được thay thế.',
+        accessToken ? 'Link hành trình không hợp lệ, đã hết hạn hoặc đã được thay thế.'
+          : 'Không tìm thấy hành trình cho người học và lớp đã chọn.',
         404
       );
-      return buildStudentCourseJourney(row);
+      const journey = buildStudentCourseJourney(row);
+      const mapped = normalizeJourneyTestSources(row.test_sources);
+      if (mapped.length) {
+        if (!testResultReader) {
+          journey.coverage.testResults = 'temporarily_unavailable';
+        } else {
+          try {
+            const results = await testResultReader({ classId: row.class_id,
+              studentRef: row.student_ref, testSlugs: mapped.map(item => item.testSlug) });
+            const bySlug = new Map(results.map(item => [item.testSlug, item]));
+            const byNumber = new Map(mapped.map(item => [item.sessionNumber, bySlug.get(item.testSlug)]));
+            journey.sessions = journey.sessions.map(session => ({ ...session,
+              ...(byNumber.get(session.sessionNumber)
+                ? { testResult: byNumber.get(session.sessionNumber) } : {}) }));
+            journey.coverage.testResults = 'connected';
+          } catch {
+            journey.coverage.testResults = 'temporarily_unavailable';
+          }
+        }
+      }
+      return journey;
     },
 
     async listTeacherOptions({ email, canAccessAllClasses }) {
@@ -797,6 +872,180 @@ export function createLearningService({ pool }) {
           formVersionId: definition.formVersionId,
           definitionHash,
           rosterCount: rosterResult.rowCount
+        };
+      });
+    },
+
+    async getTeacherErpSchedule({ assignmentId, reviewer }) {
+      const authorized = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
+        [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+      const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+        'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+      const schedule = await readErpSchedule(target.class_id);
+      return { classId: target.class_id, className: target.class_name, ...schedule };
+    },
+
+    async getTeacherTestSources({ assignmentId, reviewer }) {
+      const authorized = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
+        [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+      const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+        'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+      if (!testSourceReader) {
+        throw new LearningError('TEST_SOURCE_NOT_CONFIGURED',
+          'Nguồn kết quả Test chưa được kết nối.', 503);
+      }
+      try {
+        const tests = await testSourceReader(target.class_id);
+        return { classId: target.class_id, className: target.class_name, tests };
+      } catch {
+        throw new LearningError('TEST_SOURCE_UNAVAILABLE',
+          'Chưa đọc được nguồn kết quả Test; hãy thử lại sau.', 503);
+      }
+    },
+
+    async getTeacherJourneyPlan({ assignmentId, reviewer }) {
+      const authorized = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
+        [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+      const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+        'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+      const result = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
+      const plan = result.rows[0];
+      return {
+        classId: target.class_id,
+        className: target.class_name,
+        highestKnownSession: Number(target.highest_known_session || 0),
+        totalSessions: plan ? Number(plan.total_sessions) : null,
+        testSessionNumbers: plan ? asArray(plan.test_session_numbers).map(Number) : [],
+        testSources: plan ? normalizeJourneyTestSources(plan.test_sources) : [],
+        sessionDates: plan ? normalizeJourneySessionDates(plan.session_dates) : [],
+        revision: plan ? Number(plan.revision) : 0,
+        confirmedBy: plan?.confirmed_by_email || null,
+        confirmedAt: plan?.confirmed_at || null
+      };
+    },
+
+    async saveTeacherJourneyPlan({ assignmentId, totalSessions, testSessionNumbers,
+      testSources, sessionDates, expectedRevision, reviewer }) {
+      const newMappings = (sessionDates || []).filter(item => item.erpSessionId);
+      if (newMappings.length) {
+        const authorized = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
+          [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+        const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+          'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+        const current = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
+        const previousByNumber = new Map(normalizeJourneySessionDates(current.rows[0]?.session_dates)
+          .map(item => [item.sessionNumber, item]));
+        const changed = newMappings.filter(item => {
+          const prior = previousByNumber.get(item.sessionNumber);
+          return prior?.erpSessionId !== item.erpSessionId || prior?.date !== item.date;
+        });
+        if (changed.length) {
+          const schedule = await readErpSchedule(target.class_id);
+          const byId = new Map(schedule.sessions.map(item => [item.erpSessionId, item]));
+          if (changed.some(item => byId.get(item.erpSessionId)?.date !== item.date)) {
+            throw new LearningError('ERP_SCHEDULE_MAPPING_CHANGED',
+              'Dòng lịch ERP không thuộc lớp này hoặc ngày đã đổi; hãy tải lại lịch để xác nhận.', 409);
+          }
+        }
+      }
+      if ((testSources || []).length) {
+        const authorized = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
+          [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+        const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+          'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+        const current = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
+        const previousByNumber = new Map(normalizeJourneyTestSources(current.rows[0]?.test_sources)
+          .map(item => [item.sessionNumber, item.testSlug]));
+        const changed = testSources.filter(item => previousByNumber.get(item.sessionNumber) !== item.testSlug);
+        if (changed.length) {
+          if (!testSourceReader) {
+            throw new LearningError('TEST_SOURCE_NOT_CONFIGURED',
+              'Nguồn kết quả Test chưa được kết nối.', 503);
+          }
+          let available;
+          try { available = await testSourceReader(target.class_id); }
+          catch {
+            throw new LearningError('TEST_SOURCE_UNAVAILABLE',
+              'Chưa đọc được nguồn kết quả Test; hãy thử lại sau.', 503);
+          }
+          const slugs = new Set(available.map(item => item.testSlug));
+          if (changed.some(item => !slugs.has(item.testSlug))) {
+            throw new LearningError('TEST_SOURCE_MAPPING_CHANGED',
+              'Bài Test không có kết quả thuộc lớp này; hãy tải lại nguồn Test.', 409);
+          }
+        }
+      }
+      return withTransaction(pool, async client => {
+        const authorized = await client.query(authorizeLearningJourneyPlanAssignmentSql,
+          [assignmentId, reviewer.email, reviewer.canAccessAllClasses]);
+        const target = assertSingleRow(authorized, 'ASSIGNMENT_ACCESS_DENIED',
+          'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
+        if (totalSessions < Number(target.highest_known_session || 0)) {
+          throw new LearningError('JOURNEY_PLAN_TOO_SHORT',
+            'Tổng số buổi nhỏ hơn số buổi cao nhất đã có dữ liệu.', 409);
+        }
+        const current = await client.query(fetchLearningJourneyPlanSql, [target.class_id]);
+        const prior = current.rows[0];
+        const datesToSave = sessionDates ?? (prior ? normalizeJourneySessionDates(prior.session_dates) : []);
+        const sourcesToSave = testSources ?? (prior ? normalizeJourneyTestSources(prior.test_sources) : []);
+        if (sourcesToSave.some(item => !testSessionNumbers.includes(item.sessionNumber))
+          || new Set(sourcesToSave.map(item => item.sessionNumber)).size !== sourcesToSave.length
+          || new Set(sourcesToSave.map(item => item.testSlug)).size !== sourcesToSave.length) {
+          throw new LearningError('TEST_SOURCE_MAPPING_INVALID',
+            'Mỗi bài Test phải ghép với đúng một buổi Test của lớp.', 409);
+        }
+        const mappedIds = datesToSave.map(item => item.erpSessionId).filter(Boolean);
+        if (new Set(mappedIds).size !== mappedIds.length) {
+          throw new LearningError('ERP_SCHEDULE_DUPLICATE_MAPPING',
+            'Một dòng lịch ERP không thể gắn với hai buổi.', 409);
+        }
+        if (datesToSave.some(item => item.sessionNumber > totalSessions)) {
+          throw new LearningError('JOURNEY_DATE_OUT_OF_RANGE',
+            'Ngày đã xác nhận nằm ngoài tổng số buổi; hãy kiểm tra lại kế hoạch.', 409);
+        }
+        const same = prior && Number(prior.total_sessions) === totalSessions
+          && JSON.stringify(asArray(prior.test_session_numbers).map(Number))
+            === JSON.stringify(testSessionNumbers)
+          && JSON.stringify(normalizeJourneyTestSources(prior.test_sources)) === JSON.stringify(sourcesToSave)
+          && JSON.stringify(normalizeJourneySessionDates(prior.session_dates)) === JSON.stringify(datesToSave);
+        if (Number(prior?.revision || 0) !== expectedRevision) {
+          if (same && Number(prior.revision) === expectedRevision + 1) {
+            return {
+              classId: target.class_id, className: target.class_name,
+              highestKnownSession: Number(target.highest_known_session || 0),
+              totalSessions, testSessionNumbers, testSources: sourcesToSave,
+              sessionDates: datesToSave, revision: Number(prior.revision),
+              confirmedBy: prior.confirmed_by_email, confirmedAt: prior.confirmed_at, replayed: true
+            };
+          }
+          throw new LearningError('JOURNEY_PLAN_STALE',
+            'Kế hoạch lớp đã được cập nhật; hãy tải lại trước khi lưu.', 409);
+        }
+        const saved = await client.query(saveLearningJourneyPlanSql,
+          [target.class_id, totalSessions, testSessionNumbers, expectedRevision, reviewer.email,
+            JSON.stringify(datesToSave), JSON.stringify(sourcesToSave)]);
+        if (!saved.rowCount) {
+          throw new LearningError('JOURNEY_PLAN_STALE',
+            'Kế hoạch lớp đã được cập nhật; hãy tải lại trước khi lưu.', 409);
+        }
+        const readback = await client.query(fetchLearningJourneyPlanSql, [target.class_id]);
+        const row = assertSingleRow(readback, 'JOURNEY_PLAN_READBACK_FAILED',
+          'Chưa xác nhận được kế hoạch vừa lưu.', 500);
+        if (Number(row.revision) !== expectedRevision + 1
+          || Number(row.total_sessions) !== totalSessions
+          || JSON.stringify(asArray(row.test_session_numbers).map(Number))
+            !== JSON.stringify(testSessionNumbers)
+          || JSON.stringify(normalizeJourneyTestSources(row.test_sources)) !== JSON.stringify(sourcesToSave)
+          || JSON.stringify(normalizeJourneySessionDates(row.session_dates)) !== JSON.stringify(datesToSave)) {
+          throw new LearningError('JOURNEY_PLAN_READBACK_MISMATCH',
+            'Kế hoạch lưu không khớp dữ liệu đã gửi.', 500);
+        }
+        return {
+          classId: target.class_id, className: target.class_name,
+          highestKnownSession: Number(target.highest_known_session || 0),
+          totalSessions, testSessionNumbers, testSources: sourcesToSave,
+          sessionDates: datesToSave, revision: Number(row.revision),
+          confirmedBy: row.confirmed_by_email, confirmedAt: row.confirmed_at, replayed: false
         };
       });
     },
