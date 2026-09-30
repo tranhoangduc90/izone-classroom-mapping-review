@@ -5,82 +5,607 @@
   "change_kind": "feature",
   "escaped_user_defect": false,
   "risk": "high",
-  "system_traits": ["stateful", "asynchronous", "concurrent", "external_side_effects", "authentication", "multi_user", "multi_service", "personal_data"],
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "multi_user",
+    "multi_service",
+    "personal_data"
+  ],
   "experience": {
     "planning_mode": "controlled",
     "mode_reason": "Phát hành bài nộp thật qua Pages, API, AI và database chung, có lịch sử học viên.",
     "user": "Học viên và giảng viên IC2304",
     "problem": "Buổi 2 còn là trang thử, chưa có phiên và biên nhận thật.",
     "outcome": "Hai link hợp lệ được nhận, lưu biên nhận, phân tích Bác sĩ AI theo đúng học viên.",
-    "out_of_scope": ["Không sửa 15 Docs cũ hoặc trạng thái bài Classroom.", "Không gửi cảnh báo hồi tố cho giảng viên."],
+    "out_of_scope": [
+      "Không sửa 15 Docs cũ hoặc trạng thái bài Classroom.",
+      "Không gửi cảnh báo hồi tố cho giảng viên."
+    ],
     "plain_language_summary": "Học viên chọn tên, nộp hai hội thoại và thấy biên nhận thật trên webapp.",
     "acceptance_scope": "Phát hành theo giai đoạn với đường nộp chính và bất biến định danh được nghiệm thu đầy đủ."
   },
-  "delivery_scope": {"mode": "large_phased", "release_slice": "Trang buổi 2 và API mở bài trực tiếp; ghép 15 Docs cũ, kiểm hai link, cấp receipt và cập nhật Bác sĩ AI; Docs giữ nguyên."},
+  "delivery_scope": {
+    "mode": "large_phased",
+    "release_slice": "Trang buổi 2 và API mở bài trực tiếp; ghép 15 Docs cũ, kiểm hai link, cấp receipt và cập nhật Bác sĩ AI; Docs giữ nguyên."
+  },
   "change_package": {
     "proposal": "Dùng registry Speaking hiện có với chế độ mở trực tiếp riêng cho bài cũ.",
     "behavior_baseline": "Trang buổi 2 là bản thử; registry cũ đã giữ 21 claim nhưng đóng và chưa ghép Docs.",
     "deltas": [
-      {"id": "D-DIRECT", "operation": "ADDED", "behavior": "Chọn học viên IC2304 để mở đúng bản sao Docs đã ghép mà không cần CTA trong Docs.", "module_ids": ["M-WEB", "M-API", "M-DB"], "test_ids": ["T-IDENTITY", "T-UI"]},
-      {"id": "D-SUBMIT", "operation": "MODIFIED", "behavior": "Buổi 2 dùng hai phần thật, nhận receipt nhưng không ghi vào Docs cũ.", "module_ids": ["M-WEB", "M-API", "M-DB"], "test_ids": ["T-SUBMIT", "T-NO-DOC", "T-RETRY"]},
-      {"id": "D-REGISTRY", "operation": "MODIFIED", "behavior": "Đổi mã tạm thành 67-speaking-paraphrase mà vẫn giữ claim lịch sử.", "module_ids": ["M-DB"], "test_ids": ["T-REGISTRY", "T-DUPLICATE"]}
-    ], "archive_status": "active"
+      {
+        "id": "D-DIRECT",
+        "operation": "ADDED",
+        "behavior": "Chọn học viên IC2304 để mở đúng bản sao Docs đã ghép mà không cần CTA trong Docs.",
+        "module_ids": [
+          "M-WEB",
+          "M-API",
+          "M-DB"
+        ],
+        "test_ids": [
+          "T-IDENTITY",
+          "T-UI"
+        ]
+      },
+      {
+        "id": "D-SUBMIT",
+        "operation": "MODIFIED",
+        "behavior": "Buổi 2 dùng hai phần thật, nhận receipt nhưng không ghi vào Docs cũ.",
+        "module_ids": [
+          "M-WEB",
+          "M-API",
+          "M-DB"
+        ],
+        "test_ids": [
+          "T-SUBMIT",
+          "T-NO-DOC",
+          "T-RETRY"
+        ]
+      },
+      {
+        "id": "D-REGISTRY",
+        "operation": "MODIFIED",
+        "behavior": "Đổi mã tạm thành 67-speaking-paraphrase mà vẫn giữ claim lịch sử.",
+        "module_ids": [
+          "M-DB"
+        ],
+        "test_ids": [
+          "T-REGISTRY",
+          "T-DUPLICATE"
+        ]
+      }
+    ],
+    "archive_status": "active"
   },
   "module_map": {
     "revision": "lesson2-plan-1",
     "modules": [
-      {"id": "M-WEB", "name": "Trang học viên", "responsibility": "Chọn người học, hướng dẫn và gửi hai link; hiện trạng thái thật.", "owns_data": ["draft_local"], "public_interfaces": ["speaking-homework/index.html"], "depends_on": ["M-API"], "boundary_rules": ["Không tự báo đã nộp trước receipt."], "test_ids": ["T-UI", "T-SUBMIT"]},
-      {"id": "M-API", "name": "API Speaking", "responsibility": "Ghép học viên với Docs và bài; kiểm link, cấp receipt, xếp hàng phân tích.", "owns_data": ["grant", "submission", "receipt"], "public_interfaces": ["/api/speaking-homework"], "depends_on": ["M-DB"], "boundary_rules": ["Chế độ mở trực tiếp chỉ cho phép đúng student_ref của Docs."], "test_ids": ["T-IDENTITY", "T-SUBMIT", "T-RETRY"]},
-      {"id": "M-DB", "name": "Registry và dữ liệu nộp", "responsibility": "Giữ bài, bản sao, claim lịch sử và cấu hình không ghi Docs.", "owns_data": ["assignment", "assignment_document", "conversation_claim"], "public_interfaces": ["speaking_homework schema"], "depends_on": [], "boundary_rules": ["Không tạo lại assignment hoặc xóa claim cũ."], "test_ids": ["T-REGISTRY", "T-NO-DOC", "T-DUPLICATE"]}
+      {
+        "id": "M-WEB",
+        "name": "Trang học viên",
+        "responsibility": "Chọn người học, hướng dẫn và gửi hai link; hiện trạng thái thật.",
+        "owns_data": [
+          "draft_local"
+        ],
+        "public_interfaces": [
+          "speaking-homework/index.html"
+        ],
+        "depends_on": [
+          "M-API"
+        ],
+        "boundary_rules": [
+          "Không tự báo đã nộp trước receipt."
+        ],
+        "test_ids": [
+          "T-UI",
+          "T-SUBMIT"
+        ]
+      },
+      {
+        "id": "M-API",
+        "name": "API Speaking",
+        "responsibility": "Ghép học viên với Docs và bài; kiểm link, cấp receipt, xếp hàng phân tích.",
+        "owns_data": [
+          "grant",
+          "submission",
+          "receipt"
+        ],
+        "public_interfaces": [
+          "/api/speaking-homework"
+        ],
+        "depends_on": [
+          "M-DB"
+        ],
+        "boundary_rules": [
+          "Chế độ mở trực tiếp chỉ cho phép đúng student_ref của Docs."
+        ],
+        "test_ids": [
+          "T-IDENTITY",
+          "T-SUBMIT",
+          "T-RETRY"
+        ]
+      },
+      {
+        "id": "M-DB",
+        "name": "Registry và dữ liệu nộp",
+        "responsibility": "Giữ bài, bản sao, claim lịch sử và cấu hình không ghi Docs.",
+        "owns_data": [
+          "assignment",
+          "assignment_document",
+          "conversation_claim"
+        ],
+        "public_interfaces": [
+          "speaking_homework schema"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không tạo lại assignment hoặc xóa claim cũ."
+        ],
+        "test_ids": [
+          "T-REGISTRY",
+          "T-NO-DOC",
+          "T-DUPLICATE"
+        ]
+      }
     ],
     "integrations": [
-      {"id": "I-WEB-API", "producer": "M-API", "consumer": "M-WEB", "contract": "Mã bài, lớp, student_ref; trả receipt và trạng thái đúng người.", "test_ids": ["T-IDENTITY", "T-UI"]},
-      {"id": "I-API-DB", "producer": "M-DB", "consumer": "M-API", "contract": "Ghép đúng một Docs từ Classroom user ID, ghi không trùng.", "test_ids": ["T-REGISTRY", "T-RETRY"]}
+      {
+        "id": "I-WEB-API",
+        "producer": "M-API",
+        "consumer": "M-WEB",
+        "contract": "Mã bài, lớp, student_ref; trả receipt và trạng thái đúng người.",
+        "test_ids": [
+          "T-IDENTITY",
+          "T-UI"
+        ]
+      },
+      {
+        "id": "I-API-DB",
+        "producer": "M-DB",
+        "consumer": "M-API",
+        "contract": "Ghép đúng một Docs từ Classroom user ID, ghi không trùng.",
+        "test_ids": [
+          "T-REGISTRY",
+          "T-RETRY"
+        ]
+      }
     ]
   },
   "operational_design": {
-    "plan_revision": "lesson2-plan-1", "signals": ["multi_user", "multi_service"],
+    "plan_revision": "lesson2-plan-1",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
     "critical_path": "Pages → API → mapping database → đọc ChatGPT Share/AI → receipt → Bác sĩ AI; không ghi Docs.",
-    "peak_load": {"value": 15, "unit": "học viên", "basis": "Classroom IC2304 có 15 bản sao Docs."},
+    "peak_load": {
+      "value": 15,
+      "unit": "học viên",
+      "basis": "Classroom IC2304 có 15 bản sao Docs."
+    },
     "user_wait_target": "Hiện đang kiểm và đọc lại trạng thái; một lượt AI giới hạn 45 giây, lỗi được thử lại.",
-    "limits_and_cost": ["Hai Share bắt buộc mỗi học viên; dùng rate limit và hàng việc hiện hành."],
-    "failure_and_recovery": ["Nháp giữ cục bộ; job retry; receipt idempotent; tắt bài để ngưng phiên mới khi cần."],
-    "monitoring": ["Đếm Docs ghép, check/outbox pending/failed, receipt và đề xuất Bác sĩ AI; bảo vệ worker điểm danh API chung."],
+    "limits_and_cost": [
+      "Hai Share bắt buộc mỗi học viên; dùng rate limit và hàng việc hiện hành."
+    ],
+    "failure_and_recovery": [
+      "Nháp giữ cục bộ; job retry; receipt idempotent; tắt bài để ngưng phiên mới khi cần."
+    ],
+    "monitoring": [
+      "Đếm Docs ghép, check/outbox pending/failed, receipt và đề xuất Bác sĩ AI; bảo vệ worker điểm danh API chung."
+    ],
     "decision": "Mở bài trực tiếp từ danh sách học viên đã duyệt; giữ nguyên Docs cũ và bỏ riêng outbox ghi Docs.",
-    "test_ids": ["T-IDENTITY", "T-SUBMIT", "T-RETRY", "T-NO-DOC", "T-DOCTOR", "T-UI"]
+    "test_ids": [
+      "T-IDENTITY",
+      "T-SUBMIT",
+      "T-RETRY",
+      "T-NO-DOC",
+      "T-DOCTOR",
+      "T-UI"
+    ]
   },
   "requirements": [
-    {"id": "R-ACCESS", "statement": "Trang dùng roster IC2304 thật và chọn đúng Docs của học viên.", "test_ids": ["T-IDENTITY", "T-UI"]},
-    {"id": "R-LINK", "statement": "Chỉ nhận hai ChatGPT Share toàn hội thoại, đủ 5 câu Paraphrase và 3 câu Speaking.", "test_ids": ["T-LINK", "T-SUBMIT"]},
-    {"id": "R-HISTORY", "statement": "21 hội thoại cũ vẫn bị nhận diện là đã nộp; mã bài chính thức đúng.", "test_ids": ["T-DUPLICATE", "T-REGISTRY"]},
-    {"id": "R-DOC", "statement": "Không chỉnh Docs cũ và không tạo việc ghi Docs cho receipt buổi 2.", "test_ids": ["T-NO-DOC"]},
-    {"id": "R-DOCTOR", "statement": "Receipt mới được phân tích và cập nhật Bác sĩ AI đúng học viên.", "test_ids": ["T-DOCTOR"]}
+    {
+      "id": "R-ACCESS",
+      "statement": "Trang dùng roster IC2304 thật và chọn đúng Docs của học viên.",
+      "test_ids": [
+        "T-IDENTITY",
+        "T-UI"
+      ]
+    },
+    {
+      "id": "R-LINK",
+      "statement": "Chỉ nhận hai ChatGPT Share toàn hội thoại, đủ 5 câu Paraphrase và 3 câu Speaking.",
+      "test_ids": [
+        "T-LINK",
+        "T-SUBMIT"
+      ]
+    },
+    {
+      "id": "R-HISTORY",
+      "statement": "21 hội thoại cũ vẫn bị nhận diện là đã nộp; mã bài chính thức đúng.",
+      "test_ids": [
+        "T-DUPLICATE",
+        "T-REGISTRY"
+      ]
+    },
+    {
+      "id": "R-DOC",
+      "statement": "Không chỉnh Docs cũ và không tạo việc ghi Docs cho receipt buổi 2.",
+      "test_ids": [
+        "T-NO-DOC"
+      ]
+    },
+    {
+      "id": "R-DOCTOR",
+      "statement": "Receipt mới được phân tích và cập nhật Bác sĩ AI đúng học viên.",
+      "test_ids": [
+        "T-DOCTOR"
+      ]
+    }
   ],
   "invariants": [
-    {"id": "V-IDENTITY", "statement": "Một học viên chỉ mở Docs được ghép với Classroom user ID của mình trong tuyến trực tiếp.", "test_ids": ["T-IDENTITY"]},
-    {"id": "V-IDEMPOTENT", "statement": "Retry không tạo thêm receipt hoặc cộng thêm đề xuất.", "test_ids": ["T-RETRY", "T-DOCTOR"]},
-    {"id": "V-SHARED-API", "statement": "Phát hành API giữ điểm danh Progress Log và phiên giảng viên.", "test_ids": ["T-SHARED"]}
+    {
+      "id": "V-IDENTITY",
+      "statement": "Một học viên chỉ mở Docs được ghép với Classroom user ID của mình trong tuyến trực tiếp.",
+      "test_ids": [
+        "T-IDENTITY"
+      ]
+    },
+    {
+      "id": "V-IDEMPOTENT",
+      "statement": "Retry không tạo thêm receipt hoặc cộng thêm đề xuất.",
+      "test_ids": [
+        "T-RETRY",
+        "T-DOCTOR"
+      ]
+    },
+    {
+      "id": "V-SHARED-API",
+      "statement": "Phát hành API giữ điểm danh Progress Log và phiên giảng viên.",
+      "test_ids": [
+        "T-SHARED"
+      ]
+    }
   ],
   "tests": [
-    {"id": "T-IDENTITY", "category": "security_privacy", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm trên DB thử và production."},
-    {"id": "T-SUBMIT", "category": "happy_path", "priority": "P0", "status": "not_run", "evidence": "Chờ hai link hợp lệ và receipt."},
-    {"id": "T-LINK", "category": "invalid_input", "priority": "P0", "status": "not_run", "evidence": "Chờ kiểm link sai, /c/, /s/t_, không mở được, thiếu câu."},
-    {"id": "T-DUPLICATE", "category": "regression", "priority": "P0", "status": "not_run", "evidence": "Chờ đối chiếu 21 claim cũ."},
-    {"id": "T-RETRY", "category": "concurrency_idempotency", "priority": "P1", "status": "not_run", "evidence": "Chờ test retry/double click."},
-    {"id": "T-NO-DOC", "category": "external_partial", "priority": "P0", "status": "not_run", "evidence": "Chờ chứng minh không có write_doc."},
-    {"id": "T-REGISTRY", "category": "lifecycle_time", "priority": "P1", "status": "not_run", "evidence": "Chờ kiểm open/closed và migration."},
-    {"id": "T-DOCTOR", "category": "external_partial", "priority": "P0", "status": "not_run", "evidence": "Chờ worker và readback recommendation."},
-    {"id": "T-UI", "category": "happy_path", "priority": "P1", "status": "not_run", "evidence": "Chờ browser desktop/mobile."},
-    {"id": "T-SHARED", "category": "rollback_recovery", "priority": "P0", "status": "not_run", "evidence": "Chờ full suite và cổng Progress Log/phiên giảng viên."}
+    {
+      "id": "T-IDENTITY",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "PGlite test khóa Doc theo student_ref; production sync 15 bản sao/15 học viên; API trả roster 15."
+    },
+    {
+      "id": "T-SUBMIT",
+      "category": "happy_path",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Integration backend hai link đạt tạo đúng một receipt; browser mock desktop/mobile đi hết hành trình."
+    },
+    {
+      "id": "T-LINK",
+      "category": "invalid_input",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Bộ kiểm frontend/backend chặn /c/ và /s/t_; browser test từ chối link một phản hồi; suite kiểm link không mở và thiếu lượt."
+    },
+    {
+      "id": "T-DUPLICATE",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Production giữ 21 conversation_claim của assignment cũ; suite kiểm trùng share/fingerprint."
+    },
+    {
+      "id": "T-RETRY",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Integration thử finish lặp chỉ tạo một receipt; backend full suite 265/265."
+    },
+    {
+      "id": "T-NO-DOC",
+      "category": "external_partial",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Integration xác nhận outbox chỉ có grade_speaking và doctor_analyze, không có write_doc; 15 Docs cũ không sửa."
+    },
+    {
+      "id": "T-REGISTRY",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Production readback 67-speaking-paraphrase=open, direct, 2 phần, 15 Docs khác nhau, 21 claim."
+    },
+    {
+      "id": "T-DOCTOR",
+      "category": "external_partial",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Integration kiểm job doctor, xếp Chờ luyện/Số lần đề xuất và 5 ngày; live worker bật. Còn chờ một bài nộp thật để quan sát cập nhật production."
+    },
+    {
+      "id": "T-UI",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Playwright desktop 1280 và mobile 390 qua hai link, biên nhận, luyện thêm, ghi nhớ tên; Pages live tải 15 tên và 9 ảnh, không overflow/pageerror."
+    },
+    {
+      "id": "T-SHARED",
+      "category": "rollback_recovery",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Backend full suite 265/265; image API healthy; hash auth/attendance/outbox không đổi, bốn cấu hình điểm danh giữ dấu băm, 102 job Portal complete."
+    }
   ],
-  "task_graph": {"plan_revision": "lesson2-plan-1", "tasks": [
-    {"id": "TASK-BACKEND", "result": "Mở trực tiếp và cấu hình bài cũ.", "module_ids": ["M-API", "M-DB"], "depends_on": [], "consumes": ["Classroom 15 Docs", "registry cũ"], "produces": ["API", "migration"], "contract": "Ghép identity duy nhất, không ghi Docs.", "test_ids": ["T-IDENTITY", "T-REGISTRY", "T-NO-DOC", "T-RETRY"], "evidence_required": ["DB integration", "readback"], "decision_inputs": ["Giữ Docs cũ"], "affected_future_tasks": ["TASK-WEB", "TASK-RELEASE"], "status": "in_progress", "plan_revision": "lesson2-plan-1"},
-    {"id": "TASK-WEB", "result": "Trang nộp buổi 2 thật.", "module_ids": ["M-WEB"], "depends_on": ["TASK-BACKEND"], "consumes": ["API trực tiếp"], "produces": ["Trang Pages"], "contract": "Chỉ báo nộp khi có receipt.", "test_ids": ["T-LINK", "T-UI", "T-SUBMIT"], "evidence_required": ["Browser desktop/mobile"], "decision_inputs": ["Hai link bắt buộc"], "affected_future_tasks": ["TASK-RELEASE"], "status": "planned", "plan_revision": "lesson2-plan-1"},
-    {"id": "TASK-RELEASE", "result": "Production có thể nhận bài.", "module_ids": ["M-WEB", "M-API", "M-DB"], "depends_on": ["TASK-BACKEND", "TASK-WEB"], "consumes": ["Code đã test", "15 Docs Classroom"], "produces": ["URL chính thức", "DB readback"], "contract": "Giữ điểm danh, phiên, Docs cũ.", "test_ids": ["T-SHARED", "T-DOCTOR", "T-DUPLICATE"], "evidence_required": ["Production readback"], "decision_inputs": ["Yêu cầu phát hành của Đức"], "affected_future_tasks": [], "status": "planned", "plan_revision": "lesson2-plan-1"}
-  ]},
-  "risk_register": {"assessment": "FAIL", "risks": [{"id": "R-DIRECT", "description": "Mở nhầm Docs hoặc cập nhật sai học viên khi vào URL chung.", "probability": 2, "impact": 3, "score": 6, "severity": "P1", "status": "open", "owner": "Codex", "mitigation": "Ghép theo Classroom user ID, khóa đúng student_ref và test hai người xen kẽ.", "test_ids": ["T-IDENTITY"]}], "waivers": []},
-  "coverage_exemptions": {}, "cross_constraints": [{"id": "CHECK-LEASE", "left": {"name": "check_job_lease_seconds", "value": 300}, "operator": ">", "right": {"name": "ai_timeout_plus_margin_seconds", "value": 90}, "status": "not_run", "evidence": "Sẽ xác nhận với worker hiện hành trước phát hành."}], "mutations": [], "verification_runs": [],
-  "convergence": {"status": "gaps", "tree_revision": "pending", "gaps": ["Chưa xây và kiểm bản phát hành."], "unrequested_work": [], "evidence": "Bản kiểm trước xây."},
-  "context_handoff": {"summary": "Buổi 2 đang là demo; phát hành bằng mở trực tiếp, không sửa Docs cũ.", "decisions": ["Mã bài 67-speaking-paraphrase.", "Không sửa Docs cũ."], "completed": [], "next_step": "Xây backend và frontend rồi kiểm integration.", "open_risks": ["R-DIRECT"], "tree_revision": "pending"},
-  "release": {"target_environment": "production", "decision": "not_ready", "base_tree_revision": "8a32fe1", "current_tree_revision": "pending", "production_authorized": true, "rollback": "Tắt bài và quay lại image/source trước, đối chiếu receipt phát sinh trước khi đảo cấu hình.", "deployment_readback": "unknown", "operational_observation": "unknown", "open_risks": [{"severity": "P1", "summary": "Chưa kiểm định danh mở trực tiếp."}]}
+  "task_graph": {
+    "plan_revision": "lesson2-plan-1",
+    "tasks": [
+      {
+        "id": "TASK-BACKEND",
+        "result": "Mở trực tiếp và cấu hình bài cũ.",
+        "module_ids": [
+          "M-API",
+          "M-DB"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "Classroom 15 Docs",
+          "registry cũ"
+        ],
+        "produces": [
+          "API",
+          "migration"
+        ],
+        "contract": "Ghép identity duy nhất, không ghi Docs.",
+        "test_ids": [
+          "T-IDENTITY",
+          "T-REGISTRY",
+          "T-NO-DOC",
+          "T-RETRY"
+        ],
+        "evidence_required": [
+          "DB integration",
+          "readback"
+        ],
+        "decision_inputs": [
+          "Giữ Docs cũ"
+        ],
+        "affected_future_tasks": [
+          "TASK-WEB",
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "lesson2-plan-1"
+      },
+      {
+        "id": "TASK-WEB",
+        "result": "Trang nộp buổi 2 thật.",
+        "module_ids": [
+          "M-WEB"
+        ],
+        "depends_on": [
+          "TASK-BACKEND"
+        ],
+        "consumes": [
+          "API trực tiếp"
+        ],
+        "produces": [
+          "Trang Pages"
+        ],
+        "contract": "Chỉ báo nộp khi có receipt.",
+        "test_ids": [
+          "T-LINK",
+          "T-UI",
+          "T-SUBMIT"
+        ],
+        "evidence_required": [
+          "Browser desktop/mobile"
+        ],
+        "decision_inputs": [
+          "Hai link bắt buộc"
+        ],
+        "affected_future_tasks": [
+          "TASK-RELEASE"
+        ],
+        "status": "done",
+        "plan_revision": "lesson2-plan-1"
+      },
+      {
+        "id": "TASK-RELEASE",
+        "result": "Production có thể nhận bài.",
+        "module_ids": [
+          "M-WEB",
+          "M-API",
+          "M-DB"
+        ],
+        "depends_on": [
+          "TASK-BACKEND",
+          "TASK-WEB"
+        ],
+        "consumes": [
+          "Code đã test",
+          "15 Docs Classroom"
+        ],
+        "produces": [
+          "URL chính thức",
+          "DB readback"
+        ],
+        "contract": "Giữ điểm danh, phiên, Docs cũ.",
+        "test_ids": [
+          "T-SHARED",
+          "T-DOCTOR",
+          "T-DUPLICATE"
+        ],
+        "evidence_required": [
+          "Production readback"
+        ],
+        "decision_inputs": [
+          "Yêu cầu phát hành của Đức"
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "lesson2-plan-1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "CONCERNS",
+    "risks": [
+      {
+        "id": "R-DIRECT",
+        "description": "Mở nhầm Docs hoặc cập nhật sai học viên khi vào URL chung.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Ghép theo Classroom user ID, khóa đúng student_ref và test hai người xen kẽ.",
+        "test_ids": [
+          "T-IDENTITY"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "CHECK-LEASE",
+      "left": {
+        "name": "check_job_lease_seconds",
+        "value": 300
+      },
+      "operator": ">",
+      "right": {
+        "name": "ai_timeout_plus_margin_seconds",
+        "value": 90
+      },
+      "status": "passed",
+      "evidence": "Lease 5 phút trong speaking-homework.js lớn hơn timeout đọc/AI 90 giây và nhịp worker; kiểm lại trên image production."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "M-MIGRATION",
+      "target": "PostgreSQL mapping production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Cột delivery_mode có mặc định docs_cta; assignment buổi 2 readback direct."
+    },
+    {
+      "id": "M-API",
+      "target": "mapping-review-api production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image izone-speaking-lesson2:20260930-v1 healthy; /ready ok; env hash và 102 job Portal giữ nguyên."
+    },
+    {
+      "id": "M-REGISTRY",
+      "target": "speaking_homework.assignment buổi 2",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Readback mã 67-speaking-paraphrase, open, 2 parts, 21 claim cũ."
+    },
+    {
+      "id": "M-BIND",
+      "target": "15 assignment_document IC2304",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Classroom snapshot 15 unique user/doc/submission; sync trả bound=15; database có 15 student_ref unique."
+    },
+    {
+      "id": "M-PAGES",
+      "target": "GitHub Pages Speaking Homework buổi 2",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Pages workflow 36669250465 success; HTML/JS 200; browser live 1280/390 roster 15, chín ảnh 200."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND-FULL",
+      "scope": "full_suite",
+      "command": "node --test --test-concurrency=1 test/*.test.js",
+      "tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b",
+      "captured_at": "2026-09-30T04:39:08.735030Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 265,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "265/265 trên runtime Speaking hiện hành; hai test Progress Log cũng đạt khi chạy tuần tự."
+    },
+    {
+      "id": "V-BROWSER",
+      "scope": "behavioral",
+      "command": "node tests/speaking-homework-lesson2-live.mjs",
+      "tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b",
+      "captured_at": "2026-09-30T04:39:08.735030Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Hai viewport: link sai, hai link đạt, receipt, Bác sĩ AI, luyện thêm, ghi nhớ tên và chín ảnh."
+    },
+    {
+      "id": "V-PRODUCTION",
+      "scope": "focused",
+      "command": "node E:/Codex-Data/speaking-lesson2-release-20260930/live-browser.mjs",
+      "tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b",
+      "captured_at": "2026-09-30T04:39:08.735030Z",
+      "exit_code": 0,
+      "outcome": "passed",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "Trang Pages và API production: roster 15, chín ảnh, không tràn ngang hoặc pageerror."
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Đối chiếu yêu cầu, phạm vi Docs cũ, API, database, Pages và test; hạng mục vận hành còn chờ bài thật được ghi riêng ở release."
+  },
+  "context_handoff": {
+    "summary": "Buổi 2 đã mở webapp thật; Docs/Classroom cũ giữ nguyên.",
+    "decisions": [
+      "Dùng mã 67-speaking-paraphrase trên chính assignment lịch sử.",
+      "Không sửa Docs cũ; biên nhận trên webapp."
+    ],
+    "completed": [
+      "TASK-BACKEND",
+      "TASK-WEB",
+      "TASK-RELEASE"
+    ],
+    "next_step": "Quan sát lượt nộp thật đầu tiên, biên nhận, grade và cập nhật Bác sĩ AI trong production.",
+    "open_risks": [
+      "Chưa có lượt nộp mới để đọc lại worker AI ở production."
+    ],
+    "tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "8a32fe1",
+    "current_tree_revision": "content-sha256:32ebc5bd28b247d96d7d3699cc90520fd793d0b61ba8ed3f8ee8fa9241f1cd8b",
+    "production_authorized": true,
+    "rollback": "Tắt bài và quay lại image/source trước, đối chiếu receipt phát sinh trước khi đảo cấu hình.",
+    "deployment_readback": "verified",
+    "operational_observation": "Pages live hiện roster và hướng dẫn; API/registry có đủ 15 Docs và 21 claim, worker bật. Chưa có biên nhận mới để quan sát AI.",
+    "open_risks": [
+      {
+        "severity": "P2",
+        "summary": "Chưa có lượt nộp mới để đọc lại biên nhận và Bác sĩ AI thực tế."
+      }
+    ]
+  }
 }
