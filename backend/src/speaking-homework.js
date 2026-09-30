@@ -56,7 +56,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     const result = await pool.query(`
       SELECT d.document_id, d.student_ref AS bound_student_ref,
         a.id AS assignment_id, a.class_id, a.title, a.assignment_code,
-        a.status AS assignment_status,
+        a.status AS assignment_status, a.delivery_mode,
         a.required_practice_count, a.doctor_course_key,
         c.erp_class_name_snapshot AS class_code
       FROM speaking_homework.assignment_document d
@@ -64,7 +64,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE d.document_id = $1 AND a.assignment_code = $2
         AND a.status IN ('open', 'closed') AND c.status = 'approved'
-        AND d.cta_verified_at IS NOT NULL`, [documentId, assignmentCode]);
+        AND (d.cta_verified_at IS NOT NULL OR a.delivery_mode = 'direct')`, [documentId, assignmentCode]);
     if (result.rows.length !== 1) {
       throw new SpeakingHomeworkError('ASSIGNMENT_NOT_FOUND', 'File Homework chưa được đăng ký cho bài này.', 404);
     }
@@ -91,11 +91,52 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     const parts = await pool.query(`SELECT part_key, display_title, practice_url, min_questions
       FROM speaking_homework.assignment_part WHERE assignment_id = $1 ORDER BY position`,
     [assignment.assignment_id]);
+    let students = roster.rows;
+    if (assignment.delivery_mode === 'direct') {
+      const bound = await pool.query(`SELECT student_ref
+        FROM speaking_homework.assignment_document
+        WHERE assignment_id = $1 AND student_ref IS NOT NULL
+          AND classroom_submission_id IS NOT NULL`, [assignment.assignment_id]);
+      const allowed = new Set(bound.rows.map(row => String(row.student_ref)));
+      students = students.filter(student => allowed.has(String(student.student_ref)));
+    }
     return { title: assignment.title, classCode: assignment.class_code,
-      assignmentCode: assignment.assignment_code, students: roster.rows, parts: parts.rows,
+      assignmentCode: assignment.assignment_code, students, parts: parts.rows,
       requiredPracticeCount: assignment.required_practice_count,
       assignmentStatus: assignment.assignment_status,
       doctorEnabled: Boolean(assignment.doctor_course_key) };
+  }
+
+  // Dữ liệu vào: mã lớp và mã bài cũ không có CTA trong Google Docs.
+  // Việc chính: chỉ mở bài đã bật chế độ trực tiếp và có bản sao Classroom đã ghép.
+  // Kết quả: roster thật; không lộ Doc ID của cả lớp trong trang công khai.
+  async function openDirectAssignment({ classCode, assignmentCode }) {
+    const found = await pool.query(`SELECT d.document_id
+      FROM speaking_homework.assignment a
+      JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
+      JOIN speaking_homework.assignment_document d ON d.assignment_id = a.id
+      WHERE upper(c.erp_class_name_snapshot) = upper($1) AND a.assignment_code = $2
+        AND a.delivery_mode = 'direct' AND a.status = 'open' AND c.status = 'approved'
+        AND d.student_ref IS NOT NULL AND d.classroom_submission_id IS NOT NULL
+      ORDER BY d.document_id LIMIT 1`, [classCode, assignmentCode]);
+    if (!found.rows.length) throw new SpeakingHomeworkError('ASSIGNMENT_NOT_FOUND',
+      'Bài này chưa sẵn sàng nhận link.', 404);
+    return openAssignment({ documentId: found.rows[0].document_id, assignmentCode, classCode });
+  }
+
+  async function startDirectSession({ classCode, assignmentCode, studentRef }) {
+    const found = await pool.query(`SELECT d.document_id
+      FROM speaking_homework.assignment a
+      JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
+      JOIN speaking_homework.assignment_document d ON d.assignment_id = a.id
+      WHERE upper(c.erp_class_name_snapshot) = upper($1) AND a.assignment_code = $2
+        AND a.delivery_mode = 'direct' AND a.status = 'open' AND c.status = 'approved'
+        AND d.student_ref = $3 AND d.classroom_submission_id IS NOT NULL`,
+    [classCode, assignmentCode, studentRef]);
+    if (found.rows.length !== 1) throw new SpeakingHomeworkError('STUDENT_DOCUMENT_REQUIRED',
+      'Chưa tìm được đúng file Homework của học viên này.', 403);
+    const documentId = found.rows[0].document_id;
+    return { ...(await startSession({ documentId, assignmentCode, studentRef })), documentId };
   }
 
   // Tên được nhớ ở browser chỉ giúp bỏ bước chọn lại; server vẫn kiểm Doc ID và roster.
@@ -105,6 +146,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     if (!assignment.bound_student_ref) {
       throw new SpeakingHomeworkError('STUDENT_DOCUMENT_REQUIRED',
         'Hãy mở bản Homework được Classroom tạo riêng cho bạn.', 403);
+    }
+    if (assignment.delivery_mode === 'direct' && assignment.bound_student_ref !== studentRef) {
+      throw new SpeakingHomeworkError('STUDENT_DOCUMENT_MISMATCH',
+        'File Homework không thuộc học viên đã chọn.', 403);
     }
     const student = await pool.query(`
       SELECT 1 FROM mapping.student_mapping_review m
@@ -152,7 +197,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     const tokenHash = hash(String(accessToken || ''));
     const result = await client.query(`
       SELECT g.id AS grant_id, g.document_id, a.id AS assignment_id, a.class_id,
-             a.course_id, a.course_work_id, a.doctor_course_key, a.required_practice_count, a.title,
+             a.course_id, a.course_work_id, a.doctor_course_key, a.required_practice_count,
+             a.delivery_mode, a.title,
              m.erp_student_name_snapshot AS student_name
       FROM speaking_homework.access_grant g
       JOIN speaking_homework.assignment_document d
@@ -162,6 +208,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         ON m.public_id = g.student_ref AND m.erp_course_class_id = a.class_id
       JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id = a.class_id
       WHERE g.token_hash = $1 AND g.student_ref = $2 AND g.revoked_at IS NULL
+        AND (a.delivery_mode <> 'direct' OR d.student_ref = g.student_ref)
         AND (a.status = 'open' OR (a.status = 'closed' AND EXISTS (
           SELECT 1 FROM speaking_homework.submission s
           WHERE s.access_grant_id = g.id AND s.status = 'submitted'
@@ -643,9 +690,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       const receipt = await client.query(`
         INSERT INTO speaking_homework.receipt (submission_id) VALUES ($1)
         RETURNING id, created_at`, [submission.id]);
-      const kinds = grant.doctor_course_key
-        ? ['write_doc', 'grade_speaking', 'doctor_analyze']
-        : ['write_doc', 'grade_speaking'];
+      const kinds = grant.delivery_mode === 'direct' ? ['grade_speaking'] : ['write_doc', 'grade_speaking'];
+      if (grant.doctor_course_key) kinds.push('doctor_analyze');
       for (const kind of kinds) {
         await client.query('INSERT INTO speaking_homework.outbox (receipt_id, kind) VALUES ($1, $2)',
           [receipt.rows[0].id, kind]);
@@ -1101,7 +1147,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     return result.rows[0];
   }
 
-  return { openAssignment, startSession, open, requestCheck, claimCheckJob, completeCheck, failCheckJob,
+  return { openAssignment, openDirectAssignment, startSession, startDirectSession,
+    open, requestCheck, claimCheckJob, completeCheck, failCheckJob,
     rejectCheckJob,
     claimOutboxJob, completeOutboxJob, failOutboxJob, completeGradeJob,
     getDoctorCatalog, completeDoctorJob,

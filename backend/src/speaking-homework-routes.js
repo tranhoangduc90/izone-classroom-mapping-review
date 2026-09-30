@@ -17,6 +17,13 @@ const assignmentOpen = z.object({ documentId: z.string().regex(/^[A-Za-z0-9_-]{5
 const sessionStart = assignmentOpen.omit({ classCode: true }).extend({
   studentRef: z.string().uuid(), identityConfirmed: z.literal(true)
 }).strict();
+const directOpen = z.object({
+  classCode: z.string().trim().regex(/^[A-Za-z0-9_-]{2,32}$/),
+  assignmentCode: z.string().trim().min(3).max(100)
+}).strict();
+const directSessionStart = directOpen.extend({
+  studentRef: z.string().uuid(), identityConfirmed: z.literal(true)
+}).strict();
 const part = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
 const checkRequest = identity.extend({ part, url: z.string().trim().url().max(500) }).strict();
 const finishRequest = identity.extend({ voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
@@ -126,10 +133,20 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     if (!input) return;
     res.json({ ok: true, assignment: await service.openAssignment(input) });
   }));
+  router.post('/assignment/direct-open', asyncRoute(async (req, res) => {
+    const input = parseOrReply(directOpen, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, assignment: await service.openDirectAssignment(input) });
+  }));
   router.post('/session/start', asyncRoute(async (req, res) => {
     const input = parseOrReply(sessionStart, req.body, res);
     if (!input) return;
     res.json({ ok: true, session: await service.startSession(input) });
+  }));
+  router.post('/session/direct-start', asyncRoute(async (req, res) => {
+    const input = parseOrReply(directSessionStart, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, session: await service.startDirectSession(input) });
   }));
   router.post('/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(identity, req.body, res);

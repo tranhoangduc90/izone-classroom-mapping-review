@@ -80,6 +80,8 @@ async function fixture() {
   await db.exec(doctorMigration);
   const lesson4Migration = await readFile(new URL('../ops/migrations/202609290003_speaking_lesson4_practice.sql', import.meta.url), 'utf8');
   await db.exec(lesson4Migration);
+  const directMigration = await readFile(new URL('../ops/migrations/202609300001_speaking_direct_homework.sql', import.meta.url), 'utf8');
+  await db.exec(directMigration);
   assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
     [second.rows[0].id])).rows[0].doctor_course_key, '67');
   for (const [assignmentId, parts] of [
@@ -746,6 +748,65 @@ test('CTA có Doc ID và lớp tải roster; tên đã nhớ mở lại theo Doc
         studentRef, identityConfirmed: true });
     assert.equal(templateSession.status, 404);
     assert.equal(templateSession.body.error, 'ASSIGNMENT_NOT_FOUND');
+  } finally { await db.close(); }
+});
+
+test('buổi 2 mở trực tiếp đúng Docs của từng học viên, cấp một biên nhận và không ghi Docs cũ', async () => {
+  const { db, pool } = await fixture();
+  try {
+    const app = createApp({ config: { nodeEnv: 'test', authMode: 'legacy',
+      legacyReviewToken: 'a-valid-test-token', allowedOrigins: new Set(), trustProxyHops: 0,
+      speakingHomeworkEnabled: true, speakingHomeworkWorkerSecret: workerSecret,
+      speakingHomeworkAccessSecret: 'test-student-access-secret-32-characters' },
+    pool, speakingHomeworkPool: pool });
+    await pool.query(`UPDATE speaking_homework.assignment SET delivery_mode = 'direct',
+      assignment_code = '67-speaking-paraphrase' WHERE course_work_id = 'lesson-2'`);
+    await pool.query(`UPDATE speaking_homework.assignment_document
+      SET classroom_submission_id = 'classroom-sub-A', cta_verified_at = NULL
+      WHERE document_id = 'doc-A'`);
+    await pool.query(`INSERT INTO speaking_homework.assignment_document
+      (assignment_id, document_id, student_ref, classroom_submission_id)
+      SELECT id, 'doc-D', $1, 'classroom-sub-B' FROM speaking_homework.assignment
+      WHERE course_work_id = 'lesson-2'`, [secondStudentRef]);
+    await pool.query(`DELETE FROM speaking_homework.access_grant
+      WHERE document_id = 'doc-A'`);
+    const opened = await request(app).post('/api/speaking-homework/assignment/direct-open')
+      .send({ classCode: 'IC2304', assignmentCode: '67-speaking-paraphrase' });
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.assignment.students.length, 2);
+    assert.equal(opened.body.assignment.parts.length, 2);
+    const wrongClass = await request(app).post('/api/speaking-homework/assignment/direct-open')
+      .send({ classCode: 'IC9999', assignmentCode: '67-speaking-paraphrase' });
+    assert.equal(wrongClass.status, 404);
+    const started = await request(app).post('/api/speaking-homework/session/direct-start')
+      .send({ classCode: 'IC2304', assignmentCode: '67-speaking-paraphrase',
+        studentRef, identityConfirmed: true });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.session.documentId, 'doc-A');
+    const otherStarted = await request(app).post('/api/speaking-homework/session/direct-start')
+      .send({ classCode: 'IC2304', assignmentCode: '67-speaking-paraphrase',
+        studentRef: secondStudentRef, identityConfirmed: true });
+    assert.equal(otherStarted.body.session.documentId, 'doc-D');
+    const wrongDoc = await request(app).post('/api/speaking-homework/session/start')
+      .send({ documentId: 'doc-A', assignmentCode: '67-speaking-paraphrase',
+        studentRef: secondStudentRef, identityConfirmed: true });
+    assert.equal(wrongDoc.status, 403);
+    assert.equal(wrongDoc.body.error, 'STUDENT_DOCUMENT_MISMATCH');
+    const token = started.body.session.accessToken;
+    await checkAccepted(createSpeakingHomeworkService({ pool }), token,
+      studentRef, 'paraphrase', 'p', 5);
+    await checkAccepted(createSpeakingHomeworkService({ pool }), token,
+      studentRef, 'speaking', 's', 3);
+    const firstReceipt = await request(app).post('/api/speaking-homework/finish')
+      .send({ accessToken: token, studentRef, voiceConfirmedParts: [] });
+    assert.equal(firstReceipt.status, 200);
+    const retryReceipt = await request(app).post('/api/speaking-homework/finish')
+      .send({ accessToken: token, studentRef, voiceConfirmedParts: [] });
+    assert.equal(retryReceipt.body.receipt.id, firstReceipt.body.receipt.id);
+    const outbox = await pool.query(`SELECT kind FROM speaking_homework.outbox
+      WHERE receipt_id = $1 ORDER BY kind`, [firstReceipt.body.receipt.id]);
+    assert.deepEqual(outbox.rows.map(row => row.kind), ['doctor_analyze', 'grade_speaking']);
+    assert.equal((await pool.query(`SELECT count(*)::int AS count FROM speaking_homework.receipt`)).rows[0].count, 1);
   } finally { await db.close(); }
 });
 
