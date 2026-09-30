@@ -6,7 +6,7 @@ Học viên mở [webapp buổi 2](https://tranhoangduc90.github.io/izone-ai-tea
 
 1. Chụp lại image/container API live, sao lưu database mapping và đọc trạng thái hàng điểm danh Progress Log. Ghi lại sự hiện diện và đích của cấu hình điểm danh mà không in secret.
 2. Chạy migration `202609300001_speaking_direct_homework.sql`. Các bài cũ mặc định vẫn ở chế độ `docs_cta`.
-3. Chuyển image API với hai module Speaking đã kiểm. Giữ image/container trước chuyển để quay lại; kiểm `/ready`, đăng nhập giảng viên, Progress Log và consumer điểm danh.
+3. Dùng `Dockerfile` phủ đúng hai module Speaking đã kiểm lên image `izone-progress-log-journey:20260930-rc3`; chạy `deploy-api.sh` sau khi đối chiếu digest image live. Script giữ container cũ để quay lại, tự phục hồi nếu health check thất bại. Kiểm `/ready`, đăng nhập giảng viên, Progress Log và consumer điểm danh.
 4. Chạy `register-ic2304.sql`: đổi **chính hàng cũ** từ `67-speaking-lesson2-legacy` sang `67-speaking-paraphrase`, giữ tối thiểu 21 hội thoại đã nhận diện và để bài ở trạng thái `draft`.
 5. Đọc snapshot đầy đủ 15 bài nộp Classroom, trích chính xác một Doc ID từ mỗi attachment; gửi endpoint nội bộ `/internal/classroom-copies/sync`. Chỉ ghi mapping bản sao; không gọi `plan`/`verify` CTA, không sửa Docs.
 6. Đối chiếu 15 cặp Classroom user ID → học viên đã duyệt → Doc ID và chạy `activate-ic2304.sql`. SQL tự chặn nếu số lượng, tính duy nhất hoặc lịch sử link không đạt.
