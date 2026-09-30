@@ -85,6 +85,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
           WHERE e.erp_course_class_id = m.erp_course_class_id
             AND e.erp_student_contact_id = m.erp_student_contact_id
+            AND e.source_state = 'active'
             AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))
       ORDER BY m.erp_student_name_snapshot, m.public_id`,
     [assignment.class_id]);
@@ -158,6 +159,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
           WHERE e.erp_course_class_id = m.erp_course_class_id
             AND e.erp_student_contact_id = m.erp_student_contact_id
+            AND e.source_state = 'active'
             AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))`,
     [studentRef, assignment.class_id]);
     if (!student.rows.length) {
@@ -218,6 +220,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
           SELECT 1 FROM mapping.erp_class_membership_snapshot e
           WHERE e.erp_course_class_id = a.class_id
             AND e.erp_student_contact_id = m.erp_student_contact_id
+            AND e.source_state = 'active'
             AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold')
         )`, [tokenHash, studentRef]);
     if (rowCount(result) !== 1) {

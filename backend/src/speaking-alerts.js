@@ -15,7 +15,7 @@ export function createSpeakingAlerts({ pool }) {
   // Dữ liệu vào: toàn bộ trạng thái nộp từ một bài Classroom đã mở.
   // Việc chính: chỉ giữ ca TURNED_IN thiếu biên nhận webapp, bỏ ca RETURNED.
   // Kết quả: các ca mới chờ một email gộp; lỗi mapping rollback cả lần quét.
-  async function scan({ courseId, courseWorkId, submissions }) {
+  async function scan({ courseId, courseWorkId, submissions, notBefore }) {
     return withTransaction(pool, async client => {
       const assignment = await client.query(`SELECT id, class_id, status
         FROM speaking_homework.assignment
@@ -27,13 +27,32 @@ export function createSpeakingAlerts({ pool }) {
       const turnedInIds = [];
       for (const submission of submissions) {
         if (submission.state !== 'TURNED_IN') continue;
-        turnedInIds.push(submission.id);
-        const student = await client.query(`SELECT m.public_id, m.erp_student_name_snapshot AS name
+        // Lớp mới: bỏ bài đã nộp trước mốc mở webapp, tránh cảnh báo hồi tố.
+        if (notBefore) {
+          const boundary = Date.parse(notBefore);
+          const updated = Date.parse(submission.updateTime || '');
+          if (!Number.isFinite(boundary) || !Number.isFinite(updated)
+            || updated > Date.now() + 60_000) {
+            throw new SpeakingHomeworkError('ALERT_TIMESTAMP_REQUIRED',
+              'Chưa có thời gian nộp Classroom hợp lệ để kiểm bài của lớp mới.', 409);
+          }
+          if (updated < boundary) continue;
+        }
+        const student = await client.query(`SELECT m.public_id, m.erp_student_name_snapshot AS name,
+          e.erp_student_contact_id AS member_id, e.source_state, e.registration_status
           FROM mapping.student_mapping_review m
+          LEFT JOIN mapping.erp_class_membership_snapshot e
+            ON e.erp_course_class_id=m.erp_course_class_id
+            AND e.erp_student_contact_id=m.erp_student_contact_id
           WHERE m.erp_course_class_id = $1 AND m.classroom_user_id = $2
             AND m.status = 'approved'`, [classId, submission.userId]);
-        if (student.rows.length !== 1) throw new SpeakingHomeworkError('ALERT_STUDENT_UNMAPPED',
+        if (student.rows.length !== 1 || student.rows[0].member_id == null) throw new SpeakingHomeworkError('ALERT_STUDENT_UNMAPPED',
           'Có bài Classroom chưa ghép đúng học viên.', 409);
+        // Người nghỉ/tạm dừng còn trên Classroom không phải ca cần nhắc giảng viên.
+        const member=student.rows[0];
+        if (member.source_state !== 'active'
+          || ['dropped','on_hold'].includes(String(member.registration_status || '').trim().toLowerCase())) continue;
+        turnedInIds.push(submission.id);
         const receipt = await client.query(`SELECT 1 FROM speaking_homework.receipt r
           JOIN speaking_homework.submission s ON s.id = r.submission_id
           JOIN speaking_homework.access_grant g ON g.id = s.access_grant_id
@@ -76,8 +95,15 @@ export function createSpeakingAlerts({ pool }) {
         JOIN speaking_homework.assignment a ON a.id = ca.assignment_id
         JOIN mapping.student_mapping_review m ON m.public_id = ca.student_ref
           AND m.erp_course_class_id = a.class_id
+        JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id=a.class_id
+          AND c.status='approved'
         WHERE a.course_id = $1 AND a.course_work_id = $2 AND a.status = 'open'
           AND ca.status = 'pending'
+          AND m.status='approved' AND m.classroom_user_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+            WHERE e.erp_course_class_id=m.erp_course_class_id
+              AND e.erp_student_contact_id=m.erp_student_contact_id AND e.source_state='active'
+              AND lower(trim(coalesce(e.registration_status,''))) NOT IN ('dropped','on_hold'))
         ORDER BY ca.detected_at, ca.id FOR UPDATE OF ca SKIP LOCKED LIMIT 100`,
       [courseId, courseWorkId]);
       if (!found.rows.length) return null;

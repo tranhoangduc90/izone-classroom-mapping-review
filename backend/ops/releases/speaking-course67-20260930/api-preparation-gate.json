@@ -1,0 +1,555 @@
+{
+  "schema_version": 3,
+  "product": "Speaking 67: API additive trước đồng bộ lớp",
+  "change_id": "speaking-course67-20260930-api-preparation",
+  "change_kind": "feature",
+  "escaped_user_defect": false,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "multi_user",
+    "multi_service"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "mode_reason": "Rủi ro cao, có trạng thái, đồng thời và side effect bên ngoài.",
+    "user": "Học viên các lớp khóa 67",
+    "problem": "Ba trang chỉ mở được pilot IC2304 và chưa chọn lớp.",
+    "outcome": "API mới sẵn sàng để kiểm worker; chưa kích hoạt lớp mới hoặc đổi màn hình học viên.",
+    "out_of_scope": [
+      "Không phát bài Classroom nháp",
+      "Không đổi Docs cũ IC2304 buổi 2",
+      "Chưa phát hành Pages selector trong lát API",
+      "Chưa bật workflow hoặc kích hoạt class_scope"
+    ],
+    "plain_language_summary": "Thêm API và hai bảng cấu hình; trang hiện hành và Classroom giữ nguyên."
+  },
+  "change_package": {
+    "proposal": "Catalog lớp 67 đã đối soát, API ngữ cảnh và bộ chọn lớp dùng chung.",
+    "behavior_baseline": "Các endpoint cũ chọn lớp qua Doc hoặc cố định IC2304.",
+    "deltas": [
+      {
+        "id": "D1",
+        "operation": "ADDED",
+        "behavior": "Đăng nhập theo lớp và hồ sơ đã nhớ.",
+        "module_ids": [
+          "M1",
+          "M2",
+          "M3"
+        ],
+        "test_ids": [
+          "A01",
+          "A02",
+          "A05",
+          "A07"
+        ]
+      },
+      {
+        "id": "D2",
+        "operation": "ADDED",
+        "behavior": "Chuẩn bị route đăng ký nội bộ; chưa đổi sự kiện n8n đang chạy.",
+        "module_ids": [
+          "M4"
+        ],
+        "test_ids": [
+          "A18"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "plan-v1",
+    "modules": [
+      {
+        "id": "M1",
+        "name": "Danh mục lớp",
+        "responsibility": "Xác định lớp 67 từ nguồn ERP đã đối soát.",
+        "owns_data": [
+          "Xác định lớp 67 từ nguồn ERP đã đối soát."
+        ],
+        "public_interfaces": [
+          "Danh mục lớp"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không thay đổi định danh phiên sau mở."
+        ],
+        "test_ids": [
+          "A01",
+          "A07"
+        ]
+      },
+      {
+        "id": "M2",
+        "name": "Nhận diện học viên",
+        "responsibility": "Bộ nhớ UUID và lựa chọn lớp/tên.",
+        "owns_data": [
+          "Bộ nhớ UUID và lựa chọn lớp/tên."
+        ],
+        "public_interfaces": [
+          "Nhận diện học viên"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không thay đổi định danh phiên sau mở."
+        ],
+        "test_ids": [
+          "A02",
+          "A03",
+          "A08",
+          "A09",
+          "A15"
+        ]
+      },
+      {
+        "id": "M3",
+        "name": "Mở phiên",
+        "responsibility": "Giải quyết duy nhất assignment/student/Doc.",
+        "owns_data": [
+          "Giải quyết duy nhất assignment/student/Doc."
+        ],
+        "public_interfaces": [
+          "Mở phiên"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không thay đổi định danh phiên sau mở."
+        ],
+        "test_ids": [
+          "A04",
+          "A05",
+          "A06",
+          "A10"
+        ]
+      },
+      {
+        "id": "M4",
+        "name": "Đăng ký bài",
+        "responsibility": "Sự kiện Classroom và CTA.",
+        "owns_data": [
+          "Sự kiện Classroom và CTA."
+        ],
+        "public_interfaces": [
+          "Đăng ký bài"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không thay đổi định danh phiên sau mở."
+        ],
+        "test_ids": [
+          "A18"
+        ]
+      },
+      {
+        "id": "M5",
+        "name": "Sau nộp",
+        "responsibility": "Biên nhận, Doctor và bảo vệ API chung.",
+        "owns_data": [
+          "Biên nhận, Doctor và bảo vệ API chung."
+        ],
+        "public_interfaces": [
+          "Sau nộp"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Không thay đổi định danh phiên sau mở."
+        ],
+        "test_ids": [
+          "A12",
+          "A13",
+          "A14"
+        ]
+      }
+    ],
+    "integrations": [
+      {
+        "id": "I1",
+        "producer": "M2",
+        "consumer": "M3",
+        "contract": "classCode/assignmentCode/studentRef/documentId giải quyết duy nhất ở server.",
+        "test_ids": [
+          "A05",
+          "A09"
+        ]
+      },
+      {
+        "id": "I2",
+        "producer": "M4",
+        "consumer": "M3",
+        "contract": "Registry và Doc đúng Classroom event.",
+        "test_ids": [
+          "A19"
+        ]
+      }
+    ]
+  },
+  "operational_design": {
+    "plan_revision": "plan-v1",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
+    "critical_path": "Pages → catalog/roster → session → Share/AI → Docs/Doctor.",
+    "peak_load": {
+      "value": 60,
+      "unit": "concurrent_users",
+      "basis": "9 lớp được duyệt, 129 hồ sơ hợp lệ; lớp đông nhất 19 đăng ký. Ca giả 15/30/60, không là tải production."
+    },
+    "user_wait_target": "Roster mục tiêu 2 giây; 10 giây báo chờ/thử lại.",
+    "limits_and_cost": [
+      "Limiter 360/phút/IP hiện tại; polling chỉ khi cần, backoff.",
+      "360 request/phút/IP: 60 login x4=240, cộng 240 poll sẽ vượt giới hạn. UI backoff; không tự tăng limiter."
+    ],
+    "failure_and_recovery": [
+      "Không đoán bài hoặc Doc khi mơ hồ; retry đúng khóa hiện hữu."
+    ],
+    "monitoring": [
+      "429, độ trễ roster, job/Doc chờ và attendance outcome."
+    ],
+    "decision": "API catalog riêng, giữ worker Share/Doctor và danh tính phiên hiện hành.",
+    "test_ids": [
+      "A05",
+      "A12",
+      "A19",
+      "A20",
+      "API-GUARD"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "API-REQ",
+      "statement": "Endpoint mới và migration additive hoạt động, tương thích API cũ; draft/closed/direct/membership guards giữ đúng.",
+      "test_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A09",
+        "A10",
+        "A12",
+        "A13",
+        "A14",
+        "A15",
+        "A18",
+        "A19",
+        "A20",
+        "API-GUARD"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV1",
+      "statement": "Định danh assignment/class/student/Doc bất biến; không ghi chéo.",
+      "test_ids": [
+        "A05",
+        "A09",
+        "A19",
+        "API-GUARD"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "A01",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A02",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A03",
+      "category": "security_privacy",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A04",
+      "category": "security_privacy",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A05",
+      "category": "security_privacy",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A06",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A07",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A08",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A09",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A10",
+      "category": "concurrency_idempotency",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A12",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A13",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A14",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A15",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+    },
+    {
+      "id": "A18",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "speaking-homework.test.js: TURNED_IN-only, batch/idempotence, cutoff không hồi tố; on_hold giữa scan/claim không gửi."
+    },
+    {
+      "id": "A19",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "Independent interleaving writer mới: SCOPE_SNAPSHOT_STALE/rollback; không đè trạng thái đăng ký. backend-additional-head-repro.json."
+    },
+    {
+      "id": "A20",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "load-results.json: 15/30/60 fake users, 0 lỗi, max 1259ms; UI 429/network backoff đã kiểm."
+    },
+    {
+      "id": "API-GUARD",
+      "category": "regression",
+      "priority": "P0",
+      "status": "passed",
+      "evidence": "Image ứng viên: phiên 90 ngày/365 trần, restore/logout/CORS đạt; 3 module điểm danh/auth giữ hash. Portal sau deploy là cổng quan sát riêng."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "plan-v1",
+    "tasks": [
+      {
+        "id": "API1",
+        "result": "API/migration additive; các test local/image áp dụng đạt",
+        "module_ids": [
+          "M1"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "produces": [
+          "Catalog/API"
+        ],
+        "contract": "Đúng ngữ cảnh và readback trước hoàn tất.",
+        "test_ids": [
+          "A01",
+          "A02",
+          "A03",
+          "A04",
+          "A05",
+          "A06",
+          "A07",
+          "A08",
+          "A09",
+          "A10",
+          "A12",
+          "A13",
+          "A14",
+          "A15",
+          "A18",
+          "A19",
+          "A20",
+          "API-GUARD"
+        ],
+        "evidence_required": [
+          "Test và readback trên revision hiện tại."
+        ],
+        "decision_inputs": [
+          "Phạm vi đã duyệt trong PLAN.md."
+        ],
+        "affected_future_tasks": [],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "PASS",
+    "risks": [
+      {
+        "id": "RISK-1",
+        "description": "Đổi lớp mang theo DocID cũ gây ghi chéo.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Người xây dựng",
+        "mitigation": "Đổi lớp bỏ Doc; server kiểm UUID/lớp/Doc và khóa phiên. Test hai lớp cùng tên và browser identity đã đạt.",
+        "test_ids": [
+          "A05",
+          "A09"
+        ]
+      }
+    ],
+    "waivers": []
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "CTX",
+      "left": {
+        "value": 0
+      },
+      "operator": "==",
+      "right": {
+        "value": 0
+      },
+      "status": "passed",
+      "evidence": "Catalog hai lớp và homework hai học viên: không ghi chéo ngữ cảnh."
+    },
+    {
+      "id": "LOAD",
+      "left": {
+        "value": 1259
+      },
+      "operator": "<",
+      "right": {
+        "value": 10000
+      },
+      "status": "passed",
+      "evidence": "Load PGlite/Express giả; không là capacity production."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "SCHEMA",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Ledger202609301329/checksum78323d21...,3templates2/4/2,class_scope0; mapping_duc/issue30 transaction."
+    },
+    {
+      "id": "API",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "Image7494996...healthy; post-deploy.json HTTPS/cors/directpilot15/2, protectedconfigmatch; registrydraft unchanged."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "BACKEND-FINAL",
+      "scope": "full_suite",
+      "command": "npm test",
+      "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
+      "captured_at": "2026-09-30T14:58:28.995151Z",
+      "outcome": "passed",
+      "passed": 279,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\speaking-course67-plan-20260930\\backend-evidence\\full-suite-final-v2.txt"
+    }
+  ],
+  "convergence": {
+    "status": "passed",
+    "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
+    "gaps": [],
+    "unrequested_work": [],
+    "evidence": "Phạm vi additive; không bật lớp, không đổi Pages/n8n. Phần rollout vẫn giữ pending trong manifest tổng."
+  },
+  "context_handoff": {
+    "summary": "Đang xây theo plan đã duyệt.",
+    "decisions": [
+      "Dùng request id làm khóa idempotency."
+    ],
+    "completed": [
+      "Backend 279/279 trên source cuối; frontend 16 suite đạt."
+    ],
+    "next_step": "Kiểm inactive n8n candidate; không bật thêm lớp khi Portal/worker gates chưa xác nhận.",
+    "open_risks": [
+      "Nguồn toàn khóa đang đối soát."
+    ],
+    "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "deployed_awaiting_validation",
+    "base_tree_revision": "2a63247290a5a1f3e74d9185b9af2efa30b79c82",
+    "current_tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
+    "production_authorized": true,
+    "rollback": "Quay API image/Pages revision; tắt class scope, giữ dữ liệu lịch sử.",
+    "deployment_readback": "verified",
+    "operational_observation": "HTTPS catalog3mã/CORS/direct15/2 đọc lại; module/config điểm danh giữ hash,102complete. Chưa có Portal outcome mới sau chuyển.",
+    "open_risks": []
+  },
+  "release_scope": {
+    "acceptance_mode": "large_phased",
+    "active_phase": "T1 endpoints/migration; class_scope trống",
+    "isolated_future": [
+      "Pages selector chưa phát hành",
+      "Chưa bật workflow/đăng ký lớp mới"
+    ]
+  }
+}
