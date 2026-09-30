@@ -19,14 +19,13 @@
     "mode_reason": "Rủi ro cao, có trạng thái, đồng thời và side effect bên ngoài.",
     "user": "Học viên các lớp khóa 67",
     "problem": "Ba trang chỉ mở được pilot IC2304 và chưa chọn lớp.",
-    "outcome": "API mới sẵn sàng để kiểm worker; chưa kích hoạt lớp mới hoặc đổi màn hình học viên.",
+    "outcome": "API đã chuyển và đọc lại; scope/Pages có gate riêng, Portal outcome mới còn chờ.",
     "out_of_scope": [
       "Không phát bài Classroom nháp",
-      "Không đổi Docs cũ IC2304 buổi 2",
-      "Chưa phát hành Pages selector trong lát API",
-      "Chưa bật workflow hoặc kích hoạt class_scope"
+      "Không đổi Docs cũ IC2304 buổi2",
+      "Không phát hành Pages hoặc đồng bộ scope trong riêng lát API"
     ],
-    "plain_language_summary": "Thêm API và hai bảng cấu hình; trang hiện hành và Classroom giữ nguyên."
+    "plain_language_summary": "Thêm API và hai bảng cấu hình, giữ tương thích sản phẩm đang chạy."
   },
   "change_package": {
     "proposal": "Catalog lớp 67 đã đối soát, API ngữ cảnh và bộ chọn lớp dùng chung.",
@@ -517,7 +516,7 @@
     "tree_revision": "sha256:37d1eac52ad12108ee562aeb9f48072c2c03f1d885232a64d6bd27e0feb0ad21",
     "gaps": [],
     "unrequested_work": [],
-    "evidence": "Phạm vi additive; không bật lớp, không đổi Pages/n8n. Phần rollout vẫn giữ pending trong manifest tổng."
+    "evidence": "Phạm vi T1 additive đã đối soát; scope refresh và Pages có evidence riêng, không nâng T1 lên verified khi chưa có Portal outcome mới."
   },
   "context_handoff": {
     "summary": "Đang xây theo plan đã duyệt.",
@@ -542,14 +541,16 @@
     "rollback": "Quay API image/Pages revision; tắt class scope, giữ dữ liệu lịch sử.",
     "deployment_readback": "verified",
     "operational_observation": "HTTPS catalog3mã/CORS/direct15/2 đọc lại; module/config điểm danh giữ hash,102complete. Chưa có Portal outcome mới sau chuyển.",
-    "open_risks": []
+    "open_risks": [
+      "Chưa có Portal outcome mới sau chuyển API; trạng thái giữ deployed_awaiting_validation."
+    ]
   },
   "release_scope": {
     "acceptance_mode": "large_phased",
-    "active_phase": "T1 endpoints/migration; class_scope trống",
+    "active_phase": "T1 API additive; scope refresh và Pages được kiểm ở lát riêng",
     "isolated_future": [
-      "Pages selector chưa phát hành",
-      "Chưa bật workflow/đăng ký lớp mới"
+      "Không gộp nghiệm thu scope/Pages vào T1",
+      "Workflow sự kiện toàn khóa còn thử, chưa active"
     ]
   }
 }
