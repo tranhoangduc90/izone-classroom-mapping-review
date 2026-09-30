@@ -35,7 +35,9 @@ function hasWhiteCtaStyle(style) {
 
 export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
   const page = assignmentCode === LESSON_4_CODE
-    ? '/izone-ai-team-pages/speaking-homework/lesson-4.html' : PAGE_PATH;
+    ? '/izone-ai-team-pages/speaking-homework/lesson-4.html'
+    : assignmentCode === '67-speaking-paraphrase'
+      ? '/izone-ai-team-pages/speaking-homework/' : PAGE_PATH;
   const url = new URL(page, PAGE_ORIGIN);
   url.searchParams.set('documentId', documentId);
   url.searchParams.set('class', classCode);
@@ -95,19 +97,28 @@ export function createSpeakingClassroomCopies({ pool }) {
     return withTransaction(pool, async client => {
       const a = await assignment(client, courseId, courseWorkId);
       const pending = [];
+      let bound = 0;
+      let skippedExcluded = 0;
       for (const item of submissions) {
         if (!item.documentId) continue;
-        const mapped = await client.query(`SELECT m.public_id AS student_ref
+        const mapped = await client.query(`SELECT m.public_id AS student_ref,
+          e.erp_student_contact_id AS member_id, e.source_state, e.registration_status
           FROM mapping.student_mapping_review m
+          LEFT JOIN mapping.erp_class_membership_snapshot e
+            ON e.erp_course_class_id = m.erp_course_class_id
+            AND e.erp_student_contact_id = m.erp_student_contact_id
           WHERE m.erp_course_class_id = $1 AND m.classroom_user_id = $2
-            AND m.status = 'approved'
-            AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
-              WHERE e.erp_course_class_id = m.erp_course_class_id
-                AND e.erp_student_contact_id = m.erp_student_contact_id
-                AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))`,
+            AND m.status = 'approved'`,
         [a.class_id, item.userId]);
-        if (mapped.rows.length !== 1) throw new SpeakingHomeworkError('STUDENT_MAPPING_INVALID',
+        if (mapped.rows.length !== 1 || mapped.rows[0].member_id == null) throw new SpeakingHomeworkError('STUDENT_MAPPING_INVALID',
           'Học viên Classroom chưa ghép duy nhất với lớp.', 409);
+        // Classroom còn bản sao của người nghỉ/tạm dừng: giữ lịch sử, không gắn CTA mới.
+        const member = mapped.rows[0];
+        if (member.source_state !== 'active'
+          || ['dropped', 'on_hold'].includes(String(member.registration_status || '').trim().toLowerCase())) {
+          skippedExcluded++;
+          continue;
+        }
         const studentRef = mapped.rows[0].student_ref;
         const inserted = await client.query(`INSERT INTO speaking_homework.assignment_document
           (assignment_id, document_id, student_ref, classroom_submission_id)
@@ -120,11 +131,12 @@ export function createSpeakingClassroomCopies({ pool }) {
         [a.id, item.documentId, studentRef, item.id]);
         if (inserted.rows.length !== 1) throw new SpeakingHomeworkError('DOCUMENT_BINDING_CONFLICT',
           'Bản sao Google Docs đã được ghép với bài hoặc học viên khác.', 409);
+        bound++;
         if (!inserted.rows[0].cta_verified_at) pending.push({ documentId: item.documentId,
           classroomSubmissionId: item.id, classCode: a.class_code,
           assignmentCode: a.assignment_code });
       }
-      return { pending, bound: submissions.filter(item => item.documentId).length };
+      return { pending, bound, skippedExcluded };
     });
   }
 

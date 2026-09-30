@@ -45,6 +45,7 @@ async function fixture() {
     CREATE TABLE mapping.erp_class_membership_snapshot (
       erp_course_class_id BIGINT NOT NULL, erp_student_contact_id BIGINT NOT NULL,
       registration_status TEXT
+      ,source_state TEXT NOT NULL DEFAULT 'active'
     );
     CREATE TABLE mapping.reviewer_class_access (
       reviewer_email TEXT NOT NULL, erp_course_class_id BIGINT NOT NULL
@@ -193,6 +194,22 @@ test('bản sao Classroom cần CTA đã đọc lại; học viên cùng lớp c
   } finally { await db.close(); }
 });
 
+test('đồng bộ bản sao bỏ qua đúng người nghỉ, vẫn chặn người chưa ghép', async () => {
+  const {db,pool}=await fixture();
+  try {
+    const copies=createSpeakingClassroomCopies({pool});
+    await pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_hold' WHERE erp_student_contact_id=2");
+    const scope={courseId:'course-2304',courseWorkId:'lesson-3',submissions:[
+      {id:'new-active',userId:'classroom-A',documentId:'doc-C'},
+      {id:'new-excluded',userId:'classroom-B',documentId:'excluded-doc'}]};
+    await pool.query("UPDATE speaking_homework.assignment_document SET classroom_submission_id='new-active' WHERE document_id='doc-C'");
+    const result=await copies.sync(scope);
+    assert.equal(result.bound,1); assert.equal(result.skippedExcluded,1);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM speaking_homework.assignment_document WHERE document_id='excluded-doc'")).rows[0].n,0);
+    await assert.rejects(copies.sync({...scope,submissions:[{id:'unknown',userId:'unknown',documentId:'unknown-doc'}]}),{code:'STUDENT_MAPPING_INVALID'});
+  } finally {await db.close();}
+});
+
 test('CTA thiếu hoặc trùng không được đánh dấu đã cập nhật', () => {
   const input = { documentId: 'doc-1', classCode: 'IC2304',
     assignmentCode: '67-speaking-lam_ro' };
@@ -249,6 +266,34 @@ test('lịch Classroom chỉ gom TURNED_IN thiếu bài Speaking và gửi một
       submissions: [{ ...returned, state: 'TURNED_IN' }, turnedIn] })).pending, 1);
     assert.equal((await alerts.scan({ ...scope, submissions: [returned, turnedIn] })).pending, 0);
     assert.equal(await alerts.claim(scope), null);
+  } finally { await db.close(); }
+});
+
+test('email bỏ người đã nghỉ giữa quét và gửi, không bỏ hồ sơ chưa ghép', async () => {
+  const {db,pool}=await fixture();
+  try {
+    const alerts=createSpeakingAlerts({pool});
+    const scope={courseId:'course-2304',courseWorkId:'lesson-3'};
+    const item={id:'sub-excluded',userId:'classroom-B',state:'TURNED_IN',alternateLink:'https://classroom.google.com/c/fixture/a/fixture/submissions/sub-excluded'};
+    assert.equal((await alerts.scan({...scope,submissions:[item]})).pending,1);
+    await pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_hold' WHERE erp_student_contact_id=2");
+    assert.equal(await alerts.claim(scope),null);
+    assert.equal((await alerts.scan({...scope,submissions:[item]})).pending,0);
+    await assert.rejects(alerts.scan({...scope,submissions:[{...item,userId:'unknown'}]}),{code:'ALERT_STUDENT_UNMAPPED'});
+  } finally {await db.close();}
+});
+
+test('lớp mới không cảnh báo hồi tố bài đã nộp trước mốc mở webapp', async () => {
+  const { db, pool } = await fixture();
+  const alerts = createSpeakingAlerts({ pool });
+  const scope = { courseId:'course-2304',courseWorkId:'lesson-3',notBefore:'2026-09-30T00:00:00Z' };
+  const old = {id:'old',userId:'classroom-A',state:'TURNED_IN',updateTime:'2026-09-29T00:00:00Z',
+    alternateLink:'https://classroom.google.com/c/fixture/a/fixture/submissions/old'};
+  try {
+    assert.equal((await alerts.scan({...scope,submissions:[old]})).pending,0);
+    await assert.rejects(alerts.scan({...scope,submissions:[{...old,updateTime:undefined}]}),{code:'ALERT_TIMESTAMP_REQUIRED'});
+    assert.equal((await alerts.scan({...scope,submissions:[{...old,updateTime:'2026-09-30T00:00:01Z'}]})).pending,1);
+    assert.equal((await alerts.scan({...scope,submissions:[{...old,state:'RETURNED',updateTime:'2026-09-30T00:00:02Z'}]})).pending,0);
   } finally { await db.close(); }
 });
 

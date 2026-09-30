@@ -6,6 +6,7 @@ import { createSpeakingHomeworkService, SpeakingHomeworkError } from './speaking
 import { createSpeakingDocsJobs } from './speaking-docs-jobs.js';
 import { createSpeakingAlerts } from './speaking-alerts.js';
 import { createSpeakingClassroomCopies } from './speaking-classroom-copies.js';
+import { createSpeakingCatalog } from './speaking-catalog.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -24,6 +25,33 @@ const directOpen = z.object({
 const directSessionStart = directOpen.extend({
   studentRef: z.string().uuid(), identityConfirmed: z.literal(true)
 }).strict();
+const selectedOpen = directOpen.extend({ documentId: assignmentOpen.shape.documentId.optional() }).strict();
+const selectedSession = selectedOpen.extend({ studentRef: z.string().uuid(), identityConfirmed: z.literal(true) }).strict();
+const rememberedIdentity = z.object({ assignmentCode: directOpen.shape.assignmentCode, studentRef: z.string().uuid() }).strict();
+const registerAssignment = z.object({ courseId: z.string().regex(/^\d+$/), courseWorkId: z.string().regex(/^\d+$/),
+  assignmentCode: directOpen.shape.assignmentCode, title: z.string().trim().min(1).max(500).optional(),
+  classroomState: z.enum(['PUBLISHED', 'DRAFT', 'DELETED']) }).strict();
+const scopeSnapshot = z.object({ sourceCourseId: z.literal(5), snapshotComplete: z.literal(true),
+  sourceObservedAt: z.iso.datetime(), classes: z.array(z.object({
+    classId: z.string().regex(/^\d+$/), classCode: directOpen.shape.classCode,
+    active: z.boolean()
+  }).strict()).min(1).max(200) }).strict().superRefine((value, ctx) => {
+  if (new Set(value.classes.map(c => c.classId)).size !== value.classes.length
+    || new Set(value.classes.map(c => c.classCode.toUpperCase())).size !== value.classes.length) {
+    ctx.addIssue({ code: 'custom', message: 'Snapshot lớp trùng mã.' });
+  }
+});
+const membershipSnapshot = z.object({ sourceCourseId: z.literal(5), snapshotComplete: z.literal(true),
+  sourceObservedAt: z.iso.datetime(), classIds: z.array(z.string().regex(/^\d+$/)).min(1).max(200),
+  memberships: z.array(z.object({ classId: z.string().regex(/^\d+$/), contactId: z.string().regex(/^\d+$/),
+    studentName: z.string().trim().min(1).max(300), email: z.string().max(300).nullable().optional(),
+    registrationStatus: z.string().trim().min(1).max(50), registrationUpdatedAt: z.iso.datetime().nullable().optional()
+  }).strict()).max(5000) }).strict().superRefine((value, ctx) => {
+  if (new Set(value.classIds).size !== value.classIds.length
+    || new Set(value.memberships.map(m => `${m.classId}:${m.contactId}`)).size !== value.memberships.length) {
+    ctx.addIssue({ code:'custom', message:'Snapshot đăng ký trùng định danh.' });
+  }
+});
 const part = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
 const checkRequest = identity.extend({ part, url: z.string().trim().url().max(500) }).strict();
 const finishRequest = identity.extend({ voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
@@ -50,10 +78,12 @@ const docsRequest = z.object({ jobId: z.string().uuid(),
 const classroomAlertScope = z.object({ courseId: z.string().regex(/^\d+$/),
   courseWorkId: z.string().regex(/^\d+$/) }).strict();
 const classroomAlertScan = classroomAlertScope.extend({ snapshotComplete: z.literal(true),
+  notBefore: z.iso.datetime().optional(),
   submissions: z.array(z.object({
     id: z.string().trim().min(1).max(200),
     userId: z.string().trim().min(1).max(200),
     state: z.enum(['NEW', 'CREATED', 'TURNED_IN', 'RETURNED', 'RECLAIMED_BY_STUDENT']),
+    updateTime: z.iso.datetime().optional(),
     alternateLink: z.string().max(1000).optional().default('')
   }).strict()).max(100) }).strict().superRefine((input, context) => {
   if (new Set(input.submissions.map(item => item.id)).size !== input.submissions.length) {
@@ -124,10 +154,31 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   const docsJobs = createSpeakingDocsJobs({ pool });
   const alerts = createSpeakingAlerts({ pool });
   const classroomCopies = createSpeakingClassroomCopies({ pool });
+  const catalog = createSpeakingCatalog({ pool, service });
   router.use(rateLimit({ windowMs: 60_000, limit: 360,
     standardHeaders: 'draft-8', legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng chờ.' } }));
 
+  router.get('/classes', asyncRoute(async (req, res) => {
+    const input = parseOrReply(z.object({ assignmentCode: directOpen.shape.assignmentCode }).strict(), req.query, res);
+    if (!input) return;
+    res.json({ ok: true, classes: await catalog.listClasses(input) });
+  }));
+  router.post('/identity/resolve', asyncRoute(async (req, res) => {
+    const input = parseOrReply(rememberedIdentity, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, ...(await catalog.resolveIdentity(input)) });
+  }));
+  router.post('/assignment/roster', asyncRoute(async (req, res) => {
+    const input = parseOrReply(selectedOpen, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, assignment: await catalog.roster(input) });
+  }));
+  router.post('/session/start-selected', asyncRoute(async (req, res) => {
+    const input = parseOrReply(selectedSession, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, session: await catalog.startSelected(input) });
+  }));
   router.post('/assignment/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(assignmentOpen, req.body, res);
     if (!input) return;
@@ -202,6 +253,24 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   }));
 
   router.use('/internal', workerAuth(workerSecret));
+  router.get('/internal/assignments/scopes', asyncRoute(async (_req, res) => {
+    res.json({ ok: true, assignments: await catalog.assignmentScopes() });
+  }));
+  router.post('/internal/classes/sync', asyncRoute(async (req, res) => {
+    const input = parseOrReply(scopeSnapshot, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, result: await catalog.syncScope(input) });
+  }));
+  router.post('/internal/classes/memberships-sync', asyncRoute(async (req, res) => {
+    const input = parseOrReply(membershipSnapshot, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, result: await catalog.syncMemberships(input) });
+  }));
+  router.post('/internal/assignments/register', asyncRoute(async (req, res) => {
+    const input = parseOrReply(registerAssignment, req.body, res);
+    if (!input) return;
+    res.json({ ok: true, result: await catalog.register(input) });
+  }));
   router.post('/internal/classroom-copies/sync', asyncRoute(async (req, res) => {
     const input = parseOrReply(classroomCopySync, req.body, res);
     if (!input) return;
