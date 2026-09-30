@@ -14,11 +14,13 @@ RUN test "$(sha256sum /app/src/app.js | cut -d' ' -f1)" = '1c34d61a44fe7124ef04e
  && test "$(sha256sum /app/src/term-test-writing-grading.js | cut -d' ' -f1)" = '4919aa77a6e21a17c965898aa38637bea3a999f7d08c5bb51b3c9e2df0e80276' \
  && test "$(sha256sum /app/src/learning-attendance-worker.js | cut -d' ' -f1)" = 'fbfee853fecf12d1ae55aeb750b245b71934438f3dbfa55c67cd670335eaae2d'
 COPY src/ /app/src/
-RUN node --check /app/src/app.js \
+RUN test -f /app/src/term-test-writing-notifier.js \
+ && node --check /app/src/app.js \
  && node --check /app/src/config.js \
  && node --check /app/src/server.js \
  && node --check /app/src/sql.js \
  && node --check /app/src/term-test-writing-grading.js \
+ && node --check /app/src/term-test-writing-notifier.js \
  && node --check /app/src/learning-routes.js \
  && node --check /app/src/learning-service.js \
  && node --check /app/src/learning-sql.js \

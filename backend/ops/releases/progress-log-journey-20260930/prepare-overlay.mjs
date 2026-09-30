@@ -2,6 +2,7 @@
 // Việc chính: khóa hash image nền, phủ Journey và ba phần Term Test bị cũ trên image.
 // Kết quả: thư mục build cùng manifest hash; khi image đổi thì dừng trước build.
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 
@@ -31,12 +32,24 @@ for (const [file, digest] of Object.entries(expected)) {
 }
 const copyModules = [
   'app.js', 'config.js', 'server.js', 'sql.js', 'term-test-writing-grading.js',
+  'term-test-writing-notifier.js',
   'learning-routes.js', 'learning-service.js', 'learning-sql.js',
   'learning-erp-schedule.js', 'learning-test-sources.js', 'learning-test-results.js'
 ];
 await mkdir(join(output, 'src'), { recursive: true });
 for (const file of copyModules) {
   await cp(join(backend, 'src', file), join(output, 'src', file));
+}
+// Kiểm mọi import tương đối của module mới ngay lúc chuẩn bị image.
+for (const file of copyModules) {
+  const source = await readFile(join(output, 'src', file), 'utf8');
+  for (const match of source.matchAll(/(?:from\s*|import\s*)['"](\.\/[A-Za-z0-9/_-]+\.js)['"]/gu)) {
+    const relative = match[1].slice(2);
+    if (!existsSync(join(output, 'src', relative))
+      && !existsSync(join(live, 'src', relative))) {
+      throw new Error(`Thiếu module import của ${file}: ${relative}`);
+    }
+  }
 }
 await cp(join(import.meta.dirname, 'Dockerfile'), join(output, 'Dockerfile'));
 const result = { baseHashes: expected, overlayHashes: {} };
