@@ -10,10 +10,15 @@ RUN test "$(sha256sum /app/src/app.js | cut -d' ' -f1)" = '1c34d61a44fe7124ef04e
  && test "$(sha256sum /app/src/learning-sql.js | cut -d' ' -f1)" = '33499d8ca6d2b4029d17e0a49c7505a4bf541ec0351665cef20a5275c1bf60bd' \
  && test "$(sha256sum /app/src/auth.js | cut -d' ' -f1)" = 'af50eac4d39f0c0c4e9c5042e672b3fbd34d52a18e9f094072e0d8451858394b' \
  && test "$(sha256sum /app/src/server.js | cut -d' ' -f1)" = '5aa0068436adfaf1b1ea1b815ffa59a5c5011d6bf7ae045415fc181c182234e5' \
+ && test "$(sha256sum /app/src/sql.js | cut -d' ' -f1)" = '474cde7d05fac8741ac80358ef46efff338196e2d7769c7562ce95d9625e9b8e' \
+ && test "$(sha256sum /app/src/term-test-writing-grading.js | cut -d' ' -f1)" = '4919aa77a6e21a17c965898aa38637bea3a999f7d08c5bb51b3c9e2df0e80276' \
  && test "$(sha256sum /app/src/learning-attendance-worker.js | cut -d' ' -f1)" = 'fbfee853fecf12d1ae55aeb750b245b71934438f3dbfa55c67cd670335eaae2d'
 COPY src/ /app/src/
 RUN node --check /app/src/app.js \
  && node --check /app/src/config.js \
+ && node --check /app/src/server.js \
+ && node --check /app/src/sql.js \
+ && node --check /app/src/term-test-writing-grading.js \
  && node --check /app/src/learning-routes.js \
  && node --check /app/src/learning-service.js \
  && node --check /app/src/learning-sql.js \

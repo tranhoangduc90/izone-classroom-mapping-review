@@ -70,7 +70,8 @@ const decisionSchema = z.object({
   }
 });
 
-const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,32}$/);
+// Mã lớp ERP như CS.070626 có dấu chấm; giữ nguyên hợp đồng production.
+const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
 const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
 const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
 const temporaryStudentRegistrationSchema = z.object({
