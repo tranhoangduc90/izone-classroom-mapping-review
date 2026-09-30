@@ -52,3 +52,13 @@ Migration `202609301329` đã áp dụng, ledger SHA-256 `78323d2174ca20be688443
 Source cuối đạt 279/279 test, không lỗi/skip. Ca PGlite/Express riêng 15/30/60 lượt login: 0 lỗi, p95 272/700/1173ms; không là đo tải production. Image ứng viên kiểm phiên giảng viên 90 ngày, trần 365 ngày, khôi phục/đăng xuất/CORS đạt. Bốn cấu hình điểm danh và ba module auth/worker/outbox giữ hash trước/sau; 102 việc attendance vẫn complete. Chưa có Portal outcome mới sau lần chuyển: lát API giữ `deployed_awaiting_validation`, không gọi điểm danh verified.
 
 Backup database riêng đã kiểm SHA-256 và đọc catalog: mã `speaking-course67-20260930/mapping-before.dump`, 318672250 bytes. Container rollback giữ tên `mapping-review-api-before-speaking-course67-20260930`. Phần lớp/Pages/sự kiện và nộp thật lớp thứ hai còn là các lát sau, chưa được chứng minh bởi health của API.
+
+## Đồng bộ lớp và Pages sau lát API
+
+Workflow thử inactive `2392487` đã đồng bộ 105 lớp từ nguồn khóa 67, kích hoạt đúng 9 Classroom đã duyệt. 164 dòng đăng ký nguồn và 1 dòng lịch sử missing/dropped tạo tổng 165; đối chiếu từng trường sai khác 0. Ba danh mục trả 9 lớp; IC2304 buổi 2/3 sẵn sàng, buổi 4 vẫn nháp, các lớp chưa có Docs chuẩn chưa sẵn sàng.
+
+Backend source PR #31 đã tích hợp `6fd01a0`. Sau đó bổ sung phép kiểm lịch sử bài đã đổi mã riêng và chạy toàn bộ 280/280 test; năm module production không thay đổi. Giả thuyết bài cũ cùng mã gây xung đột bị bác bằng readback: lịch sử đã có mã riêng và database giữ UNIQUE(course_id, assignment_code). Không dùng lỗi của fixture sai cấu trúc làm bằng chứng RED của sản phẩm.
+
+Pages PR #40 đã tích hợp `468465aa`, build `36738900098` đạt. Đọc lại 9 asset khớp source, năm ca đăng nhập browser/API thật đạt và mở lại đúng một bài buổi 3 đã có biên nhận. Không nộp link mới; hash hồ sơ phiên/bài/biên nhận trước/sau không đổi. T2/T3 có gate riêng; T4/T5/T6 và Portal outcome mới vẫn chưa nghiệm thu trong gate tổng.
+
+Trong kiểm Classroom thật thấy 16 bản sao buổi 3, trong khi 15 bản đã có binding. Bản còn lại thuộc học viên mới chưa có mapping lớp; guard không tự bỏ qua hoặc ghép bằng tên. Luồng sự kiện mới chưa kích hoạt khi chưa đọc lại đúng binding. Docs lớp thứ hai còn thiếu CTA/ô trạng thái; không sửa hàng loạt ngoài phạm vi đã duyệt.

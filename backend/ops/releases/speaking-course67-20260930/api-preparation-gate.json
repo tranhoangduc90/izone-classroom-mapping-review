@@ -264,98 +264,98 @@
       "category": "happy_path",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A02",
       "category": "happy_path",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A03",
       "category": "security_privacy",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A04",
       "category": "security_privacy",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A05",
       "category": "security_privacy",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A06",
       "category": "regression",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A07",
       "category": "regression",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A08",
       "category": "regression",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A09",
       "category": "concurrency_idempotency",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A10",
       "category": "concurrency_idempotency",
       "priority": "P0",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A12",
       "category": "external_partial",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A13",
       "category": "invalid_input",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A14",
       "category": "external_partial",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A15",
       "category": "lifecycle_time",
       "priority": "P1",
       "status": "passed",
-      "evidence": "Local: backend 279/279; Pages 16 suite, browser identity và closed CTA. Không là readback production."
+      "evidence": "Local: backend 280/280; Pages 16 suite, browser identity và closed CTA. Không là readback production."
     },
     {
       "id": "A18",
@@ -502,19 +502,19 @@
       "id": "BACKEND-FINAL",
       "scope": "full_suite",
       "command": "npm test",
-      "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
-      "captured_at": "2026-09-30T14:58:28.995151Z",
+      "tree_revision": "sha256:37d1eac52ad12108ee562aeb9f48072c2c03f1d885232a64d6bd27e0feb0ad21",
+      "captured_at": "2026-09-30T15:37:53.993978Z",
       "outcome": "passed",
-      "passed": 279,
+      "passed": 280,
       "failed": 0,
       "skipped": 0,
       "exit_code": 0,
-      "evidence": "E:\\Codex-Data\\speaking-course67-plan-20260930\\backend-evidence\\full-suite-final-v2.txt"
+      "evidence": "E:\\Codex-Data\\speaking-course67-plan-20260930\\backend-evidence\\full-suite-final-v3.txt"
     }
   ],
   "convergence": {
     "status": "passed",
-    "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
+    "tree_revision": "sha256:37d1eac52ad12108ee562aeb9f48072c2c03f1d885232a64d6bd27e0feb0ad21",
     "gaps": [],
     "unrequested_work": [],
     "evidence": "Phạm vi additive; không bật lớp, không đổi Pages/n8n. Phần rollout vẫn giữ pending trong manifest tổng."
@@ -525,19 +525,19 @@
       "Dùng request id làm khóa idempotency."
     ],
     "completed": [
-      "Backend 279/279 trên source cuối; frontend 16 suite đạt."
+      "Backend 280/280 trên source cuối; frontend 16 suite đạt."
     ],
-    "next_step": "Kiểm inactive n8n candidate; không bật thêm lớp khi Portal/worker gates chưa xác nhận.",
+    "next_step": "Đối soát workflow active và quan sát Portal outcome mới; không suy ra từ container healthy.",
     "open_risks": [
-      "Nguồn toàn khóa đang đối soát."
+      "Chưa có Portal outcome mới sau lần chuyển API."
     ],
-    "tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb"
+    "tree_revision": "sha256:37d1eac52ad12108ee562aeb9f48072c2c03f1d885232a64d6bd27e0feb0ad21"
   },
   "release": {
     "target_environment": "production",
     "decision": "deployed_awaiting_validation",
     "base_tree_revision": "2a63247290a5a1f3e74d9185b9af2efa30b79c82",
-    "current_tree_revision": "sha256:0117710f8963d60bbca32bed334e196a76eab1bc58dba0407b41c980adddf9cb",
+    "current_tree_revision": "sha256:37d1eac52ad12108ee562aeb9f48072c2c03f1d885232a64d6bd27e0feb0ad21",
     "production_authorized": true,
     "rollback": "Quay API image/Pages revision; tắt class scope, giữ dữ liệu lịch sử.",
     "deployment_readback": "verified",
