@@ -257,3 +257,22 @@ test('refresh đăng ký giữ lịch sử, loại missing và không ghi sang l
     assert.equal((await f.pool.query('SELECT source_state FROM mapping.erp_class_membership_snapshot WHERE erp_course_class_id=2304 AND erp_student_contact_id=1')).rows[0].source_state,'missing');
   } finally {await f.db.close();}
 });
+
+// Lịch sử bài đã xóa phải còn nguyên; chỉ đối soát lại đúng instance hiện hành.
+test('registry giữ lịch sử đã đóng khi đối soát đúng bài hiện hành, không tự đổi binding', async () => {
+  const f=await fixture();
+  try {
+    await f.pool.query(`INSERT INTO speaking_homework.assignment
+      (class_id,course_id,course_work_id,assignment_code,title,status)
+      VALUES (2304,'100','099',$1,'Homework cũ đã xóa','closed')`,[code+'-deleted-20260928']);
+    const input={courseId:'100',courseWorkId:'101',assignmentCode:code};
+    const current=await f.catalog.register({...input,classroomState:'PUBLISHED'});
+    assert.equal(current.status,'open');
+    assert.equal((await f.catalog.register({...input,classroomState:'PUBLISHED'})).assignmentId,current.assignmentId);
+    assert.equal((await f.catalog.register({...input,classroomState:'DELETED'})).status,'closed');
+    assert.equal((await f.pool.query("SELECT count(*)::int AS n FROM speaking_homework.assignment WHERE course_id='100' AND status='closed'")).rows[0].n,2);
+    await assert.rejects(f.catalog.register({...input,classroomState:'PUBLISHED'}),{code:'HOMEWORK_CLOSED'});
+    await assert.rejects(f.catalog.register({...input,courseWorkId:'102',classroomState:'PUBLISHED'}),{code:'ASSIGNMENT_BINDING_CONFLICT'});
+    assert.equal((await f.pool.query("SELECT assignment_code FROM speaking_homework.assignment WHERE course_work_id='099'")).rows[0].assignment_code,code+'-deleted-20260928');
+  } finally {await f.db.close();}
+});
