@@ -12,12 +12,12 @@ Lớp đầu tiên IC2305 là ERP **1294**, **31 buổi**. Việc người dùng
 
 ## Bản đã kiểm
 
-Mã nguồn ứng dụng, schema và tests: `source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0`.
+Mã nguồn ứng dụng, schema và tests: `source-sha256:faafe93c64282ae2d0eb5399f9f0ced24f57e135989b8b28cff3cfd73fc095fd`.
 
 | Kiểm tra | Kết quả |
 |---|---|
 | Full backend cuối | 303/303, không fail/skip |
-| Toàn bộ nhóm Pages local | 38/38, không fail/skip |
+| Toàn bộ nhóm Pages local | 39/39, không fail/skip |
 | Callback học viên thực chạy Chrome | 2/2 |
 | Chrome → API → DB | 1/1; tám dạng, sáu phiếu/57 câu/14 ô, drilldown đúng bài |
 | Hai lỗi loading/date picker | Cùng test RED trên base, GREEN trên head |
@@ -26,11 +26,11 @@ Mã nguồn ứng dụng, schema và tests: `source-sha256:f6d173b0f900d9f4a4901
 | Backup/migration/rollback/image | Đạt; schema production đọc lại đúng |
 | Pages thật IC2305 | 18 người/31 buổi; spinner/quay lại/mobile/không ghi bài |
 | HTTPS và assets | 14 kiểm đạt; auth chưa đăng nhập trả401 |
-| Nghiệm thu toàn gói | `deployed_awaiting_validation`; G03 còn chờ Portal/phiên GV thật |
+| Nghiệm thu toàn gói | `verified`; Chrome giảng viên thật và Portal nhánh conflict có readback/cleanup |
 
 Live Journey đã chạy trên URL phiếu IC2305 lấy riêng tư và đúng fragment assignment; không bắt đầu/nộp bài. Script smoke lịch sử hardcode buổi3/revision cũ không được tính PASS. Các lượt test thất bại và hai lần rollback chuyển image được giữ trong kho bằng chứng, không ghi lại thành PASS.
 
-## Phần phát hành cần thực hiện
+## Hợp đồng phát hành đã thực hiện
 
 1. Chuẩn bị PostgreSQL/database riêng và image thử trên VPS trong đúng phạm vi task; chạy cổng nhiều connection đã chuẩn bị. Không dùng DB học viên làm fixture.
 2. Backup database/config/image API và demo; kiểm backup và thử quay lại image cũ. Apply migration mới `202610010001_progress_log_form_drafts.sql`, đọc lại bảng, quyền và triggers. Không sửa migration đã phát hành.
@@ -44,6 +44,6 @@ Chuyển API/demo/Pages về revision/image đã giữ trước phát hành; t�
 
 ## Trạng thái quyền và bước tiếp theo
 
-Đức đã cho phép kiểm thử riêng và triển khai khi cổng đạt. PostgreSQL/backup/restore/rollback đạt; migration, API/demo và Pages đã triển khai. Gói chưa được nghiệm thu toàn bộ: chờ bài nộp hợp lệ sau chuyển tới kết quả Portal và kiểm dashboard trong phiên giảng viên thật. Bản hiện hành/điểm khôi phục/lịch sử Git đọc ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md); không tự nộp giả/requeue/force Portal để đóng cổng.
+Đức đã cho phép kiểm thử riêng và triển khai khi cổng đạt, sau đó cho thử trên một học viên thật rồi xóa dữ liệu tạo thêm. Gói đã nghiệm thu đầy đủ phạm vi small_complete; checker PASS/verified. Phiên Chrome giảng viên thật đã kiểm qua tải lại: IC2305 có18 học viên/31 buổi/67 bài; Overview, chi tiết,31 dropdown ERP và bộ soạn hoạt động. Bài thử hợp lệ trên một học viên được Đức cho phép đã qua consumer tới execution1812481 và Portal đúng lớp/người/buổi. Portal trả conflict vì đã có nghỉ có phép; node ghi có mặt không chạy, trạng thái Y/T giữ nguyên. Dashboard thấy bài thử; sau dọn transaction, readback khớp snapshot, còn67 bài và0 dữ liệu nghiệp vụ thử. Ca này chứng minh nhánh xung đột, không chứng minh ghi PRESENT mới. Bản hiện hành/điểm khôi phục/lịch sử Git đọc ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md).
 
-Chi tiết registry/API: [runbook](PROGRESS_LOG_UPGRADE_20261001_RUNBOOK.md). Trạng thái từng mã nghiệm thu và bằng chứng: [manifest](PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json). Tool cập nhật graph được AGENTS Pages yêu cầu chưa có trong inventory; hợp đồng module/interface đã ghi trong manifest, chưa tuyên bố đã chạy tool đó.
+Chi tiết registry/API: [runbook](PROGRESS_LOG_UPGRADE_20261001_RUNBOOK.md). Trạng thái từng mã nghiệm thu và bằng chứng: [manifest](PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json). Tool cập nhật graph được AGENTS Pages yêu cầu chưa có trong inventory; hợp đồng module/interface đã ghi trong manifest; graph6 import được kiểm thủ công, không thiếu dependency và không tuyên bố đã chạy tool đó.

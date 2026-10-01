@@ -1,6 +1,6 @@
 # Registry và phát hành nâng cấp Progress Log
 
-IC2305 (1294), 31 buổi. Migration `202610010001_progress_log_form_drafts.sql` đã áp production ngày 01/10/2026; API/demo/Pages đã chuyển và đọc lại. Các bước dưới giữ làm hợp đồng vận hành; lịch sử, hash, điểm khôi phục và phần còn chờ ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md).
+IC2305 (1294), 31 buổi. Migration `202610010001_progress_log_form_drafts.sql` đã áp production ngày 01/10/2026; API/demo/Pages đã chuyển và đọc lại. Các bước dưới giữ làm hợp đồng vận hành; lịch sử, hash, điểm khôi phục và kết quả nghiệm thu ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md).
 
 ## Registry dữ liệu mới
 
@@ -61,4 +61,4 @@ Script tạo fixture giả, mở nhiều connection thật, chứng minh connect
 
 ## Kết quả ứng viên local
 
-Backend 303/303; nhóm Pages 38/38; callback học viên thực chạy Chrome 2/2; Chrome → API → DB 1/1. Hai lỗi loading/ô nhập ngày có RED trên base, GREEN cùng test trên head. PostgreSQL/backup/restore/migration/rollback/image đã đạt; Pages thật kiểm Journey31buổi và spinner đạt. G03 chưa đạt toàn bộ vì chưa có Portal readback của bài nộp sau chuyển và phiên giảng viên thật chưa kiểm; không gọi toàn gói verified. Hash và bằng chứng ở `PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json`.
+Backend 303/303; nhóm Pages 39/39; callback học viên thực chạy Chrome 2/2; Chrome → API → DB 1/1. Hai lỗi loading/ô nhập ngày có RED trên base, GREEN cùng test trên head. PostgreSQL/backup/restore/migration/rollback/image đã đạt; Pages thật kiểm Journey31buổi và spinner đạt. G03 đã đạt theo phạm vi nghiệm thu giữ nguyên; checker PASS/verified. Phiên Chrome giảng viên thật đã kiểm qua tải lại: IC2305 có18 học viên/31 buổi/67 bài; Overview, chi tiết,31 dropdown ERP và bộ soạn hoạt động. Bài thử hợp lệ trên một học viên được Đức cho phép đã qua consumer tới execution1812481 và Portal đúng lớp/người/buổi. Portal trả conflict vì đã có nghỉ có phép; node ghi có mặt không chạy, trạng thái Y/T giữ nguyên. Dashboard thấy bài thử; sau dọn transaction, readback khớp snapshot, còn67 bài và0 dữ liệu nghiệp vụ thử. Ca này chứng minh nhánh xung đột, không chứng minh ghi PRESENT mới. Hash và bằng chứng ở `PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json`.
