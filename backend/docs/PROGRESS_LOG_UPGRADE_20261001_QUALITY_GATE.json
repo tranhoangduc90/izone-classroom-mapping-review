@@ -1,0 +1,1429 @@
+{
+  "schema_version": 3,
+  "product": "Nâng cấp Progress Log dùng chung",
+  "change_id": "progress-log-upgrade-20261001",
+  "change_kind": "bugfix",
+  "escaped_user_defect": true,
+  "risk": "high",
+  "system_traits": [
+    "stateful",
+    "asynchronous",
+    "concurrent",
+    "external_side_effects",
+    "authentication",
+    "personal_data",
+    "multi_user",
+    "multi_service"
+  ],
+  "experience": {
+    "planning_mode": "controlled",
+    "acceptance_mode": "small_complete",
+    "mode_reason": "5 lát được kiểm đủ; cùng dùng kế hoạch và phiếu có điểm.",
+    "user": "Học viên và giảng viên",
+    "problem": "Lịch khó ghép, Journey thiếu báo chờ, thiếu overview/phân tích/bộ soạn.",
+    "outcome": "Đủ năm lát đã xây; chưa phát hành cho đến hết kiểm PostgreSQL/image/Portal.",
+    "out_of_scope": [
+      "Bài luyện thêm",
+      "Kết nối hệ thống Đức Anh",
+      "Dạng câu mới",
+      "AI chấm gapfill/reflection"
+    ],
+    "plain_language_summary": "Xem hành trình, xác nhận lịch, phân tích câu và tự soạn/phát phiếu."
+  },
+  "change_package": {
+    "proposal": "Thực hiện toàn bộ PLAN.md",
+    "behavior_baseline": "Xem source tại base đã khóa",
+    "deltas": [
+      {
+        "id": "DELTA-S1",
+        "operation": "MODIFIED",
+        "behavior": "Journey và lịch ERP",
+        "module_ids": [
+          "M1",
+          "M3"
+        ],
+        "test_ids": [
+          "J01",
+          "J02",
+          "J03",
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05",
+          "E06",
+          "E07"
+        ]
+      },
+      {
+        "id": "DELTA-S2",
+        "operation": "ADDED",
+        "behavior": "Hành trình lớp",
+        "module_ids": [
+          "M4"
+        ],
+        "test_ids": [
+          "O01",
+          "O02",
+          "O03",
+          "O04"
+        ]
+      },
+      {
+        "id": "DELTA-S3",
+        "operation": "ADDED",
+        "behavior": "Phân tích câu",
+        "module_ids": [
+          "M4"
+        ],
+        "test_ids": [
+          "A01",
+          "A02",
+          "A03",
+          "A04",
+          "A05"
+        ]
+      },
+      {
+        "id": "DELTA-S4",
+        "operation": "ADDED",
+        "behavior": "Soạn/nhập/xem thử",
+        "module_ids": [
+          "M2",
+          "M5"
+        ],
+        "test_ids": [
+          "D01",
+          "D02",
+          "D03",
+          "D04",
+          "D05",
+          "D06"
+        ]
+      },
+      {
+        "id": "DELTA-S5",
+        "operation": "ADDED",
+        "behavior": "Duyệt và phát phiếu",
+        "module_ids": [
+          "M2"
+        ],
+        "test_ids": [
+          "P01",
+          "P02",
+          "P03",
+          "P04"
+        ]
+      }
+    ],
+    "archive_status": "active"
+  },
+  "module_map": {
+    "revision": "plan-v1",
+    "modules": [
+      {
+        "id": "M1",
+        "name": "Lịch và kế hoạch lớp",
+        "responsibility": "Lịch và kế hoạch lớp",
+        "owns_data": [
+          "learning.class_journey_plan",
+          "ERP schedule DTO"
+        ],
+        "public_interfaces": [
+          "GET teacher/classes/:id/erp-schedule",
+          "GET/PUT teacher/classes/:id/journey-plan"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Giữ quyền lớp, version bất biến và không đổi điểm danh từ thao tác đọc."
+        ],
+        "test_ids": [
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05",
+          "E06",
+          "E07"
+        ]
+      },
+      {
+        "id": "M2",
+        "name": "Soạn và phát phiếu",
+        "responsibility": "Soạn và phát phiếu",
+        "owns_data": [
+          "learning.form_draft",
+          "learning.form_draft_class_lock",
+          "definition/key/version/assignment publish"
+        ],
+        "public_interfaces": [
+          "teacher/form-drafts CRUD/review/import/publish",
+          "public assignment pinned version"
+        ],
+        "depends_on": [],
+        "boundary_rules": [
+          "Giữ quyền lớp, version bất biến và không đổi điểm danh từ thao tác đọc."
+        ],
+        "test_ids": [
+          "D01",
+          "D02",
+          "D03",
+          "D04",
+          "D05",
+          "D06",
+          "P01",
+          "P02",
+          "P03",
+          "P04"
+        ]
+      },
+      {
+        "id": "M3",
+        "name": "Hành trình học viên",
+        "responsibility": "Hành trình học viên",
+        "owns_data": [
+          "student Journey view state"
+        ],
+        "public_interfaces": [
+          "POST student/course-journey",
+          "POST student/assignment-journey"
+        ],
+        "depends_on": [
+          "M1"
+        ],
+        "boundary_rules": [
+          "Giữ quyền lớp, version bất biến và không đổi điểm danh từ thao tác đọc."
+        ],
+        "test_ids": [
+          "J01",
+          "J02",
+          "J03"
+        ]
+      },
+      {
+        "id": "M4",
+        "name": "Overview và thống kê",
+        "responsibility": "Overview và thống kê",
+        "owns_data": [
+          "Overview/analytics aggregate DTO"
+        ],
+        "public_interfaces": [
+          "GET teacher/classes/:id/overview",
+          "GET teacher/assignments/:id/question-analytics",
+          "GET teacher/classes/:id/sessions/:session/students/:ref"
+        ],
+        "depends_on": [
+          "M1",
+          "M2"
+        ],
+        "boundary_rules": [
+          "Giữ quyền lớp, version bất biến và không đổi điểm danh từ thao tác đọc."
+        ],
+        "test_ids": [
+          "O01",
+          "O02",
+          "O03",
+          "O04",
+          "A01",
+          "A02",
+          "A03",
+          "A04",
+          "A05"
+        ]
+      },
+      {
+        "id": "M5",
+        "name": "Xem thử cách ly",
+        "responsibility": "Xem thử cách ly",
+        "owns_data": [
+          "learning_demo.run",
+          "demo-only fake roster/submission"
+        ],
+        "public_interfaces": [
+          "signed draft preview grant",
+          "POST demo/runs/reset"
+        ],
+        "depends_on": [
+          "M2"
+        ],
+        "boundary_rules": [
+          "Giữ quyền lớp, version bất biến và không đổi điểm danh từ thao tác đọc."
+        ],
+        "test_ids": [
+          "D06"
+        ]
+      }
+    ],
+    "integrations": [
+      {
+        "id": "I1",
+        "producer": "M1",
+        "consumer": "M3",
+        "contract": "Đọc bản chốt; Test/gap không thành vắng; không tạo bài/điểm danh.",
+        "test_ids": [
+          "J03",
+          "E03",
+          "O01"
+        ]
+      },
+      {
+        "id": "I2",
+        "producer": "M1",
+        "consumer": "M4",
+        "contract": "Calendar/plan cùng classId; aggregate đầy đủ dù zero assignment.",
+        "test_ids": [
+          "O01",
+          "O02",
+          "O04"
+        ]
+      },
+      {
+        "id": "I3",
+        "producer": "M2",
+        "consumer": "M4",
+        "contract": "Canonical assignment/version/roster; latest complete grade mỗi học viên.",
+        "test_ids": [
+          "A01",
+          "A02",
+          "A05"
+        ]
+      },
+      {
+        "id": "I4",
+        "producer": "M2",
+        "consumer": "M5",
+        "contract": "Grant có expiry/hash/revision/owner; đọc lại quyền; pin source và dùng DB demo riêng.",
+        "test_ids": [
+          "D06",
+          "P04"
+        ]
+      }
+    ]
+  },
+  "operational_design": {
+    "plan_revision": "plan-v1",
+    "signals": [
+      "multi_user",
+      "multi_service"
+    ],
+    "critical_path": "Pages → API → PostgreSQL; ERP chỉ đọc lịch, nộp đủ → outbox → Portal; demo riêng.",
+    "peak_load": {
+      "value": 20,
+      "unit": "students_per_60_seconds",
+      "basis": "Pilot IC2305 18 người × 31 buổi; 2 giảng viên sửa đồng thời."
+    },
+    "user_wait_target": "Journey báo chờ tức thì, deadline 15s; ERP backend 18s < UI 20s; mutation nháp 25s; đọc p95 mục tiêu <2s.",
+    "limits_and_cost": [
+      "Không thêm AI; dùng thư viện đã ghim; query tổng hợp không N+1."
+    ],
+    "failure_and_recovery": [
+      "Giữ nháp khi lỗi; revision/conflict; publish idempotent; rollback không xóa submissions."
+    ],
+    "monitoring": [
+      "progress_log_operation: route mẫu/status/duration/correlation/UTC, không body/query/email/key/token.",
+      "ERP nguồn lỗi/409 plan/draft/publish; queue Portal và bằng chứng đọc lại đích tách riêng."
+    ],
+    "decision": "Giữ app chung và module theo trách nhiệm.",
+    "test_ids": [
+      "J01",
+      "J02",
+      "J03",
+      "E01",
+      "E02",
+      "E03",
+      "E04",
+      "E05",
+      "E06",
+      "E07",
+      "O01",
+      "O02",
+      "O03",
+      "O04",
+      "A01",
+      "A02",
+      "A03",
+      "A04",
+      "A05",
+      "D01",
+      "D02",
+      "D03",
+      "D04",
+      "D05",
+      "D06",
+      "P01",
+      "P02",
+      "P03",
+      "P04"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "REQ-J01",
+      "statement": "Request chậm → spinner/text hiện trước response, không bấm lặp",
+      "test_ids": [
+        "J01"
+      ]
+    },
+    {
+      "id": "REQ-J02",
+      "statement": "Timeout/offline/lỗi → retry/return, giữ phiếu và danh tính",
+      "test_ids": [
+        "J02"
+      ]
+    },
+    {
+      "id": "REQ-J03",
+      "statement": "Quay lại/đổi context khi request đang bay → response cũ không mở nhầm Journey",
+      "test_ids": [
+        "J03"
+      ]
+    },
+    {
+      "id": "REQ-E01",
+      "statement": "Một select; đúng thứ/ngày/số buổi; không date picker/giờ/ID dòng",
+      "test_ids": [
+        "E01"
+      ]
+    },
+    {
+      "id": "REQ-E02",
+      "statement": "Mở khối và refresh tự đọc; proposal chưa ghi DB trước confirm",
+      "test_ids": [
+        "E02"
+      ]
+    },
+    {
+      "id": "REQ-E03",
+      "statement": "Anchor đã có assignment/bản chốt giữ đúng, future changes có diff, không duplicate ERP ID",
+      "test_ids": [
+        "E03"
+      ]
+    },
+    {
+      "id": "REQ-E04",
+      "statement": "Lịch ngắn/dài, ngày trùng, hủy/bù/đổi ngày, nguồn ordinal không chắc → không ghép chắc giả",
+      "test_ids": [
+        "E04"
+      ]
+    },
+    {
+      "id": "REQ-E05",
+      "statement": "Hai GV lưu, fingerprint đổi sau khi đọc → conflict/readback, không đè",
+      "test_ids": [
+        "E05"
+      ]
+    },
+    {
+      "id": "REQ-E06",
+      "statement": "ERP chậm/lỗi và teacher có nháp → giữ nháp/bản chốt, không manual-date fallback",
+      "test_ids": [
+        "E06"
+      ]
+    },
+    {
+      "id": "REQ-E07",
+      "statement": "Sai quyền/đổi lớp/request cũ → không đọc/ghi lịch lớp khác",
+      "test_ids": [
+        "E07"
+      ]
+    },
+    {
+      "id": "REQ-O01",
+      "statement": "Overview đủ ô lịch dù không có phiếu; không biến gap/Test/future thành vắng",
+      "test_ids": [
+        "O01"
+      ]
+    },
+    {
+      "id": "REQ-O02",
+      "statement": "Counts/cell khớp query độc lập, tên trùng không trộn ID",
+      "test_ids": [
+        "O02"
+      ]
+    },
+    {
+      "id": "REQ-O03",
+      "statement": "Không lộ overview lớp qua API public; teacher ngoài quyền bị chặn",
+      "test_ids": [
+        "O03"
+      ]
+    },
+    {
+      "id": "REQ-O04",
+      "statement": "Mobile, ngăn detail, đổi lớp khi đang tải, chuỗi Test có Writing muộn",
+      "test_ids": [
+        "O04"
+      ]
+    },
+    {
+      "id": "REQ-A01",
+      "statement": "Bài lặp/chấm lại → một học viên, grading run đúng",
+      "test_ids": [
+        "A01"
+      ]
+    },
+    {
+      "id": "REQ-A02",
+      "statement": "Denominator đúng, pending/manual/ungraded/blank tách riêng",
+      "test_ids": [
+        "A02"
+      ]
+    },
+    {
+      "id": "REQ-A03",
+      "statement": "Điều kiện ẩn và optional không báo thiếu/sai",
+      "test_ids": [
+        "A03"
+      ]
+    },
+    {
+      "id": "REQ-A04",
+      "statement": "Checklist/số tự khai/ý kiến mở không biến thành chấm khách quan",
+      "test_ids": [
+        "A04"
+      ]
+    },
+    {
+      "id": "REQ-A05",
+      "statement": "Common options/detail đúng item version/assignment và n cộng được",
+      "test_ids": [
+        "A05"
+      ]
+    },
+    {
+      "id": "REQ-D01",
+      "statement": "Loại ngoài danh mục bị từ chối ở cả UI và API; key private đúng quyền",
+      "test_ids": [
+        "D01"
+      ]
+    },
+    {
+      "id": "REQ-D02",
+      "statement": "Sao chép remap dependencies và 4 nhóm gapfill vẫn đúng bố cục",
+      "test_ids": [
+        "D02"
+      ]
+    },
+    {
+      "id": "REQ-D03",
+      "statement": "Lưu nháp đồng thời/reload/lỗi → không mất/ghi đè; không ghi key localStorage",
+      "test_ids": [
+        "D03"
+      ]
+    },
+    {
+      "id": "REQ-D04",
+      "statement": "Tạo lại 6 phiếu bằng editor khớp nội dung, options/slots/conditions/checkpoints",
+      "test_ids": [
+        "D04"
+      ]
+    },
+    {
+      "id": "REQ-D05",
+      "statement": "CSV nháy/phẩy/xuống dòng/Unicode, dòng lỗi và confirm → draft đúng/không bỏ dòng",
+      "test_ids": [
+        "D05"
+      ]
+    },
+    {
+      "id": "REQ-D06",
+      "statement": "Preview draft nộp/reset → dữ liệu lớp thật/Portal/queue không đổi, grant hết hạn",
+      "test_ids": [
+        "D06"
+      ]
+    },
+    {
+      "id": "REQ-P01",
+      "statement": "Quyền lớp/course, draft/key chưa duyệt hoặc sửa sau duyệt → chặn publish",
+      "test_ids": [
+        "P01"
+      ]
+    },
+    {
+      "id": "REQ-P02",
+      "statement": "Double click/timeout/retry/hai GV/trùng buổi → không nhân assignment",
+      "test_ids": [
+        "P02"
+      ]
+    },
+    {
+      "id": "REQ-P03",
+      "statement": "Version đã publish bất biến, key public không lộ, roster/version/hash readback đúng",
+      "test_ids": [
+        "P03"
+      ]
+    },
+    {
+      "id": "REQ-P04",
+      "statement": "Transaction lỗi giữa chừng → không gán dở; mở phiếu và demo đúng version",
+      "test_ids": [
+        "P04"
+      ]
+    },
+    {
+      "id": "REQ-PG01",
+      "statement": "PostgreSQL nhiều connection: wait lock, publisher cũ/mới, retry, replacement/ID guard, rollback.",
+      "test_ids": [
+        "PG01"
+      ]
+    },
+    {
+      "id": "REQ-G02",
+      "statement": "Backup/staging/rollback, migration/GRANT/readback và phiên 90 ngày trên image cuối.",
+      "test_ids": [
+        "G02"
+      ]
+    },
+    {
+      "id": "REQ-G03",
+      "statement": "API/demo/Pages readback sau phát hành; cấu hình/consumer và bài hợp lệ đọc lại kết quả từ Portal.",
+      "test_ids": [
+        "G03"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-ATTENDANCE",
+      "statement": "Nộp đủ mới điểm danh; đọc Journey, lịch, soạn và demo không điểm danh.",
+      "test_ids": [
+        "D06",
+        "P04"
+      ]
+    },
+    {
+      "id": "INV-VERSION",
+      "statement": "Không sửa version đã phát hành, không lộ key public.",
+      "test_ids": [
+        "P03"
+      ]
+    },
+    {
+      "id": "INV-IDENTITY",
+      "statement": "Không trộn học viên/lớp hoặc đếm lượt thay số học viên.",
+      "test_ids": [
+        "J03",
+        "E07",
+        "O02",
+        "A01"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "J01",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Request chậm → spinner/text hiện trước response, không bấm lặp"
+    },
+    {
+      "id": "J02",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Timeout/offline/lỗi → retry/return, giữ phiếu và danh tính"
+    },
+    {
+      "id": "J03",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Quay lại/đổi context khi request đang bay → response cũ không mở nhầm Journey"
+    },
+    {
+      "id": "E01",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Một select; đúng thứ/ngày/số buổi; không date picker/giờ/ID dòng"
+    },
+    {
+      "id": "E02",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Mở khối và refresh tự đọc; proposal chưa ghi DB trước confirm"
+    },
+    {
+      "id": "E03",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Anchor đã có assignment/bản chốt giữ đúng, future changes có diff, không duplicate ERP ID"
+    },
+    {
+      "id": "E04",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Lịch ngắn/dài, ngày trùng, hủy/bù/đổi ngày, nguồn ordinal không chắc → không ghép chắc giả"
+    },
+    {
+      "id": "E05",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Hai GV lưu, fingerprint đổi sau khi đọc → conflict/readback, không đè"
+    },
+    {
+      "id": "E06",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "ERP chậm/lỗi và teacher có nháp → giữ nháp/bản chốt, không manual-date fallback"
+    },
+    {
+      "id": "E07",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Sai quyền/đổi lớp/request cũ → không đọc/ghi lịch lớp khác"
+    },
+    {
+      "id": "O01",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Overview đủ ô lịch dù không có phiếu; không biến gap/Test/future thành vắng"
+    },
+    {
+      "id": "O02",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Counts/cell khớp query độc lập, tên trùng không trộn ID"
+    },
+    {
+      "id": "O03",
+      "category": "security_privacy",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Không lộ overview lớp qua API public; teacher ngoài quyền bị chặn"
+    },
+    {
+      "id": "O04",
+      "category": "lifecycle_time",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Mobile, ngăn detail, đổi lớp khi đang tải, chuỗi Test có Writing muộn"
+    },
+    {
+      "id": "A01",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Bài lặp/chấm lại → một học viên, grading run đúng"
+    },
+    {
+      "id": "A02",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Denominator đúng, pending/manual/ungraded/blank tách riêng"
+    },
+    {
+      "id": "A03",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Điều kiện ẩn và optional không báo thiếu/sai"
+    },
+    {
+      "id": "A04",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Checklist/số tự khai/ý kiến mở không biến thành chấm khách quan"
+    },
+    {
+      "id": "A05",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "Common options/detail đúng item version/assignment và n cộng được"
+    },
+    {
+      "id": "D01",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "Loại ngoài danh mục bị từ chối ở cả UI và API; key private đúng quyền"
+    },
+    {
+      "id": "D02",
+      "category": "regression",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "Sao chép remap dependencies và 4 nhóm gapfill vẫn đúng bố cục"
+    },
+    {
+      "id": "D03",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "Lưu nháp đồng thời/reload/lỗi → không mất/ghi đè; không ghi key localStorage"
+    },
+    {
+      "id": "D04",
+      "category": "happy_path",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "Tạo lại 6 phiếu bằng editor khớp nội dung, options/slots/conditions/checkpoints"
+    },
+    {
+      "id": "D05",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log",
+      "requirement": "CSV nháy/phẩy/xuống dòng/Unicode, dòng lỗi và confirm → draft đúng/không bỏ dòng"
+    },
+    {
+      "id": "D06",
+      "category": "security_privacy",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-demo-final-test.log (Chrome xem thử/nộp/reset; source submissions/outbox0).",
+      "requirement": "Preview draft nộp/reset → dữ liệu lớp thật/Portal/queue không đổi, grant hết hạn"
+    },
+    {
+      "id": "P01",
+      "category": "invalid_input",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Quyền lớp/course, draft/key chưa duyệt hoặc sửa sau duyệt → chặn publish"
+    },
+    {
+      "id": "P02",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; PGlite request races PASS nhưng pool serialize; PostgreSQL contention chưa chạy.",
+      "requirement": "Double click/timeout/retry/hai GV/trùng buổi → không nhân assignment"
+    },
+    {
+      "id": "P03",
+      "category": "security_privacy",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Version đã publish bất biến, key public không lộ, roster/version/hash readback đúng"
+    },
+    {
+      "id": "P04",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "passed",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log",
+      "requirement": "Transaction lỗi giữa chừng → không gán dở; mở phiếu và demo đúng version"
+    },
+    {
+      "id": "PG01",
+      "category": "concurrency_idempotency",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "requirement": "PostgreSQL nhiều connection: wait lock, publisher cũ/mới, retry, replacement/ID guard, rollback."
+    },
+    {
+      "id": "G02",
+      "category": "rollback_recovery",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "requirement": "Backup/staging/rollback, migration/GRANT/readback và phiên 90 ngày trên image cuối."
+    },
+    {
+      "id": "G03",
+      "category": "external_partial",
+      "priority": "P1",
+      "status": "not_run",
+      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "requirement": "API/demo/Pages readback sau phát hành; cấu hình/consumer và bài hợp lệ đọc lại kết quả từ Portal."
+    }
+  ],
+  "task_graph": {
+    "plan_revision": "plan-v1",
+    "tasks": [
+      {
+        "id": "S1",
+        "result": "Journey và lịch ERP",
+        "module_ids": [
+          "M1",
+          "M3"
+        ],
+        "depends_on": [],
+        "consumes": [
+          "PLAN.md revision 1",
+          "Source mới và dữ liệu kiểm kê"
+        ],
+        "produces": [
+          "Journey và lịch ERP"
+        ],
+        "contract": "Đúng scope đã giao; không nối hệ thống ngoài hoặc sửa lịch sử.",
+        "test_ids": [
+          "J01",
+          "J02",
+          "J03",
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05",
+          "E06",
+          "E07"
+        ],
+        "evidence_required": [
+          "Test hành vi, full suite, kiểm trình duyệt và readback tương ứng"
+        ],
+        "decision_inputs": [
+          "Danh mục 8 nhóm và quyền lớp hiện hành"
+        ],
+        "affected_future_tasks": [
+          "S2"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "S2",
+        "result": "Hành trình lớp",
+        "module_ids": [
+          "M4"
+        ],
+        "depends_on": [
+          "S1"
+        ],
+        "consumes": [
+          "PLAN.md revision 1",
+          "Source mới và dữ liệu kiểm kê"
+        ],
+        "produces": [
+          "Hành trình lớp"
+        ],
+        "contract": "Đúng scope đã giao; không nối hệ thống ngoài hoặc sửa lịch sử.",
+        "test_ids": [
+          "O01",
+          "O02",
+          "O03",
+          "O04"
+        ],
+        "evidence_required": [
+          "Test hành vi, full suite, kiểm trình duyệt và readback tương ứng"
+        ],
+        "decision_inputs": [
+          "Danh mục 8 nhóm và quyền lớp hiện hành"
+        ],
+        "affected_future_tasks": [
+          "S3"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "S3",
+        "result": "Phân tích câu",
+        "module_ids": [
+          "M4"
+        ],
+        "depends_on": [
+          "S2"
+        ],
+        "consumes": [
+          "PLAN.md revision 1",
+          "Source mới và dữ liệu kiểm kê"
+        ],
+        "produces": [
+          "Phân tích câu"
+        ],
+        "contract": "Đúng scope đã giao; không nối hệ thống ngoài hoặc sửa lịch sử.",
+        "test_ids": [
+          "A01",
+          "A02",
+          "A03",
+          "A04",
+          "A05"
+        ],
+        "evidence_required": [
+          "Test hành vi, full suite, kiểm trình duyệt và readback tương ứng"
+        ],
+        "decision_inputs": [
+          "Danh mục 8 nhóm và quyền lớp hiện hành"
+        ],
+        "affected_future_tasks": [
+          "S4"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "S4",
+        "result": "Soạn/nhập/xem thử",
+        "module_ids": [
+          "M2",
+          "M5"
+        ],
+        "depends_on": [
+          "S3"
+        ],
+        "consumes": [
+          "PLAN.md revision 1",
+          "Source mới và dữ liệu kiểm kê"
+        ],
+        "produces": [
+          "Soạn/nhập/xem thử"
+        ],
+        "contract": "Đúng scope đã giao; không nối hệ thống ngoài hoặc sửa lịch sử.",
+        "test_ids": [
+          "D01",
+          "D02",
+          "D03",
+          "D04",
+          "D05",
+          "D06"
+        ],
+        "evidence_required": [
+          "Test hành vi, full suite, kiểm trình duyệt và readback tương ứng"
+        ],
+        "decision_inputs": [
+          "Danh mục 8 nhóm và quyền lớp hiện hành"
+        ],
+        "affected_future_tasks": [
+          "S5"
+        ],
+        "status": "done",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "S5",
+        "result": "Duyệt và phát phiếu",
+        "module_ids": [
+          "M2"
+        ],
+        "depends_on": [
+          "S4"
+        ],
+        "consumes": [
+          "PLAN.md revision 1",
+          "Source mới và dữ liệu kiểm kê"
+        ],
+        "produces": [
+          "Duyệt và phát phiếu"
+        ],
+        "contract": "Đúng scope đã giao; không nối hệ thống ngoài hoặc sửa lịch sử.",
+        "test_ids": [
+          "P01",
+          "P02",
+          "P03",
+          "P04"
+        ],
+        "evidence_required": [
+          "Test hành vi, full suite, kiểm trình duyệt và readback tương ứng"
+        ],
+        "decision_inputs": [
+          "Danh mục 8 nhóm và quyền lớp hiện hành"
+        ],
+        "affected_future_tasks": [],
+        "status": "in_progress",
+        "plan_revision": "plan-v1"
+      },
+      {
+        "id": "RELEASE",
+        "result": "Phát hành IC2305 có bằng chứng đích",
+        "module_ids": [
+          "M1",
+          "M2",
+          "M3",
+          "M4",
+          "M5"
+        ],
+        "depends_on": [
+          "S5"
+        ],
+        "consumes": [
+          "Ứng viên source cuối và log full suite",
+          "Quyền staging/migration/API/demo/Pages"
+        ],
+        "produces": [
+          "PostgreSQL contention",
+          "Backup/rollback đã thử",
+          "Readback/quan sát Portal"
+        ],
+        "contract": "Chỉ chuyển bản sau hết gate; không xóa dữ liệu hoặc ghi giả điểm danh.",
+        "test_ids": [
+          "PG01",
+          "G02",
+          "G03"
+        ],
+        "evidence_required": [
+          "Kết quả đích và image/source hash"
+        ],
+        "decision_inputs": [
+          "Quyền người dùng cho đúng gói phát hành"
+        ],
+        "affected_future_tasks": [],
+        "status": "planned",
+        "plan_revision": "plan-v1"
+      }
+    ]
+  },
+  "risk_register": {
+    "assessment": "CONCERNS",
+    "waivers": [],
+    "risks": [
+      {
+        "id": "R-PG",
+        "description": "PGlite serialize không chứng minh contention PostgreSQL thật.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Codex",
+        "mitigation": "Chạy scripts/check-progress-log-postgres-contention.mjs trên DB riêng/localhost; không chạy vào DB lớp thật.",
+        "test_ids": [
+          "P02",
+          "PG01"
+        ]
+      },
+      {
+        "id": "R-RELEASE",
+        "description": "Migration/image/backup/rollback chưa áp và kiểm trên môi trường phát hành.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Codex",
+        "mitigation": "Giữ image live, backup đã kiểm và thử rollback trước chuyển; kiểm phiên GV 90 ngày trên image cuối.",
+        "test_ids": [
+          "G02"
+        ]
+      },
+      {
+        "id": "R-PORTAL",
+        "description": "Chưa có readback Portal sau đổi API chung.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "open",
+        "owner": "Codex",
+        "mitigation": "So cấu hình/đích/consumer trước sau, quan sát bài nộp thật hợp lệ; chưa có ca giữ deployed_awaiting_validation.",
+        "test_ids": [
+          "G03"
+        ]
+      },
+      {
+        "id": "R-DATA",
+        "description": "Lưu chậm, quyền cũ, bản copy và đường SQL có thể mất nháp/sai version/trùng buổi.",
+        "probability": 2,
+        "impact": 3,
+        "score": 6,
+        "severity": "P1",
+        "status": "mitigated",
+        "owner": "Codex",
+        "mitigation": "Review độc lập đã đóng findings; khóa controls/revision, đọc lại quyền, giữ family, class lock và immutable assignment ID.",
+        "test_ids": [
+          "D02",
+          "D03",
+          "D06",
+          "P01",
+          "P03",
+          "P04"
+        ]
+      }
+    ]
+  },
+  "coverage_exemptions": {},
+  "cross_constraints": [
+    {
+      "id": "C-ERP-DEADLINE",
+      "left": {
+        "value": 20000
+      },
+      "operator": ">",
+      "right": {
+        "value": 18000
+      },
+      "status": "passed",
+      "evidence": "teacher.js deadline20s; learning-erp-schedule.js deadline18s; backend/pages full suite."
+    },
+    {
+      "id": "C-DEMO-WRITES",
+      "left": {
+        "value": 0
+      },
+      "operator": "==",
+      "right": {
+        "value": 0
+      },
+      "status": "passed",
+      "evidence": "D06/P04 source DB/Portal/outbox không đổi; learning-draft-demo.test.js."
+    },
+    {
+      "id": "C-PILOT-CELLS",
+      "left": {
+        "value": 620
+      },
+      "operator": "==",
+      "right": {
+        "value": 620
+      },
+      "status": "passed",
+      "evidence": "learning-upgrade-pilot-load.test.js; backend-final-full-test.log."
+    },
+    {
+      "id": "C-COPY-CONTENT",
+      "left": {
+        "value": 57
+      },
+      "operator": "==",
+      "right": {
+        "value": 57
+      },
+      "status": "passed",
+      "evidence": "Chrome/API/DB đối chiếu sáu phiếu, options/conditions/family; editor-api-integration-final-test.log."
+    },
+    {
+      "id": "C-COPY-SLOTS",
+      "left": {
+        "value": 14
+      },
+      "operator": "==",
+      "right": {
+        "value": 14
+      },
+      "status": "passed",
+      "evidence": "Chrome/API/DB readback nhóm gapfill; editor-api-integration-final-test.log."
+    }
+  ],
+  "mutations": [
+    {
+      "id": "LOCAL-DRAFT-PUBLISH",
+      "environment": "local",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "learning-form-publishing.test.js: version/key/assignment/roster/blocks/hash readback, role learning_api và rollback; backend-final-full-test.log."
+    },
+    {
+      "id": "LOCAL-EDITOR",
+      "environment": "local",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-final-test.log"
+    },
+    {
+      "id": "LOCAL-DEMO",
+      "environment": "local",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "learning-draft-demo.test.js: submit/reset/pin/revoked/expired, source/outbox không đổi; backend-final-full-test.log."
+    }
+  ],
+  "verification_runs": [
+    {
+      "id": "V-BACKEND",
+      "scope": "full_suite",
+      "command": "npm test -- --test-concurrency=2",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:20:11.596259Z",
+      "outcome": "passed",
+      "passed": 303,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log"
+    },
+    {
+      "id": "V-PAGES",
+      "scope": "full_suite",
+      "command": "PowerShell chọn toàn bộ tests/progress-log-*.mjs và progress-log-link-ui.cjs; node --test --test-concurrency=1 @testFiles",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:17:06.525696Z",
+      "outcome": "passed",
+      "passed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log"
+    },
+    {
+      "id": "V-STUDENT",
+      "scope": "behavioral",
+      "command": "node E:/Codex-Data/progress-log-plans/2026-09-30/student-browser-contracts.mjs",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:17:55.357537Z",
+      "outcome": "passed",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-student-contracts-final.log"
+    },
+    {
+      "id": "V-CROSS",
+      "scope": "behavioral",
+      "command": "node E:/Codex-Data/progress-log-plans/2026-09-30/editor-api-integration.mjs",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:40:29.666921Z",
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\editor-api-integration-demo-final-test.log"
+    },
+    {
+      "id": "V-SCRIPT-CONFIG",
+      "scope": "focused",
+      "command": "node --test E:/Codex-Data/progress-log-plans/2026-09-30/postgres-test-config-tests.mjs",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:34:07.982786Z",
+      "outcome": "passed",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\postgres-test-config-test.log"
+    }
+  ],
+  "red_green": {
+    "red_on_base": {
+      "test_id": "J01",
+      "tree_revision": "pages:6e82084c8037efa9584b0c23cf561ec6a07cea3c;backend:4a2ae8f281892d34229149904747cc3c33b98149",
+      "command": "node --test --test-name-pattern=\"J01|E01\" regression-base/tests/progress-log-journey-loading.mjs regression-base/tests/progress-log-schedule-proposals.mjs",
+      "outcome": "failed",
+      "exit_code": 1,
+      "failed": 2,
+      "passed": 0,
+      "skipped": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\escaped-defects-red-base.log"
+    },
+    "green_on_head": {
+      "test_id": "J01",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "command": "PowerShell chọn toàn bộ tests/progress-log-*.mjs và progress-log-link-ui.cjs; node --test --test-concurrency=1 @testFiles",
+      "outcome": "passed",
+      "exit_code": 0,
+      "failed": 0,
+      "passed": 38,
+      "skipped": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log"
+    }
+  },
+  "convergence": {
+    "status": "gaps",
+    "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+    "gaps": [
+      "P02/PG01 PostgreSQL contention nhiều connection chưa chạy.",
+      "G02: chưa apply migration, thử backup/rollback và image cuối.",
+      "G03: chưa phát hành/readback/quan sát Portal cho gói này.",
+      "Tool graph Pages được yêu cầu không có trong inventory; chưa tuyên bố đã cập nhật bằng tool."
+    ],
+    "unrequested_work": [],
+    "evidence": "Full backend303/Pages38/Chrome2/API-DB1 cùng source; 28/29 mã có bằng chứng local, P02 còn gate PostgreSQL; review closed. Không thu nhỏ plan."
+  },
+  "context_handoff": {
+    "summary": "Đã xây đủ năm lát; ứng viên local có test đầy đủ, đang chuẩn bị phát hành có kiểm soát.",
+    "decisions": [
+      "Giữ chọn tên; Journey cùng phiếu; chỉ tám nhóm hiện có; nộp đủ mới điểm danh Portal; không nối Đức Anh."
+    ],
+    "completed": [
+      "S1–S4 local",
+      "S5 logic publish/rollback local",
+      "Review độc lập và RED/GREEN hai lỗi người dùng"
+    ],
+    "next_step": "Xin quyền đúng gói cho PostgreSQL riêng/staging/migration/API/demo/Pages rồi readback; không tự chuyển VPS.",
+    "open_risks": [
+      "P02/PG01 PostgreSQL contention nhiều connection chưa chạy.",
+      "G02: chưa apply migration, thử backup/rollback và image cuối.",
+      "G03: chưa phát hành/readback/quan sát Portal cho gói này.",
+      "Tool graph Pages được yêu cầu không có trong inventory; chưa tuyên bố đã cập nhật bằng tool."
+    ],
+    "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0"
+  },
+  "release": {
+    "target_environment": "production",
+    "decision": "not_ready",
+    "base_tree_revision": "pages:6e82084c8037efa9584b0c23cf561ec6a07cea3c;backend:4a2ae8f281892d34229149904747cc3c33b98149",
+    "current_tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+    "production_authorized": false,
+    "rollback": "Giữ image API/demo/Pages trước chuyển và consumer/cấu hình Portal; quay code về image cũ, giữ bảng/guard/version/assignment/nháp/bài đã nhận; không DROP hay hoàn nguyên Portal.",
+    "deployment_readback": "not_run",
+    "operational_observation": "not_run",
+    "open_risks": [
+      {
+        "id": "R-PG",
+        "severity": "P1"
+      },
+      {
+        "id": "R-RELEASE",
+        "severity": "P1"
+      },
+      {
+        "id": "R-PORTAL",
+        "severity": "P1"
+      }
+    ]
+  },
+  "independent_review": {
+    "status": "passed",
+    "reviewer": "/root/meo GPT-6.1 Sol/high",
+    "findings_closed": [
+      "Shared old/new publisher lock",
+      "Controls locked during mutation",
+      "Fresh demo account permission",
+      "Copy preserves family",
+      "Published session readonly",
+      "Assignment ID cannot bypass deferred guard"
+    ],
+    "limits": "Source review; real PostgreSQL contention and production not covered.",
+    "release_script_findings_closed": [
+      "URL query override host/timeout",
+      "Rollback orphan content and same-operation retry",
+      "Acquire/cleanup always releases clients"
+    ]
+  },
+  "evidence_notes": [
+    "pages-final-full-test.log có1fail vì live smoke thiếu LIVE_PROGRESS_LOG_URL; là script production riêng, giữ lỗi thật, không tính đã pass.",
+    "memory.cjs/session3-ui.cjs là callback, đã thực chạy bằng Chrome trong V-STUDENT; không dùng Node parse callback làm bằng chứng.",
+    "Các lượt OOM/timeout cũ giữ nguyên logs failed; lượt cuối khóa mã và giảm file concurrency.",
+    "API live14source cần thay/ thêm khớp base hoặc missing mới; learning-demo.js chỉ thuộc container demo, live demo thiếu phần Journey initializer cũ hơn base."
+  ],
+  "release_scripts": [
+    {
+      "path": "scripts/check-progress-log-postgres-contention.mjs",
+      "sha256": "6e1c846b5285db50503633e5120a4bc1c1c311ea9305156c06399d23082eb08a"
+    },
+    {
+      "path": "scripts/progress-log-postgres-test-config.mjs",
+      "sha256": "1345e8cd9bd50a70fda18b0aa72fb7c324e8b1f1ddf29b36428cc2a93eb02686"
+    }
+  ]
+}

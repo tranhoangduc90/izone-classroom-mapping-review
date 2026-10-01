@@ -1032,6 +1032,10 @@ RETURNING id::text, assignment_id::text, student_ref::text, skill_code,
 export const authorizeLearningJourneyPlanAssignmentSql = `SELECT
   assignment.erp_course_class_id::text AS class_id,
   assignment.class_name_snapshot AS class_name,
+  (SELECT COALESCE(jsonb_agg(DISTINCT candidate.session_number), '[]'::jsonb)
+    FROM learning.form_assignment AS candidate
+    WHERE candidate.erp_course_class_id = assignment.erp_course_class_id
+      AND candidate.status IN ('published', 'closed')) AS assignment_session_numbers,
   GREATEST(
     COALESCE((SELECT max(candidate.session_number) FROM learning.form_assignment AS candidate
       WHERE candidate.erp_course_class_id = assignment.erp_course_class_id
@@ -1046,10 +1050,25 @@ export const authorizeLearningJourneyPlanAssignmentSql = `SELECT
   ) AS highest_known_session
 FROM learning.form_assignment AS assignment
 WHERE assignment.id = $1::uuid
-  AND ($3::boolean OR ${buildTeacherClassAccessPredicate({
+  AND ($3::boolean OR ${buildLearningClassAccessPredicate({
     reviewerEmailSql: '$2',
     classIdSql: 'assignment.erp_course_class_id'
   })});`;
+
+export const authorizeLearningJourneyPlanClassSql = `SELECT
+  course.erp_course_class_id::text AS class_id, course.erp_class_name_snapshot AS class_name,
+  (SELECT COALESCE(jsonb_agg(DISTINCT a.session_number), '[]'::jsonb)
+    FROM learning.form_assignment AS a WHERE a.erp_course_class_id=course.erp_course_class_id
+    AND a.status IN ('published','closed')) AS assignment_session_numbers,
+  GREATEST(COALESCE((SELECT max(a.session_number) FROM learning.form_assignment AS a
+    WHERE a.erp_course_class_id=course.erp_course_class_id AND a.status IN ('published','closed')),0),
+    COALESCE((SELECT max(e.session_number) FROM learning.evidence_event AS e
+    WHERE e.erp_course_class_id=course.erp_course_class_id AND (e.visibility='student_visible'
+      OR e.source_system IN ('term_test','mini_test'))),0),
+    COALESCE((SELECT max(p.to_session_number) FROM learning.periodic_report AS p
+    WHERE p.erp_course_class_id=course.erp_course_class_id AND p.status='published'),0)) AS highest_known_session
+FROM mapping.classroom_course_mapping AS course WHERE course.erp_course_class_id=$1::bigint
+  AND ($3::boolean OR ${buildLearningClassAccessPredicate({reviewerEmailSql:'$2',classIdSql:'course.erp_course_class_id'})});`;
 
 export const fetchLearningJourneyPlanSql = `SELECT
   erp_course_class_id::text AS class_id,

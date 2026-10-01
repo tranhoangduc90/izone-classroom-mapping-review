@@ -76,9 +76,32 @@ function sectionScore(section) {
       ? band : band === '<2.5' ? band : null };
 }
 
+function decodeTestResult(row, allowed) {
+  if (!allowed.has(row.test_slug)) throw new Error('TEST_RESULT_ROW_INVALID');
+  const data = row.result_json;
+  const completed = new Date(row.completed_at);
+  if (!data || typeof data !== 'object' || !Number.isFinite(completed.getTime())) {
+    throw new Error('TEST_RESULT_ROW_INVALID');
+  }
+  const writingScore = row.writing_score == null ? null : Number(row.writing_score);
+  if (writingScore !== null && (!Number.isFinite(writingScore)
+    || writingScore < 0 || writingScore > 9)) throw new Error('TEST_RESULT_ROW_INVALID');
+  return {
+    testSlug: row.test_slug,
+    title: String(row.title || 'Buổi Test'),
+    completedAt: completed.toISOString(),
+    listening: sectionScore(data.listening),
+    reading: sectionScore(data.reading),
+    writing: row.test_slug.startsWith('term-test-')
+      ? { status: writingScore !== null ? 'ready'
+        : row.writing_submitted_at ? 'pending' : 'not_submitted',
+      score: writingScore } : null
+  };
+}
+
 export function createLearningTestResultReader({ pool }) {
   if (!pool) return null;
-  return async ({ classId: rawClassId, studentRef, testSlugs }) => {
+  const reader = async ({ classId: rawClassId, studentRef, testSlugs }) => {
     const classId = String(rawClassId);
     if (!/^\d{1,19}$/u.test(classId)
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(studentRef)
@@ -92,27 +115,36 @@ export function createLearningTestResultReader({ pool }) {
       throw new Error('TEST_RESULT_RESPONSE_INVALID');
     }
     const allowed = new Set(testSlugs);
-    return result.rows.map(row => {
-      if (!allowed.has(row.test_slug)) throw new Error('TEST_RESULT_ROW_INVALID');
-      const data = row.result_json;
-      const completed = new Date(row.completed_at);
-      if (!data || typeof data !== 'object' || !Number.isFinite(completed.getTime())) {
-        throw new Error('TEST_RESULT_ROW_INVALID');
-      }
-      const writingScore = row.writing_score == null ? null : Number(row.writing_score);
-      if (writingScore !== null && (!Number.isFinite(writingScore)
-        || writingScore < 0 || writingScore > 9)) throw new Error('TEST_RESULT_ROW_INVALID');
-      return {
-        testSlug: row.test_slug,
-        title: String(row.title || 'Buổi Test'),
-        completedAt: completed.toISOString(),
-        listening: sectionScore(data.listening),
-        reading: sectionScore(data.reading),
-        writing: row.test_slug.startsWith('term-test-')
-          ? { status: writingScore !== null ? 'ready'
-            : row.writing_submitted_at ? 'pending' : 'not_submitted',
-          score: writingScore } : null
-      };
-    });
+    return result.rows.map(row => decodeTestResult(row, allowed));
   };
+  // Đọc toàn lớp bằng một round trip. LATERAL dùng cùng phép nối định danh của Journey cá nhân,
+  // nên không nối theo tên và không mở một request DB riêng cho mỗi học viên.
+  reader.readClass = async ({ classId, studentRefs, testSlugs }) => {
+    if (!/^\d{1,19}$/u.test(String(classId)) || !Array.isArray(studentRefs) || studentRefs.length > 500
+      || new Set(studentRefs).size !== studentRefs.length
+      || studentRefs.some(ref => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(ref))
+      || !Array.isArray(testSlugs) || testSlugs.length > 100
+      || testSlugs.some(slug => !/^(?:term-test-[1-9]\d*|mini-test-[a-z0-9-]+)$/u.test(slug))) {
+      throw new Error('TEST_RESULT_INPUT_INVALID');
+    }
+    if (!studentRefs.length || !testSlugs.length) return [];
+    // Chỉ thay biểu thức cố định trong SQL của hệ thống; mọi dữ liệu vẫn là tham số.
+    const scopedSql = resultSql.replaceAll('$2::uuid', 'requested_student.student_ref').replace(/;\s*$/u, '');
+    const response = await pool.query(`SELECT requested_student.student_ref::text, result.*
+      FROM unnest($2::uuid[]) AS requested_student(student_ref)
+      CROSS JOIN LATERAL (${scopedSql}) AS result;`, [String(classId), studentRefs, testSlugs]);
+    if (!Array.isArray(response.rows) || response.rows.length > studentRefs.length * testSlugs.length) {
+      throw new Error('TEST_RESULT_RESPONSE_INVALID');
+    }
+    const allowed = new Set(studentRefs), seen = new Set();
+    const results = [];
+    for (const row of response.rows) {
+      const identity = `${row.student_ref}:${row.test_slug}`;
+      if (!allowed.has(row.student_ref) || seen.has(identity)) throw new Error('TEST_RESULT_ROW_INVALID');
+      seen.add(identity);
+      results.push({ studentRef: row.student_ref, result: decodeTestResult(row, new Set(testSlugs)) });
+    }
+    return results;
+  };
+  return reader;
 }

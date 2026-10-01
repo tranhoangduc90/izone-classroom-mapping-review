@@ -41,3 +41,19 @@ test('Journey không nhận kết quả khác bài hoặc đầu vào định da
   await assert.rejects(() => reader({ ...input, studentRef: 'không hợp lệ' }),
     /TEST_RESULT_INPUT_INVALID/u);
 });
+
+test('O04: đọc kết quả cả lớp chỉ gọi DB một lần và vẫn tách học viên/điểm Writing muộn',async()=>{
+  const student2='21000000-0000-4000-8000-000000000004';
+  let calls=0;
+  const reader=createLearningTestResultReader({pool:{async query(sql,params){
+    calls+=1;assert.deepEqual(params[1],[studentRef,student2]);
+    assert.match(sql,/requested_student\.student_ref/u);
+    return {rows:[studentRef,student2].map((ref,index)=>({student_ref:ref,test_slug:'term-test-2',title:'Term Test 2',
+      result_json:{reading:{correct:20+index,total:40}},completed_at:new Date('2026-10-01T01:00:00Z'),
+      writing_submitted_at:new Date('2026-10-01T01:00:00Z'),writing_score:index?6:null}))};
+  }}});
+  const results=await reader.readClass({...input,studentRefs:[studentRef,student2]});
+  assert.equal(calls,1);assert.equal(results[0].studentRef,studentRef);
+  assert.equal(results[0].result.writing.status,'pending');assert.equal(results[1].result.writing.score,6);
+  await assert.rejects(()=>reader.readClass({...input,studentRefs:[studentRef,studentRef]}),/INPUT_INVALID/u);
+});
