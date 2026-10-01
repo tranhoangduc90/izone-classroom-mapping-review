@@ -22,9 +22,13 @@ Mã nguồn ứng dụng, schema và tests: `source-sha256:f6d173b0f900d9f4a4901
 | Chrome → API → DB | 1/1; tám dạng, sáu phiếu/57 câu/14 ô, drilldown đúng bài |
 | Hai lỗi loading/date picker | Cùng test RED trên base, GREEN trên head |
 | Review độc lập mã ứng dụng | Findings đã khép; không thay kiểm PostgreSQL/production |
-| Checker chất lượng | Hợp lệ, `pending/not_ready` |
+| PostgreSQL riêng VPS | 6/6; lock/commit/retry/replacement/rollback |
+| Backup/migration/rollback/image | Đạt; schema production đọc lại đúng |
+| Pages thật IC2305 | 18 người/31 buổi; spinner/quay lại/mobile/không ghi bài |
+| HTTPS và assets | 14 kiểm đạt; auth chưa đăng nhập trả401 |
+| Nghiệm thu toàn gói | `deployed_awaiting_validation`; G03 còn chờ Portal/phiên GV thật |
 
-Script live smoke cần URL production và revision thực tế; chưa chạy cho ứng viên chưa phát hành. Các lượt test thất bại trước đó được giữ trong kho bằng chứng, không ghi lại thành PASS.
+Live Journey đã chạy trên URL phiếu IC2305 lấy riêng tư và đúng fragment assignment; không bắt đầu/nộp bài. Script smoke lịch sử hardcode buổi3/revision cũ không được tính PASS. Các lượt test thất bại và hai lần rollback chuyển image được giữ trong kho bằng chứng, không ghi lại thành PASS.
 
 ## Phần phát hành cần thực hiện
 
@@ -40,6 +44,6 @@ Chuyển API/demo/Pages về revision/image đã giữ trước phát hành; t�
 
 ## Trạng thái quyền và bước tiếp theo
 
-Đây là gói source local, chưa apply migration/chuyển dịch vụ/merge/push gói backend mới. AGENTS của workspace quy định ghi VPS, chạy migration, dựng/chuyển dịch vụ cần quyền rõ; quyền phát hành Journey trước đây không tự mở gói schema/API mới. Khi được duyệt gói này, đi lần lượt các cổng trên; chỉ phát hành nếu các kiểm tra bắt buộc đạt.
+Đức đã cho phép kiểm thử riêng và triển khai khi cổng đạt. PostgreSQL/backup/restore/rollback đạt; migration, API/demo và Pages đã triển khai. Gói chưa được nghiệm thu toàn bộ: chờ bài nộp hợp lệ sau chuyển tới kết quả Portal và kiểm dashboard trong phiên giảng viên thật. Bản hiện hành/điểm khôi phục/lịch sử Git đọc ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md); không tự nộp giả/requeue/force Portal để đóng cổng.
 
 Chi tiết registry/API: [runbook](PROGRESS_LOG_UPGRADE_20261001_RUNBOOK.md). Trạng thái từng mã nghiệm thu và bằng chứng: [manifest](PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json). Tool cập nhật graph được AGENTS Pages yêu cầu chưa có trong inventory; hợp đồng module/interface đã ghi trong manifest, chưa tuyên bố đã chạy tool đó.

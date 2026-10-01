@@ -21,7 +21,7 @@
     "mode_reason": "5 lát được kiểm đủ; cùng dùng kế hoạch và phiếu có điểm.",
     "user": "Học viên và giảng viên",
     "problem": "Lịch khó ghép, Journey thiếu báo chờ, thiếu overview/phân tích/bộ soạn.",
-    "outcome": "Đủ năm lát đã xây; chưa phát hành cho đến hết kiểm PostgreSQL/image/Portal.",
+    "outcome": "Đã phát hành năm lát cho IC2305; chưa verified toàn gói vì G03 còn chờ quan sát đích và phiên giảng viên thật.",
     "out_of_scope": [
       "Bài luyện thêm",
       "Kết nối hệ thống Đức Anh",
@@ -822,8 +822,8 @@
       "id": "P02",
       "category": "concurrency_idempotency",
       "priority": "P1",
-      "status": "not_run",
-      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\pages-final-local-full-test.log; E:\\Codex-Data\\progress-log-plans\\2026-09-30\\backend-final-full-test.log; PGlite request races PASS nhưng pool serialize; PostgreSQL contention chưa chạy.",
+      "status": "passed",
+      "evidence": "E:/Codex-Data/progress-log-plans/2026-09-30/postgres-contention-vps-test.log: PostgreSQL16 riêng,6/6; backend final303/303 giữ nguyên source.",
       "requirement": "Double click/timeout/retry/hai GV/trùng buổi → không nhân assignment"
     },
     {
@@ -846,16 +846,16 @@
       "id": "PG01",
       "category": "concurrency_idempotency",
       "priority": "P1",
-      "status": "not_run",
-      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "status": "passed",
+      "evidence": "E:/Codex-Data/progress-log-plans/2026-09-30/postgres-contention-vps-test.log: PostgreSQL16 riêng,6/6; backend final303/303 giữ nguyên source.",
       "requirement": "PostgreSQL nhiều connection: wait lock, publisher cũ/mới, retry, replacement/ID guard, rollback."
     },
     {
       "id": "G02",
       "category": "rollback_recovery",
       "priority": "P1",
-      "status": "not_run",
-      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "status": "passed",
+      "evidence": "staging-release-gates.log; demo-rollback-rehearsal-verified.log; final-image-auth-tests.log; production-migration-result.json; production-final-readback.log: backup/restore, old/new API, rollback, schema/GRANT và auth90day đạt.",
       "requirement": "Backup/staging/rollback, migration/GRANT/readback và phiên 90 ngày trên image cuối."
     },
     {
@@ -863,7 +863,7 @@
       "category": "external_partial",
       "priority": "P1",
       "status": "not_run",
-      "evidence": "Chưa có quyền mới để ghi VPS/apply migration/chuyển dịch vụ trong gói nâng cấp này.",
+      "evidence": "G03: đã deploy/readback API/demo/Pages; chưa có Portal readback bài nộp hợp lệ sau chuyển và chưa kiểm dashboard trong phiên giảng viên thật (CUA lỗi khởi tạo). Cấu hình/consumer giữ nguyên;102complete/0stale, không có event mới. deploy-readback.json; public-release-readback.json; live-pages-journey-final-test.log.",
       "requirement": "API/demo/Pages readback sau phát hành; cấu hình/consumer và bài hợp lệ đọc lại kết quả từ Portal."
     }
   ],
@@ -1049,7 +1049,7 @@
           "Danh mục 8 nhóm và quyền lớp hiện hành"
         ],
         "affected_future_tasks": [],
-        "status": "in_progress",
+        "status": "done",
         "plan_revision": "plan-v1"
       },
       {
@@ -1087,7 +1087,7 @@
           "Quyền người dùng cho đúng gói phát hành"
         ],
         "affected_future_tasks": [],
-        "status": "planned",
+        "status": "in_progress",
         "plan_revision": "plan-v1"
       }
     ]
@@ -1103,9 +1103,9 @@
         "impact": 3,
         "score": 6,
         "severity": "P1",
-        "status": "open",
+        "status": "mitigated",
         "owner": "Codex",
-        "mitigation": "Chạy scripts/check-progress-log-postgres-contention.mjs trên DB riêng/localhost; không chạy vào DB lớp thật.",
+        "mitigation": "PostgreSQL riêng6/6 với hai backendPID/lockwait/commitguard/retry/rollback đã đạt.",
         "test_ids": [
           "P02",
           "PG01"
@@ -1118,9 +1118,9 @@
         "impact": 3,
         "score": 6,
         "severity": "P1",
-        "status": "open",
+        "status": "mitigated",
         "owner": "Codex",
-        "mitigation": "Giữ image live, backup đã kiểm và thử rollback trước chuyển; kiểm phiên GV 90 ngày trên image cuối.",
+        "mitigation": "Backup VERIFIED, phục hồi/migration/rollback API cũ và demo; image auth90day; chuyển lần3 healthy, cấu hình và source readback khớp. Hai lần lỗi chuyển trước đã rollback/readback.",
         "test_ids": [
           "G02"
         ]
@@ -1134,7 +1134,7 @@
         "severity": "P1",
         "status": "open",
         "owner": "Codex",
-        "mitigation": "So cấu hình/đích/consumer trước sau, quan sát bài nộp thật hợp lệ; chưa có ca giữ deployed_awaiting_validation.",
+        "mitigation": "G03: đã deploy/readback API/demo/Pages; chưa có Portal readback bài nộp hợp lệ sau chuyển và chưa kiểm dashboard trong phiên giảng viên thật (CUA lỗi khởi tạo). Không nộp giả hay force/requeue Portal; giữ cổng nghiệm thu mở.",
         "test_ids": [
           "G03"
         ]
@@ -1244,6 +1244,27 @@
       "outcome": "success",
       "readback": "verified",
       "evidence": "learning-draft-demo.test.js: submit/reset/pin/revoked/expired, source/outbox không đổi; backend-final-full-test.log."
+    },
+    {
+      "id": "PRODUCTION-MIGRATION",
+      "environment": "production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "production-migration-result.json; production-final-readback.log: version/checksum/backupId/tables/triggers/role privileges."
+    },
+    {
+      "id": "PRODUCTION-API-DEMO",
+      "environment": "production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "deploy-readback.json; production-source-readback.json; live-runtime-after.log: healthy/images/config/14source/consumer."
+    },
+    {
+      "id": "PRODUCTION-PAGES",
+      "environment": "production",
+      "outcome": "success",
+      "readback": "verified",
+      "evidence": "PR42 merge83c5ba2 build36820483113 success; public-release-readback.json assets matched; live-pages-journey-final-test.log."
     }
   ],
   "verification_runs": [
@@ -1311,6 +1332,45 @@
       "skipped": 0,
       "exit_code": 0,
       "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\postgres-test-config-test.log"
+    },
+    {
+      "id": "V-PG-VPS",
+      "scope": "behavioral",
+      "command": "check-progress-log-postgres-contention.mjs trong PostgreSQL16 network none riêng",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T04:57:19.006Z",
+      "outcome": "passed",
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:/Codex-Data/progress-log-plans/2026-09-30/postgres-contention-vps-test.log"
+    },
+    {
+      "id": "V-LIVE-STUDENT",
+      "scope": "behavioral",
+      "command": "node live-pages-journey.mjs (read-only actual Pages/IC2305)",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T05:47:21.838Z",
+      "outcome": "passed",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\live-pages-journey-final-test.log"
+    },
+    {
+      "id": "V-HTTPS-ASSETS",
+      "scope": "behavioral",
+      "command": "node public-release-readback.mjs",
+      "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
+      "captured_at": "2026-10-01T05:47:21.838Z",
+      "outcome": "passed",
+      "passed": 14,
+      "failed": 0,
+      "skipped": 0,
+      "exit_code": 0,
+      "evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\public-release-readback.json"
     }
   ],
   "red_green": {
@@ -1341,56 +1401,50 @@
     "status": "gaps",
     "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
     "gaps": [
-      "P02/PG01 PostgreSQL contention nhiều connection chưa chạy.",
-      "G02: chưa apply migration, thử backup/rollback và image cuối.",
-      "G03: chưa phát hành/readback/quan sát Portal cho gói này.",
-      "Tool graph Pages được yêu cầu không có trong inventory; chưa tuyên bố đã cập nhật bằng tool."
+      "G03: đã deploy/readback API/demo/Pages; chưa có Portal readback bài nộp hợp lệ sau chuyển và chưa kiểm dashboard trong phiên giảng viên thật (CUA lỗi khởi tạo).",
+      "Tool graph Pages không có trong inventory; hợp đồng module/interface được lưu trong manifest, chưa tuyên bố chạy tool."
     ],
     "unrequested_work": [],
-    "evidence": "Full backend303/Pages38/Chrome2/API-DB1 cùng source; 28/29 mã có bằng chứng local, P02 còn gate PostgreSQL; review closed. Không thu nhỏ plan."
+    "evidence": "S1–S5 đã kiểm cùng source: backend303/Pages38/Chrome2/API-DB1/PG6; production source14 khớp, Journey31 và assets14 đạt; G03 chưa hoàn tất. Giữ nguyên small_complete và toàn phạm vi."
   },
   "context_handoff": {
-    "summary": "Đã xây đủ năm lát; ứng viên local có test đầy đủ, đang chuẩn bị phát hành có kiểm soát.",
+    "summary": "API/demo/Pages và migration đã phát hành; core/readback đạt, nghiệm thu Portal/phiên giảng viên thật còn chờ.",
     "decisions": [
       "Giữ chọn tên; Journey cùng phiếu; chỉ tám nhóm hiện có; nộp đủ mới điểm danh Portal; không nối Đức Anh."
     ],
     "completed": [
-      "S1–S4 local",
-      "S5 logic publish/rollback local",
-      "Review độc lập và RED/GREEN hai lỗi người dùng"
+      "S1–S5 source và tests",
+      "PostgreSQL6/6, backup/restore/rollback, migration production",
+      "API/demo healthy/config preserved; Pages build thành công và Journey thật31buổi"
     ],
-    "next_step": "Xin quyền đúng gói cho PostgreSQL riêng/staging/migration/API/demo/Pages rồi readback; không tự chuyển VPS.",
+    "next_step": "Tích hợp backend Git và chờ/đọc lại một bài nộp thật hợp lệ sau chuyển; xác minh dashboard trong phiên giảng viên thật. Không đánh dấu goal complete trước G03.",
     "open_risks": [
-      "P02/PG01 PostgreSQL contention nhiều connection chưa chạy.",
-      "G02: chưa apply migration, thử backup/rollback và image cuối.",
-      "G03: chưa phát hành/readback/quan sát Portal cho gói này.",
-      "Tool graph Pages được yêu cầu không có trong inventory; chưa tuyên bố đã cập nhật bằng tool."
+      "G03: đã deploy/readback API/demo/Pages; chưa có Portal readback bài nộp hợp lệ sau chuyển và chưa kiểm dashboard trong phiên giảng viên thật (CUA lỗi khởi tạo).",
+      "Tool graph Pages không có trong inventory; hợp đồng module/interface được lưu trong manifest, chưa tuyên bố chạy tool."
     ],
     "tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0"
   },
   "release": {
     "target_environment": "production",
-    "decision": "not_ready",
+    "decision": "deployed_awaiting_validation",
     "base_tree_revision": "pages:6e82084c8037efa9584b0c23cf561ec6a07cea3c;backend:4a2ae8f281892d34229149904747cc3c33b98149",
     "current_tree_revision": "source-sha256:f6d173b0f900d9f4a49014a49733ce2f0c5afd548a9c2ed695764035d2dacea0",
-    "production_authorized": false,
+    "production_authorized": true,
     "rollback": "Giữ image API/demo/Pages trước chuyển và consumer/cấu hình Portal; quay code về image cũ, giữ bảng/guard/version/assignment/nháp/bài đã nhận; không DROP hay hoàn nguyên Portal.",
-    "deployment_readback": "not_run",
-    "operational_observation": "not_run",
+    "deployment_readback": "verified",
+    "operational_observation": "unknown: không có Portal event mới; chưa kiểm phiên giảng viên thật",
     "open_risks": [
-      {
-        "id": "R-PG",
-        "severity": "P1"
-      },
-      {
-        "id": "R-RELEASE",
-        "severity": "P1"
-      },
       {
         "id": "R-PORTAL",
         "severity": "P1"
       }
-    ]
+    ],
+    "authorization": "Đức: Cho phép kiểm thử riêng và triển khai khi các cổng đạt — 2026-10-01.",
+    "deployed_at": "2026-10-01T05:48:51.017Z",
+    "api_image": "izone-progress-log-upgrade:20261001-candidate",
+    "demo_image": "izone-progress-log-demo:20261001-upgrade",
+    "pages_merge": "83c5ba272a6de48658b24d9e8fd67fe291f3bb7e",
+    "deployment_evidence": "E:\\Codex-Data\\progress-log-plans\\2026-09-30\\deploy-readback.json"
   },
   "independent_review": {
     "status": "passed",
@@ -1414,7 +1468,11 @@
     "pages-final-full-test.log có1fail vì live smoke thiếu LIVE_PROGRESS_LOG_URL; là script production riêng, giữ lỗi thật, không tính đã pass.",
     "memory.cjs/session3-ui.cjs là callback, đã thực chạy bằng Chrome trong V-STUDENT; không dùng Node parse callback làm bằng chứng.",
     "Các lượt OOM/timeout cũ giữ nguyên logs failed; lượt cuối khóa mã và giảm file concurrency.",
-    "API live14source cần thay/ thêm khớp base hoặc missing mới; learning-demo.js chỉ thuộc container demo, live demo thiếu phần Journey initializer cũ hơn base."
+    "API live14source cần thay/ thêm khớp base hoặc missing mới; learning-demo.js chỉ thuộc container demo, live demo thiếu phần Journey initializer cũ hơn base.",
+    "Hai lần chuyển đầu lỗi serialization SecurityOpt/VolumeOptions và rollback cả hai image cũ healthy; lần3 thành công, không xóa log thất bại.",
+    "Live Journey harness đầu dùng sai fragment; lượt2 timeout networkidle ở teacher do Google script; sửa harness đúng assignment và domcontentloaded, lượt cuối đạt. Không phải lỗi source ứng dụng.",
+    "HTTPS harness đầu dùng sai tên asset form-authoring.js; sửa thành teacher-form-editor.js,14 kiểm cuối đạt.",
+    "G03 chưa đạt; checker có thể fail các điều kiện hoàn tất dù deployment readback verified. Không hạ P1, bỏ test/rủi ro hay thay cách nghiệm thu để xanh."
   ],
   "release_scripts": [
     {

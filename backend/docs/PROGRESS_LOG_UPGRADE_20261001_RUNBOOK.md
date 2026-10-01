@@ -1,6 +1,6 @@
 # Registry và phát hành nâng cấp Progress Log
 
-Ứng viên IC2305 (1294), 31 buổi. Migration `202610010001_progress_log_form_drafts.sql` chưa áp production. Các bước dưới là hợp đồng phát hành, không phải lịch sử đã thực hiện.
+IC2305 (1294), 31 buổi. Migration `202610010001_progress_log_form_drafts.sql` đã áp production ngày 01/10/2026; API/demo/Pages đã chuyển và đọc lại. Các bước dưới giữ làm hợp đồng vận hành; lịch sử, hash, điểm khôi phục và phần còn chờ ở [bộ nhớ phát hành](PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md).
 
 ## Registry dữ liệu mới
 
@@ -57,8 +57,8 @@ Trước hoàn tất: full backend/nhóm Pages/browser/checker cùng source cu�
 
 Chạy `scripts/check-progress-log-postgres-contention.mjs` bằng Node 24 đã ghim. Đầu vào là `PROGRESS_LOG_TEST_DATABASE_URL` được cấp qua môi trường riêng tư và `PROGRESS_LOG_TEST_DATABASE_CONFIRM=progress-log-upgrade-20261001`. URL phải trỏ localhost vào DB mới, trống, có tên bắt đầu `progress_log_upgrade_test_`; script từ chối đích khác trước ghi. Không đưa mật khẩu vào command line hoặc tài liệu.
 
-Script tạo fixture giả, mở nhiều connection thật, chứng minh connection thứ hai đợi khóa, kiểm conflict khi commit, retry cùng operation, publisher cũ/mới, replacement, chặn đổi ID và rollback lỗi giữa publish. Kết quả là JSON tên ca/UTC; lỗi trả mã 1, giữ database test để điều tra. Script không DROP, không gọi ERP/Portal. Cần quyền tạo role/bảng trong môi trường riêng. Kiểm cú pháp đã đạt; chưa được ghi là cổng nghiệp vụ PASS.
+Script tạo fixture giả, mở nhiều connection thật, chứng minh connection thứ hai đợi khóa, kiểm conflict khi commit, retry cùng operation, publisher cũ/mới, replacement, chặn đổi ID và rollback lỗi giữa publish. Kết quả là JSON tên ca/UTC; lỗi trả mã 1, giữ database test để điều tra. Script không DROP, không gọi ERP/Portal. Cần quyền tạo role/bảng trong môi trường riêng. Cổng PostgreSQL16 riêng VPS đã đạt6/6 ngày01/10; chạy lại phải dùng DB mới/trống, không chạy lại trên DB fixture đã có dữ liệu.
 
 ## Kết quả ứng viên local
 
-Backend 303/303; nhóm Pages 38/38; callback học viên thực chạy Chrome 2/2; Chrome → API → DB 1/1. Hai lỗi loading/ô nhập ngày có RED trên base, GREEN cùng test trên head. Hash đầy đủ và đường dẫn bằng chứng ở `PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json`; checker hiện hợp lệ nhưng `pending/not_ready` vì cổng PostgreSQL và phát hành chưa chạy.
+Backend 303/303; nhóm Pages 38/38; callback học viên thực chạy Chrome 2/2; Chrome → API → DB 1/1. Hai lỗi loading/ô nhập ngày có RED trên base, GREEN cùng test trên head. PostgreSQL/backup/restore/migration/rollback/image đã đạt; Pages thật kiểm Journey31buổi và spinner đạt. G03 chưa đạt toàn bộ vì chưa có Portal readback của bài nộp sau chuyển và phiên giảng viên thật chưa kiểm; không gọi toàn gói verified. Hash và bằng chứng ở `PROGRESS_LOG_UPGRADE_20261001_QUALITY_GATE.json`.
