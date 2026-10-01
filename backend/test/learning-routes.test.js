@@ -30,6 +30,28 @@ test('token assignment sai bị từ chối trước khi chạm database', async
   assert.equal(response.body.error, 'INVALID_ASSIGNMENT_TOKEN');
 });
 
+test('O03: Overview, thống kê và chi tiết không có quyền Google thì không chạm database',async()=>{
+  const app=express();app.use(express.json());
+  app.use('/api/learning',createLearningRouter({pool:failIfQueriedPool(),
+    authenticate:(_req,res)=>res.status(401).json({ok:false,error:'AUTH_REQUIRED'})}));
+  for(const path of ['/teacher/classes/1294/overview',
+    '/teacher/assignments/11111111-1111-4111-8111-111111111111/question-analytics',
+    '/teacher/classes/1294/sessions/2/students/22222222-2222-4222-8222-222222222222']) {
+    const result=await request(app).get('/api/learning'+path);
+    assert.equal(result.status,401);
+  }
+  const publicResult=await request(app).get('/api/learning/student/classes/1294/overview');
+  assert.equal(publicResult.status,404);
+});
+
+test('E07/O03: context lớp/phiếu phải là duy nhất; ID detail sai bị chặn trước DB',async()=>{
+  const app=appWithPool(failIfQueriedPool());
+  for(const path of ['/teacher/journey-plan?classId=1294&assignment=11111111-1111-4111-8111-111111111111',
+    '/teacher/erp-schedule?classId=other','/teacher/classes/1294/sessions/0/students/not-uuid']) {
+    const result=await request(app).get('/api/learning'+path);assert.equal(result.status,400);
+  }
+});
+
 test('payload draft không nhận field lạ hoặc response quá dài', async () => {
   const response = await request(appWithPool(failIfQueriedPool()))
     .patch('/api/learning/attempts/draft')

@@ -1328,7 +1328,7 @@ export function createApp({
       return next();
     });
     app.use('/api/learning', createLearningRouter({
-      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret,
+      pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret, logger,
       erpScheduleReader: scheduleReader,
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: createLearningTestResultReader({ pool })

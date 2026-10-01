@@ -1,5 +1,7 @@
 # API duyệt mapping độc lập
 
+Trạng thái nâng cấp Progress Log ngày 01/10/2026: đọc [bộ nhớ phát hành](docs/PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md) trước khi thay API/demo/schema. Bản đã triển khai, còn chờ nghiệm thu Portal và phiên giảng viên thật.
+
 API này phục vụ web duyệt mapping mà không dùng execution của n8n. n8n chỉ còn nhiệm vụ quét ERP, Classroom và Lark theo lịch rồi ghi dữ liệu vào PostgreSQL.
 
 ## Đăng nhập và phân quyền

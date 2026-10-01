@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { LearningError, createLearningService } from '../src/learning-service.js';
+import {createLearningTestResultReader} from '../src/learning-test-results.js';
 import { claimLearningJobs, processLearningJob } from '../src/learning-outbox.js';
 import { createLearningAttendanceSync } from '../src/learning-attendance-sync.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
@@ -378,6 +379,13 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
   );
   assert.deepEqual(erpCalls, ['990000567']);
   await assert.rejects(
+    () => erpService.saveTeacherJourneyPlan({assignmentId: dashboard.assignmentId,
+      totalSessions:8, testSessionNumbers:[5,7], expectedRevision:2,
+      expectedScheduleFingerprint:'b'.repeat(64), reviewer}),
+    error => error instanceof LearningError && error.code === 'ERP_SCHEDULE_STALE'
+  );
+  assert.equal((await service.getTeacherJourneyPlan({assignmentId:dashboard.assignmentId,reviewer})).revision,2);
+  await assert.rejects(
     () => erpService.saveTeacherJourneyPlan({ assignmentId: dashboard.assignmentId,
       totalSessions: 8, testSessionNumbers: [5, 7],
       sessionDates: [{ sessionNumber: 2, date: '2026-09-15', erpSessionId: '35811' }],
@@ -388,10 +396,18 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
     assignmentId: dashboard.assignmentId, totalSessions: 8, testSessionNumbers: [5, 7],
     sessionDates: [{ sessionNumber: 1, date: '2026-09-01' },
       { sessionNumber: 2, date: '2026-09-14', erpSessionId: '35811' },
+      { sessionNumber: 6, date: '2026-09-28' },
       { sessionNumber: 7, date: '2026-09-30' }],
-    expectedRevision: 2, reviewer
+    expectedRevision: 2, expectedScheduleFingerprint: erpSchedule.fingerprint, reviewer
   });
   assert.equal(mappedPlan.revision, 3);
+  await assert.rejects(
+    () => service.saveTeacherJourneyPlan({assignmentId:dashboard.assignmentId,
+      totalSessions:8,testSessionNumbers:[5,7],expectedRevision:3,reviewer,
+      sessionDates:mappedPlan.sessionDates.filter(item=>item.sessionNumber!==6)}),
+    error => error instanceof LearningError && error.code === 'ERP_ASSIGNED_SESSION_LOCKED'
+  );
+  assert.equal((await service.getTeacherJourneyPlan({assignmentId:dashboard.assignmentId,reviewer})).revision,3);
   assert.deepEqual((await erpService.getTeacherJourneyPlan({
     assignmentId: dashboard.assignmentId, reviewer
   })).sessionDates, mappedPlan.sessionDates);
@@ -468,6 +484,26 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
   assert.equal(plannedJourney.sessions[0].sessionDate, '2026-09-01');
   assert.equal(plannedJourney.sessions[6].sessionDate, '2026-09-30');
   assert.equal(plannedJourney.sessions[4].sessionDate, null);
+  const overview = await service.getCourseOverview({classId:'990000567',reviewer});
+  assert.equal(overview.sessions.length,8);
+  assert.equal(overview.students.find(s=>s.studentRef===sample.studentRef).cells[6].status,'test_pending');
+  assert.ok(overview.students.every(s=>s.cells.length===8));
+  const detail=await service.getCourseSessionDetail({classId:'990000567',studentRef:sample.studentRef,
+    sessionNumber:dashboard.sessionNumber,reviewer});
+  assert.equal(detail.student.studentRef,sample.studentRef);
+  assert.equal(detail.sessionNumber,dashboard.sessionNumber);
+  assert.ok(detail.definition.blocks.length);
+  assert.ok(Object.keys(detail.responses).length);
+  assert.doesNotMatch(JSON.stringify(detail),/expectedAnswer|expectedOptionId/u);
+  const testDetail=await service.getCourseSessionDetail({classId:'990000567',studentRef:sample.studentRef,
+    sessionNumber:7,reviewer});
+  assert.equal(testDetail.status,'test_pending');
+  assert.equal(testDetail.definition,null);
+  await assert.rejects(()=>service.getCourseSessionDetail({classId:'990000567',studentRef:'21000000-0000-4000-8000-000000000099',
+    sessionNumber:3,reviewer}),error=>error.code==='JOURNEY_STUDENT_NOT_FOUND');
+  await assert.rejects(()=>service.getCourseOverview({classId:'990000567',
+    reviewer:{email:'unauthorized@example.test',canAccessAllClasses:false}}),
+    error=>error instanceof LearningError&&error.code==='CLASS_ACCESS_DENIED');
   assert.equal(plannedJourney.sessions[7].dataOrigin, 'confirmed_plan');
   await database.query(`INSERT INTO learning.evidence_event (
     id, source_system, source_record_id, source_revision, entity_key, unit_key,
@@ -555,6 +591,62 @@ test('migration demo chỉ tạo dữ liệu giả và đủ hành trình tổng
   });
   assert.equal(closedJourney.sessions.length, 9);
   await database.close();
+});
+
+test('O01/O03/E07: lớp chưa có phiếu vẫn đọc/chốt kế hoạch đúng quyền lớp', async () => {
+  const {database}=await setupDatabase();
+  const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
+  const service=createLearningService({pool:poolFrom(database),erpScheduleReader:async()=>({sessions:[
+    {erpSessionId:'401',date:'2026-10-05',startsAt:'2026-10-05 18:30:00',endsAt:'2026-10-05 20:00:00',status:1},
+    {erpSessionId:'402',date:'2026-10-08',startsAt:'2026-10-08 18:30:00',endsAt:'2026-10-08 20:00:00',status:1}]})});
+  try {
+    const initial=await service.getTeacherJourneyPlan({classId:'2139',reviewer});
+    assert.equal(initial.revision,0);assert.equal(initial.highestKnownSession,0);
+    const schedule=await service.getTeacherErpSchedule({classId:'2139',reviewer});
+    await service.saveTeacherJourneyPlan({classId:'2139',totalSessions:2,testSessionNumbers:[2],
+      sessionDates:[{sessionNumber:1,erpSessionId:'401',date:'2026-10-05'},{sessionNumber:2,erpSessionId:'402',date:'2026-10-08'}],
+      expectedRevision:0,expectedScheduleFingerprint:schedule.fingerprint,reviewer});
+    const overview=await service.getCourseOverview({classId:'2139',reviewer});
+    assert.equal(overview.sessions.length,2);assert.equal(overview.counts.assignments,0);
+    assert.equal(overview.students.length,3);assert.ok(overview.students.every(student=>student.cells.length===2));
+    assert.equal(new Set(overview.students.map(student=>student.studentRef)).size,3);
+    assert.equal(overview.rosterCoverage,'mapping_unverified');
+    // Nguồn Test giả đúng các field được reader dùng: kiểm SQL tổng hợp và Writing đến sau.
+    await database.exec(`CREATE SCHEMA assessment;
+      CREATE TABLE assessment.test_definition (slug text PRIMARY KEY,title text);
+      CREATE TABLE assessment.term_test_roster (test_slug text,erp_course_class_id bigint,student_ref uuid,erp_student_contact_id bigint);
+      CREATE TABLE assessment.term_test_temporary_student (test_slug text,erp_course_class_id bigint,student_ref uuid,temporary_student_id bigint,active boolean);
+      CREATE TABLE assessment.term_test_attempt (id uuid PRIMARY KEY,test_slug text,erp_course_class_id bigint,erp_student_contact_id bigint,
+        completed_at timestamptz,writing_submitted_at timestamptz,combined_result jsonb);
+      CREATE TABLE assessment.term_test_writing_grading_final (attempt_id uuid,status text,writing_score numeric);
+      CREATE TABLE assessment.mini_test_result (test_slug text,erp_course_class_id bigint,erp_student_contact_id bigint,result jsonb,updated_at timestamptz);
+      INSERT INTO assessment.test_definition VALUES ('term-test-2','Term Test giả');
+      INSERT INTO assessment.term_test_attempt VALUES
+        ('31000000-0000-4000-8000-000000000001','term-test-2',2139,9001,now(),now(),'{"reading":{"correct":28,"total":40}}'),
+        ('31000000-0000-4000-8000-000000000002','term-test-2',2139,9002,now(),now(),'{"reading":{"correct":30,"total":40}}');
+      INSERT INTO assessment.term_test_writing_grading_final VALUES ('31000000-0000-4000-8000-000000000002','ready',6);
+      UPDATE learning.class_journey_plan SET test_sources='[{"sessionNumber":2,"testSlug":"term-test-2"}]' WHERE erp_course_class_id=2139;`);
+    let bulkQueries=0;
+    const testReader=createLearningTestResultReader({pool:poolFrom(database,()=>{bulkQueries+=1;})});
+    const results=await testReader.readClass({classId:'2139',studentRefs:overview.students.map(student=>student.studentRef),testSlugs:['term-test-2']});
+    assert.equal(bulkQueries,1);assert.equal(results.length,2);
+    const testService=createLearningService({pool:poolFrom(database),testResultReader:testReader});
+    const testOverview=await testService.getCourseOverview({classId:'2139',reviewer});
+    const first=testOverview.students.find(student=>student.studentRef==='60000000-0000-4000-8000-000000000001');
+    assert.equal(first.cells[1].testResult.reading.correct,28);assert.equal(first.cells[1].testResult.writing.status,'pending');
+    await database.exec(`INSERT INTO assessment.term_test_writing_grading_final VALUES ('31000000-0000-4000-8000-000000000001','ready',6.5);`);
+    const updated=await testService.getCourseOverview({classId:'2139',reviewer});
+    assert.equal(updated.students.find(student=>student.studentRef===first.studentRef).cells[1].testResult.writing.score,6.5);
+    await database.exec(`ALTER TABLE mapping.erp_class_membership_snapshot ADD COLUMN registration_status text;
+      ALTER TABLE mapping.erp_class_membership_snapshot ADD COLUMN source_state text;
+      INSERT INTO mapping.erp_class_membership_snapshot VALUES (2139,9001,'active','active'),(2139,9002,'on_hold','active'),(2139,9003,'dropped','missing');`);
+    const reduced=await testService.getCourseOverview({classId:'2139',reviewer});
+    assert.equal(reduced.counts.currentStudents,1);assert.equal(reduced.rosterCoverage,'erp_snapshot');
+    const unauthorized={email:'other@example.test',canAccessAllClasses:false};
+    for(const method of ['getTeacherJourneyPlan','getTeacherErpSchedule','getCourseOverview']) {
+      await assert.rejects(()=>service[method]({classId:'2139',reviewer:unauthorized}),error=>error.code==='CLASS_ACCESS_DENIED');
+    }
+  } finally {await database.close();}
 });
 
 test('dashboard live trả đúng snapshot theo assignment và không lộ sang lớp không được cấp quyền', async () => {
@@ -1016,6 +1108,39 @@ test('quiz 40 câu vẫn ghi đủ dữ liệu bằng bốn lượt trao đổi 
       WHERE run.submission_id = '24000000-0000-4000-8000-000000000007') AS grading;
   `);
   assert.deepEqual(counts.rows[0], { responses: 40, grading: 40 });
+  const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
+  const analytics=await service.getQuestionAnalytics({assignmentId,reviewer});
+  assert.equal(analytics.items.length,40);assert.equal(analytics.submittedCount,1);
+  assert.ok(analytics.items.every(item=>item.counts.correct===1&&item.counts.graded===1));
+  await assert.rejects(()=>service.getQuestionAnalytics({assignmentId,
+    reviewer:{email:'outside@example.test',canAccessAllClasses:false}}),
+    error=>error instanceof LearningError&&error.code==='ASSIGNMENT_ACCESS_DENIED');
+  // Tạo lần chấm lại trên DB giả; bản hoàn tất mới nhất thay điểm cũ, không tăng mẫu số.
+  await database.exec(`INSERT INTO learning.grading_run (id,submission_id,grader_version,operation_key,idempotency_key,status,result_json,completed_at)
+    SELECT '28000000-0000-4000-8000-000000000001',submission_id,2,'fixture-regrade-op','fixture-regrade-idem',status,result_json,now()+interval '1 second'
+    FROM learning.grading_run WHERE submission_id='24000000-0000-4000-8000-000000000007' AND grader_version=1;
+    INSERT INTO learning.grading_result_item (grading_run_id,item_version_id,raw_answer,normalized_answer,expected_answer,answer_state,verdict,score_earned,max_score)
+    SELECT '28000000-0000-4000-8000-000000000001',item_version_id,raw_answer,normalized_answer,expected_answer,answer_state,
+      CASE WHEN item_version_id='26000000-0000-4000-8000-000000000001' THEN 'incorrect' ELSE verdict END,
+      CASE WHEN item_version_id='26000000-0000-4000-8000-000000000001' THEN 0 ELSE score_earned END,max_score
+    FROM learning.grading_result_item WHERE grading_run_id=(SELECT id FROM learning.grading_run
+      WHERE submission_id='24000000-0000-4000-8000-000000000007' AND grader_version=1);`);
+  const regraded=await service.getQuestionAnalytics({assignmentId,reviewer});
+  assert.equal(regraded.items[0].counts.incorrect,1);assert.equal(regraded.items[0].counts.correct,0);
+  assert.equal(regraded.items[0].counts.graded,1);assert.equal(regraded.submittedCount,1);
+  assert.ok(!JSON.stringify(regraded).includes('expectedOptionId'));
+  // Làm lại có lượt mới: bỏ bài cũ khỏi mẫu số, rồi chỉ đếm bài nộp hiện hành.
+  await database.query(`UPDATE learning.attempt SET status='superseded' WHERE attempt_token=$1::uuid`,[attempt.attemptToken]);
+  const retake=await service.startAttempt({publicToken,studentRef,clientIdempotencyKey:crypto.randomUUID(),identityConfirmed:true});
+  assert.equal((await service.getQuestionAnalytics({assignmentId,reviewer})).submittedCount,0);
+  const retakeResponses=Object.fromEntries(items.map(item=>[item.itemVersionId,'B']));
+  await service.saveDraft({attemptToken:retake.attemptToken,revision:1,definitionHash:retake.definitionHash,responses:retakeResponses});
+  const retakeInput={attemptToken:retake.attemptToken,submissionId:crypto.randomUUID(),definitionHash:retake.definitionHash,
+    draftRevision:1,responses:retakeResponses};
+  await service.submit(retakeInput);await service.submit(retakeInput);
+  const canonical=await service.getQuestionAnalytics({assignmentId,reviewer});
+  assert.equal(canonical.submittedCount,1);
+  assert.ok(canonical.items.every(item=>item.counts.graded===1&&item.counts.incorrect===1));
   await database.close();
 });
 

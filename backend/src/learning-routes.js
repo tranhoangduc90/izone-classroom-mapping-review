@@ -1,10 +1,12 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { LearningError, createLearningService } from './learning-service.js';
 import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
-import { createLearningDemoGrant } from './learning-demo-grant.js';
+import { createLearningDemoGrant,createLearningDraftDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
+import {createLearningFormDraftService} from './learning-form-drafts.js';
+import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -85,8 +87,12 @@ const publishQuizSchema = z.object({
   }
 });
 const dashboardQuerySchema = z.object({ assignment: uuidSchema }).strict();
+const journeyContextQuerySchema = z.object({assignment:uuidSchema.optional(),
+  classId:z.string().regex(/^\d{1,18}$/u).optional()}).strict()
+  .refine(value=>Boolean(value.assignment)!==Boolean(value.classId),'Chọn đúng một lớp hoặc phiếu.');
 const teacherJourneyPlanSchema = z.object({
-  assignmentId: uuidSchema,
+  assignmentId: uuidSchema.optional(),
+  classId:z.string().regex(/^\d{1,18}$/u).optional(),
   totalSessions: z.number().int().min(1).max(100),
   testSessionNumbers: z.array(z.number().int().min(1).max(100)).max(100),
   testSources: z.array(z.object({
@@ -98,8 +104,10 @@ const teacherJourneyPlanSchema = z.object({
     date: z.iso.date(),
     erpSessionId: z.string().regex(/^\d{1,18}$/).optional()
   }).strict()).max(100).optional(),
-  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  expectedScheduleFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional()
 }).strict().superRefine((value, context) => {
+  if(Boolean(value.assignmentId)===Boolean(value.classId)) context.addIssue({code:'custom',path:['classId'],message:'Chọn đúng một lớp hoặc phiếu.'});
   const numbers = value.testSessionNumbers;
   if (numbers.some((number, index) => number > value.totalSessions
     || (index > 0 && number <= numbers[index - 1]))) {
@@ -186,9 +194,23 @@ function attemptRateKey(req) {
 }
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
-  testSourceReader = null, testResultReader = null, demoSourceSecret = '' }) {
+  testSourceReader = null, testResultReader = null, demoSourceSecret = '', logger = null }) {
   const router = express.Router();
+  // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
+  router.use((req,res,next)=>{
+    if(logger?.info&&/^\/teacher\/(erp-schedule|journey-plan|form-drafts|classes\/|assignments\/)/u.test(req.path)) {
+      const started=performance.now(),correlation=randomUUID();
+      res.on('finish',()=>{
+        try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
+          operation:typeof req.route?.path==='string'?req.route.path:'teacher_request',method:req.method,
+          status:res.statusCode,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
+        catch { /* Lỗi logger không được làm hỏng nộp bài hoặc mutation đã commit. */ }
+      });
+    }
+    next();
+  });
   const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader });
+  const drafts=createLearningFormDraftService({pool});
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
     limit: 12_000,
@@ -246,6 +268,11 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const expected = Buffer.from(demoSourceSecret);
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
       return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+    }
+    if(req.body?.grant) {
+      const grant=verifyLearningDemoGrant(req.body.grant,demoSourceSecret);
+      if(!grant||grant.kind!=='draft') return res.status(403).json({ok:false,error:'DRAFT_PREVIEW_DENIED'});
+      res.set('Cache-Control','no-store');return res.json({ok:true,source:await drafts.demoSource({grant})});
     }
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
@@ -365,30 +392,30 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   router.get('/teacher/journey-plan', authenticate, asyncRoute(async (req, res) => {
-    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_JOURNEY_PLAN_QUERY');
+    const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_JOURNEY_PLAN_QUERY');
     if (!input) return;
     const plan = await service.getTeacherJourneyPlan({
-      assignmentId: input.assignment, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, plan });
   }));
 
   router.get('/teacher/erp-schedule', authenticate, asyncRoute(async (req, res) => {
-    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_ERP_SCHEDULE_QUERY');
+    const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_ERP_SCHEDULE_QUERY');
     if (!input) return;
     const schedule = await service.getTeacherErpSchedule({
-      assignmentId: input.assignment, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, schedule });
   }));
 
   router.get('/teacher/test-sources', authenticate, asyncRoute(async (req, res) => {
-    const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_TEST_SOURCES_QUERY');
+    const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_TEST_SOURCES_QUERY');
     if (!input) return;
     const sources = await service.getTeacherTestSources({
-      assignmentId: input.assignment, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, sources });
@@ -400,6 +427,89 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const plan = await service.saveTeacherJourneyPlan({ ...input, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, plan });
+  }));
+
+  router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
+  router.get('/teacher/form-drafts/review-queue',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.reviewQueue({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/form-drafts/:id/review',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.getReview({...input,reviewer:req.reviewer})});
+  }));
+  for(const action of ['request-review','approve','publish','preview-grant']) router.post('/teacher/form-drafts/:id/'+action,authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),
+      ...(action==='approve'?{expectedHash:z.string().regex(/^[0-9a-f]{64}$/)}:{}),
+      ...(action==='publish'?{operationId:uuidSchema}:{})}).strict(),req.body,res,'INVALID_DRAFT_ACTION');if(!input)return;
+    res.set('Cache-Control','no-store');
+    const args={...path,...input,reviewer:req.reviewer};
+    if(action==='request-review') return res.json({ok:true,draft:await drafts.requestReview(args)});
+    if(action==='approve') return res.json({ok:true,draft:await drafts.approve(args)});
+    if(action==='publish') return res.status(201).json({ok:true,published:await drafts.publish(args)});
+    if(!demoSourceSecret) return res.status(503).json({ok:false,message:'Chưa cấu hình xem thử.'});
+    const draft=await drafts.get(args);
+    if(draft.revision!==input.expectedRevision) return res.status(409).json({ok:false,error:'DRAFT_STALE',message:'Nháp đã đổi; tải và đối chiếu lại.'});
+    return res.json({ok:true,grant:createLearningDraftDemoGrant({draft,reviewer:req.reviewer,secret:demoSourceSecret})});
+  }));
+  router.get('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');
+    if(!input) return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.list({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/form-drafts/:id',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!input) return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.get({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
+      definition:z.record(z.string(),z.unknown()),gradingKey:z.record(z.string(),z.unknown()),operationId:uuidSchema}).strict(),req.body,res,'INVALID_FORM_DRAFT');
+    if(!input) return;
+    const draft=await drafts.create({...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
+  }));
+  router.put('/teacher/form-drafts/:id',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path) return;
+    const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),sessionNumber:z.number().int().min(1).max(100),
+      definition:z.record(z.string(),z.unknown()),gradingKey:z.record(z.string(),z.unknown())}).strict(),req.body,res,'INVALID_FORM_DRAFT');
+    if(!input) return;
+    const draft=await drafts.save({...path,...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.json({ok:true,draft});
+  }));
+  router.post('/teacher/form-drafts/copy',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({assignmentId:uuidSchema,classId:z.string().regex(/^\d{1,18}$/u),
+      sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_COPY');if(!input) return;
+    const draft=await drafts.copyAssignment({...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
+  }));
+  router.post('/teacher/form-drafts/:id/import-preview',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path) return;
+    const input=parseOrReply(z.object({text:z.string().max(240000),expectedRevision:z.number().int().positive()}).strict(),req.body,res,'INVALID_DRAFT_IMPORT');
+    if(!input) return;
+    const preview=await drafts.previewImport({...path,...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.json({ok:true,preview});
+  }));
+
+  router.get('/teacher/classes/:classId/overview', authenticate, asyncRoute(async (req,res) => {
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/)}).strict(),req.params,res,'INVALID_CLASS');
+    if (!input) return;
+    const overview=await service.getCourseOverview({...input,reviewer:req.reviewer});
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,overview});
+  }));
+
+  router.get('/teacher/assignments/:assignmentId/question-analytics', authenticate, asyncRoute(async (req,res) => {
+    const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');
+    if (!input) return;
+    const analytics=await service.getQuestionAnalytics({...input,reviewer:req.reviewer});
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,analytics});
+  }));
+
+  router.get('/teacher/classes/:classId/sessions/:sessionNumber/students/:studentRef', authenticate, asyncRoute(async (req,res) => {
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),
+      sessionNumber:z.coerce.number().int().min(1).max(100),studentRef:uuidSchema}).strict(),req.params,res,'INVALID_JOURNEY_DETAIL');
+    if (!input) return;
+    const detail=await service.getCourseSessionDetail({...input,reviewer:req.reviewer});
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,detail});
   }));
 
   router.get('/teacher/dashboard', authenticate, asyncRoute(async (req, res) => {
@@ -483,8 +593,9 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   router.use((error, _req, res, next) => {
-    if (!(error instanceof LearningError)) return next(error);
-    return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message });
+    if (!(error instanceof LearningError) && !(error instanceof FormAuthoringError)) return next(error);
+    return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message,
+      ...(error instanceof FormAuthoringError?{issues:error.issues}:{}) });
   });
 
   return router;

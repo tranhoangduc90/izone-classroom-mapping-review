@@ -46,3 +46,34 @@ test('dòng lịch khác lớp hoặc phản hồi bị cắt không được d�
   });
   await assert.rejects(() => reader('1294'), /ERP_SCHEDULE_ROW_INVALID/);
 });
+
+test('E02/E06: cùng lớp đang đọc được gộp, refresh đọc mới; lỗi/deadline giải phóng lượt đang chờ',async()=>{
+  let calls=0,fail=false;
+  const reader=createLearningErpScheduleReader({url:'https://metabase.example.test',username:'reader',password:'fixture',timeoutMs:2000,
+    fetchImpl:async(url,{signal})=>{
+      calls++;await new Promise(resolve=>setTimeout(resolve,15));
+      if(fail)throw new Error('UPSTREAM_FIXTURE');
+      assert.ok(signal instanceof AbortSignal);
+      return {ok:true,json:async()=>String(url).endsWith('/api/session')?{id:'fixture'}:{data:{cols:columns,rows:[[1,1294,'2026-09-14 18:30:00','2026-09-14 21:00:00',0]]}}};
+    }});
+  const both=await Promise.all([reader('1294'),reader('1294')]);assert.equal(calls,2);assert.deepEqual(both[0],both[1]);
+  await reader('1294');assert.equal(calls,4);
+  fail=true;await assert.rejects(()=>reader('1294'),/UPSTREAM_FIXTURE/);fail=false;await reader('1294');assert.equal(calls,7);
+  const hanging=createLearningErpScheduleReader({url:'https://metabase.example.test',username:'reader',password:'fixture',timeoutMs:2000,
+    fetchImpl:(_url,{signal})=>new Promise((_resolve,reject)=>{signal.addEventListener('abort',()=>reject(signal.reason),{once:true});})});
+  // Giữ event loop tới deadline thật; AbortSignal.timeout tự unref timer.
+  const keep=setTimeout(()=>{},3000);try{await assert.rejects(()=>hanging('1294'),e=>e.name==='TimeoutError');}finally{clearTimeout(keep);}
+});
+
+test('E04: ngày/giờ sai và lịch bị cắt quá 200 dòng bị từ chối',async()=>{
+  for(const row of [[1,1294,'2026-02-30 18:30:00','2026-02-30 21:00:00',0],
+    [1,1294,'2026-09-14 24:00:00','2026-09-15 25:00:00',0],[1,1294,'2026-09-14 18:30:00','2026-09-14 18:00:00',0]]){
+    const reader=createLearningErpScheduleReader({url:'https://metabase.example.test',username:'reader',password:'fixture',
+      fetchImpl:async url=>({ok:true,json:async()=>String(url).endsWith('/api/session')?{id:'fixture'}:{data:{cols:columns,rows:[row]}}})});
+    await assert.rejects(()=>reader('1294'),/ERP_SCHEDULE_ROW_INVALID/);
+  }
+  const capped=createLearningErpScheduleReader({url:'https://metabase.example.test',username:'reader',password:'fixture',
+    fetchImpl:async url=>({ok:true,json:async()=>String(url).endsWith('/api/session')?{id:'fixture'}:{data:{cols:columns,
+      rows:Array.from({length:201},(_,index)=>[index+1,1294,'2026-09-14 18:30:00','2026-09-14 21:00:00',0])}}})});
+  await assert.rejects(()=>capped('1294'),/ERP_SCHEDULE_RESPONSE_INVALID/);
+});
