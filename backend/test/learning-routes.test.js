@@ -248,3 +248,15 @@ test('nhiều học viên cùng IP không chia chung quota start/draft; một at
   });
   assert.equal(otherAttempt.status, 400);
 });
+
+// Payload phải qua cùng cổng danh tính Journey; không nhận lớp tùy ý hoặc người chưa xác nhận.
+test('student session detail rejects invalid identity/session before database',async()=>{
+  const app=appWithPool(failIfQueriedPool());
+  for(const value of [{publicToken:'invalid',studentRef:'invalid',sessionNumber:2,identityConfirmed:true},
+    {publicToken:'11111111-1111-4111-8111-111111111111',studentRef:'22222222-2222-4222-8222-222222222222',sessionNumber:2,identityConfirmed:false},
+    {accessToken:'a'.repeat(40),sessionNumber:0},
+    {accessToken:'a'.repeat(40),sessionNumber:1,classId:'1294'}]) {
+    const r=await request(app).post('/api/learning/student/course-session-detail').send(value);
+    assert.equal(r.status,400);assert.equal(r.body.error,'INVALID_SESSION_DETAIL');
+  }
+});

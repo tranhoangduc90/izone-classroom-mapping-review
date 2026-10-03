@@ -1146,6 +1146,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
 ), session_rows AS (
   SELECT
     assignment.id,
+    assignment.public_token,
     session_numbers.session_number,
     COALESCE(test_event.title,
       CASE WHEN session_numbers.session_number = ANY(plan.test_session_numbers)
@@ -1165,6 +1166,14 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     student_status.attempt_status,
     student_status.completeness,
     student_status.grading_status,
+    (SELECT jsonb_build_object(
+      'correct',count(*) FILTER(WHERE item.verdict='correct' AND item.max_score>0),
+      'incorrect',count(*) FILTER(WHERE item.verdict='incorrect' AND item.max_score>0),
+      'graded',count(*) FILTER(WHERE item.verdict IN ('correct','incorrect') AND item.max_score>0))
+      FROM learning.grading_result_item AS item
+      WHERE item.grading_run_id=(SELECT run.id FROM learning.grading_run AS run
+        WHERE run.submission_id=student_status.submission_id AND run.status='complete'
+        ORDER BY run.completed_at DESC NULLS LAST,run.created_at DESC,run.id DESC LIMIT 1)) AS quiz_summary,
     student_status.submitted_at,
     student_status.attendance_status,
     CASE WHEN portal_job.status IS NULL THEN NULL ELSE jsonb_build_object(
@@ -1259,6 +1268,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
 ), sessions AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'assignmentId', id::text,
+    'publicToken', public_token::text,
     'sessionNumber', session_number,
     'sessionDate', session_date,
     'sessionKind', session_kind,
@@ -1268,6 +1278,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     'attemptStatus', attempt_status,
     'completeness', completeness,
     'gradingStatus', grading_status,
+    'quizSummary', quiz_summary,
     'submittedAt', submitted_at,
     'attendanceStatus', attendance_status,
     'portalSync', portal_sync,

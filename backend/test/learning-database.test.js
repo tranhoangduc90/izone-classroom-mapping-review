@@ -1835,3 +1835,36 @@ test('nhận xét Speaking gửi đúng học viên, đọc lại và chặn g�
     .teacherSessionFeedback.noteText, assignedTeacher.noteText);
   await database.close();
 });
+
+// Đọc bài đã nộp theo link/tên hiện có; không ghi thêm attempt, điểm danh hay job.
+test('student history regression: full public questions/responses, assigned link and identity isolation', async () => {
+  const {database,service}=await setupDatabase();
+  try {
+    const published=await service.publishReflectionForm({reviewer:{email:'teacher@example.test',canAccessAllClasses:false},
+      title:'Reading 3 + Writing 1',courseCode:'course-67',classId:'2139',sessionNumber:3,opensAt:null,closesAt:null,
+      items:[{libraryItemId:'10000000-0000-4000-8000-000000000001',checkpoint:1,required:true},
+        {libraryItemId:'10000000-0000-4000-8000-000000000003',checkpoint:2,required:true}]});
+    const assignment=await service.getPublicAssignment(published.publicToken);
+    const studentRef=assignment.roster[0].studentRef,other=assignment.roster[1].studentRef;
+    const input={publicToken:published.publicToken,studentRef,identityConfirmed:true,sessionNumber:3};
+    await assert.rejects(()=>service.getStudentCourseSessionDetail(input),e=>e.code==='JOURNEY_SUBMISSION_NOT_READY');
+    const attempt=await service.startAttempt({publicToken:published.publicToken,studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()});
+    const responses=Object.fromEntries(assignment.definition.blocks.flatMap(b=>b.items).map((i,n)=>[i.itemVersionId,'Dòng '+n+'\nTiếng Việt rất dài <script>alert(1)</script>']));
+    const submissionId=crypto.randomUUID();
+    await service.submit({attemptToken:attempt.attemptToken,submissionId,definitionHash:published.definitionHash,draftRevision:0,responses});
+    const before=await database.query('SELECT (SELECT count(*)::int FROM learning.attempt) AS attempts,(SELECT count(*)::int FROM learning.outbox_job) AS jobs');
+    const journey=await service.getStudentCourseJourney(input);
+    assert.equal(journey.sessions[2].publicToken,published.publicToken);
+    const detail=await service.getStudentCourseSessionDetail(input);
+    assert.equal(detail.student.studentRef,studentRef);assert.equal(detail.classId,'2139');assert.equal(detail.sessionNumber,3);
+    assert.deepEqual(detail.responses,responses);assert.equal(detail.definition.blocks.flatMap(b=>b.items).length,2);
+    assert.equal(detail.submissionId,submissionId);assert.ok(detail.gradingItems.every(i=>!('expectedAnswer' in i)));
+    await assert.rejects(()=>service.getStudentCourseSessionDetail({...input,studentRef:other}),e=>e.code==='JOURNEY_SUBMISSION_NOT_READY');
+    await assert.rejects(()=>service.getStudentCourseSessionDetail({...input,studentRef:crypto.randomUUID()}),e=>e.code==='PROGRESS_LINK_INVALID');
+    await assert.rejects(()=>service.getStudentCourseSessionDetail({...input,sessionNumber:99}),e=>e.code==='JOURNEY_SESSION_NOT_FOUND');
+    await database.query("UPDATE learning.form_assignment SET status='closed' WHERE id=$1",[published.assignmentId]);
+    assert.deepEqual((await service.getStudentCourseSessionDetail(input)).responses,responses);
+    const after=await database.query('SELECT (SELECT count(*)::int FROM learning.attempt) AS attempts,(SELECT count(*)::int FROM learning.outbox_job) AS jobs');
+    assert.deepEqual(after.rows,before.rows);
+  } finally {await database.close();}
+});
