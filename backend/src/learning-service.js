@@ -673,6 +673,29 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       return journey;
     },
 
+    // Link/tên được kiểm bằng cùng nguồn Journey; chỉ trả bài nộp của đúng lớp/người/buổi.
+    // Không tạo attempt, đọc khóa chấm, gửi Portal hoặc thay chính sách mở phần.
+    async getStudentCourseSessionDetail(input) {
+      const journey = await this.getStudentCourseJourney(input);
+      const session = journey.sessions.find(item => item.sessionNumber === input.sessionNumber);
+      if (!session) throw new LearningError('JOURNEY_SESSION_NOT_FOUND', 'Không tìm thấy buổi học trong hành trình.', 404);
+      if (session.completeness !== 'complete') throw new LearningError('JOURNEY_SUBMISSION_NOT_READY',
+        'Buổi này chưa có phiếu hoàn tất; hãy mở Progress Log theo lịch học.', 409);
+      const result = await pool.query(fetchCourseSessionDetailSql,
+        [journey.class.classId, input.sessionNumber, journey.student.studentRef]);
+      if (result.rowCount > 1) throw new LearningError('JOURNEY_SESSION_CONFLICT',
+        'Buổi có nhiều phiếu; giảng viên cần đối chiếu trước khi mở bài.', 409);
+      const row = assertSingleRow(result, 'JOURNEY_SUBMISSION_NOT_READY', 'Chưa đọc được bài đã nộp.', 404);
+      if (row.assignment_id !== session.assignmentId || row.student_ref !== journey.student.studentRef
+        || !row.submission_id) throw new LearningError('JOURNEY_DETAIL_MISMATCH',
+        'Dữ liệu buổi học đã thay đổi; hãy tải lại hành trình.', 409);
+      return {classId:journey.class.classId, student:journey.student, sessionNumber:input.sessionNumber,
+        sessionDate:session.sessionDate, status:'complete', definition:parseFormDefinition(asObject(row.public_definition)),
+        submissionId:row.submission_id, responses:asObject(row.responses), gradingItems:asArray(row.grading_items),
+        teacherSessionFeedback:session.teacherSessionFeedback || null,
+        attendanceStatus:session.attendanceStatus, portalSync:session.portalSync};
+    },
+
     async listTeacherOptions({ email, canAccessAllClasses }) {
       const result = await pool.query(listLearningTeacherOptionsSql, [email, canAccessAllClasses]);
       return asObject(result.rows[0]?.response || { classes: [], assignments: [] });
@@ -1108,7 +1131,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       if (result.rowCount>1) throw new LearningError('JOURNEY_SESSION_CONFLICT','Buổi có nhiều phiếu; cần đối chiếu trước khi mở bài.',409);
       const row=result.rows[0];
       return {classId,student:{studentRef,name:student.name,discriminator:student.discriminator},sessionNumber,
-        status:cell.status,testResult:cell.testResult,testCoverage:overview.testCoverage,
+        status:cell.status,sessionDate:overview.sessions.find(item=>item.sessionNumber===sessionNumber)?.sessionDate||null,
+        testResult:cell.testResult,testCoverage:overview.testCoverage,
         definition:row?parseFormDefinition(asObject(row.public_definition)):null,
         submissionId:row?.submission_id||null,responses:asObject(row?.responses),
         gradingItems:asArray(row?.grading_items),teacherSessionFeedback:row?.teacher_session_feedback||null};
