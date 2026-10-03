@@ -55,6 +55,12 @@ const studentJourneySchema = z.union([
     identityConfirmed: z.literal(true)
   }).strict()
 ]);
+const studentSessionDetailSchema = z.union([
+  z.object({accessToken:z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/),
+    sessionNumber:z.number().int().min(1).max(100)}).strict(),
+  z.object({publicToken:uuidSchema,studentRef:uuidSchema,identityConfirmed:z.literal(true),
+    sessionNumber:z.number().int().min(1).max(100)}).strict()
+]);
 const publishReflectionSchema = z.object({
   title: z.string().trim().min(3).max(200),
   courseCode: z.string().trim().max(80).optional().default(''),
@@ -358,6 +364,14 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const journey = await service.getStudentCourseJourney(input);
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, journey });
+  }));
+
+  router.post('/student/course-session-detail', journeyLimiter, asyncRoute(async (req, res) => {
+    const input = parseOrReply(studentSessionDetailSchema, req.body, res, 'INVALID_SESSION_DETAIL');
+    if (!input) return;
+    const detail = await service.getStudentCourseSessionDetail(input);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ok:true, detail});
   }));
 
   router.get('/teacher/options', authenticate, asyncRoute(async (req, res) => {
