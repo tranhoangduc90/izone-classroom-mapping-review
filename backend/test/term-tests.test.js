@@ -865,6 +865,9 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
           attempt_token: attemptToken,
           writing_task_1: params[1],
           writing_task_2: params[2],
+          writing_draft_revision: 1,
+          writing_accepted: true,
+          writing_reason: 'saved',
           writing_started_at: submittedAt,
           writing_updated_at: submittedAt,
           writing_submitted_at: params[3] === 'submit' ? submittedAt : null
@@ -883,6 +886,7 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
         completed_at: submittedAt,
         writing_task_1: task1,
         writing_task_2: task2,
+        writing_draft_revision: 1,
         writing_started_at: submittedAt,
         writing_updated_at: submittedAt,
         writing_submitted_at: submittedAt,
@@ -895,11 +899,12 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
   const saved = await request(app)
     .post('/api/term-tests/writing')
     .set('Origin', 'https://tranhoangduc90.github.io')
-    .send({ attemptToken, action: 'submit', task1, task2 });
+    .send({ attemptToken, action: 'submit', task1, task2, baseRevision: 0 });
   assert.equal(saved.status, 200);
   assert.deepEqual(saved.body.writing, {
     task1,
     task2,
+    revision: 1,
     started: true,
     submitted: true,
     deadlineAt: null,
@@ -907,10 +912,12 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
     timedOut: false,
     updatedAt: submittedAt,
     submittedAt,
-    grading: null
+    grading: null,
+    accepted: true,
+    reason: 'saved'
   });
   assert.deepEqual(pool.calls[0].params, [attemptToken]);
-  assert.deepEqual(pool.calls[1].params, [attemptToken, task1, task2, 'submit', 60]);
+  assert.deepEqual(pool.calls[1].params, [attemptToken, task1, task2, 'submit', 60, 0]);
 
   const result = await request(app)
     .post('/api/term-tests/result')
@@ -919,6 +926,7 @@ test('Writing được lưu theo attempt token và trả lại nguyên văn khi 
   assert.equal(result.status, 200);
   assert.equal(result.body.writing.task1, task1);
   assert.equal(result.body.writing.task2, task2);
+  assert.equal(result.body.writing.revision, 1);
   assert.equal(result.body.writing.submitted, true);
 });
 
@@ -932,7 +940,8 @@ test('không lưu Writing nếu attempt token chưa có Reading hoàn chỉnh', 
       attemptToken: '00000000-0000-4000-8000-000000000099',
       action: 'draft',
       task1: 'Task 1',
-      task2: 'Task 2'
+      task2: 'Task 2',
+      baseRevision: 0
     });
   assert.equal(response.status, 404);
   assert.equal(response.body.error, 'WRITING_ATTEMPT_NOT_FOUND');
