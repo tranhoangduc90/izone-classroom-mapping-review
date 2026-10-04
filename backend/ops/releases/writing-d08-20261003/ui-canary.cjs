@@ -22,10 +22,11 @@ function validatePayload(payload,identity) {
 
 // Nhận trạng thái cuối và bridge sở hữu bài giả; luôn lưu lỗi trước khi ném ra ngoài.
 // Pending/cleanup sai giữ unknown, không báo đạt; server thử luôn được đóng.
-async function finalizeReceipt({receipt,bridge,identity,scope,pending,server,evidenceDir,errors}) {
+async function finalizeReceipt({receipt,bridge,identity,scope,pending,server,evidenceDir,errors,contextsClosed=true}) {
   let failure=null;
-  receipt.pending_http=pending;receipt.contexts_closed=true;
+  receipt.pending_http=pending;receipt.contexts_closed=contextsClosed;
   try {
+    assert.equal(contextsClosed,true,'Chrome chưa đóng chắc chắn, giữ fixture để đối soát');
     assert.ok(Number.isSafeInteger(pending)&&pending===0,'HTTP chưa dừng, không được cleanup');
     assert.equal(typeof bridge.cleanup,'function','Thiếu primitive cleanup của chủ bài giả');
     const cleanup=await bridge.cleanup();receipt.cleanup=cleanup;
@@ -46,6 +47,25 @@ async function finalizeReceipt({receipt,bridge,identity,scope,pending,server,evi
   }
   if(failure)throw failure;
   return receipt;
+}
+
+// Đóng từng context/browser có hạn chờ; lỗi vẫn phải ghi receipt cuối.
+// Timeout chỉ giữ unknown, không chứng minh process đã dừng hoặc cho cleanup.
+async function closeContexts(contexts,browser,evidenceDir,timeoutMs=10000) {
+  const failures=[];
+  async function bounded(operation,label) {
+    let timer;
+    try {
+      await Promise.race([Promise.resolve().then(operation),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+' timeout')),timeoutMs);})]);
+    } catch(error) {failures.push({label,name:error.name,message:error.message});}
+    finally {clearTimeout(timer);}
+  }
+  for(let i=0;i<contexts.length;i++) {
+    await bounded(()=>contexts[i].tracing.stop({path:path.join(evidenceDir,'trace-'+i+'.zip')}),'trace '+i);
+    await bounded(()=>contexts[i].close(),'context '+i);
+  }
+  if(browser)await bounded(()=>browser.close(),'browser');
+  return {closed:failures.length===0,errors:failures};
 }
 
 async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
@@ -187,10 +207,11 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   }catch(error){receipt.error={name:error.name,message:error.message,stack:error.stack};throw error;}
   finally {
     if(releaseBlocked)releaseBlocked();
-    for(let i=0;i<contexts.length;i++){await contexts[i].tracing.stop({path:path.join(evidenceDir,'trace-'+i+'.zip')}).catch(()=>{});await contexts[i].close();}
-    await browser?.close();for(let i=0;pending&&i<200;i++)await new Promise(resolve=>setTimeout(resolve,50));
-    await finalizeReceipt({receipt,bridge,identity,scope,pending,server,evidenceDir,errors});
+    const closing=await closeContexts(contexts,browser,evidenceDir);
+    receipt.context_close_errors=closing.errors;
+    for(let i=0;pending&&i<200;i++)await new Promise(resolve=>setTimeout(resolve,50));
+    await finalizeReceipt({receipt,bridge,identity,scope,pending,server,evidenceDir,errors,contextsClosed:closing.closed});
   }
   return receipt;
 }
-module.exports={runUiCanary,validatePayload,hash,finalizeReceipt};
+module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts};

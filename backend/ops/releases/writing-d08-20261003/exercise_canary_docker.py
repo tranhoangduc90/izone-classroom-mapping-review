@@ -18,7 +18,7 @@ def command(argv, text=None):
     return value.stdout
 
 
-def exercise(manifest, core):
+def exercise(manifest, core, ui_driver=None):
     owner = uuid.uuid4().hex
     name = 'izone-d08-canary-fixture-' + owner[:12]
     labels = {'codex.task':'writing-d08-canary-fixture','codex.fixture':owner}
@@ -99,8 +99,12 @@ process.on('SIGTERM',()=>server.close(async()=>{await pool.end();process.exit(0)
                 if not r.inspect(apiid)['State']['Running']: raise RuntimeError('fixture_api_start_failed')
                 time.sleep(1)
             else: raise RuntimeError('fixture_api_not_ready')
-            output=command(['docker','exec','-i','-w','/app',apiid,'node','--input-type=module','-'],c.node_source(item,core))
-            result=json.loads(output)
+            if ui_driver is None:
+                output=command(['docker','exec','-i','-w','/app',apiid,'node','--input-type=module','-'],c.node_source(item,core))
+                result=json.loads(output)
+            else:
+                # Callback chỉ nhận ID/label object riêng; production names không được dùng.
+                result=ui_driver(manifest,item,apiid,pgid,owner)
             if result['status']!='passed': raise RuntimeError('fixture_canary_not_passed')
             counts=json.loads(command(['docker','exec',apiid,'node','-e',ping]))
             if counts!={'grading':0,'portal':0}: raise RuntimeError('fixture_external_writer_called:'+json.dumps(counts))
