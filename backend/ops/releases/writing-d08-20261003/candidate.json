@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "baseline_checkpoint": "ea0ff655dbf748479de3ef051439e7a2e902a097",
+  "baseline_checkpoint": "df03b4698d2b9e956c92db6a695f1018a78d1fe4",
   "source_fix": "d836688632006014091039db9bd8dfbbf3791aba",
-  "pages_candidate": "4fdf65f3fd67d1501b6f1eb053e513457e0b43e0",
+  "pages_candidate": "dc824fa17bac0944788dff75814face733beb859",
   "targets": [
     {
       "name": "mapping-review-api",
-      "base_image": "sha256:1fdaca6048a223d5b6db2e8247b65964662767b2de6e61a631176acb5fcb11a2",
-      "candidate_image": "sha256:7ed23cc015f060c1baa29d42422ae8b6ef7489c35b9b0dd32d01c531c34a0c8d",
+      "base_image": "sha256:1ae4dccc1dfe05809985a6eacbd17a61588547dcd6c7fe61215e07efd4ae42c2",
+      "candidate_image": "sha256:aca6b9dab1234645f519d8f3df27c44c80909a557ad29a9e2be14954b7042652",
       "source_hashes": {
         "src/app.js": "32e6f3c50050a5eb67600324b8ddcbfbcff1e2034c2c7a2d3baf826f3c11694e",
         "src/app.test.js": "297c6d14b345fe1d96c1ad56076f29b4eb27180652e2dd30061cf9283f80512a",
@@ -51,7 +51,7 @@
         "src/speaking-alerts.js": "f4a0091f72b0520eaf1a165b23975369522f1cc7dea7cd57b3c704ed8464d3dd",
         "src/speaking-catalog.js": "a3075f1c4ddefab5ff315876909f281b6d522f566e050028c594871e456e6324",
         "src/speaking-check-worker.js": "dd06d830cfa3ab6b682c01d18584a545367b71742e79f5a939031ea9d8781b4c",
-        "src/speaking-checker.js": "210138fc89c680d3842a539f022d122e8020fe0a8d5a1e788a43451609737531",
+        "src/speaking-checker.js": "21309a5500f9695c909328c091ed429eaea0331f337ab9f026953c86eaf7e51d",
         "src/speaking-classroom-copies.js": "db43e041abf3442ca1b1a4db3818463817c5976591c03a96340380c559f2465d",
         "src/speaking-docs-jobs.js": "a4d8e6c2b2f7a3afe00c19830e0f55767212d1596ba43d3f2f9d33cf8b19478b",
         "src/speaking-docs-notifier.js": "e3ea4ffd69342dba105b6294c9d8f00bed05b8975f062e636c04c91336196301",
@@ -59,8 +59,8 @@
         "src/speaking-doctor-worker.js": "ce69babf7d11bc6a64876a614ba4f4487aa6bf894da89e8038b793f4dc647c27",
         "src/speaking-grade-worker.js": "4a1d709f961b9bddf3a5194ffd81ce9466a2451f6d92464ed08cf8bbec97307c",
         "src/speaking-homework-routes.js": "ce5760e4fa8be396c153967b5c1cf3cd90ad54b94031cbb539f3e6c7189f540e",
-        "src/speaking-homework.js": "44a4ebe83f4f9200e1b6e12377de67d9cf014e98975d25de0197fd7e0ea345d3",
-        "src/speaking-practice-worker.js": "924010c7a369c3c41f88803b93ba7b2f89560618f61f9ff7c210ff85ca0cbd44",
+        "src/speaking-homework.js": "41f11b910a679c58bd88c1f2e2ff8e7fe5b1aa69edbbeec30d58a9e1d00283bc",
+        "src/speaking-practice-worker.js": "cb2899401c5c607f3e958a3f676391d57be33e73456cfc2c03455936562e299e",
         "src/speaking-share-reader.js": "88133ef3ad5744c3b46cc4580f3f22dfb1b4ba787a9b32199df6b7ad874954e5",
         "src/sql.js": "16c76201fffff6e09cd3f3a68070a82103de9e3ce738a75b02e8e76c315d1ea9",
         "src/teacher-class-access-sql.js": "3e8b48ccb15ef3f9e6015d5f79a41da0500e5a4a28a606ca26c651d963ed2372",
