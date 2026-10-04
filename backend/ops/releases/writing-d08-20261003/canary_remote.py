@@ -208,8 +208,8 @@ try {
  await pool.query(`INSERT INTO ${schema}.term_test_attempt
   (id,client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,
    erp_student_contact_id,student_name_snapshot,listening_answers,listening_result,
-   reading_answers,reading_result,combined_result,listening_submitted_at,completed_at)
-  VALUES($1::uuid,$1::uuid,$2,$3,$4,$5,$6,'D08 synthetic temporary','{}','{}','{}','{}','{}',now(),now())`,
+   reading_answers,reading_result,combined_result,listening_submitted_at,reading_submitted_at,completed_at)
+  VALUES($1::uuid,$1::uuid,$2,$3,$4,$5,$6,'D08 synthetic temporary','{}','{}','{}','{}','{}',now(),now(),now())`,
   [config.attempt_id,definition.slug,definition.version,config.course_id,config.marker,config.student_id]);
  const read=async()=>{
   const row=(await pool.query(`SELECT writing_task_1,writing_task_2,writing_draft_revision,test_slug,
@@ -246,13 +246,15 @@ def acceptance_path(value):
     for key in ('original_plan_digest','acceptance_digest','ui_ledger_sha256'):
         if not isinstance(value[key],str) or not re.fullmatch('[a-f0-9]{64}',value[key]):
             raise RuntimeError('acceptance_executor_digest_invalid')
-    if type(value['expected_generation']) is not int or value['expected_generation'] != 0:
+    if type(value['expected_generation']) is not int or value['expected_generation'] not in (0,2):
         raise RuntimeError('acceptance_executor_generation_conflict')
     return r.RELEASE_ROOT/value['release_run_id']/'acceptance.executor.json'
 
 
 def acquire_acceptance(value):
     path=acceptance_path(value)
+    if value['expected_generation']!=0:
+        raise RuntimeError('acceptance_resume_requires_cas')
     release=r.RELEASE_ROOT/(value['release_run_id']+'.json')
     if not release.is_file() or json.loads(release.read_text(encoding='utf-8')).get('status') != 'deployed_awaiting_validation':
         raise RuntimeError('acceptance_executor_release_not_deployed')
@@ -271,16 +273,16 @@ def acquire_acceptance(value):
 def require_acceptance(value):
     path=acceptance_path(value)
     state=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
-    if state.get('binding') != value or state.get('status') != 'api_passed' or state.get('generation') != 2:
+    if state.get('binding') != value or state.get('status') != 'api_passed' or state.get('generation') != value['expected_generation']+2:
         raise RuntimeError('acceptance_executor_not_passed_or_binding_changed')
     return state
 
 
 def complete_api_acceptance(value,passed):
     path=acceptance_path(value);state=json.loads(path.read_text(encoding='utf-8'))
-    if state.get('generation')!=1 or state.get('binding')!=value or state.get('status')!='api_started' or state.get('pid')!=os.getpid():
+    if state.get('generation')!=value['expected_generation']+1 or state.get('binding')!=value or state.get('status')!='api_started' or state.get('pid')!=os.getpid():
         raise RuntimeError('acceptance_executor_completion_conflict')
-    state.update(generation=2,status='api_passed' if passed else 'unknown')
+    state.update(generation=value['expected_generation']+2,status='api_passed' if passed else 'unknown')
     r.write_receipt(path,state)
     # Khóa được giữ kể cả passed/unknown; không chạy lại API hoặc lấy lại theo tuổi.
 
@@ -290,22 +292,35 @@ def exercise(request):
     rows = r.probe(request['manifest'])
     if rows != request['expected'] or any(row['image'] != target['candidate_image'] or not row['running'] or row['healthy'] != 'healthy' for row, target in zip(rows, request['manifest']['targets'])):
         raise RuntimeError('canary_live_candidate_drift')
-    journal = r.RELEASE_ROOT / request['run_id'] / 'canary.json'
+    resume=request['acceptance_binding']['expected_generation']==2
+    journal = r.RELEASE_ROOT / request['run_id'] / ('canary.generation-3.json' if resume else 'canary.json')
     if journal.exists():
         raise RuntimeError('canary_replay_blocked_reconcile_cleanup')
-    acquire_acceptance(request['acceptance_binding'])
-    # Khóa API/database/network ID trước lượt; mỗi query/cleanup phải so lại topology.
-    for item in identities:
-        item['_database_binding'] = binding.resolve(item, destination)
-    for item in identities:
-        schema, _, database = destination(item)
-        counts = child_expression(schema, item['attempt_id'], item)
-        preflight = admin_query(item, f"BEGIN READ ONLY; DO $$ BEGIN {topology_guard_sql(item)} {demo_course_guard_sql(item)} END $$; SELECT jsonb_build_object('database',current_database(),'existing',(SELECT count(*) FROM {schema}.term_test_attempt WHERE id='{item['attempt_id']}'::uuid OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']}{course_collision_sql(item)}),'children',({counts}))::text; COMMIT;")
-        if preflight != [{'database':database,'existing':0,'children':0}]:
-            raise RuntimeError('canary_preexisting_identity_blocked_no_cleanup')
-    state = {'status': 'in_progress', 'before': rows, 'identities': identities, 'receipts': []}
+    if resume:
+        import acceptance_resume
+        previous=acceptance_resume.acquire(request,__import__(__name__))
+    else:
+        if request.get('acceptance_resume'):raise RuntimeError('resume_initial_binding_invalid')
+        acquire_acceptance(request['acceptance_binding'])
+    try:
+        # Khóa API/database/network ID trước lượt; mỗi query/cleanup phải so lại topology.
+        for item in identities:
+            item['_database_binding'] = binding.resolve(item, destination)
+        for item in identities:
+            schema, _, database = destination(item)
+            counts = child_expression(schema, item['attempt_id'], item)
+            preflight = admin_query(item, f"BEGIN READ ONLY; DO $$ BEGIN {topology_guard_sql(item)} {demo_course_guard_sql(item)} END $$; SELECT jsonb_build_object('database',current_database(),'existing',(SELECT count(*) FROM {schema}.term_test_attempt WHERE id='{item['attempt_id']}'::uuid OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']}{course_collision_sql(item)}),'children',({counts}))::text; COMMIT;")
+            if preflight != [{'database':database,'existing':0,'children':0}]:
+                raise RuntimeError('canary_preexisting_identity_blocked_no_cleanup')
+    except Exception as error:
+        failure={'status':'unknown','phase':'preflight_after_executor_claim','error_type':type(error).__name__,'no_seed_sent':True,'before':rows,'identities':identities,'receipts':[previous['receipts'][0]] if resume else [],'acceptance_binding':request['acceptance_binding']}
+        r.write_receipt(journal,failure)
+        complete_api_acceptance(request['acceptance_binding'],False)
+        raise
+    state = {'status': 'in_progress', 'before': rows, 'identities': identities, 'receipts': [previous['receipts'][0]] if resume else []}
+    if resume:state['acceptance_resume']=request['acceptance_resume']
     r.write_receipt(journal, state)
-    for item in identities:
+    for item in (identities[1:] if resume else identities):
         state['phase'] = 'before_seed:' + item['name']
         r.write_receipt(journal, state)
         receipt = {'target': item['name'], 'status': 'unknown'}
@@ -339,6 +354,8 @@ def exercise(request):
     state['after'] = r.probe(request['manifest'])
     state['runtime_unchanged'] = state['after'] == rows
     state['status'] = 'passed_api_database' if len(state['receipts']) == 3 and all(item['status'] == 'passed' for item in state['receipts']) and state['runtime_unchanged'] else 'unknown'
+    if resume:
+        state['receipt_provenance']={item['name']:({'epoch':'reused','journal_sha256':request['acceptance_resume']['journal_sha256'],'receipt_sha256':request['acceptance_resume']['reuse_receipt_sha256']} if index==0 else {'epoch':'current','acceptance_digest':request['acceptance_binding']['acceptance_digest']}) for index,item in enumerate(identities)}
     state['at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     state['scope'] = 'API + database + exact cleanup only; browser and external boundary evidence still required'
     r.write_receipt(journal, state)

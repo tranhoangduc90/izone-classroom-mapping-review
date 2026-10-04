@@ -63,6 +63,10 @@ def run(config):
     if any(row['image'] != target['candidate_image'] or not row['running'] or row['healthy'] != 'healthy' for row, target in zip(rows, manifest['targets'])):
         raise RuntimeError('canary_requires_deployed_candidates')
     public = adapter.public_readback(config)
+    if config.get('acceptance_resume'):
+        from acceptance_provenance import validate_prior
+        validate_prior(config,directory,request,rows)
+        request['acceptance_resume']=config['acceptance_resume']
     request['expected'] = rows
     request['core'] = (HERE/'canary_contract.mjs').read_text(encoding='utf-8')
     for target, base in zip(manifest['targets'], json.loads((HERE/'baseline.json').read_text(encoding='utf-8'))['targets']):
@@ -75,7 +79,7 @@ from pathlib import Path
 packet=json.load(sys.stdin)
 with tempfile.TemporaryDirectory(prefix='codex-d08-canary-') as folder:
  for name,source in packet['files'].items():
-  if name not in ('release_remote.py','canary_remote.py','database_binding.py'): raise RuntimeError('source_invalid')
+  if name not in ('release_remote.py','canary_remote.py','database_binding.py','acceptance_resume.py','acceptance_cas.py','outcome_receipt.py'): raise RuntimeError('source_invalid')
   (Path(folder)/name).write_text(source,encoding='utf-8')
  sys.path.insert(0,folder)
  import canary_remote as c
@@ -88,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='codex-d08-canary-') as folder:
     password = ''
     try:
         stdin, stdout, stderr = client.exec_command('python3 -c ' + shlex.quote(remote), timeout=900)
-        packet = {'request': request, 'files': {name:(HERE/name).read_text(encoding='utf-8') for name in ('release_remote.py','canary_remote.py','database_binding.py')}}
+        packet = {'request': request, 'files': {name:(HERE/name).read_text(encoding='utf-8') for name in ('release_remote.py','canary_remote.py','database_binding.py','acceptance_resume.py','acceptance_cas.py','outcome_receipt.py')}}
         stdin.write(json.dumps(packet,ensure_ascii=False))
         stdin.channel.shutdown_write()
         output = stdout.read().decode('utf-8')

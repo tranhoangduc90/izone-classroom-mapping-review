@@ -63,9 +63,9 @@ END $$;
 INSERT INTO {schema}.term_test_attempt
  (id,client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,
  erp_student_contact_id,student_name_snapshot,listening_answers,listening_result,
- reading_answers,reading_result,combined_result,listening_submitted_at,completed_at)
+ reading_answers,reading_result,combined_result,listening_submitted_at,reading_submitted_at,completed_at)
  SELECT '{identifier}'::uuid,'{identifier}'::uuid,slug,version,{item['course_id']},'{item['marker']}',
- {item['student_id']},'D08 synthetic temporary','{{}}','{{}}','{{}}','{{}}','{{}}',now(),now()
+ {item['student_id']},'D08 synthetic temporary','{{}}','{{}}','{{}}','{{}}','{{}}',now(),now(),now()
  FROM {schema}.test_definition WHERE slug='{item['test_slug']}' ORDER BY version DESC LIMIT 1;
 COMMIT;"""
         self.query(entry,sql)

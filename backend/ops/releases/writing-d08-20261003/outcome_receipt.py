@@ -57,25 +57,29 @@ def validate_api(value, ledger, manifest):
     receipts = value.get('receipts', [])
     require(len(receipts) == 3 and [r.get('target') for r in receipts] == [i['name'] for i in ledger['identities']], 'api_receipt_targets_missing')
     for receipt, identity in zip(receipts, ledger['identities']):
-        core = receipt.get('api_database', {})
-        require(receipt.get('status') == 'passed' and core.get('status') == 'passed'
-                and core.get('attempt_id') == identity['attempt_id'], 'api_identity_or_status_mismatch')
-        cases = core.get('receipts', [])
-        require(API_CASES.issubset({c.get('case') for c in cases}), 'api_cases_missing')
-        for case in cases:
-            if 'payload' in case:
-                require(case['payload'].get('attemptToken') == identity['attempt_id']
-                        and case['payload'].get('action') in ('start', 'draft'), 'api_payload_outside_scope')
-            if case.get('case') == 'database_readback':
-                require(zero_children(case.get('value', {}).get('children'), identity['name'])
-                        and case['value'].get('submitted') is False, 'api_readback_children_or_submit')
-        final = core.get('final', {})
-        require(final.get('revision') == 1 and final.get('submitted') is False
-                and zero_children(final.get('children'), identity['name']), 'api_final_not_verified')
-        cleanup = receipt.get('cleanup', {})
-        require(cleanup.get('status') == 'passed' and cleanup.get('attempt_id') == identity['attempt_id']
-                and cleanup.get('readback') == {'attempt_remaining': 0, 'marker_remaining': 0, 'children_remaining': 0},
-                'api_cleanup_not_verified')
+        validate_api_receipt(receipt,identity)
+
+
+def validate_api_receipt(receipt, identity):
+    core = receipt.get('api_database', {})
+    require(receipt.get('status') == 'passed' and core.get('status') == 'passed'
+            and core.get('attempt_id') == identity['attempt_id'], 'api_identity_or_status_mismatch')
+    cases = core.get('receipts', [])
+    require(API_CASES.issubset({c.get('case') for c in cases}), 'api_cases_missing')
+    for case in cases:
+        if 'payload' in case:
+            require(case['payload'].get('attemptToken') == identity['attempt_id']
+                    and case['payload'].get('action') in ('start', 'draft'), 'api_payload_outside_scope')
+        if case.get('case') == 'database_readback':
+            require(zero_children(case.get('value', {}).get('children'), identity['name'])
+                    and case['value'].get('submitted') is False, 'api_readback_children_or_submit')
+    final = core.get('final', {})
+    require(final.get('revision') == 1 and final.get('submitted') is False
+            and zero_children(final.get('children'), identity['name']), 'api_final_not_verified')
+    cleanup = receipt.get('cleanup', {})
+    require(cleanup.get('status') == 'passed' and cleanup.get('attempt_id') == identity['attempt_id']
+            and cleanup.get('readback') == {'attempt_remaining': 0, 'marker_remaining': 0, 'children_remaining': 0},
+            'api_cleanup_not_verified')
 
 
 def validate(value, config, snapshots, public, root, manifest):
@@ -97,6 +101,9 @@ def validate(value, config, snapshots, public, root, manifest):
             'outcome_ledger_mismatch')
     require(len(ledger.get('identities', [])) == 3, 'outcome_identities_missing')
     validate_api(data['api_database'], ledger, manifest)
+    if config.get('acceptance_resume'):
+        from acceptance_provenance import validate_reuse
+        validate_reuse(config,root,ledger,data['api_database'])
     browser = data['browser']
     browser_ledger_reference = next(r for r in refs if r['role'] == 'browser_ledger')
     spec = importlib.util.spec_from_file_location('browser_receipt', Path(__file__).parent/'browser_receipt.py')

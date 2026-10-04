@@ -1,0 +1,779 @@
+{
+  "schema": "d08-real-attempt-schema/v1",
+  "source_sha256": "a8987bd4301d2bf5293f2403637a44b2849c9cb15e840277710166db59825461",
+  "source_scope": "Read-only catalog, no student rows/credentials",
+  "targets": {
+    "mapping-review-api": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "nullable": "NO"
+        },
+        {
+          "name": "client_submission_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "test_slug",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "definition_version",
+          "type": "integer",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_course_class_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "class_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_student_contact_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "student_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "listening_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "listening_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "listening_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "combined_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_task_1",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_task_2",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "exam_session_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_draft_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        },
+        {
+          "name": "superseded_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "term_test_attempt_completion_check",
+          "type": "c",
+          "definition": "CHECK ((((completed_at IS NULL) AND (reading_answers IS NULL) AND (reading_result IS NULL) AND (combined_result IS NULL)) OR ((completed_at IS NOT NULL) AND (reading_answers IS NOT NULL) AND (reading_result IS NOT NULL) AND (combined_result IS NOT NULL))))"
+        },
+        {
+          "name": "term_test_attempt_exam_session_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (exam_session_id) REFERENCES assessment.term_test_exam_session(id)"
+        },
+        {
+          "name": "term_test_attempt_exam_session_id_key",
+          "type": "u",
+          "definition": "UNIQUE (exam_session_id)"
+        },
+        {
+          "name": "term_test_attempt_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "term_test_attempt_section_deadline_check",
+          "type": "c",
+          "definition": "CHECK ((((reading_started_at IS NULL) AND (reading_deadline_at IS NULL)) OR ((reading_started_at IS NOT NULL) AND (reading_deadline_at > reading_started_at))))"
+        },
+        {
+          "name": "term_test_attempt_test_slug_client_submission_id_key",
+          "type": "u",
+          "definition": "UNIQUE (test_slug, client_submission_id)"
+        },
+        {
+          "name": "term_test_attempt_test_slug_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (test_slug) REFERENCES assessment.test_definition(slug)"
+        },
+        {
+          "name": "term_test_attempt_writing_draft_revision_check",
+          "type": "c",
+          "definition": "CHECK ((writing_draft_revision >= 0))"
+        },
+        {
+          "name": "term_test_attempt_writing_order_check",
+          "type": "c",
+          "definition": "CHECK ((((writing_started_at IS NULL) AND (writing_updated_at IS NULL) AND (writing_submitted_at IS NULL)) OR ((completed_at IS NOT NULL) AND (writing_started_at IS NOT NULL) AND (writing_updated_at IS NOT NULL) AND ((writing_submitted_at IS NULL) OR (writing_submitted_at >= writing_started_at)))))"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "collaboration_row_history",
+          "definition": "CREATE TRIGGER collaboration_row_history AFTER INSERT OR DELETE OR UPDATE ON assessment.term_test_attempt FOR EACH ROW EXECUTE FUNCTION collaboration.record_row()"
+        },
+        {
+          "name": "collaboration_truncate_history",
+          "definition": "CREATE TRIGGER collaboration_truncate_history AFTER TRUNCATE ON assessment.term_test_attempt FOR EACH STATEMENT EXECUTE FUNCTION collaboration.record_row()"
+        }
+      ]
+    },
+    "izone-k56-ic2264-api": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "nullable": "NO"
+        },
+        {
+          "name": "client_submission_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "test_slug",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "definition_version",
+          "type": "integer",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_course_class_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "class_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_student_contact_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "student_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "exam_session_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_draft_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "combined_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "superseded_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_task_1",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_task_2",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        },
+        {
+          "name": "exam_mode",
+          "type": "text",
+          "default": "'lis_first'::text",
+          "nullable": "NO"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "k56_completed_sections_check",
+          "type": "c",
+          "definition": "CHECK (((completed_at IS NULL) OR ((listening_submitted_at IS NOT NULL) AND (reading_submitted_at IS NOT NULL) AND (listening_result IS NOT NULL) AND (reading_result IS NOT NULL) AND (combined_result IS NOT NULL))))"
+        },
+        {
+          "name": "k56_exam_mode_check",
+          "type": "c",
+          "definition": "CHECK ((exam_mode = ANY (ARRAY['lis_first'::text, 'read_first'::text])))"
+        },
+        {
+          "name": "term_test_attempt_exam_session_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (exam_session_id) REFERENCES assessment_k56.term_test_exam_session(id)"
+        },
+        {
+          "name": "term_test_attempt_exam_session_id_key",
+          "type": "u",
+          "definition": "UNIQUE (exam_session_id)"
+        },
+        {
+          "name": "term_test_attempt_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "term_test_attempt_section_deadline_check",
+          "type": "c",
+          "definition": "CHECK ((((reading_started_at IS NULL) AND (reading_deadline_at IS NULL)) OR ((reading_started_at IS NOT NULL) AND (reading_deadline_at > reading_started_at))))"
+        },
+        {
+          "name": "term_test_attempt_test_slug_client_submission_id_key",
+          "type": "u",
+          "definition": "UNIQUE (test_slug, client_submission_id)"
+        },
+        {
+          "name": "term_test_attempt_test_slug_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (test_slug) REFERENCES assessment_k56.test_definition(slug)"
+        },
+        {
+          "name": "term_test_attempt_writing_draft_revision_check",
+          "type": "c",
+          "definition": "CHECK ((writing_draft_revision >= 0))"
+        },
+        {
+          "name": "term_test_attempt_writing_order_check",
+          "type": "c",
+          "definition": "CHECK ((((writing_started_at IS NULL) AND (writing_updated_at IS NULL) AND (writing_submitted_at IS NULL)) OR ((completed_at IS NOT NULL) AND (writing_started_at IS NOT NULL) AND (writing_updated_at IS NOT NULL) AND ((writing_submitted_at IS NULL) OR (writing_submitted_at >= writing_started_at)))))"
+        }
+      ],
+      "triggers": [
+        {
+          "name": "collaboration_row_history",
+          "definition": "CREATE TRIGGER collaboration_row_history AFTER INSERT OR DELETE OR UPDATE ON assessment_k56.term_test_attempt FOR EACH ROW EXECUTE FUNCTION collaboration.record_row()"
+        },
+        {
+          "name": "collaboration_truncate_history",
+          "definition": "CREATE TRIGGER collaboration_truncate_history AFTER TRUNCATE ON assessment_k56.term_test_attempt FOR EACH STATEMENT EXECUTE FUNCTION collaboration.record_row()"
+        }
+      ]
+    },
+    "izone-k56-demo-k56-demo-api-1": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "nullable": "NO"
+        },
+        {
+          "name": "client_submission_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "test_slug",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "definition_version",
+          "type": "integer",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_course_class_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "class_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "erp_student_contact_id",
+          "type": "bigint",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "student_name_snapshot",
+          "type": "text",
+          "default": null,
+          "nullable": "NO"
+        },
+        {
+          "name": "exam_session_id",
+          "type": "uuid",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "listening_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_answers",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_draft_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        },
+        {
+          "name": "reading_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "combined_result",
+          "type": "jsonb",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "reading_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "superseded_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_task_1",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_task_2",
+          "type": "text",
+          "default": "''::text",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_started_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_deadline_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_updated_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "writing_submitted_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "nullable": "YES"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "nullable": "NO"
+        },
+        {
+          "name": "writing_draft_revision",
+          "type": "bigint",
+          "default": "0",
+          "nullable": "NO"
+        },
+        {
+          "name": "exam_mode",
+          "type": "text",
+          "default": "'lis_first'::text",
+          "nullable": "NO"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "k56_completed_sections_check",
+          "type": "c",
+          "definition": "CHECK (((completed_at IS NULL) OR ((listening_submitted_at IS NOT NULL) AND (reading_submitted_at IS NOT NULL) AND (listening_result IS NOT NULL) AND (reading_result IS NOT NULL) AND (combined_result IS NOT NULL))))"
+        },
+        {
+          "name": "k56_exam_mode_check",
+          "type": "c",
+          "definition": "CHECK ((exam_mode = ANY (ARRAY['lis_first'::text, 'read_first'::text])))"
+        },
+        {
+          "name": "term_test_attempt_exam_session_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (exam_session_id) REFERENCES assessment.term_test_exam_session(id)"
+        },
+        {
+          "name": "term_test_attempt_exam_session_id_key",
+          "type": "u",
+          "definition": "UNIQUE (exam_session_id)"
+        },
+        {
+          "name": "term_test_attempt_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "term_test_attempt_section_deadline_check",
+          "type": "c",
+          "definition": "CHECK ((((reading_started_at IS NULL) AND (reading_deadline_at IS NULL)) OR ((reading_started_at IS NOT NULL) AND (reading_deadline_at > reading_started_at))))"
+        },
+        {
+          "name": "term_test_attempt_test_slug_client_submission_id_key",
+          "type": "u",
+          "definition": "UNIQUE (test_slug, client_submission_id)"
+        },
+        {
+          "name": "term_test_attempt_test_slug_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (test_slug) REFERENCES assessment.test_definition(slug)"
+        },
+        {
+          "name": "term_test_attempt_writing_draft_revision_check",
+          "type": "c",
+          "definition": "CHECK ((writing_draft_revision >= 0))"
+        },
+        {
+          "name": "term_test_attempt_writing_order_check",
+          "type": "c",
+          "definition": "CHECK ((((writing_started_at IS NULL) AND (writing_updated_at IS NULL) AND (writing_submitted_at IS NULL)) OR ((completed_at IS NOT NULL) AND (writing_started_at IS NOT NULL) AND (writing_updated_at IS NOT NULL) AND ((writing_submitted_at IS NULL) OR (writing_submitted_at >= writing_started_at)))))"
+        }
+      ],
+      "triggers": null
+    }
+  }
+}

@@ -9,6 +9,7 @@ import time
 import uuid
 import canary_remote as c
 import release_remote as r
+from real_attempt_schema import real_attempt_ddl
 
 
 def command(argv, text=None):
@@ -53,22 +54,11 @@ def exercise(manifest, core, ui_driver=None):
 CREATE TABLE __SCHEMA__.test_definition(slug text PRIMARY KEY,title text,version int);
 INSERT INTO __SCHEMA__.test_definition VALUES('term-test-1','D08 giả',1),
  ('term-test-1-k56','D08 Term 1 giả',1),('mini-test-k56','D08 Mini giả',1),('term-test-2-k56','D08 Term 2 giả',1);
-CREATE TABLE __SCHEMA__.term_test_attempt(
- id uuid PRIMARY KEY,client_submission_id uuid,test_slug text,definition_version int,
- erp_course_class_id bigint,erp_student_contact_id bigint,class_name_snapshot text,student_name_snapshot text,
- exam_session_id uuid,superseded_at timestamptz,listening_submitted_at timestamptz,
- listening_answers jsonb,listening_result jsonb,reading_answers jsonb,reading_result jsonb,
- reading_started_at timestamptz,reading_deadline_at timestamptz,reading_draft_updated_at timestamptz,
- reading_submitted_at timestamptz,completed_at timestamptz,combined_result jsonb,
- writing_task_1 text NOT NULL DEFAULT '',writing_task_2 text NOT NULL DEFAULT '',
- writing_draft_revision bigint NOT NULL DEFAULT 0,writing_started_at timestamptz,
- writing_deadline_at timestamptz,writing_updated_at timestamptz,writing_submitted_at timestamptz,
- updated_at timestamptz DEFAULT now());
 """
         for index,(target,item) in enumerate(zip(manifest['targets'],request['identities'])):
             schema,_,database=c.destination(item)
             text=ddl.replace('__SCHEMA__',schema)
-            text+='\n'.join('CREATE TABLE '+schema+'.'+table+'(attempt_id uuid REFERENCES '+schema+'.term_test_attempt(id));' for table in c.child_tables(item))
+            text+=real_attempt_ddl(manifest['attempt_schema_contract'],item)
             # Lớp nền giả cho guard demo; giữ riêng DB owned, không tạo lớp production.
             class_code = 'CODEXDEMO56' if index == 2 else 'IC2264' if index == 1 else 'IC2146'
             courses = [c.DEMO_COURSE_ID] if index==2 else [-2000000-index*2] + ([-3000002,-3000006,-3000010] if index == 1 else [-3000000])
