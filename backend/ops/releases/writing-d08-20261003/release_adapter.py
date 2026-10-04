@@ -142,8 +142,14 @@ def verify(config):
  receipt=Path(config['evidence_dir'])/'production-user-outcome.json'
  if not receipt.exists():return {'status':'unknown','evidence_reference':str(receipt)}
  value=json.loads(receipt.read_text(encoding='utf-8'))
- if value.get('status')!='passed' or value.get('snapshots')!=actual or value.get('cleanup_verified') is not True:return {'status':'unknown','evidence_reference':str(receipt)}
- return {'status':'passed','evidence_reference':str(receipt)}
+ spec=importlib.util.spec_from_file_location('outcome_receipt',HERE/'outcome_receipt.py')
+ checker=importlib.util.module_from_spec(spec);spec.loader.exec_module(checker)
+ manifest=json.loads((HERE/'candidate.json').read_text(encoding='utf-8'))
+ try:
+  checked=checker.validate(value,config,actual,public,receipt.parent,manifest)
+ except (ValueError,KeyError,TypeError,OSError) as error:
+  return {'status':'unknown','evidence_reference':str(receipt),'reason':str(error)}
+ return {**checked,'evidence_reference':str(receipt)}
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('--config',required=True);parser.add_argument('action',choices=['probe','inspect','dry_create','backup','validate','deploy','verify']);args=parser.parse_args();config=json.loads(Path(args.config).read_text(encoding='utf-8'))
  if args.action=='probe':value=snapshots(config)

@@ -1,2 +1,2 @@
 # Artifact đã kiểm; adapter còn so toàn bộ dấu kiểm source trước chuyển bản.
-FROM sha256:9f8f834a1e4c338f784682b1e86b58d0b03c45f795bdfe7a747317123f59ac0c
+FROM sha256:2557e2ce8eddf02f7879482a52315ad239db79a19f3ca80baae11e38e98e4190

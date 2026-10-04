@@ -1,0 +1,496 @@
+{
+  "schema": "d08-ui-canary/v1",
+  "client": "shared",
+  "identity": {
+    "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+    "student_ref": "a74232e2-5285-46a7-9a8b-28b05bef96df",
+    "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+    "class_code": "CODEXDEMO806"
+  },
+  "cases": [
+    "ui_start_preserves_canonical",
+    "two_writer_stale_preserves_both_tasks",
+    "conflict_no_automatic_rebase",
+    "reload_preserves_local_and_canonical",
+    "explicit_keep_local_rebases_after_choice",
+    "explicit_use_server_keeps_recovery_without_write",
+    "visible_recovery_and_outline_preserved"
+  ],
+  "events": [
+    {
+      "kind": "database_read",
+      "label": "before",
+      "at": "2026-10-04T06:20:37.728Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "",
+          "task2": "",
+          "revision": 0,
+          "started": false,
+          "submitted": false,
+          "deadlineAt": null,
+          "serverNow": "2026-10-04T06:20:37.725Z"
+        }
+      }
+    },
+    {
+      "kind": "database_read",
+      "label": "outer_restore_A",
+      "at": "2026-10-04T06:20:38.443Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "",
+          "task2": "",
+          "revision": 0,
+          "started": false,
+          "submitted": false,
+          "deadlineAt": null,
+          "serverNow": "2026-10-04T06:20:38.443Z"
+        }
+      }
+    },
+    {
+      "kind": "browser_dispatch",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 0,
+        "baseRevision": 0,
+        "action": "start",
+        "task1": "",
+        "task2": ""
+      },
+      "at": "2026-10-04T06:20:38.683Z"
+    },
+    {
+      "kind": "api_response",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 0,
+        "baseRevision": 0,
+        "action": "start",
+        "task1": "",
+        "task2": ""
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+          "writing": {
+            "task1": "",
+            "task2": "",
+            "revision": 0,
+            "started": true,
+            "submitted": false,
+            "deadlineAt": "2026-10-04T07:20:38.767Z",
+            "serverNow": "2026-10-04T06:20:38.767Z",
+            "timedOut": false,
+            "updatedAt": "2026-10-04T06:20:38.767Z",
+            "submittedAt": null,
+            "grading": null,
+            "accepted": true,
+            "reason": "started"
+          }
+        }
+      },
+      "at": "2026-10-04T06:20:38.787Z"
+    },
+    {
+      "kind": "database_read",
+      "label": "after_ui_start",
+      "at": "2026-10-04T06:20:38.869Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "",
+          "task2": "",
+          "revision": 0,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:20:38.869Z"
+        }
+      }
+    },
+    {
+      "kind": "database_read",
+      "label": "outer_restore_B",
+      "at": "2026-10-04T06:20:39.425Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "",
+          "task2": "",
+          "revision": 0,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:20:39.425Z"
+        }
+      }
+    },
+    {
+      "kind": "browser_dispatch",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 2,
+        "baseRevision": 0,
+        "action": "draft",
+        "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "at": "2026-10-04T06:20:45.900Z"
+    },
+    {
+      "kind": "browser_dispatch",
+      "label": "B",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 2,
+        "baseRevision": 0,
+        "action": "draft",
+        "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "at": "2026-10-04T06:20:51.722Z"
+    },
+    {
+      "kind": "api_response",
+      "label": "B",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 2,
+        "baseRevision": 0,
+        "action": "draft",
+        "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+          "writing": {
+            "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "revision": 1,
+            "started": true,
+            "submitted": false,
+            "deadlineAt": "2026-10-04T07:20:38.767Z",
+            "serverNow": "2026-10-04T06:20:51.733Z",
+            "timedOut": false,
+            "updatedAt": "2026-10-04T06:20:51.733Z",
+            "submittedAt": null,
+            "grading": null,
+            "accepted": true,
+            "reason": "saved"
+          }
+        }
+      },
+      "at": "2026-10-04T06:20:51.737Z"
+    },
+    {
+      "kind": "database_read",
+      "label": "winner_before_stale_dispatch",
+      "at": "2026-10-04T06:20:51.763Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "revision": 1,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:20:51.763Z"
+        }
+      }
+    },
+    {
+      "kind": "api_response",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 2,
+        "baseRevision": 0,
+        "action": "draft",
+        "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+          "writing": {
+            "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "revision": 1,
+            "started": true,
+            "submitted": false,
+            "deadlineAt": "2026-10-04T07:20:38.767Z",
+            "serverNow": "2026-10-04T06:20:51.775Z",
+            "timedOut": false,
+            "updatedAt": "2026-10-04T06:20:51.733Z",
+            "submittedAt": null,
+            "grading": null,
+            "accepted": false,
+            "reason": "revision_conflict"
+          }
+        }
+      },
+      "at": "2026-10-04T06:20:51.777Z"
+    },
+    {
+      "kind": "database_read",
+      "label": "after_stale",
+      "at": "2026-10-04T06:20:51.855Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "revision": 1,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:20:51.855Z"
+        }
+      }
+    },
+    {
+      "kind": "database_read",
+      "label": "outer_restore_A",
+      "at": "2026-10-04T06:21:08.015Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "Canonical B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "task2": "Canonical B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "revision": 1,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:21:08.015Z"
+        }
+      }
+    },
+    {
+      "kind": "browser_dispatch",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 3,
+        "baseRevision": 1,
+        "action": "draft",
+        "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "at": "2026-10-04T06:21:08.488Z"
+    },
+    {
+      "kind": "api_response",
+      "label": "A",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 3,
+        "baseRevision": 1,
+        "action": "draft",
+        "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+          "writing": {
+            "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "revision": 2,
+            "started": true,
+            "submitted": false,
+            "deadlineAt": "2026-10-04T07:20:38.767Z",
+            "serverNow": "2026-10-04T06:21:08.503Z",
+            "timedOut": false,
+            "updatedAt": "2026-10-04T06:21:08.503Z",
+            "submittedAt": null,
+            "grading": null,
+            "accepted": true,
+            "reason": "saved"
+          }
+        }
+      },
+      "at": "2026-10-04T06:21:08.507Z"
+    },
+    {
+      "kind": "database_read",
+      "label": "after_explicit_keep_local",
+      "at": "2026-10-04T06:21:08.534Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "revision": 2,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:21:08.534Z"
+        }
+      }
+    },
+    {
+      "kind": "browser_dispatch",
+      "label": "B",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 4,
+        "baseRevision": 1,
+        "action": "draft",
+        "task1": "Recovery B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Recovery B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "at": "2026-10-04T06:21:12.226Z"
+    },
+    {
+      "kind": "api_response",
+      "label": "B",
+      "payload": {
+        "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "revision": 4,
+        "baseRevision": 1,
+        "action": "draft",
+        "task1": "Recovery B Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "task2": "Recovery B Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "attemptToken": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+          "writing": {
+            "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+            "revision": 2,
+            "started": true,
+            "submitted": false,
+            "deadlineAt": "2026-10-04T07:20:38.767Z",
+            "serverNow": "2026-10-04T06:21:12.233Z",
+            "timedOut": false,
+            "updatedAt": "2026-10-04T06:21:08.503Z",
+            "submittedAt": null,
+            "grading": null,
+            "accepted": false,
+            "reason": "revision_conflict"
+          }
+        }
+      },
+      "at": "2026-10-04T06:21:12.235Z"
+    },
+    {
+      "kind": "database_read",
+      "label": "after_explicit_use_server",
+      "at": "2026-10-04T06:21:28.692Z",
+      "value": {
+        "attempt_id": "5ebf89d1-3987-4c73-bc8b-95e112d6a939",
+        "marker": "CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+        "children": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "writing": {
+          "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+          "revision": 2,
+          "started": true,
+          "submitted": false,
+          "deadlineAt": "2026-10-04T07:20:38.767Z",
+          "serverNow": "2026-10-04T06:21:28.692Z"
+        }
+      }
+    }
+  ],
+  "final": {
+    "task1": "Local A Task1 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+    "task2": "Local A Task2 CODEX_D08_6568a0ceda4c42c5a711fcda2727a18a_0",
+    "revision": 2,
+    "started": true,
+    "submitted": false,
+    "deadlineAt": "2026-10-04T07:20:38.767Z",
+    "serverNow": "2026-10-04T06:21:28.692Z"
+  },
+  "fixture_notice": "Dữ liệu giả cho unit validator; không phải biên nhận production."
+}
