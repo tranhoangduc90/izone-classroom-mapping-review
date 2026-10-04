@@ -2,11 +2,11 @@
   "schema": 1,
   "kind": "imported_immutable_artifact_checkpoint",
   "original_build_git_revision": "unknown",
-  "captured_at": "2026-10-03T14:32:53.371251+00:00",
+  "captured_at": "2026-10-04T15:16:24.158334+00:00",
   "targets": [
     {
       "name": "mapping-review-api",
-      "image": "sha256:1fdaca6048a223d5b6db2e8247b65964662767b2de6e61a631176acb5fcb11a2",
+      "image": "sha256:1ae4dccc1dfe05809985a6eacbd17a61588547dcd6c7fe61215e07efd4ae42c2",
       "source_hashes": {
         "src/app.js": "db64a9af326cb4de24ab474ec36caff54b5c7679ef07f66f556cc6180f10214a",
         "src/app.test.js": "297c6d14b345fe1d96c1ad56076f29b4eb27180652e2dd30061cf9283f80512a",
@@ -50,7 +50,7 @@
         "src/speaking-alerts.js": "f4a0091f72b0520eaf1a165b23975369522f1cc7dea7cd57b3c704ed8464d3dd",
         "src/speaking-catalog.js": "a3075f1c4ddefab5ff315876909f281b6d522f566e050028c594871e456e6324",
         "src/speaking-check-worker.js": "dd06d830cfa3ab6b682c01d18584a545367b71742e79f5a939031ea9d8781b4c",
-        "src/speaking-checker.js": "210138fc89c680d3842a539f022d122e8020fe0a8d5a1e788a43451609737531",
+        "src/speaking-checker.js": "21309a5500f9695c909328c091ed429eaea0331f337ab9f026953c86eaf7e51d",
         "src/speaking-classroom-copies.js": "db43e041abf3442ca1b1a4db3818463817c5976591c03a96340380c559f2465d",
         "src/speaking-docs-jobs.js": "a4d8e6c2b2f7a3afe00c19830e0f55767212d1596ba43d3f2f9d33cf8b19478b",
         "src/speaking-docs-notifier.js": "e3ea4ffd69342dba105b6294c9d8f00bed05b8975f062e636c04c91336196301",
@@ -58,8 +58,8 @@
         "src/speaking-doctor-worker.js": "ce69babf7d11bc6a64876a614ba4f4487aa6bf894da89e8038b793f4dc647c27",
         "src/speaking-grade-worker.js": "4a1d709f961b9bddf3a5194ffd81ce9466a2451f6d92464ed08cf8bbec97307c",
         "src/speaking-homework-routes.js": "ce5760e4fa8be396c153967b5c1cf3cd90ad54b94031cbb539f3e6c7189f540e",
-        "src/speaking-homework.js": "44a4ebe83f4f9200e1b6e12377de67d9cf014e98975d25de0197fd7e0ea345d3",
-        "src/speaking-practice-worker.js": "924010c7a369c3c41f88803b93ba7b2f89560618f61f9ff7c210ff85ca0cbd44",
+        "src/speaking-homework.js": "41f11b910a679c58bd88c1f2e2ff8e7fe5b1aa69edbbeec30d58a9e1d00283bc",
+        "src/speaking-practice-worker.js": "cb2899401c5c607f3e958a3f676391d57be33e73456cfc2c03455936562e299e",
         "src/speaking-share-reader.js": "88133ef3ad5744c3b46cc4580f3f22dfb1b4ba787a9b32199df6b7ad874954e5",
         "src/sql.js": "f53ea5b3c75cd2a97d97def321b5f08b6f36b87cbc1fa8307250f5b1b2822c08",
         "src/teacher-class-access-sql.js": "3e8b48ccb15ef3f9e6015d5f79a41da0500e5a4a28a606ca26c651d963ed2372",
@@ -70,7 +70,7 @@
         "src/writing-portal-worker.js": "70d79dd645d87f198c067444ff7cc5edecdfe4ce76b142f36a0e9b8a38fd4242",
         "src/writing-tests.js": "24e1a347ee3c4a6a20608a15c7757853c188282ebe950216302925b23eac48db"
       },
-      "recipe": "baseline-mapping-review-api.Dockerfile"
+      "recipe": "Exact live original image plus Speaking PR37 overlay; byte readback kept. Original whole-image Git build unavailable; this is an artifact/source checkpoint."
     },
     {
       "name": "izone-k56-ic2264-api",
