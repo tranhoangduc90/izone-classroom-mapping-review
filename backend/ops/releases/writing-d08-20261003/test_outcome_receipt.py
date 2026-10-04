@@ -87,7 +87,7 @@ class OutcomeGuard(unittest.TestCase):
         return o.validate(self.value, self.config, self.snapshots, self.public, self.root, self.manifest)
 
     def test_generic_operational_labels_still_blocked(self):
-        with self.assertRaisesRegex(ValueError, 'docs_boundary_specific_validator_pending'):
+        with self.assertRaisesRegex(ValueError, 'docs_boundary_schema'):
             self.validate()
 
     def test_fields_only_old_receipt_blocked(self):
