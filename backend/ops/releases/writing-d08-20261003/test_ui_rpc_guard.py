@@ -1,6 +1,7 @@
 """Fixture unit giữ khóa/danh tính và chặn side effect sai; không gọi VPS."""
 import copy,json,tempfile,unittest,uuid
 from pathlib import Path
+from canary_remote import child_tables
 from ui_rpc_guard import validate_ledger,validate_payload,execute,Journal,canonical_hash,request_binding,ENTRIES,DESTINATIONS
 
 class Backend:
@@ -10,7 +11,7 @@ class Backend:
     def value(self,entry):
         value={'attempt_id':entry['identity']['attempt_id'],'marker':entry['identity']['marker'],
          'course_id':entry['identity']['course_id'],'student_id':entry['identity']['student_id'],
-         'ownership_checked':True,'destination':entry['destination'],'children':[1 if self.child else 0,0,0,0,0],
+         'ownership_checked':True,'destination':entry['destination'],'child_tables':list(child_tables({'name':entry['destination']['container']})),'children':[1 if self.child and i==0 else 0 for i in range(len(child_tables({'name':entry['destination']['container']})))],
          'writing':{'task1':'','task2':'','revision':0,'started':False,'submitted':self.submitted,'deadlineAt':None,'serverNow':'2026-10-04T00:00:00Z'}}
         if self.wrong_identity:value['student_id']=-9999999
         return value
@@ -22,7 +23,7 @@ class Backend:
         return {'status':200,'body':{'ok':True,'writing':{'accepted':True}}}
     def cleanup(self,entry):
         self.deletes+=1;self.present=False
-        return {'status':'passed','attempt_id':entry['identity']['attempt_id'],'marker':entry['identity']['marker'],'destination':entry['destination'],'remaining':{'attempt':0,'marker':0,'children':[0]*5}}
+        return {'status':'passed','attempt_id':entry['identity']['attempt_id'],'marker':entry['identity']['marker'],'destination':entry['destination'],'child_tables':list(child_tables({'name':entry['destination']['container']})),'remaining':{'attempt':0,'marker':0,'children':[0]*len(child_tables({'name':entry['destination']['container']}))}}
 
 class RpcGuard(unittest.TestCase):
     def setUp(self):

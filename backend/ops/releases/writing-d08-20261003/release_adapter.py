@@ -71,6 +71,16 @@ def checkpoint_inputs(config, manifest):
  baseline_manifest=json.loads((HERE/'baseline.json').read_text(encoding='utf-8'))
  if baseline_manifest.get('runtime_source_checkpoint'):
   command(['git','merge-base','--is-ancestor',baseline_manifest['runtime_source_checkpoint'],manifest['baseline_checkpoint']],BACKEND)
+ runtime_checkpoint=config.get('runtime_candidate_checkpoint')
+ if runtime_checkpoint is not None:
+  if not isinstance(runtime_checkpoint,str) or re.fullmatch('[0-9a-f]{40}',runtime_checkpoint) is None:
+   raise RuntimeError('runtime_candidate_checkpoint_invalid')
+  command(['git','merge-base','--is-ancestor',runtime_checkpoint,checkpoint],BACKEND)
+  # Helper mới được chốt riêng; image/patch/Pages metadata của runtime đã phát hành giữ nguyên.
+  for filename in ('candidate.json','baseline.json'):
+   original=subprocess.run(['git','show',runtime_checkpoint+':'+prefix+filename],cwd=BACKEND,capture_output=True,timeout=30)
+   if original.returncode or original.stdout.replace(b'\r\n',b'\n') != (HERE/filename).read_bytes().replace(b'\r\n',b'\n'):
+    raise RuntimeError('runtime_checkpoint_metadata_changed:'+filename)
  if head(BACKEND) != checkpoint:
   raise RuntimeError('candidate_checkpoint_not_current_head')
  return checkpoint
@@ -91,7 +101,7 @@ def snapshots(config,rows=None):
  if not all_base and not all_candidate:
   raise RuntimeError('mixed_runtime_recovery_required')
  # Source runtime giữ checkpoint đã sinh các image hiện chạy; helper mới có checkpoint riêng.
- source = baseline.get('runtime_source_checkpoint',manifest['baseline_checkpoint']) if all_base else checkpoint
+ source = baseline.get('runtime_source_checkpoint',manifest['baseline_checkpoint']) if all_base else config.get('runtime_candidate_checkpoint',checkpoint)
  api_snapshot = {'revision':sha([item['image'] for item in rows]),'fingerprint':sha(stable),'sources':{'backend':source}}
  return {'api.classroom':api_snapshot,'database.mapping':api_snapshot,'pages.ielts':pages_live(config)}
 def public_readback(config):

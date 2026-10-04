@@ -3,7 +3,7 @@
 // Trả bằng chứng có nội dung hai Task, revision và child count; assertion lỗi giữ ca mở.
 import assert from 'node:assert/strict';
 
-export async function exerciseCanary({ id, post, read }) {
+export async function exerciseCanary({ id, post, read, childTables = ['term_test_exam_session', 'term_test_writing_grading_run', 'term_test_writing_grading_final', 'term_test_writing_planning', 'term_test_portal_sync_job'] }) {
   const receipts = [];
   const send = async (caseName, body, expectedStatus = 200) => {
     const payload = { attemptToken: id, action: 'draft', ...body };
@@ -19,7 +19,7 @@ export async function exerciseCanary({ id, post, read }) {
     assert.equal(value.task2, task2);
     assert.equal(Number(value.revision), revision);
     assert.equal(value.submitted, false);
-    assert.ok(Object.values(value.children).length === 5);
+    assert.deepEqual(Object.keys(value.children).sort(), [...childTables].sort());
     assert.ok(Object.values(value.children).every(count => count === 0), 'UNEXPECTED_CHILD_SIDE_EFFECT');
     receipts.push({ case: 'database_readback', value });
     return value;

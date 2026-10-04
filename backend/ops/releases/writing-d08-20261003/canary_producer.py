@@ -29,7 +29,8 @@ def save_new(path, value):
 
 def prepare(config):
     directory = Path(config['evidence_dir'])
-    run = uuid.uuid4().hex
+    run = config['acceptance_binding']['acceptance_run_id']
+    canary.acceptance_path(config['acceptance_binding'])
     numbers = set()
     def negative_id():
         while True:
@@ -38,7 +39,7 @@ def prepare(config):
                 numbers.add(value)
                 return value
     manifest = json.loads((HERE/'candidate.json').read_text(encoding='utf-8'))
-    value = {'run_id': run, 'manifest': manifest,
+    value = {'run_id': run, 'manifest': manifest, 'acceptance_binding':config['acceptance_binding'],
              'created_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
              'task_id': '01a0ffd0-778e-7723-99e3-a4bdee78fbb7',
              'identities': [{'name': target['name'], 'attempt_id': str(uuid.uuid4()),
@@ -91,8 +92,10 @@ with tempfile.TemporaryDirectory(prefix='codex-d08-canary-') as folder:
         stdin.write(json.dumps(packet,ensure_ascii=False))
         stdin.channel.shutdown_write()
         output = stdout.read().decode('utf-8')
-        stderr.read()
+        remote_stderr = stderr.read().decode('utf-8')
         code = stdout.channel.recv_exit_status()
+        # Giữ stdout/stderr riêng trước phân tích; lỗi preflight không bị gọi nhầm mất phản hồi.
+        save_new(directory/'production-canary-transport.private.json', {'exit_code':code,'stdout':output,'stderr':remote_stderr})
         if code or not output:
             raise RuntimeError('canary_remote_response_unknown_reconcile_journal_do_not_replay')
         value = json.loads(output)

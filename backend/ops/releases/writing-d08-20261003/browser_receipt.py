@@ -10,7 +10,7 @@ import re
 import uuid
 import zipfile
 from pathlib import Path
-from canary_remote import uses_existing_demo_course
+from canary_remote import uses_existing_demo_course,child_tables
 
 CASES = {'ui_start_preserves_canonical', 'two_writer_stale_preserves_both_tasks',
          'conflict_no_automatic_rebase', 'reload_preserves_local_and_canonical',
@@ -80,7 +80,7 @@ def validate_events(child, identity, destination, strict=True):
         elif kind=='database_read':
             row=event['value'];writing=row['writing']
             check(row.get('attempt_id')==identity['attempt_id'] and row.get('marker')==identity['marker'], 'browser_sql_identity')
-            check(row.get('children')==[0]*5 and writing.get('submitted') is False, 'browser_sql_child_or_submit')
+            check(row.get('child_tables')==list(child_tables({'name':destination['container']})) and row.get('children')==[0]*len(child_tables({'name':destination['container']})) and writing.get('submitted') is False, 'browser_sql_child_or_submit')
             if strict:
                 check(row.get('ownership_checked') is True and row.get('destination')==destination
                       and row.get('course_id')==identity['course_id'] and row.get('student_id')==identity['student_id'], 'browser_sql_destination')
@@ -188,7 +188,7 @@ def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
         cleanup=child.get('cleanup',{})
         check(cleanup.get('status')=='passed' and cleanup.get('attempt_id')==identity['attempt_id']
               and cleanup.get('marker')==identity['marker'] and cleanup.get('destination')==expected
-              and cleanup.get('remaining')=={'attempt':0,'marker':0,'children':[0]*5}, 'browser_cleanup_guard')
+              and cleanup.get('child_tables')==list(child_tables({'name':target})) and cleanup.get('remaining')=={'attempt':0,'marker':0,'children':[0]*len(child_tables({'name':target}))}, 'browser_cleanup_guard')
         check(set(child.get('artifacts',{}))==ARTIFACTS, 'browser_artifacts_missing')
         for name,sha in child['artifacts'].items():file_hash(path.parent,name,sha)
         validate_traces(child,path.parent)

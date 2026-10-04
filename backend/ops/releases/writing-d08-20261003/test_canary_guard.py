@@ -63,8 +63,8 @@ class CanaryGuards(unittest.TestCase):
             self.assertIn('writing_submitted_at IS NULL AND exam_session_id IS NULL', sql)
             self.assertIn('erp_student_contact_id=' + str(item['student_id']), sql)
             self.assertIn('erp_course_class_id=' + str(item['course_id']), sql)
-            self.assertEqual(sql.count('SELECT count(*) FROM ' + schema + '.term_test_'), 13)
-            for table in c.CHILDREN:
+            self.assertEqual(sql.count('SELECT count(*) FROM ' + schema + '.term_test_attempt'), 3)
+            for table in c.child_tables(item):
                 self.assertIn(schema + '.' + table + " WHERE attempt_id='" + item['attempt_id'], sql)
 
 

@@ -11,8 +11,8 @@ async function fixture(){
  const evidenceDir=path.join('C:/Codex-Data/writing-d08-fix-20261003/ui-finalization-unit',randomUUID());
  await fs.mkdir(evidenceDir,{recursive:true});
  const identity={attempt_id:randomUUID(),marker:'CODEX_D08_fixture'};
- const destination={container:'fixture-only'};let cleanupCalls=0,closed=0;
- const bridge={binding:{destination},cleanup:async()=>{cleanupCalls++;return {status:'passed',...identity,destination,remaining:{attempt:0,marker:0,children:[0,0,0,0,0]}};}};
+ const destination={container:'mapping-review-api'};let cleanupCalls=0,closed=0;
+ const bridge={binding:{destination},cleanup:async()=>{cleanupCalls++;return {status:'passed',...identity,destination,child_tables:['term_test_exam_session','term_test_portal_sync_job','term_test_writing_grading_final','term_test_writing_grading_run','term_test_writing_planning'],remaining:{attempt:0,marker:0,children:[0,0,0,0,0]}};}};
  const receipt={status:'passed',identity};
  const server={closeAllConnections(){},close(callback){closed++;callback();}};
  const packet={receipt,bridge,identity,scope:'production_fixture',pending:0,server,evidenceDir,errors:[]};

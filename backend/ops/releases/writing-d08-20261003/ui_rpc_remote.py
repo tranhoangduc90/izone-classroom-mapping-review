@@ -20,6 +20,7 @@ class ProductionBackend:
         for row,target in zip(rows,self.manifest['targets']):
             check(row['image']==target['candidate_image'] and row['running'] and row['healthy']=='healthy','ui_candidates_not_live')
         binding.require(self.item(entry),c.destination)
+        c.verify_child_topology(self.item(entry))
     def item(self,entry):
         target=entry['destination']['container']
         return {'name':target,**entry['identity'],'test_slug':c.fixture_test_slug(target,entry['client']),
@@ -29,12 +30,12 @@ class ProductionBackend:
         item=self.item(entry);schema,_,database=c.destination(item)
         identifier=item['attempt_id']
         fields=' OR '.join([f"id='{identifier}'::uuid",f"class_name_snapshot='{item['marker']}'",f"erp_student_contact_id={item['student_id']}"])+c.course_collision_sql(item)
-        children=",".join(f"(SELECT count(*) FROM {schema}.{table} WHERE attempt_id='{identifier}'::uuid)" for table in c.CHILDREN)
+        children=",".join(f"(SELECT count(*) FROM {schema}.{table} WHERE attempt_id='{identifier}'::uuid)" for table in c.child_tables(item))
         sql=f"""BEGIN READ ONLY;
 SET LOCAL statement_timeout='10s';
 SELECT jsonb_build_object('database',current_database(),'identity_count',(SELECT count(*) FROM {schema}.term_test_attempt WHERE {fields}),
  'value',(SELECT jsonb_build_object('attempt_id',id,'marker',class_name_snapshot,'course_id',erp_course_class_id,'student_id',erp_student_contact_id,'test_slug',test_slug,
- 'exam_session',exam_session_id,'children',jsonb_build_array({children}),
+ 'exam_session',exam_session_id,'child_tables',{json.dumps(c.child_tables(item))!r}::jsonb,'children',jsonb_build_array({children}),
  'writing',jsonb_build_object('task1',writing_task_1,'task2',writing_task_2,'revision',writing_draft_revision,
  'started',writing_started_at IS NOT NULL,'startedAt',writing_started_at,'submitted',writing_submitted_at IS NOT NULL,
  'deadlineAt',writing_deadline_at,'serverNow',clock_timestamp()))
@@ -48,11 +49,12 @@ COMMIT;"""
         return value
     def seed(self,entry):
         item=self.item(entry);schema,_,database=c.destination(item);identifier=item['attempt_id']
-        counts=c.child_expression(schema,identifier)
+        counts=c.child_expression(schema,identifier,item)
         sql=f"""BEGIN;
 SET LOCAL lock_timeout='5s';SET LOCAL statement_timeout='15s';
 DO $$ BEGIN
  IF current_database()<>'{database}' THEN RAISE EXCEPTION 'UI_DATABASE_MISMATCH'; END IF;
+ {c.topology_guard_sql(item)}
  {c.demo_course_guard_sql(item)}
  IF EXISTS(SELECT 1 FROM {schema}.term_test_attempt WHERE id='{identifier}'::uuid
  OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']}{c.course_collision_sql(item)})
@@ -93,14 +95,14 @@ try {
         item=self.item(entry);schema,_,database=c.destination(item)
         c.cleanup(item)
         identifier=item['attempt_id']
-        children=",".join(f"(SELECT count(*) FROM {schema}.{table} WHERE attempt_id='{identifier}'::uuid)" for table in c.CHILDREN)
+        children=",".join(f"(SELECT count(*) FROM {schema}.{table} WHERE attempt_id='{identifier}'::uuid)" for table in c.child_tables(item))
         sql=f"""BEGIN READ ONLY;
 SELECT jsonb_build_object('database',current_database(),
  'remaining',jsonb_build_object('attempt',(SELECT count(*) FROM {schema}.term_test_attempt WHERE id='{identifier}'::uuid),
  'marker',(SELECT count(*) FROM {schema}.term_test_attempt WHERE class_name_snapshot='{item['marker']}'),
  'children',jsonb_build_array({children})))::text;COMMIT;"""
         values=self.query(entry,sql);check(len(values)==1 and values[0]['database']==database,'ui_cleanup_database_wrong')
-        return {'status':'passed','attempt_id':identifier,'marker':item['marker'],'destination':entry['destination'],'remaining':values[0]['remaining']}
+        return {'status':'passed','attempt_id':identifier,'marker':item['marker'],'destination':entry['destination'],'child_tables':list(c.child_tables(item)),'remaining':values[0]['remaining']}
 
 def perform(packet):
     check(packet.get('scope')=='production_fixture','ui_remote_scope_invalid')
@@ -108,6 +110,10 @@ def perform(packet):
     source=packet.get('ledger_source')
     check(isinstance(source,str) and hashlib.sha256(source.encode('utf-8')).hexdigest()==request.get('ledger_sha256'),'ui_raw_ledger_binding_wrong')
     check(json.loads(source)==ledger,'ui_raw_ledger_content_wrong')
+    # UI chỉ tiếp tục executor đúng release/digest/sổ đã qua API; không sender khác.
+    acceptance=packet.get('acceptance_binding')
+    c.require_acceptance(acceptance)
+    check(acceptance['ui_ledger_sha256']==request['ledger_sha256'],'ui_acceptance_ledger_changed')
     # Chỉ thư mục journal theo run/case đã có trong ledger hợp lệ.
     from ui_rpc_guard import validate_ledger
     validate_ledger(ledger,packet['manifest'])

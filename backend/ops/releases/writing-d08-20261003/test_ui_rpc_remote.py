@@ -11,6 +11,7 @@ class RemoteBinding(unittest.TestCase):
         source=json.dumps(ledger,ensure_ascii=False,indent=2).replace('\n','\r\n')
         self.packet={'scope':'production_fixture','ledger':ledger,'ledger_source':source,'manifest':self.manifest,'expected':[],
                      'request':{'case_id':ledger['entries'][0]['case_id'],'ledger_sha256':hashlib.sha256(source.encode('utf-8')).hexdigest()}}
+        self.packet['acceptance_binding']={'ui_ledger_sha256':self.packet['request']['ledger_sha256']}
         self.packet['database_bindings']={}
         from ui_rpc_guard import canonical_hash
         self.packet['request']['database_bindings_sha256']=canonical_hash({})
@@ -25,12 +26,12 @@ class RemoteBinding(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'raw_ledger_content'):remote.perform(self.packet)
             backend.assert_not_called()
     def test_crlf_exact_source_reaches_executor_unchanged(self):
-        with patch.object(remote,'Journal'),patch.object(remote,'ProductionBackend'),patch.object(remote,'execute',return_value={'fixture':'verified'}) as execute:
+        with patch.object(remote.c,'require_acceptance'),patch.object(remote,'Journal'),patch.object(remote,'ProductionBackend'),patch.object(remote,'execute',return_value={'fixture':'verified'}) as execute:
             self.assertEqual(remote.perform(self.packet),{'fixture':'verified'})
             self.assertEqual(execute.call_args.args[:3],(self.packet['request'],self.packet['ledger'],self.manifest))
     def test_changed_database_binding_blocks_backend(self):
         self.packet['database_bindings']={'wrong_target':{}}
-        with patch.object(remote,'ProductionBackend') as backend:
+        with patch.object(remote.c,'require_acceptance'),patch.object(remote,'ProductionBackend') as backend:
             with self.assertRaisesRegex(ValueError,'database_binding_packet_wrong'):remote.perform(self.packet)
             backend.assert_not_called()
 if __name__=='__main__':unittest.main()

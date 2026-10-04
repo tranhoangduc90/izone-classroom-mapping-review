@@ -5,7 +5,7 @@ Lỗi gửi hoặc chưa rõ response giữ khóa và ca mở, không tự repla
 import hashlib,json,os,re,uuid
 from pathlib import Path
 from browser_receipt import ENTRIES,DESTINATIONS
-from canary_remote import CHILDREN,uses_existing_demo_course
+from canary_remote import child_tables,uses_existing_demo_course
 
 def check(value,code):
     if not value:raise ValueError(code)
@@ -56,7 +56,7 @@ def validate_read(value,entry):
     check(value.get('destination')==entry['destination'],'ui_read_wrong_destination')
     check(value.get('ownership_checked') is True,'ui_read_ownership_unknown')
     for key in ('attempt_id','marker','course_id','student_id'):check(value.get(key)==identity[key],'ui_read_identity_wrong')
-    check(value.get('children')==[0]*len(CHILDREN),'ui_child_guard')
+    check(value.get('child_tables')==list(child_tables({'name':entry['destination']['container']})) and value.get('children')==[0]*len(child_tables({'name':entry['destination']['container']})),'ui_child_guard')
     writing=value.get('writing',{})
     check(writing.get('submitted') is False,'ui_attempt_submitted')
     check(type(writing.get('revision')) is int and writing['revision']>=0,'ui_read_revision_invalid')
@@ -67,7 +67,7 @@ def validate_cleanup(value,entry):
     identity=entry['identity']
     check(value.get('status')=='passed' and value.get('destination')==entry['destination'],'ui_cleanup_unknown')
     check(value.get('attempt_id')==identity['attempt_id'] and value.get('marker')==identity['marker'],'ui_cleanup_identity_wrong')
-    check(value.get('remaining')=={'attempt':0,'marker':0,'children':[0]*len(CHILDREN)},'ui_cleanup_not_zero')
+    check(value.get('child_tables')==list(child_tables({'name':entry['destination']['container']})) and value.get('remaining')=={'attempt':0,'marker':0,'children':[0]*len(child_tables({'name':entry['destination']['container']}))},'ui_cleanup_not_zero')
     return value
 
 def canonical_hash(value):

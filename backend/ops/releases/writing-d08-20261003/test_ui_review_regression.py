@@ -52,7 +52,7 @@ class FakeOwned:
     def guard(self,entry):pass
     def read(self,entry):
         return {**{key:entry['identity'][key] for key in ('attempt_id','marker','course_id','student_id')},
-          'destination':entry['destination'],'ownership_checked':True,'children':[0]*5,'writing':copy.deepcopy(self.writing)}
+          'destination':entry['destination'],'ownership_checked':True,'child_tables':list(guard.child_tables({'name':entry['destination']['container']})),'children':[0]*len(guard.child_tables({'name':entry['destination']['container']})),'writing':copy.deepcopy(self.writing)}
     def seed(self,entry):
         self.writing.update(task1='',task2='',revision=0,started=False);return self.read(entry)
     def post(self,entry,payload):
@@ -63,7 +63,7 @@ class FakeOwned:
         return {'status':200,'body':{'ok':True,'writing':{**copy.deepcopy(self.writing),'accepted':accepted,'reason':reason}}}
     def cleanup(self,entry):
         return {'status':'passed','attempt_id':entry['identity']['attempt_id'],'marker':entry['identity']['marker'],
-          'destination':entry['destination'],'remaining':{'attempt':0,'marker':0,'children':[0]*5}}
+          'destination':entry['destination'],'child_tables':list(guard.child_tables({'name':entry['destination']['container']})),'remaining':{'attempt':0,'marker':0,'children':[0]*len(guard.child_tables({'name':entry['destination']['container']}))}}
 
 class EventRegression(unittest.TestCase):
     def test_actual_driver_retains_original_base_revision(self):

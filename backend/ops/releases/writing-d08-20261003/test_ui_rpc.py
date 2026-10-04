@@ -3,6 +3,8 @@ import hashlib,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 import ui_rpc as rpc
+from canary_remote import child_tables
+rpc.child_tables=child_tables
 from exercise_ui_rpc_docker import ledger_for
 
 class Stream:
@@ -40,7 +42,7 @@ class CliRpc(unittest.TestCase):
         (self.root/'production-ui-database-bindings.json').write_text(json.dumps(self.bindings),encoding='utf-8')
         self.entry=self.ledger['entries'][0];id=self.entry['identity']
         self.value={'attempt_id':id['attempt_id'],'marker':id['marker'],'course_id':id['course_id'],'student_id':id['student_id'],
-          'destination':self.entry['destination'],'ownership_checked':True,'children':[0]*5,
+          'destination':self.entry['destination'],'ownership_checked':True,'child_tables':list(rpc.child_tables({'name':self.entry['destination']['container']})),'children':[0]*5,
           'writing':{'task1':'','task2':'','revision':0,'started':False,'submitted':False,'deadlineAt':None,'serverNow':'2026-10-04T00:00:00Z'}}
         self.config={'evidence_dir':str(self.root),'bundle_revision':'4'*64,'product_revision':'d08-bundle:'+'4'*64}
         self.output=json.dumps(self.value).encode();self.exitcode=0;self.client=Client(self)

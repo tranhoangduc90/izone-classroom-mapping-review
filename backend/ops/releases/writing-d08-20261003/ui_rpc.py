@@ -63,7 +63,7 @@ def call(config,case_id,action,payload=None):
     journal.acquire(request)
     try:
         expected=json.loads((folder/'production-ui-snapshot.json').read_text(encoding='utf-8'))
-        packet={'scope':'production_fixture','request':request,'ledger':ledger,'ledger_source':ledger_source,'manifest':manifest,'expected':expected,'database_bindings':bindings,
+        packet={'scope':'production_fixture','acceptance_binding':config.get('acceptance_binding'),'request':request,'ledger':ledger,'ledger_source':ledger_source,'manifest':manifest,'expected':expected,'database_bindings':bindings,
                 'files':{name:(HERE/name).read_text(encoding='utf-8') for name in FILES}}
         journal.save_new(str(request['sequence'])+'.packet.json',packet)
         # Sender/frame cũ không tự bị lấy lại theo tuổi; replay cần đối soát riêng.

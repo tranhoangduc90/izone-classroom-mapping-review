@@ -12,6 +12,17 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const pair = value => ({task1:value.task1,task2:value.task2});
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Danh sách này đối chiếu riêng với catalog; tên bảng thiếu/thừa chặn nghiệm thu.
+function childTablesFor(identity,destination) {
+  const target=destination?.container;
+  const shared='mapping-review-api';
+  const k56=['izone-k56-ic2264-api','izone-k56-demo-k56-demo-api-1'];
+  const useK56=target?k56.includes(target):['IC2264','CODEXDEMO56'].includes(identity.class_code);
+  if(target)assert.ok(target===shared||k56.includes(target),'Đích bảng con ngoài phạm vi');
+  return (useK56?['term_test_exam_session','term_test_writing_grading_run','term_test_writing_grading_final','term_test_portal_sync_job','term_test_portal_sync_state','k56_portal_field_dispatch']:
+    ['term_test_exam_session','term_test_writing_grading_run','term_test_writing_grading_final','term_test_writing_planning','term_test_portal_sync_job']).sort();
+}
+
 function validatePayload(payload,identity) {
   assert.ok(uuid.test(identity.attempt_id),'UUID fixture không hợp lệ');
   assert.equal(payload.attemptToken,identity.attempt_id,'Request ngoài UUID fixture');
@@ -33,7 +44,9 @@ async function finalizeReceipt({receipt,bridge,identity,scope,pending,server,evi
     assert.equal(cleanup.status,'passed');
     if(scope==='production_fixture')assert.deepEqual(cleanup.destination,bridge.binding.destination);
     assert.equal(cleanup.attempt_id,identity.attempt_id);assert.equal(cleanup.marker,identity.marker);
-    assert.deepEqual(cleanup.remaining,{attempt:0,marker:0,children:[0,0,0,0,0]});
+    const tables=childTablesFor(identity,bridge.binding?.destination);
+    assert.deepEqual(cleanup.child_tables,tables);
+    assert.deepEqual(cleanup.remaining,{attempt:0,marker:0,children:tables.map(()=>0)});
   } catch(error) {
     failure=error;receipt.status='unknown';
     receipt.cleanup_error={name:error.name,message:error.message};
@@ -153,7 +166,8 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
     assert.equal(value.test_slug,spec.slug,'Bài SQL thuộc sai đề');
     validateWritingClock(value.writing,spec.minutes);
     assert.ok(Number.isSafeInteger(value.writing.revision)&&value.writing.revision>=0);
-    assert.equal(value.writing.submitted,false); assert.deepEqual(value.children,[0,0,0,0,0]);
+    const tables=childTablesFor(identity,bridge.binding?.destination);
+    assert.equal(value.writing.submitted,false); assert.deepEqual(value.child_tables,tables);assert.deepEqual(value.children,tables.map(()=>0));
     events.push({kind:'database_read',label,at:new Date().toISOString(),value}); await save(); return value;
   };
   const shell=`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/assets/css"></head><body class="cbt-mode"><div id="app"></div><script src="/assets/config"></script><script>

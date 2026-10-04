@@ -33,8 +33,8 @@ class BrowserGuard(unittest.TestCase):
                           'started_at':'2026-10-04T06:20:00Z','finished_at':'2026-10-04T06:22:00Z'})
             child['public_assets']={'status':'passed','assets':{key:{'status':200,'sha256':sha} for key,sha in child['assetHashes'].items()}}
             for event in child['events']:
-                if event['kind']=='database_read':event['value'].update({'course_id':identity['course_id'],'student_id':identity['student_id'],'ownership_checked':True,'destination':destination})
-            child['cleanup']={'status':'passed','attempt_id':identifier,'marker':marker,'destination':destination,'remaining':{'attempt':0,'marker':0,'children':[0]*5}}
+                if event['kind']=='database_read':event['value'].update({'course_id':identity['course_id'],'student_id':identity['student_id'],'ownership_checked':True,'destination':destination,'child_tables':list(b.child_tables({'name':target})),'children':[0]*len(b.child_tables({'name':target}))})
+            child['cleanup']={'status':'passed','attempt_id':identifier,'marker':marker,'destination':destination,'child_tables':list(b.child_tables({'name':target})),'remaining':{'attempt':0,'marker':0,'children':[0]*len(b.child_tables({'name':target}))}}
             folder=self.root/case_id;folder.mkdir()
             child['artifacts']={}
             for name in b.ARTIFACTS:

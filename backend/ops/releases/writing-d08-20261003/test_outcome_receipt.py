@@ -43,10 +43,11 @@ class OutcomeGuard(unittest.TestCase):
         ledger = {'run_id': '3'*32, 'manifest': self.manifest,
                   'identities': [{'name': t['name'], 'attempt_id': 'fixture-id-'+str(i)} for i,t in enumerate(self.manifest['targets'])]}
         rows = [{'name': t['name'], 'image': t['candidate_image'], 'running': True, 'healthy': 'healthy'} for t in self.manifest['targets']]
-        zero = {k: 0 for k in o.CHILDREN}
+        # Kỳ vọng cấu trúc từng target được fixture riêng bên dưới cung cấp.
         receipts = []
         for identity in ledger['identities']:
             identifier = identity['attempt_id']
+            zero = {k: 0 for k in o.child_tables({'name':identity['name']})}
             core = {'status': 'passed', 'attempt_id': identifier,
                     'receipts': [{'case': c} for c in sorted(o.API_CASES)] + [
                         {'case': 'database_readback', 'value': {'children': zero, 'submitted': False}}],

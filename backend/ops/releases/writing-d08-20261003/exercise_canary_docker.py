@@ -68,7 +68,7 @@ CREATE TABLE __SCHEMA__.term_test_attempt(
         for index,(target,item) in enumerate(zip(manifest['targets'],request['identities'])):
             schema,_,database=c.destination(item)
             text=ddl.replace('__SCHEMA__',schema)
-            text+='\n'.join('CREATE TABLE '+schema+'.'+table+'(attempt_id uuid);' for table in c.CHILDREN)
+            text+='\n'.join('CREATE TABLE '+schema+'.'+table+'(attempt_id uuid REFERENCES '+schema+'.term_test_attempt(id));' for table in c.child_tables(item))
             # Lớp nền giả cho guard demo; giữ riêng DB owned, không tạo lớp production.
             class_code = 'CODEXDEMO56' if index == 2 else 'IC2264' if index == 1 else 'IC2146'
             courses = [c.DEMO_COURSE_ID] if index==2 else [-2000000-index*2] + ([-3000002,-3000006,-3000010] if index == 1 else [-3000000])

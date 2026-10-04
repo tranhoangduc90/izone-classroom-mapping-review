@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 import re
+from canary_remote import child_tables,NAMES
 from pathlib import Path
 
 CHILDREN = {'term_test_exam_session', 'term_test_writing_grading_run',
@@ -41,8 +42,8 @@ def timestamp(value):
     return datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(datetime.timezone.utc)
 
 
-def zero_children(value):
-    return isinstance(value, dict) and set(value) == CHILDREN and all(type(n) is int and n == 0 for n in value.values())
+def zero_children(value, target=NAMES[0]):
+    return isinstance(value, dict) and set(value) == set(child_tables({'name':target})) and all(type(n) is int and n == 0 for n in value.values())
 
 
 def validate_api(value, ledger, manifest):
@@ -66,11 +67,11 @@ def validate_api(value, ledger, manifest):
                 require(case['payload'].get('attemptToken') == identity['attempt_id']
                         and case['payload'].get('action') in ('start', 'draft'), 'api_payload_outside_scope')
             if case.get('case') == 'database_readback':
-                require(zero_children(case.get('value', {}).get('children'))
+                require(zero_children(case.get('value', {}).get('children'), identity['name'])
                         and case['value'].get('submitted') is False, 'api_readback_children_or_submit')
         final = core.get('final', {})
         require(final.get('revision') == 1 and final.get('submitted') is False
-                and zero_children(final.get('children')), 'api_final_not_verified')
+                and zero_children(final.get('children'), identity['name']), 'api_final_not_verified')
         cleanup = receipt.get('cleanup', {})
         require(cleanup.get('status') == 'passed' and cleanup.get('attempt_id') == identity['attempt_id']
                 and cleanup.get('readback') == {'attempt_remaining': 0, 'marker_remaining': 0, 'children_remaining': 0},
