@@ -358,7 +358,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
             typing_warning = $6::jsonb, evidence = $7::jsonb, checked_at = now()
         WHERE id = $1`,
       [row.link_id, fingerprint, questionCount, status, code,
-        JSON.stringify(typingWarning), JSON.stringify(evidence)]);
+        JSON.stringify(null), JSON.stringify(evidence)]);
       await client.query(`UPDATE speaking_homework.check_job SET status = 'done', updated_at = now() WHERE id = $1`,
         [checkJobId]);
       return { linkId: row.link_id, status, code };
@@ -668,12 +668,6 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         throw new SpeakingHomeworkError('SAME_CONVERSATION', 'Mỗi phần cần một hội thoại riêng.');
       }
       for (const link of links) {
-        if (link.typing_warning && !voiceConfirmedParts.includes(link.part)) {
-          throw new SpeakingHomeworkError('VOICE_CONFIRMATION_REQUIRED',
-            'Hãy xem cảnh báo và xác nhận bạn đã luyện bằng giọng nói.');
-        }
-      }
-      for (const link of links) {
         const claim = await client.query(`
           INSERT INTO speaking_homework.conversation_claim
             (course_id, share_id, fingerprint, source_kind, source_id, assignment_id)
@@ -683,9 +677,6 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         if (!claim.rows.length) {
           throw new SpeakingHomeworkError('REUSED_CONVERSATION',
             'Hội thoại đã được nộp cho một bài khác trong khóa. Hãy luyện bằng hội thoại mới.');
-        }
-        if (link.typing_warning) {
-          await client.query('UPDATE speaking_homework.submission_link SET voice_confirmed = true WHERE id = $1', [link.id]);
         }
       }
       await client.query(`UPDATE speaking_homework.submission
@@ -884,7 +875,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         [row.course_id, row.share_id, fingerprint]);
         if (existing.rows.length) code = 'REUSED_CONVERSATION';
       }
-      let status = code ? 'rejected' : (typingWarning ? 'needs_voice_confirmation' : 'accepted');
+      // Nội dung đạt được nhận ngay; không yêu cầu xác nhận cách nhập.
+      let status = code ? 'rejected' : 'accepted';
       if (status === 'accepted') {
         const claim = await client.query(`INSERT INTO speaking_homework.conversation_claim
           (course_id, share_id, fingerprint, source_kind, source_id, assignment_id)
@@ -899,7 +891,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       await client.query(`UPDATE speaking_homework.practice_link
         SET fingerprint = $2, question_count = $3, status = $4, check_code = $5,
           typing_warning = $6::jsonb, checked_at = now() WHERE id = $1`,
-      [row.link_id, fingerprint, questionCount, status, code, JSON.stringify(typingWarning)]);
+      [row.link_id, fingerprint, questionCount, status, code, JSON.stringify(null)]);
       await client.query(`UPDATE speaking_homework.practice_check_job
         SET status = 'done', updated_at = now() WHERE id = $1`, [checkJobId]);
       if (status === 'accepted') {
@@ -944,7 +936,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         ON CONFLICT (class_id, student_ref, exercise_id) DO NOTHING`,
       [grant.class_id, studentRef, row.exercise_id]);
       await client.query(`UPDATE speaking_homework.practice_link
-        SET status = 'accepted', voice_confirmed = true WHERE id = $1`, [row.id]);
+        SET status = 'accepted' WHERE id = $1`, [row.id]);
       await client.query(`INSERT INTO speaking_homework.practice_analysis_job
         (practice_link_id) VALUES ($1) ON CONFLICT DO NOTHING`, [row.id]);
       return { row, grant };

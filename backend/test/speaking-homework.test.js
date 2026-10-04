@@ -552,9 +552,8 @@ test('nội dung trùng dù URL khác, thiếu câu và cảnh báo voice đư�
       fingerprint: fingerprint('e'), questionCount: 3, qualityPassed: true,
       typingWarning: { summary: 'Có dấu hiệu gõ chữ.', evidence: ['Đoạn có dấu câu bất thường.'] } });
     assert.equal(checked.status, 'accepted');
-    await assert.rejects(service.finish({ accessToken, studentRef }), { code: 'VOICE_CONFIRMATION_REQUIRED' });
-    const receipt = await service.finish({ accessToken, studentRef,
-      voiceConfirmedParts: ['speaking'] });
+    const receipt = await service.finish({ accessToken, studentRef });
+    assert.equal((await poolFrom(db).query('SELECT voice_confirmed FROM speaking_homework.submission_link WHERE id = $1', [checked.linkId])).rows[0].voice_confirmed, false);
     assert.ok(receipt.id);
   } finally { await db.close(); }
 });
@@ -707,9 +706,9 @@ test('hai ô luyện bổ trợ nhận riêng, nhận diện đúng bài và tă
       fingerprint: fingerprint('f'), questionCount: 2, qualityPassed: true,
       matchedExerciseId: exerciseId,
       typingWarning: { summary: 'Có dấu hiệu gõ.', evidence: ['Một câu cần xác minh.'] } });
-    assert.equal(checked.status, 'needs_voice_confirmation');
+    assert.equal(checked.status, 'accepted');
     let rec = (await pool.query('SELECT practice_count FROM speaking_homework.doctor_recommendation')).rows[0];
-    assert.equal(rec.practice_count, 0);
+    assert.equal(rec.practice_count, 1);
     await service.confirmPracticeVoice({ accessToken, studentRef, linkId: checked.linkId });
     await service.confirmPracticeVoice({ accessToken, studentRef, linkId: checked.linkId });
     rec = (await pool.query('SELECT practice_count, waiting FROM speaking_homework.doctor_recommendation')).rows[0];
