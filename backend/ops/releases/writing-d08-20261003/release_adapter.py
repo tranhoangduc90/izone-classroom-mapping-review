@@ -68,6 +68,8 @@ def checkpoint_inputs(config, manifest):
  if baseline.returncode or baseline.stdout.replace(b'\r\n',b'\n') != (HERE/'baseline.json').read_bytes().replace(b'\r\n',b'\n'):
   raise RuntimeError('baseline_checkpoint_manifest_changed')
  command(['git','merge-base','--is-ancestor',manifest['baseline_checkpoint'],checkpoint],BACKEND)
+ if baseline.get('runtime_source_checkpoint'):
+  command(['git','merge-base','--is-ancestor',baseline['runtime_source_checkpoint'],manifest['baseline_checkpoint']],BACKEND)
  if head(BACKEND) != checkpoint:
   raise RuntimeError('candidate_checkpoint_not_current_head')
  return checkpoint
@@ -87,7 +89,8 @@ def snapshots(config,rows=None):
  all_candidate = all(item['image'] == target['candidate_image'] for item,target in zip(rows,manifest['targets']))
  if not all_base and not all_candidate:
   raise RuntimeError('mixed_runtime_recovery_required')
- source = manifest['baseline_checkpoint'] if all_base else checkpoint
+ # Source runtime giữ checkpoint đã sinh các image hiện chạy; helper mới có checkpoint riêng.
+ source = baseline.get('runtime_source_checkpoint',manifest['baseline_checkpoint']) if all_base else checkpoint
  api_snapshot = {'revision':sha([item['image'] for item in rows]),'fingerprint':sha(stable),'sources':{'backend':source}}
  return {'api.classroom':api_snapshot,'database.mapping':api_snapshot,'pages.ielts':pages_live(config)}
 def public_readback(config):

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "baseline_checkpoint": "53def811cee2672198799f1272b1920d2e718870",
+  "baseline_checkpoint": "b59d1ab100398713cfa4a68527afceb077074816",
   "source_fix": "d836688632006014091039db9bd8dfbbf3791aba",
   "pages_candidate": "dc824fa17bac0944788dff75814face733beb859",
   "targets": [

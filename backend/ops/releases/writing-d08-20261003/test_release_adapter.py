@@ -45,6 +45,8 @@ class Contracts(unittest.TestCase):
   with tempfile.TemporaryDirectory() as directory,patch.object(r,'RELEASE_ROOT',Path(directory)),patch.object(r,'probe',return_value=[{'changed':True}]),patch.object(r,'api') as api:
    with self.assertRaisesRegex(RuntimeError,'switch_live_drift'):r.switch(request)
    api.assert_not_called()
+  # Fixture cần một đích đổi image; manifest rỗng nay bị chặn trước kiểm phiên thi.
+  request['manifest']['targets']=[{'name':'api-fixture','base_image':'base','candidate_image':'candidate'}]
   with tempfile.TemporaryDirectory() as directory,patch.object(r,'RELEASE_ROOT',Path(directory)),patch.object(r,'probe',return_value=[]),patch.object(r,'active_writing',return_value=[{'active':1}]),patch.object(r,'api') as api:
    with self.assertRaisesRegex(RuntimeError,'writing_in_progress'):r.switch(request)
    api.assert_not_called()
