@@ -108,9 +108,17 @@ def backup(config):
  result=remote(config,'backup');repo=Path(config['pages_repo']);dest=Path(config['evidence_dir']);dest.mkdir(parents=True,exist_ok=True)
  bundle=dest/'pages-before.bundle'
  if bundle.exists():raise RuntimeError('backup_already_exists_reconcile')
- command(['git','bundle','create',str(bundle),config['pages_before_commit']],repo)
+ # Git bundle cần ref có tên; khóa ref riêng vào đúng commit trước để giữ đủ object.
+ run_id=config.get('run_id')
+ if not isinstance(run_id,str) or re.fullmatch(r'[a-f0-9]{32}',run_id) is None:
+  raise RuntimeError('backup_pages_run_id_invalid')
+ reference='refs/codex/writing-d08-backup/'+run_id
+ command(['git','update-ref',reference,config['pages_before_commit'],'0'*40],repo)
+ command(['git','bundle','create',str(bundle),reference],repo)
  command(['git','bundle','verify',str(bundle)],repo)
- return {'status':'passed','api':result,'pages_bundle':str(bundle)}
+ if command(['git','bundle','list-heads',str(bundle)],repo)!=config['pages_before_commit']+' '+reference:
+  raise RuntimeError('backup_pages_revision_mismatch')
+ return {'status':'passed','api':result,'pages_bundle':str(bundle),'pages_ref':reference}
 def validate(config):
  # Biên nhận các suite thuộc đúng image/tree đã chốt; checker không thay assertion.
  result=command([sys.executable,config['quality_checker'],config['quality_manifest'],'--current-revision',config['product_revision']],timeout=120)
