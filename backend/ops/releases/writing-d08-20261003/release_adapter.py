@@ -64,12 +64,13 @@ def checkpoint_inputs(config, manifest):
   original = subprocess.run(['git','show',checkpoint+':'+prefix+filename],cwd=BACKEND,capture_output=True,timeout=30)
   if original.returncode or original.stdout.replace(b'\r\n',b'\n') != (HERE/filename).read_bytes().replace(b'\r\n',b'\n'):
    raise RuntimeError('checkpoint_input_mismatch:'+filename)
- baseline = subprocess.run(['git','show',manifest['baseline_checkpoint']+':'+prefix+'baseline.json'],cwd=BACKEND,capture_output=True,timeout=30)
- if baseline.returncode or baseline.stdout.replace(b'\r\n',b'\n') != (HERE/'baseline.json').read_bytes().replace(b'\r\n',b'\n'):
+ baseline_process = subprocess.run(['git','show',manifest['baseline_checkpoint']+':'+prefix+'baseline.json'],cwd=BACKEND,capture_output=True,timeout=30)
+ if baseline_process.returncode or baseline_process.stdout.replace(b'\r\n',b'\n') != (HERE/'baseline.json').read_bytes().replace(b'\r\n',b'\n'):
   raise RuntimeError('baseline_checkpoint_manifest_changed')
  command(['git','merge-base','--is-ancestor',manifest['baseline_checkpoint'],checkpoint],BACKEND)
- if baseline.get('runtime_source_checkpoint'):
-  command(['git','merge-base','--is-ancestor',baseline['runtime_source_checkpoint'],manifest['baseline_checkpoint']],BACKEND)
+ baseline_manifest=json.loads((HERE/'baseline.json').read_text(encoding='utf-8'))
+ if baseline_manifest.get('runtime_source_checkpoint'):
+  command(['git','merge-base','--is-ancestor',baseline_manifest['runtime_source_checkpoint'],manifest['baseline_checkpoint']],BACKEND)
  if head(BACKEND) != checkpoint:
   raise RuntimeError('candidate_checkpoint_not_current_head')
  return checkpoint
