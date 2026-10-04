@@ -49,6 +49,9 @@ def create_payload(old,image,dry=False):
  for name,entry in old['NetworkSettings']['Networks'].items():
   aliases=[a for a in (entry.get('Aliases') or []) if a not in (old['Id'],old['Id'][:12])]
   networks[name]={'Aliases':aliases}
+  # Docker Compose có thể lưu IPAM rỗng là {}; giữ rõ dạng này khi tạo lại mạng.
+  if entry.get('IPAMConfig') == {}:
+   networks[name]['IPAMConfig']={}
  if dry:
   host['NetworkMode']='none';networks={}
  body['HostConfig']=host;body['NetworkingConfig']={'EndpointsConfig':networks}
@@ -294,7 +297,10 @@ def switch(request):
   raise RuntimeError('release_already_started_reconcile_receipt_do_not_replay')
  if probe(manifest)!=expected:
   raise RuntimeError('switch_live_drift')
- active=active_writing(manifest)
+ changed=[target for target in manifest['targets'] if target['base_image']!=target['candidate_image']]
+ if not changed:
+  raise RuntimeError('no_target_change_do_not_redeploy')
+ active=active_writing({'targets':changed})
  if any(item['active']!=0 for item in active):
   raise RuntimeError('writing_in_progress_wait_for_window')
  verify_backup(request)
@@ -306,7 +312,7 @@ def switch(request):
  try:
   # Dừng nhận request và đợi graceful shutdown trên cả ba API trước tạo candidate.
   # Nếu có phiên thi mới lọt vào trước stop, SELECT sau drain sẽ chặn và giữ bản cũ.
-  for target in manifest['targets']:
+  for target in changed:
    old=inspect(target['name'])
    original=next(item for item in expected if item['name']==target['name'])
    if old['Id']!=original['container_id'] or digest(config_view(old))!=original['config_hash']:
@@ -326,13 +332,13 @@ def switch(request):
    row['phase']='stopped'
    write_receipt(path,state)
   after_drain=[]
-  for target,row in zip(manifest['targets'],state['targets']):
+  for target,row in zip(changed,state['targets']):
    after_drain.append(stopped_activity(target,inspect(row['old_id'])))
   state['activity_after_drain']=after_drain
   write_receipt(path,state)
   if any(item['active']!=0 for item in after_drain):
    raise RuntimeError('exam_started_during_drain_recovery_required')
-  for target,row in zip(manifest['targets'],state['targets']):
+  for target,row in zip(changed,state['targets']):
    old=inspect(row['old_id'])
    body=create_payload(old,target['candidate_image'])
    row['phase']='before_rename'
@@ -384,7 +390,10 @@ def recovery_activity(manifest,state):
  rows=[]
  for target in manifest['targets']:
   row=next((item for item in state['targets'] if item['name']==target['name']),None)
-  old=inspect(row['old_id'] if row else target['name'])
+  # Chỉ các API đã bị lượt chuyển tác động mới cần chặn khi phục hồi.
+  if row is None:
+   continue
+  old=inspect(row['old_id'])
   if row:
    core=digest({key:value for key,value in config_view(old).items() if key!='networks'})
    if old['Image']!=row['old_image'] or core!=row['old_core_hash']:
@@ -416,6 +425,8 @@ def recover(request):
  stopped=[]
  try:
   for target in manifest['targets']:
+   if not any(row['name']==target['name'] for row in state['targets']):
+    continue
    current=optional_inspect(target['name'])
    if current and current['State']['Running']:
     original=next(item for item in expected if item['name']==target['name'])
