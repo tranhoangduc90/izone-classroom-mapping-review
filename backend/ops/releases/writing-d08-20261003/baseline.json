@@ -162,5 +162,6 @@
       },
       "recipe": "baseline-izone-k56-demo-k56-demo-api-1.Dockerfile"
     }
-  ]
+  ],
+  "runtime_source_checkpoint": "9df5e744e92765e941b0827db2ede5ec5abb97cf"
 }
