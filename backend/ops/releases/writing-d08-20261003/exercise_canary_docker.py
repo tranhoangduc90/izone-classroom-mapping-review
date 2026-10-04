@@ -47,11 +47,12 @@ def exercise(manifest, core, ui_driver=None):
         c.admin_query=admin
         request={'run_id':owner,'manifest':manifest,'identities':[{
             'name':target['name'],'attempt_id':str(uuid.uuid4()),'marker':'CODEX_D08_'+owner+'_'+str(index),
-            'course_id':-2000000-index*2,'student_id':-2000001-index*2} for index,target in enumerate(manifest['targets'])]}
+            'course_id':c.DEMO_COURSE_ID if target['name']==c.NAMES[2] else -2000000-index*2,'student_id':-2000001-index*2} for index,target in enumerate(manifest['targets'])]}
         c.validate(request)
         ddl="""CREATE SCHEMA __SCHEMA__;
 CREATE TABLE __SCHEMA__.test_definition(slug text PRIMARY KEY,title text,version int);
-INSERT INTO __SCHEMA__.test_definition VALUES('term-test-1','D08 giả',1);
+INSERT INTO __SCHEMA__.test_definition VALUES('term-test-1','D08 giả',1),
+ ('term-test-1-k56','D08 Term 1 giả',1),('mini-test-k56','D08 Mini giả',1),('term-test-2-k56','D08 Term 2 giả',1);
 CREATE TABLE __SCHEMA__.term_test_attempt(
  id uuid PRIMARY KEY,client_submission_id uuid,test_slug text,definition_version int,
  erp_course_class_id bigint,erp_student_contact_id bigint,class_name_snapshot text,student_name_snapshot text,
@@ -70,19 +71,44 @@ CREATE TABLE __SCHEMA__.term_test_attempt(
             text+='\n'.join('CREATE TABLE '+schema+'.'+table+'(attempt_id uuid);' for table in c.CHILDREN)
             # Lớp nền giả cho guard demo; giữ riêng DB owned, không tạo lớp production.
             class_code = 'CODEXDEMO56' if index == 2 else 'IC2264' if index == 1 else 'IC2146'
-            courses = [-2000000-index*2] + ([-3000004,-3000008,-3000012] if index == 2 else [-3000002,-3000006,-3000010] if index == 1 else [-3000000])
+            courses = [c.DEMO_COURSE_ID] if index==2 else [-2000000-index*2] + ([-3000002,-3000006,-3000010] if index == 1 else [-3000000])
             text += "CREATE SCHEMA IF NOT EXISTS mapping; CREATE TABLE IF NOT EXISTS mapping.classroom_course_mapping(erp_course_class_id bigint PRIMARY KEY, erp_class_name_snapshot text);"
             text += "INSERT INTO mapping.classroom_course_mapping VALUES " + ','.join(f"({course},'{class_code}')" for course in courses) + ';'
+            if index==2:
+                # Hai lượt nền giả có cùng lớp, khác UUID/student; phải nguyên vẹn sau mọi seed/cleanup.
+                for prior in range(2):
+                    identifier=str(uuid.uuid4())
+                    text += f"INSERT INTO {schema}.term_test_attempt(id,client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,student_name_snapshot,writing_task_1,writing_task_2) VALUES('{identifier}','{identifier}','term-test-1-k56',1,{c.DEMO_COURSE_ID},{-570001-prior},'D08_BASELINE_{owner}_{prior}','Synthetic baseline','Baseline Task1 {prior}','Baseline Task2 {prior}');"
             admin(item,text)
+            baseline_sql=f"BEGIN READ ONLY; SELECT jsonb_build_object('rows',COALESCE(jsonb_agg(jsonb_build_object('id',id,'hash',md5(row_to_json(prior)::text)) ORDER BY id),'[]'::jsonb))::text FROM {schema}.term_test_attempt AS prior WHERE class_name_snapshot LIKE 'D08_BASELINE_{owner}_%'; COMMIT;"
+            baseline_before=admin(item,baseline_sql)
+            class_guards=[]
+            if index==2:
+                # Đổi lớp chỉ trong transaction DB owned; lỗi đóng kết nối phải rollback.
+                class_sql="BEGIN READ ONLY; SELECT jsonb_build_object('rows',jsonb_agg(row_to_json(course) ORDER BY erp_course_class_id))::text FROM mapping.classroom_course_mapping course; COMMIT;"
+                classes_before=admin(item,class_sql)
+                scenarios={
+                    'missing':f"DELETE FROM mapping.classroom_course_mapping WHERE erp_course_class_id={c.DEMO_COURSE_ID};",
+                    'wrong_code':f"UPDATE mapping.classroom_course_mapping SET erp_class_name_snapshot='OTHER_CLASS' WHERE erp_course_class_id={c.DEMO_COURSE_ID};",
+                    'duplicate_code':"INSERT INTO mapping.classroom_course_mapping VALUES(-560002,'CODEXDEMO56');"
+                }
+                for scenario,mutation in scenarios.items():
+                    sql="BEGIN; "+mutation+" DO $$ BEGIN "+c.demo_course_guard_sql(item)+" END $$; ROLLBACK;"
+                    failed=subprocess.run(['docker','exec','-i',pgid,'psql','-h','127.0.0.1','-At','-U','postgres','-d',database,'-v','ON_ERROR_STOP=1'],input=sql,text=True,encoding='utf-8',capture_output=True,timeout=30)
+                    if failed.returncode==0 or 'CANARY_DEMO_CLASS_CHANGED' not in failed.stderr:
+                        raise RuntimeError('fixture_demo_guard_not_failed:'+scenario)
+                    if admin(item,class_sql)!=classes_before or admin(item,baseline_sql)!=baseline_before:
+                        raise RuntimeError('fixture_demo_guard_rollback_changed_data:'+scenario)
+                    class_guards.append({'scenario':scenario,'rejected':True,'rollback_readback_equal':True,'exit_code':failed.returncode})
             # Pool K56 thật định tuyến assessment sang schema riêng như server hiện hành.
             scoped="import {createAssessmentSchemaPool} from './src/assessment-schema-pool.js'; const scoped=createAssessmentSchemaPool(pool,{family:'k56'});" if index==1 else 'const scoped=pool;'
-            server="""import pg from 'pg'; import express from 'express'; import {createApp} from './src/app.js';
+            server="""import pg from 'pg'; import express from 'express'; import {createApp} from './src/app.js'; import {createTermTestAssetService} from './src/term-test-assets.js';
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:3,statement_timeout:15000});
 __SCOPED__
 let grading=0,portal=0;
 const app=createApp({config:{nodeEnv:'test',deploymentProfileName:'__PROFILE__',demoIsolatedMode:__DEMO__,authMode:'legacy',legacyReviewToken:'fixture-only',
  allowedOrigins:new Set(['https://tranhoangduc90.github.io']),trustProxyHops:0},pool:scoped,
- termTestAssetService:{getTiming:()=>({writingDurationMinutes:60})},
+ termTestAssetService:createTermTestAssetService({assetDir:'/fixture-assets-unused',sessionSecret:'Synthetic-D08-private-fixture-key-0000000000'}),
  syncErpGrades:async()=>{portal++;},termTestWritingGradingService:{ensureSubmission:async()=>{grading++;return {ready:false};}}});
 const outer=express(); outer.get('/fixture-writer-counts',(_,res)=>res.json({grading,portal}));
 outer.use(app); const server=outer.listen(8798,'0.0.0.0');
@@ -114,8 +140,11 @@ process.on('SIGTERM',()=>server.close(async()=>{await pool.end();process.exit(0)
             counts=json.loads(command(['docker','exec',apiid,'node','-e',ping]))
             if counts!={'grading':0,'portal':0}: raise RuntimeError('fixture_external_writer_called:'+json.dumps(counts))
             cleanup=c.cleanup(item)
+            baseline_after=admin(item,baseline_sql)
+            if baseline_after!=baseline_before:raise RuntimeError('fixture_existing_attempt_changed')
             receipts.append({'target':target['name'],'image':target['candidate_image'],'status':'passed',
-                             'api_database':result,'cleanup':cleanup,'writers':counts})
+                             'api_database':result,'cleanup':cleanup,'writers':counts,
+                             'baseline_before_after_equal':True,'baseline_rows':len(baseline_before[0]['rows']),'demo_class_negative_guards':class_guards})
         return {'status':'passed','targets':receipts,'production_environment_used':False,
                 'production_database_used':False,'network':'Internal','cleanup':'verified_after_finally',
                 'scope':'Exact candidate createApp/SQL + actual PostgreSQL + actual seed/cleanup producer; actual profile branch with synthetic legacy auth/config; no production assets/browser outcome'}

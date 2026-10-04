@@ -85,6 +85,27 @@ async function listenLoopback(server,choosePort=()=>randomInt(49152,65536)) {
   throw new Error('Không tìm được cổng localhost còn trống cho fixture Chrome');
 }
 
+// Đúng đề và đồng hồ SQL trước khi công nhận từng bước lưu bài.
+// Mọi tên ngoài bốn giao diện đã nhận đều bị chặn.
+function fixtureSpec(client) {
+  const specs={shared:{slug:'term-test-1',minutes:40},
+    'k56-shared':{slug:'term-test-1-k56',minutes:55},
+    'k56-mini-shared':{slug:'mini-test-k56',minutes:15},
+    'k56-test2-shared':{slug:'term-test-2-k56',minutes:30}};
+  assert.ok(Object.hasOwn(specs,client),'Giao diện ngoài phạm vi');
+  return specs[client];
+}
+function validateWritingClock(writing,minutes) {
+  if(!writing.started) {
+    assert.equal(writing.startedAt,null);assert.equal(writing.deadlineAt,null);return;
+  }
+  const epoch=value=>{
+    assert.equal(typeof value,'string');assert.match(value,/(?:Z|[+-]\d{2}:\d{2})$/);
+    const parsed=Date.parse(value);assert.ok(Number.isFinite(parsed));return parsed;
+  };
+  assert.equal(epoch(writing.deadlineAt)-epoch(writing.startedAt),minutes*60000,'Sai thời lượng Writing trong SQL');
+}
+
 async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   assert.ok(['shared','k56-shared','k56-mini-shared','k56-test2-shared'].includes(client));
   assert.ok(uuid.test(identity.attempt_id)&&uuid.test(identity.student_ref));
@@ -105,14 +126,17 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   await fs.mkdir(evidenceDir,{recursive:false}); // Không ghi đè evidence của lần chạy cũ.
   const bytes=Object.fromEntries(await Promise.all(Object.entries(assets).map(async([key,file])=>[key,await fs.readFile(file)])));
   const assetHashes=Object.fromEntries(Object.entries(bytes).map(([key,value])=>[key,hash(value)]));
-  const key=`izone-test:term-test-1:${identity.class_code}`;
+  const spec=fixtureSpec(client);
+  const key=`izone-test:${spec.slug}:${identity.class_code}`;
   const events=[],errors=[],contexts=[]; let browser,server,base,pending=0,blocked=null,releaseBlocked=null;
-  let receipt={schema:'d08-ui-canary/v1',scope,client,identity,assetHashes,binding:bridge.binding||null,public_assets:bridge.publicAssets||{status:'not_run'},producer_source_sha256:hash(await fs.readFile(__filename)),started_at:new Date().toISOString(),status:'failed',cases:[],events};
+  let receipt={schema:'d08-ui-canary/v1',scope,client,test_slug:spec.slug,writing_minutes:spec.minutes,identity,assetHashes,binding:bridge.binding||null,public_assets:bridge.publicAssets||{status:'not_run'},producer_source_sha256:hash(await fs.readFile(__filename)),started_at:new Date().toISOString(),status:'failed',cases:[],events};
   const save=async()=>fs.writeFile(path.join(evidenceDir,'receipt.json'),JSON.stringify(receipt,null,2)+'\n','utf8');
   const read=async label=>{
     const value=await bridge.read();
     if(scope==='production_fixture'){assert.deepEqual(value.destination,bridge.binding.destination);assert.equal(value.course_id,identity.course_id);assert.equal(value.student_id,identity.student_id);assert.equal(value.ownership_checked,true);}
     assert.equal(value.attempt_id,identity.attempt_id); assert.equal(value.marker,identity.marker);
+    assert.equal(value.test_slug,spec.slug,'Bài SQL thuộc sai đề');
+    validateWritingClock(value.writing,spec.minutes);
     assert.ok(Number.isSafeInteger(value.writing.revision)&&value.writing.revision>=0);
     assert.equal(value.writing.submitted,false); assert.deepEqual(value.children,[0,0,0,0,0]);
     events.push({kind:'database_read',label,at:new Date().toISOString(),value}); await save(); return value;
@@ -120,8 +144,8 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   const shell=`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/assets/css"></head><body class="cbt-mode"><div id="app"></div><script src="/assets/config"></script><script>
   window.D08_ORIGINAL_API_BASE=window.TERM_TEST_APP_CONFIG.API_FOR_CLASS?window.TERM_TEST_APP_CONFIG.API_FOR_CLASS(new URLSearchParams(location.search).get('class')):window.TERM_TEST_APP_CONFIG.API_BASE_URL;
   window.TERM_TEST_APP_CONFIG={...window.TERM_TEST_APP_CONFIG,API_BASE_URL:location.origin+'/fixture-api',API_FOR_CLASS:()=>location.origin+'/fixture-api'};
-  window.TERM_TEST_CONFIG={slug:'term-test-1',title:'Kiểm bài giả D08',listening:{title:'Listening',description:[],controls:[]},reading:{title:'Reading',description:[],controls:[]}};
-  window.TERM_TEST_CONTENT={variant:'semantic-html',deferResultsUntilComplete:true,timing:{writingMinutes:60},writing:{tasks:[{id:'task1',label:'Task 1',prompt:'Đề giả 1',minimumWords:0},{id:'task2',label:'Task 2',prompt:'Đề giả 2',minimumWords:0}]}};
+  window.TERM_TEST_CONFIG={slug:${JSON.stringify(spec.slug)},title:'Kiểm bài giả D08',listening:{title:'Listening',description:[],controls:[]},reading:{title:'Reading',description:[],controls:[]}};
+  window.TERM_TEST_CONTENT={variant:'semantic-html',deferResultsUntilComplete:true,timing:{writingMinutes:${spec.minutes}},writing:{tasks:[{id:'task1',label:'Task 1',prompt:'Đề giả 1',minimumWords:0},{id:'task2',label:'Task 2',prompt:'Đề giả 2',minimumWords:0}]}};
   </script><script src="/assets/examOrder"></script><script src="/assets/app"></script></body></html>`;
   // Phục hồi dựa SQL mới nhất; không gọi endpoint result thật có thể mang side effect.
   async function open(label,initial) {
@@ -231,4 +255,4 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   }
   return receipt;
 }
-module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback};
+module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback,fixtureSpec,validateWritingClock};

@@ -5,7 +5,7 @@ Lỗi gửi hoặc chưa rõ response giữ khóa và ca mở, không tự repla
 import hashlib,json,os,re,uuid
 from pathlib import Path
 from browser_receipt import ENTRIES,DESTINATIONS
-from canary_remote import CHILDREN
+from canary_remote import CHILDREN,uses_existing_demo_course
 
 def check(value,code):
     if not value:raise ValueError(code)
@@ -32,6 +32,7 @@ def validate_ledger(ledger,manifest):
         markers.add(identity['marker'])
         check(identity['class_code']==('CODEXDEMO56' if target.endswith('demo-api-1') else 'IC2264' if target=='izone-k56-ic2264-api' else 'IC2146'),'ui_class_route_wrong')
         for key in ('course_id','student_id'):
+            if key=='course_id' and uses_existing_demo_course({'name':target,**identity}):continue
             value=identity[key];check(type(value) is int and -2147483647<=value<=-1000000 and value not in numbers,'ui_negative_identity_invalid');numbers.add(value)
         api,database=DESTINATIONS[target]
         check(dest=={'container':target,'image':images[target],'public_api_base':api,'database':database},'ui_destination_wrong')

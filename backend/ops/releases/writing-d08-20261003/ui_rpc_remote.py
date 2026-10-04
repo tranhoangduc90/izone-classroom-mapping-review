@@ -16,26 +16,28 @@ class ProductionBackend:
         for row,target in zip(rows,self.manifest['targets']):
             check(row['image']==target['candidate_image'] and row['running'] and row['healthy']=='healthy','ui_candidates_not_live')
     def item(self,entry):
-        return {'name':entry['destination']['container'],**entry['identity']}
+        target=entry['destination']['container']
+        return {'name':target,**entry['identity'],'test_slug':c.fixture_test_slug(target,entry['client'])}
     def query(self,entry,sql):return c.admin_query(self.item(entry),sql)
     def read(self,entry):
         item=self.item(entry);schema,_,database=c.destination(item)
         identifier=item['attempt_id']
-        fields=' OR '.join([f"id='{identifier}'::uuid",f"class_name_snapshot='{item['marker']}'",f"erp_course_class_id={item['course_id']}",f"erp_student_contact_id={item['student_id']}"])
+        fields=' OR '.join([f"id='{identifier}'::uuid",f"class_name_snapshot='{item['marker']}'",f"erp_student_contact_id={item['student_id']}"])+c.course_collision_sql(item)
         children=",".join(f"(SELECT count(*) FROM {schema}.{table} WHERE attempt_id='{identifier}'::uuid)" for table in c.CHILDREN)
         sql=f"""BEGIN READ ONLY;
 SET LOCAL statement_timeout='10s';
 SELECT jsonb_build_object('database',current_database(),'identity_count',(SELECT count(*) FROM {schema}.term_test_attempt WHERE {fields}),
- 'value',(SELECT jsonb_build_object('attempt_id',id,'marker',class_name_snapshot,'course_id',erp_course_class_id,'student_id',erp_student_contact_id,
+ 'value',(SELECT jsonb_build_object('attempt_id',id,'marker',class_name_snapshot,'course_id',erp_course_class_id,'student_id',erp_student_contact_id,'test_slug',test_slug,
  'exam_session',exam_session_id,'children',jsonb_build_array({children}),
  'writing',jsonb_build_object('task1',writing_task_1,'task2',writing_task_2,'revision',writing_draft_revision,
- 'started',writing_started_at IS NOT NULL,'submitted',writing_submitted_at IS NOT NULL,
+ 'started',writing_started_at IS NOT NULL,'startedAt',writing_started_at,'submitted',writing_submitted_at IS NOT NULL,
  'deadlineAt',writing_deadline_at,'serverNow',clock_timestamp()))
  FROM {schema}.term_test_attempt WHERE id='{identifier}'::uuid))::text;
 COMMIT;"""
         values=self.query(entry,sql)
         check(len(values)==1 and values[0]['database']==database and values[0]['identity_count']==1,'ui_database_identity_count')
         value=values[0]['value'];check(value is not None and value.pop('exam_session') is None,'ui_exam_session_present')
+        check(value.get('test_slug')==item['test_slug'],'ui_test_slug_wrong')
         value.update(ownership_checked=True,destination=entry['destination'])
         return value
     def seed(self,entry):
@@ -45,8 +47,9 @@ COMMIT;"""
 SET LOCAL lock_timeout='5s';SET LOCAL statement_timeout='15s';
 DO $$ BEGIN
  IF current_database()<>'{database}' THEN RAISE EXCEPTION 'UI_DATABASE_MISMATCH'; END IF;
+ {c.demo_course_guard_sql(item)}
  IF EXISTS(SELECT 1 FROM {schema}.term_test_attempt WHERE id='{identifier}'::uuid
- OR class_name_snapshot='{item['marker']}' OR erp_course_class_id={item['course_id']} OR erp_student_contact_id={item['student_id']})
+ OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']}{c.course_collision_sql(item)})
  OR ({counts})<>0 THEN RAISE EXCEPTION 'UI_IDENTITY_COLLISION'; END IF;
 END $$;
 INSERT INTO {schema}.term_test_attempt
@@ -55,7 +58,7 @@ INSERT INTO {schema}.term_test_attempt
  reading_answers,reading_result,combined_result,listening_submitted_at,completed_at)
  SELECT '{identifier}'::uuid,'{identifier}'::uuid,slug,version,{item['course_id']},'{item['marker']}',
  {item['student_id']},'D08 synthetic temporary','{{}}','{{}}','{{}}','{{}}','{{}}',now(),now()
- FROM {schema}.test_definition WHERE slug='term-test-1' ORDER BY version DESC LIMIT 1;
+ FROM {schema}.test_definition WHERE slug='{item['test_slug']}' ORDER BY version DESC LIMIT 1;
 COMMIT;"""
         self.query(entry,sql)
         return self.read(entry)

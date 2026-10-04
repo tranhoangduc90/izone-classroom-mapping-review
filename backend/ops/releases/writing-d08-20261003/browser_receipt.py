@@ -10,6 +10,7 @@ import re
 import uuid
 import zipfile
 from pathlib import Path
+from canary_remote import uses_existing_demo_course
 
 CASES = {'ui_start_preserves_canonical', 'two_writer_stale_preserves_both_tasks',
          'conflict_no_automatic_rebase', 'reload_preserves_local_and_canonical',
@@ -161,6 +162,8 @@ def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
         seen.add(identity['attempt_id'])
         check(identity['marker'].startswith('CODEX_D08_'+ledger['run_id']+'_'), 'browser_marker_run')
         for key in ('course_id','student_id'):
+            if key=='course_id' and uses_existing_demo_course({'name':target,**identity}):
+                check(identity.get('class_code')=='CODEXDEMO56','browser_demo_class_wrong');continue
             n=identity[key];check(type(n) is int and -2147483647<=n<=-1000000 and n not in erp, 'browser_erp_identity');erp.add(n)
         expected={'container':target,'image':images[target],'public_api_base':DESTINATIONS[target][0],'database':DESTINATIONS[target][1]}
         check(destination==expected, 'browser_ledger_destination')

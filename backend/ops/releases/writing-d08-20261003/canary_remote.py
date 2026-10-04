@@ -13,6 +13,37 @@ import release_remote as r
 
 NAMES = ('mapping-review-api', 'izone-k56-ic2264-api', 'izone-k56-demo-k56-demo-api-1')
 CHILDREN = ('term_test_exam_session', 'term_test_writing_grading_run', 'term_test_writing_grading_final', 'term_test_writing_planning', 'term_test_portal_sync_job')
+DEMO_COURSE_ID = -560001
+
+
+def uses_existing_demo_course(item):
+    # Lớp này là lớp giả hiện có, không phải định danh học viên hoặc lượt làm bài.
+    return item.get('name') == NAMES[2] and type(item.get('course_id')) is int and item['course_id'] == DEMO_COURSE_ID
+
+
+def fixture_test_slug(target, client=None):
+    if target not in NAMES:
+        raise RuntimeError('canary_target_invalid')
+    if client == 'k56-mini-shared':
+        return 'mini-test-k56'
+    if client == 'k56-test2-shared':
+        return 'term-test-2-k56'
+    return 'term-test-1' if target == NAMES[0] else 'term-test-1-k56'
+
+
+def course_collision_sql(item):
+    # UUID/marker/mã học viên luôn riêng; chỉ lớp giả đã có được dùng chung.
+    return '' if uses_existing_demo_course(item) else f" OR erp_course_class_id={item['course_id']}"
+
+
+def demo_course_guard_sql(item):
+    if not uses_existing_demo_course(item):
+        return ''
+    return """IF (SELECT count(*) FROM mapping.classroom_course_mapping
+ WHERE erp_course_class_id=-560001 AND upper(btrim(erp_class_name_snapshot))='CODEXDEMO56')<>1
+ OR (SELECT count(*) FROM mapping.classroom_course_mapping
+ WHERE upper(btrim(erp_class_name_snapshot))='CODEXDEMO56')<>1
+ THEN RAISE EXCEPTION 'CANARY_DEMO_CLASS_CHANGED'; END IF;"""
 
 
 def validate(request):
@@ -34,6 +65,8 @@ def validate(request):
             raise RuntimeError('canary_marker_run_mismatch')
         for key in ('course_id', 'student_id'):
             value = item[key]
+            if key == 'course_id' and uses_existing_demo_course(item):
+                continue
             if type(value) is not int or not -2147483647 <= value <= -1000000 or value in numbers:
                 raise RuntimeError('canary_erp_identity_invalid')
             numbers.add(value)
@@ -44,7 +77,7 @@ def destination(item):
     if item['name'] not in NAMES:
         raise RuntimeError('canary_target_invalid')
     return ('assessment_k56' if item['name'] == NAMES[1] else 'assessment',
-            'k56-demo-db' if item['name'] == NAMES[2] else 'mapping-postgres',
+            'izone-k56-demo-k56-demo-db-1' if item['name'] == NAMES[2] else 'mapping-postgres',
             'izone_mapping_demo' if item['name'] == NAMES[2] else 'mapping_db')
 
 
@@ -55,9 +88,12 @@ def child_expression(schema, identifier):
 def cleanup_sql(item):
     schema, _, database = destination(item)
     identifier = item['attempt_id']
+    test_slug = item.get('test_slug',fixture_test_slug(item['name']))
+    if test_slug not in ('term-test-1','term-test-1-k56','mini-test-k56','term-test-2-k56'):
+        raise RuntimeError('canary_test_slug_invalid')
     condition = (f"id='{identifier}'::uuid AND class_name_snapshot='{item['marker']}'"
                  f" AND erp_course_class_id={item['course_id']} AND erp_student_contact_id={item['student_id']}"
-                 " AND writing_submitted_at IS NULL AND exam_session_id IS NULL")
+                 f" AND test_slug='{test_slug}' AND writing_submitted_at IS NULL AND exam_session_id IS NULL")
     children = child_expression(schema, identifier)
     # Không xóa theo marker diện rộng; khóa UUID trước kiểm child và xóa đúng dòng.
     return f"""BEGIN;
@@ -101,7 +137,9 @@ def cleanup(item):
 
 def node_source(item, core):
     schema, _, database = destination(item)
-    config = json.dumps({**item, 'schema': schema, 'database': database}, ensure_ascii=False)
+    config = json.dumps({**item, 'schema': schema, 'database': database,
+                         'test_slug': fixture_test_slug(item['name']),
+                         'existing_demo_course': uses_existing_demo_course(item)}, ensure_ascii=False)
     # Toàn bộ nội dung là UUID và bài giả; connection string chỉ đọc trong container.
     return core.replace('export async function exerciseCanary', 'async function exerciseCanary') + '\n' + """
 import pg from 'pg';
@@ -116,11 +154,16 @@ try {
  const schema=config.schema;
  // Xác minh tồn tại năm bảng child trước mutation.
  for(const table of tables) await pool.query(`SELECT count(*) FROM ${schema}.${table} WHERE attempt_id=$1`,[config.attempt_id]);
+ if(config.existing_demo_course){
+  const allowed=(await pool.query(`SELECT erp_course_class_id::text AS course_id,erp_class_name_snapshot AS class_code
+   FROM mapping.classroom_course_mapping WHERE upper(btrim(erp_class_name_snapshot))='CODEXDEMO56'`)).rows;
+  assert.deepEqual(allowed,[{course_id:'-560001',class_code:'CODEXDEMO56'}],'CANARY_DEMO_CLASS_CHANGED');
+ }
  const existing=await pool.query(`SELECT count(*)::int n FROM ${schema}.term_test_attempt
-  WHERE id=$1 OR class_name_snapshot=$2 OR erp_student_contact_id=$3 OR erp_course_class_id=$4`,
-  [config.attempt_id,config.marker,config.student_id,config.course_id]);
+  WHERE id=$1 OR class_name_snapshot=$2 OR erp_student_contact_id=$3 OR (NOT $5::boolean AND erp_course_class_id=$4::bigint)`,
+  [config.attempt_id,config.marker,config.student_id,config.course_id,config.existing_demo_course]);
  assert.equal(existing.rows[0].n,0,'CANARY_EXISTING_IDENTITY');
- const definition=(await pool.query(`SELECT slug,version FROM ${schema}.test_definition WHERE slug='term-test-1' ORDER BY version DESC LIMIT 1`)).rows[0];
+ const definition=(await pool.query(`SELECT slug,version FROM ${schema}.test_definition WHERE slug=$1 ORDER BY version DESC LIMIT 1`,[config.test_slug])).rows[0];
  assert.ok(definition,'CANARY_DEFINITION_MISSING');
  await pool.query(`INSERT INTO ${schema}.term_test_attempt
   (id,client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,
@@ -129,11 +172,12 @@ try {
   VALUES($1::uuid,$1::uuid,$2,$3,$4,$5,$6,'D08 synthetic temporary','{}','{}','{}','{}','{}',now(),now())`,
   [config.attempt_id,definition.slug,definition.version,config.course_id,config.marker,config.student_id]);
  const read=async()=>{
-  const row=(await pool.query(`SELECT writing_task_1,writing_task_2,writing_draft_revision,
+  const row=(await pool.query(`SELECT writing_task_1,writing_task_2,writing_draft_revision,test_slug,
    writing_updated_at,writing_submitted_at FROM ${schema}.term_test_attempt
    WHERE id=$1 AND class_name_snapshot=$2 AND erp_student_contact_id=$3 AND erp_course_class_id=$4`,
    [config.attempt_id,config.marker,config.student_id,config.course_id])).rows[0];
   assert.ok(row,'CANARY_ROW_IDENTITY_CHANGED');
+  assert.equal(row.test_slug,config.test_slug,'CANARY_ROW_TEST_CHANGED');
   const children={};
   for(const table of tables) children[table]=Number((await pool.query(`SELECT count(*)::int n FROM ${schema}.${table} WHERE attempt_id=$1`,[config.attempt_id])).rows[0].n);
   return {task1:row.writing_task_1,task2:row.writing_task_2,revision:Number(row.writing_draft_revision),
@@ -164,7 +208,7 @@ def exercise(request):
     for item in identities:
         schema, _, database = destination(item)
         counts = child_expression(schema, item['attempt_id'])
-        preflight = admin_query(item, f"BEGIN READ ONLY; SELECT jsonb_build_object('database',current_database(),'existing',(SELECT count(*) FROM {schema}.term_test_attempt WHERE id='{item['attempt_id']}'::uuid OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']} OR erp_course_class_id={item['course_id']}),'children',({counts}))::text; COMMIT;")
+        preflight = admin_query(item, f"BEGIN READ ONLY; DO $$ BEGIN {demo_course_guard_sql(item)} END $$; SELECT jsonb_build_object('database',current_database(),'existing',(SELECT count(*) FROM {schema}.term_test_attempt WHERE id='{item['attempt_id']}'::uuid OR class_name_snapshot='{item['marker']}' OR erp_student_contact_id={item['student_id']}{course_collision_sql(item)}),'children',({counts}))::text; COMMIT;")
         if preflight != [{'database':database,'existing':0,'children':0}]:
             raise RuntimeError('canary_preexisting_identity_blocked_no_cleanup')
     state = {'status': 'in_progress', 'before': rows, 'identities': identities, 'receipts': []}

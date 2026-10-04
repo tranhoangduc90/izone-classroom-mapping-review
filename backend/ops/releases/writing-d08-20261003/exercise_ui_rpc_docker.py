@@ -5,6 +5,7 @@ Receipt này không thay Chrome/public asset/user-visible outcome sau phát hàn
 import copy,hashlib,json,tempfile,uuid
 from pathlib import Path
 import release_remote as r
+import canary_remote as c
 from ui_rpc_remote import ProductionBackend
 from ui_rpc_guard import ENTRIES,DESTINATIONS,Journal,execute,canonical_hash,check
 from exercise_canary_docker import exercise
@@ -30,7 +31,7 @@ def ledger_for(manifest,run):
         entries.append({'case_id':case_id,'client':client,
           'identity':{'attempt_id':str(uuid.uuid4()),'student_ref':str(uuid.uuid4()),'marker':'CODEX_D08_'+run+'_'+str(i),
              'class_code':'CODEXDEMO56' if target.endswith('demo-api-1') else 'IC2264' if target=='izone-k56-ic2264-api' else 'IC2146',
-             'course_id':-3000000-i*2,'student_id':-3000001-i*2},
+             'course_id':c.DEMO_COURSE_ID if target==c.NAMES[2] else -3000000-i*2,'student_id':-3000001-i*2},
           'destination':{'container':target,'image':images[target],'public_api_base':api,'database':database}})
     return {'schema':'d08-ui-production-ledger/v1','run_id':run,'bundle_revision':'4'*64,'entries':entries}
 

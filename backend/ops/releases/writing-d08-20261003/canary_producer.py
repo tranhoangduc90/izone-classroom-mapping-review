@@ -43,7 +43,7 @@ def prepare(config):
              'task_id': '01a0ffd0-778e-7723-99e3-a4bdee78fbb7',
              'identities': [{'name': target['name'], 'attempt_id': str(uuid.uuid4()),
                              'marker': 'CODEX_D08_' + run + '_' + str(index),
-                             'course_id': negative_id(), 'student_id': negative_id()}
+                             'course_id': canary.DEMO_COURSE_ID if target['name']==canary.NAMES[2] else negative_id(), 'student_id': negative_id()}
                             for index, target in enumerate(manifest['targets'])]}
     canary.validate(value)
     path = directory/'production-canary-ledger.json'

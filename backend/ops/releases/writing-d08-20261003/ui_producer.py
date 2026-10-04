@@ -7,6 +7,7 @@ from pathlib import Path
 import release_adapter as adapter
 from browser_receipt import ENTRIES,DESTINATIONS,expected_assets
 from canary_producer import save_new
+from canary_remote import DEMO_COURSE_ID,NAMES
 from ui_rpc_guard import validate_ledger,check
 from ui_rpc import call
 HERE=Path(__file__).resolve().parent
@@ -33,7 +34,7 @@ def prepare(config):
         api,database=DESTINATIONS[target]
         identity={'attempt_id':str(uuid.uuid4()),'student_ref':str(uuid.uuid4()),'marker':'CODEX_D08_'+run+'_'+str(index),
           'class_code':'CODEXDEMO56' if target.endswith('demo-api-1') else 'IC2264' if target=='izone-k56-ic2264-api' else 'IC2146',
-          'course_id':negative(),'student_id':negative()}
+          'course_id':DEMO_COURSE_ID if target==NAMES[2] else negative(),'student_id':negative()}
         entries.append({'case_id':case_id,'client':client,'identity':identity,
           'destination':{'container':target,'image':targets[target]['candidate_image'],'public_api_base':api,'database':database}})
     ledger={'schema':'d08-ui-production-ledger/v1','run_id':run,'bundle_revision':config['bundle_revision'],'task_id':'01a0ffd0-778e-7723-99e3-a4bdee78fbb7','entries':entries}
