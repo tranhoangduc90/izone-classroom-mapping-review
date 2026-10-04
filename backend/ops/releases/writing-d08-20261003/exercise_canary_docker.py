@@ -68,6 +68,11 @@ CREATE TABLE __SCHEMA__.term_test_attempt(
             schema,_,database=c.destination(item)
             text=ddl.replace('__SCHEMA__',schema)
             text+='\n'.join('CREATE TABLE '+schema+'.'+table+'(attempt_id uuid);' for table in c.CHILDREN)
+            # Lớp nền giả cho guard demo; giữ riêng DB owned, không tạo lớp production.
+            class_code = 'CODEXDEMO56' if index == 2 else 'IC2264' if index == 1 else 'IC2146'
+            courses = [-2000000-index*2] + ([-3000004,-3000008,-3000012] if index == 2 else [-3000002,-3000006,-3000010] if index == 1 else [-3000000])
+            text += "CREATE SCHEMA IF NOT EXISTS mapping; CREATE TABLE IF NOT EXISTS mapping.classroom_course_mapping(erp_course_class_id bigint PRIMARY KEY, erp_class_name_snapshot text);"
+            text += "INSERT INTO mapping.classroom_course_mapping VALUES " + ','.join(f"({course},'{class_code}')" for course in courses) + ';'
             admin(item,text)
             # Pool K56 thật định tuyến assessment sang schema riêng như server hiện hành.
             scoped="import {createAssessmentSchemaPool} from './src/assessment-schema-pool.js'; const scoped=createAssessmentSchemaPool(pool,{family:'k56'});" if index==1 else 'const scoped=pool;'
@@ -75,14 +80,14 @@ CREATE TABLE __SCHEMA__.term_test_attempt(
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:3,statement_timeout:15000});
 __SCOPED__
 let grading=0,portal=0;
-const app=createApp({config:{nodeEnv:'test',authMode:'legacy',legacyReviewToken:'fixture-only',
+const app=createApp({config:{nodeEnv:'test',deploymentProfileName:'__PROFILE__',demoIsolatedMode:__DEMO__,authMode:'legacy',legacyReviewToken:'fixture-only',
  allowedOrigins:new Set(['https://tranhoangduc90.github.io']),trustProxyHops:0},pool:scoped,
  termTestAssetService:{getTiming:()=>({writingDurationMinutes:60})},
  syncErpGrades:async()=>{portal++;},termTestWritingGradingService:{ensureSubmission:async()=>{grading++;return {ready:false};}}});
 const outer=express(); outer.get('/fixture-writer-counts',(_,res)=>res.json({grading,portal}));
 outer.use(app); const server=outer.listen(8798,'0.0.0.0');
 process.on('SIGTERM',()=>server.close(async()=>{await pool.end();process.exit(0);}));
-""".replace('__SCOPED__',scoped)
+""".replace('__SCOPED__',scoped).replace('__PROFILE__','k56-demo' if index==2 else 'k56-ic2264' if index==1 else 'k67').replace('__DEMO__','true' if index==2 else 'false')
             api_name=name+'-api-'+str(index)
             apiid=r.api('POST','/containers/create?name='+api_name,{
                 'Image':target['candidate_image'],'Entrypoint':[],
@@ -113,7 +118,7 @@ process.on('SIGTERM',()=>server.close(async()=>{await pool.end();process.exit(0)
                              'api_database':result,'cleanup':cleanup,'writers':counts})
         return {'status':'passed','targets':receipts,'production_environment_used':False,
                 'production_database_used':False,'network':'Internal','cleanup':'verified_after_finally',
-                'scope':'Exact candidate createApp/SQL + actual PostgreSQL + actual seed/cleanup producer; no production profile/assets/browser outcome'}
+                'scope':'Exact candidate createApp/SQL + actual PostgreSQL + actual seed/cleanup producer; actual profile branch with synthetic legacy auth/config; no production assets/browser outcome'}
     finally:
         c.admin_query=original_admin
         for identifier,object_name,volumes in reversed(owned):

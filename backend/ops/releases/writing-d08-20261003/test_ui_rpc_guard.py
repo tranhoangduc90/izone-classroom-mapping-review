@@ -63,6 +63,14 @@ class RpcGuard(unittest.TestCase):
             with self.subTest(action=action):
                 self.payload['action']=action
                 with self.assertRaisesRegex(ValueError,'forbidden'):validate_payload(self.payload,self.entry['identity'])
+    def test_optional_outline_forwarded_unchanged(self):
+        self.payload['outline']='Dàn ý local K56'
+        self.assertEqual(validate_payload(self.payload,self.entry['identity']),self.payload)
+    def test_invalid_outline_blocked(self):
+        for value in (False,None,7,'x'*100001):
+            with self.subTest(value_type=type(value).__name__):
+                self.payload['outline']=value
+                with self.assertRaisesRegex(ValueError,'outline'):validate_payload(self.payload,self.entry['identity'])
     def test_wrong_payload_uuid(self):
         self.payload['attemptToken']=str(uuid.uuid4())
         with self.assertRaisesRegex(ValueError,'wrong_uuid'):validate_payload(self.payload,self.entry['identity'])

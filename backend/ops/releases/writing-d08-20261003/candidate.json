@@ -125,10 +125,9 @@
     {
       "name": "izone-k56-demo-k56-demo-api-1",
       "base_image": "sha256:ab8bedf62dbcfe5f8352b63a9c3e5049ebed0f5dc5c358a86edf0d49bdfd66bb",
-      "candidate_image": "sha256:2557e2ce8eddf02f7879482a52315ad239db79a19f3ca80baae11e38e98e4190",
+      "candidate_image": "sha256:5e99c24b87dae58120bdb98c696681b93f356001eafdb5dc8854c3f88a0334af",
       "source_hashes": {
-        "package.json": "ea57859799ce01345e9a506061adb2bd0e91a0bad85c99faee6ead8c56d1cc8f",
-        "src/app.js": "bceffd014af4dd3d3dce8d90ebdbad6846943b747cac1211b69ccc1d9af52514",
+        "src/app.js": "3920a8fc7fd51b178a995d1375382c692f31197171f52920ed425dfa03ff9201",
         "src/auth.js": "19f98f09a50c54e03bfea9b878d4282a4d8728445158ded46b41ef96bb5253cd",
         "src/config.js": "566db842934164acd8bdfd336210facb78de04a20b74dca6e50f5d4ee807b59e",
         "src/db.js": "e53e653c1e6a5769b5dcc24726c7ca5637f5bad563901ae13bf09ce864c47234",
@@ -150,7 +149,7 @@
         "src/learning-sql.js": "ecdfafa276a2b623f969bc2dc689b283508bc705cd836d94c94020359cf430cd",
         "src/mini-tests.js": "cb0c759eae6afa4fd66ea4576ae2e703fde957658fe204c78f5ec7ee7f1835e8",
         "src/server.js": "8e3bd8df19c0da7a08ddb49dda4d3a2060c89990291742e64bd8ae4c06a91ae9",
-        "src/sql.js": "cf81bbd2d3db8a99006bddc918d6cbf4d78608b90e4201e7d81310048c881f8a",
+        "src/sql.js": "c84f05f3a1d3c444a7c85ab0d67786a0e75c2c0509a07f9563ea887d1474b1fa",
         "src/term-test-assets.js": "f5f67e1e4c4b01526a2e97795ae1ca7866c69e7360284ce01973c77e6456fa5c",
         "src/term-test-planning.js": "e5f6f8633849619e7ebc5ad4e850f90d9eed4ca5cebd47650c175fcef4845e9a",
         "src/term-test-portal-sync.js": "c6398bc1524b0816e2c7c70334806e3f98e9f110ff65b842bcad7b95046a5037",
@@ -159,7 +158,8 @@
         "src/term-test-writing-notifier.js": "1752a45cf9592a14095d5ba16b155b981484932ff9b27dd9a8708ec5320acea2",
         "src/term-tests.js": "23f9c21d4b1758b79781f900d0be1221fd3564c7a14ad6f557a3b64f604a1569",
         "src/writing-portal-worker.js": "70d79dd645d87f198c067444ff7cc5edecdfe4ce76b142f36a0e9b8a38fd4242",
-        "src/writing-tests.js": "24e1a347ee3c4a6a20608a15c7757853c188282ebe950216302925b23eac48db"
+        "src/writing-tests.js": "24e1a347ee3c4a6a20608a15c7757853c188282ebe950216302925b23eac48db",
+        "package.json": "ea57859799ce01345e9a506061adb2bd0e91a0bad85c99faee6ead8c56d1cc8f"
       }
     }
   ]

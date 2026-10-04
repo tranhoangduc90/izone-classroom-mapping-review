@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const {createServer} = require('node:http');
-const {createHash} = require('node:crypto');
+const {createHash,randomInt} = require('node:crypto');
 const {createRequire} = require('node:module');
 const path = require('node:path');
 const {chromium} = createRequire('C:/Users/ADMIN/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/package.json')('playwright');
@@ -66,6 +66,23 @@ async function closeContexts(contexts,browser,evidenceDir,timeoutMs=10000) {
   }
   if(browser)await bounded(()=>browser.close(),'browser');
   return {closed:failures.length===0,errors:failures};
+}
+
+// Windows có thể cấp cổng 4045/6000 bị Chrome chặn khi listen(0).
+// Chọn dải động cao và thử cổng khác chỉ khi cổng đã bận; không hạ guard trình duyệt.
+async function listenLoopback(server,choosePort=()=>randomInt(49152,65536)) {
+  for(let attempt=0;attempt<16;attempt++) {
+    const port=choosePort();assert.ok(Number.isInteger(port)&&port>=49152&&port<=65535);
+    try {
+      await new Promise((resolve,reject)=>{
+        const error=value=>{server.off('listening',listening);reject(value);};
+        const listening=()=>{server.off('error',error);resolve();};
+        server.once('error',error);server.once('listening',listening);server.listen(port,'127.0.0.1');
+      });
+      return server.address().port;
+    } catch(error) {if(error.code!=='EADDRINUSE')throw error;}
+  }
+  throw new Error('Không tìm được cổng localhost còn trống cho fixture Chrome');
 }
 
 async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
@@ -159,7 +176,7 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   async function visiblePair(page,expected){const value=await session(page);assert.deepEqual(pair(value.drafts.writing),expected);assert.equal(await page.locator('[data-writing-task="task1"]').inputValue(),expected.task1);assert.equal(await page.locator('[data-writing-task="task2"]').inputValue(),expected.task2);return value;}
   try {
     server=createServer((req,res)=>{const part=req.url.split('?')[0];if(part==='/fixture.html'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(shell);}const asset=part.replace('/assets/','');if(bytes[asset]){res.writeHead(200,{'Content-Type':asset==='css'?'text/css':'text/javascript'});return res.end(bytes[asset]);}res.writeHead(404);res.end();});
-    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve)); base=`http://127.0.0.1:${server.address().port}`;
+    await listenLoopback(server); base=`http://127.0.0.1:${server.address().port}`;
     browser=await chromium.launch({headless:true,executablePath:'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'});
     const initial=(await read('before')).writing; assert.equal(initial.revision,0); assert.deepEqual(pair(initial),{task1:'',task2:''});
     const first=await open('A',initial);
@@ -214,4 +231,4 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   }
   return receipt;
 }
-module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts};
+module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback};

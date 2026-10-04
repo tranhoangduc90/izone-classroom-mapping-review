@@ -39,11 +39,13 @@ def validate_ledger(ledger,manifest):
 
 def validate_payload(payload,identity):
     check(isinstance(payload,dict),'ui_payload_object')
-    check(set(payload)<= {'attemptToken','action','task1','task2','baseRevision','revision'},'ui_payload_extra')
+    check(set(payload)<= {'attemptToken','action','task1','task2','outline','baseRevision','revision'},'ui_payload_extra')
     check(payload.get('attemptToken')==identity['attempt_id'],'ui_payload_wrong_uuid')
     check(payload.get('action') in ('start','draft'),'ui_payload_forbidden_action')
     for key in ('task1','task2'):
         check(isinstance(payload.get(key),str) and len(payload[key])<=100000,'ui_payload_task_invalid')
+    if 'outline' in payload:
+        check(isinstance(payload['outline'],str) and len(payload['outline'])<=100000,'ui_outline_invalid')
     if payload['action']=='draft':
         value=payload.get('baseRevision');check(type(value) is int and 0<=value<=9007199254740991,'ui_base_invalid')
     return payload
