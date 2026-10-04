@@ -47,7 +47,8 @@ class ExistingDemoCourse(unittest.TestCase):
             with self.assertRaises(ValueError):validate_ledger(ledger,self.manifest)
 
     def test_ui_seed_metadata_uses_exact_client_test_slug(self):
-        backend=ProductionBackend(self.manifest,[])
+        bindings={name:{'api_id':'a'*64,'db_id':'d'*64} for name in c.NAMES}
+        backend=ProductionBackend(self.manifest,[],bindings)
         ledger=ledger_for(self.manifest,'7'*32)
         expected={'shared':'term-test-1','k56-shared':'term-test-1-k56',
                   'k56-mini-shared':'mini-test-k56','k56-test2-shared':'term-test-2-k56'}

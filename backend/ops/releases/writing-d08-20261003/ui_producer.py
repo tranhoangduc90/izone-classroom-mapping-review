@@ -9,7 +9,7 @@ from browser_receipt import ENTRIES,DESTINATIONS,expected_assets
 from canary_producer import save_new
 from canary_remote import DEMO_COURSE_ID,NAMES
 from ui_rpc_guard import validate_ledger,check
-from ui_rpc import call
+from ui_rpc import call,capture_database_bindings
 HERE=Path(__file__).resolve().parent
 
 def prepare(config):
@@ -86,6 +86,7 @@ def run(config):
         check(entry['asset_hashes']==expected_assets(entry['client'],public),'ui_plan_assets_wrong_bundle')
     rows=adapter.remote(config,'probe')
     check(len(rows)==3 and all(row['name']==target['name'] and row['image']==target['candidate_image'] and row['running'] and row['healthy']=='healthy' for row,target in zip(rows,manifest['targets'])),'ui_candidates_not_live')
+    capture_database_bindings(config)
     save_new(folder/'production-ui-snapshot.json',rows)
     save_new(folder/'production-ui-public-preflight.json',public)
     aggregate={'schema':'d08-ui-production-outcome/v1','status':'in_progress','run_id':ledger['run_id'],'children':[]}

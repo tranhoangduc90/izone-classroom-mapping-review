@@ -5,19 +5,25 @@ Không submit/result/chấm/Portal/Docs/Lark. Mất response giữ journal khóa
 import hashlib,json,subprocess
 import release_remote as r
 import canary_remote as c
+import database_binding as binding
 from ui_rpc_guard import execute,Journal,check
 
 class ProductionBackend:
-    def __init__(self,manifest,expected):
-        self.manifest=manifest;self.expected=expected
+    def __init__(self,manifest,expected,bindings):
+        self.manifest=manifest;self.expected=expected;self.bindings=bindings
+        check(set(bindings)==set(c.NAMES),'ui_database_binding_target_set')
+        for row in expected:
+            check(bindings[row['name']]['api_id']==row['container_id'],'ui_database_binding_api_changed')
     def guard(self,entry):
         rows=r.probe(self.manifest)
         check(rows==self.expected,'ui_live_snapshot_drift')
         for row,target in zip(rows,self.manifest['targets']):
             check(row['image']==target['candidate_image'] and row['running'] and row['healthy']=='healthy','ui_candidates_not_live')
+        binding.require(self.item(entry),c.destination)
     def item(self,entry):
         target=entry['destination']['container']
-        return {'name':target,**entry['identity'],'test_slug':c.fixture_test_slug(target,entry['client'])}
+        return {'name':target,**entry['identity'],'test_slug':c.fixture_test_slug(target,entry['client']),
+                '_database_binding':self.bindings[target]}
     def query(self,entry,sql):return c.admin_query(self.item(entry),sql)
     def read(self,entry):
         item=self.item(entry);schema,_,database=c.destination(item)
@@ -74,12 +80,15 @@ try {
 }catch(error){console.log(JSON.stringify({status:'unknown',error:error.name}));process.exitCode=1;}
 """
         # Request đã ghi journal trên C và VPS trước Dockerexec; timeout không tự gửi lại.
-        run=subprocess.run(['docker','exec','-w','/app',entry['destination']['container'],'node','--input-type=module','-e',source,json.dumps({'url':url,'payload':payload})],
+        identifier=self.sender_id(entry)
+        run=subprocess.run(['docker','exec','-w','/app',identifier,'node','--input-type=module','-e',source,json.dumps({'url':url,'payload':payload})],
             capture_output=True,text=True,encoding='utf-8',timeout=45)
         check(run.returncode==0,'ui_post_sender_or_http_unknown')
         values=[json.loads(line) for line in run.stdout.splitlines() if line.startswith('{')]
         check(len(values)==1,'ui_post_receipt_unknown')
         return values[0]
+    def sender_id(self,entry):
+        return binding.require(self.item(entry),c.destination)['api_id']
     def cleanup(self,entry):
         item=self.item(entry);schema,_,database=c.destination(item)
         c.cleanup(item)
@@ -103,5 +112,8 @@ def perform(packet):
     from ui_rpc_guard import validate_ledger
     validate_ledger(ledger,packet['manifest'])
     check(request['case_id'] in {e['case_id'] for e in ledger['entries']},'ui_case_unknown')
+    bindings=packet.get('database_bindings')
+    from ui_rpc_guard import canonical_hash
+    check(isinstance(bindings,dict) and canonical_hash(bindings)==request.get('database_bindings_sha256'),'ui_database_binding_packet_wrong')
     folder=r.RELEASE_ROOT/ledger['run_id']/'ui-canary'/request['case_id']
-    return execute(request,ledger,packet['manifest'],ProductionBackend(packet['manifest'],packet['expected']),Journal(folder))
+    return execute(request,ledger,packet['manifest'],ProductionBackend(packet['manifest'],packet['expected'],bindings),Journal(folder))

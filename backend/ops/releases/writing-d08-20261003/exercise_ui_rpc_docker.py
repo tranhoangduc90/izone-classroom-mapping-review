@@ -13,6 +13,13 @@ from exercise_canary_docker import exercise
 class OwnedBackend(ProductionBackend):
     def __init__(self,manifest,apiid,pgid,owner):
         self.manifest=manifest;self.apiid=apiid;self.pgid=pgid;self.owner=owner
+    def item(self,entry):
+        # Fixture Internal dùng ID/label riêng; không mượn topology production.
+        target=entry['destination']['container']
+        return {'name':target,**entry['identity'],'test_slug':c.fixture_test_slug(target,entry['client'])}
+    def sender_id(self,entry):
+        self.guard(entry)
+        return self.apiid
     def guard(self,entry):
         api=r.inspect(self.apiid);pg=r.inspect(self.pgid)
         check(api['Config']['Labels'].get('codex.fixture')==self.owner and pg['Config']['Labels'].get('codex.fixture')==self.owner,'fixture_owner_wrong')

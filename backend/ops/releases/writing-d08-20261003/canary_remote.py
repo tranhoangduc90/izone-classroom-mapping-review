@@ -10,6 +10,7 @@ import subprocess
 import uuid
 from pathlib import Path
 import release_remote as r
+import database_binding as binding
 
 NAMES = ('mapping-review-api', 'izone-k56-ic2264-api', 'izone-k56-demo-k56-demo-api-1')
 CHILDREN = ('term_test_exam_session', 'term_test_writing_grading_run', 'term_test_writing_grading_final', 'term_test_writing_planning', 'term_test_portal_sync_job')
@@ -118,6 +119,8 @@ COMMIT;"""
 
 def admin_query(item, sql):
     _, container, database = destination(item)
+    frozen = binding.require(item, destination)
+    container = frozen['db_id']
     run = subprocess.run(['docker', 'exec', '-i', container, 'sh', '-c',
                           'exec psql -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d ' + database],
                          input=sql, text=True, encoding='utf-8', capture_output=True, timeout=60)
@@ -205,6 +208,9 @@ def exercise(request):
     journal = r.RELEASE_ROOT / request['run_id'] / 'canary.json'
     if journal.exists():
         raise RuntimeError('canary_replay_blocked_reconcile_cleanup')
+    # Khóa API/database/network ID trước lượt; mỗi query/cleanup phải so lại topology.
+    for item in identities:
+        item['_database_binding'] = binding.resolve(item, destination)
     for item in identities:
         schema, _, database = destination(item)
         counts = child_expression(schema, item['attempt_id'])
@@ -219,7 +225,8 @@ def exercise(request):
         receipt = {'target': item['name'], 'status': 'unknown'}
         sender_stopped = False
         try:
-            run = subprocess.run(['docker', 'exec', '-i', '-w', '/app', item['name'], 'node', '--input-type=module', '-'],
+            frozen = binding.require(item, destination)
+            run = subprocess.run(['docker', 'exec', '-i', '-w', '/app', frozen['api_id'], 'node', '--input-type=module', '-'],
                                  input=node_source(item, request['core']), text=True, encoding='utf-8', capture_output=True, timeout=180)
             sender_stopped = True
             values = [json.loads(line) for line in run.stdout.splitlines() if line.startswith('{')]

@@ -82,7 +82,11 @@ def sync_directory(folder):
 BINDING_FIELDS=('case_id','bundle_revision','ledger_canonical_sha256','ledger_sha256')
 
 def request_binding(request):
-    return {key:request[key] for key in BINDING_FIELDS}
+    value = {key:request[key] for key in BINDING_FIELDS}
+    # Production phải khóa thêm topology; fixture cũ không dùng database thật vẫn đọc được.
+    if 'database_bindings_sha256' in request:
+        value['database_bindings_sha256'] = request['database_bindings_sha256']
+    return value
 
 class Journal:
     """Khóa độc quyền không tự hết hạn; request tồn tại phải đối soát thủ công."""

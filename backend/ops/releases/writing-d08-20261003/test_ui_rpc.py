@@ -35,6 +35,9 @@ class CliRpc(unittest.TestCase):
         self.ledger=ledger_for(self.manifest,'7'*32);self.ledger['bundle_revision']='4'*64
         (self.root/'production-ui-ledger.json').write_text(json.dumps(self.ledger,ensure_ascii=False,indent=2),encoding='utf-8')
         (self.root/'production-ui-snapshot.json').write_text('[]',encoding='utf-8')
+        # Snapshot giả chỉ cho kiểm transport; không resolve hoặc query database.
+        self.bindings={name:{'api_id':'a'*64,'db_id':'d'*64} for name in ('mapping-review-api','izone-k56-ic2264-api','izone-k56-demo-k56-demo-api-1')}
+        (self.root/'production-ui-database-bindings.json').write_text(json.dumps(self.bindings),encoding='utf-8')
         self.entry=self.ledger['entries'][0];id=self.entry['identity']
         self.value={'attempt_id':id['attempt_id'],'marker':id['marker'],'course_id':id['course_id'],'student_id':id['student_id'],
           'destination':self.entry['destination'],'ownership_checked':True,'children':[0]*5,
@@ -55,6 +58,8 @@ class CliRpc(unittest.TestCase):
         self.assertEqual(set(packet['files']),set(rpc.FILES));self.assertEqual(packet['request']['sequence'],1)
         self.assertEqual(packet['request']['ledger_sha256'],hashlib.sha256((self.root/'production-ui-ledger.json').read_bytes()).hexdigest())
         self.assertEqual(packet['request']['case_id'],self.entry['case_id'])
+        self.assertEqual(packet['database_bindings'],self.bindings)
+        self.assertEqual(packet['request']['database_bindings_sha256'],rpc.canonical_hash(self.bindings))
         folder=self.root/'ui-rpc'/self.entry['case_id'];self.assertFalse((folder/'executor.lock').exists())
         self.assertTrue((folder/'1.response.json').is_file())
     def test_exact_crlf_and_lf_bytes_survive_packet(self):

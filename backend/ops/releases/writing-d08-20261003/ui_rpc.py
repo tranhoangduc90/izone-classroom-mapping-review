@@ -6,7 +6,39 @@ from pathlib import Path
 import release_adapter as adapter
 from ui_rpc_guard import Journal,validate_ledger,validate_payload,validate_read,validate_cleanup,canonical_hash,check
 HERE=Path(__file__).resolve().parent
-FILES=('release_remote.py','canary_remote.py','browser_receipt.py','ui_rpc_guard.py','ui_rpc_remote.py')
+FILES=('release_remote.py','canary_remote.py','browser_receipt.py','ui_rpc_guard.py','ui_rpc_remote.py','database_binding.py')
+
+def capture_database_bindings(config):
+    # Đọc API/DB/alias/network ID rồi ghi một snapshot bất biến trước seed đầu tiên.
+    from canary_producer import save_new
+    folder=Path(config['evidence_dir'])
+    names=('release_remote.py','canary_remote.py','database_binding.py')
+    packet={'files':{name:(HERE/name).read_text(encoding='utf-8') for name in names}}
+    save_new(folder/'production-ui-database-binding.request.json',packet)
+    bootstrap="""import json,sys,tempfile
+from pathlib import Path
+packet=json.load(sys.stdin)
+if set(packet['files'])!={'release_remote.py','canary_remote.py','database_binding.py'}:raise RuntimeError('binding_sources_wrong')
+with tempfile.TemporaryDirectory(prefix='codex-d08-db-binding-') as folder:
+ for name,source in packet['files'].items():(Path(folder)/name).write_text(source,encoding='utf-8')
+ sys.path.insert(0,folder)
+ import canary_remote as c
+ import database_binding as b
+ print(json.dumps({name:b.resolve({'name':name},c.destination) for name in c.NAMES}))
+"""
+    spec=importlib.util.spec_from_file_location('ssh_credentials',HERE/'ssh_credentials.py')
+    helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+    client,password=helper.connect('vps_1');password=''
+    try:
+        stdin,out,err=client.exec_command('python3 -c '+shlex.quote(bootstrap),timeout=90)
+        stdin.write(json.dumps(packet));stdin.channel.shutdown_write()
+        raw=out.read().decode('utf-8');err.read();code=out.channel.recv_exit_status()
+        check(code==0 and raw,'ui_database_binding_capture_unknown')
+        value=json.loads(raw)
+        check(set(value)=={'mapping-review-api','izone-k56-ic2264-api','izone-k56-demo-k56-demo-api-1'},'ui_database_binding_capture_targets')
+        save_new(folder/'production-ui-database-bindings.json',value)
+        return value
+    finally:client.close()
 
 def call(config,case_id,action,payload=None):
     folder=Path(config['evidence_dir']).resolve()
@@ -22,21 +54,23 @@ def call(config,case_id,action,payload=None):
     check(config['bundle_revision']==ledger['bundle_revision'] and config.get('product_revision')=='d08-bundle:'+ledger['bundle_revision'],'ui_bundle_config_wrong')
     check(action in ('seed','read','post','cleanup'),'ui_action_wrong')
     if action=='post':validate_payload(payload,entry['identity'])
+    bindings=json.loads((folder/'production-ui-database-bindings.json').read_text(encoding='utf-8'))
     journal=Journal(folder/'ui-rpc'/case_id)
     state=json.loads(journal.state.read_text(encoding='utf-8')) if journal.state.exists() else {'sequence':0,'phase':'unseeded'}
     request={'case_id':case_id,'action':action,'sequence':state['sequence']+1,'ledger_canonical_sha256':canonical_hash(ledger),'ledger_sha256':hashlib.sha256(ledger_source.encode('utf-8')).hexdigest(),'bundle_revision':ledger['bundle_revision']}
+    request['database_bindings_sha256']=canonical_hash(bindings)
     if action=='post':request['payload']=payload
     journal.acquire(request)
     try:
         expected=json.loads((folder/'production-ui-snapshot.json').read_text(encoding='utf-8'))
-        packet={'scope':'production_fixture','request':request,'ledger':ledger,'ledger_source':ledger_source,'manifest':manifest,'expected':expected,
+        packet={'scope':'production_fixture','request':request,'ledger':ledger,'ledger_source':ledger_source,'manifest':manifest,'expected':expected,'database_bindings':bindings,
                 'files':{name:(HERE/name).read_text(encoding='utf-8') for name in FILES}}
         journal.save_new(str(request['sequence'])+'.packet.json',packet)
         # Sender/frame cũ không tự bị lấy lại theo tuổi; replay cần đối soát riêng.
         bootstrap="""import json,sys,tempfile
 from pathlib import Path
 packet=json.load(sys.stdin)
-allowed={'release_remote.py','canary_remote.py','browser_receipt.py','ui_rpc_guard.py','ui_rpc_remote.py'}
+allowed={'release_remote.py','canary_remote.py','browser_receipt.py','ui_rpc_guard.py','ui_rpc_remote.py','database_binding.py'}
 if set(packet['files'])!=allowed:raise RuntimeError('ui_source_set')
 with tempfile.TemporaryDirectory(prefix='codex-d08-ui-') as folder:
  for name,source in packet.pop('files').items():(Path(folder)/name).write_text(source,encoding='utf-8')

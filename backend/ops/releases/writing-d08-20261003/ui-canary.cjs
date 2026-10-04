@@ -106,6 +106,21 @@ function validateWritingClock(writing,minutes) {
   assert.equal(epoch(writing.deadlineAt)-epoch(writing.startedAt),minutes*60000,'Sai thời lượng Writing trong SQL');
 }
 
+// Nhập cặp ô qua giao diện thật trong một khoảng không chạy bộ hẹn giờ.
+// Chỉ đồng hồ trình duyệt thử bị dừng; đồng hồ API/SQL và điều kiện conflict giữ nguyên.
+async function fillWritingPair(page,value){
+  const pauseAt=await page.evaluate(()=>Date.now()+1000);
+  await page.clock.pauseAt(pauseAt);
+  try{
+    const first=page.locator('[data-writing-task="task1"]');
+    if(!await first.isVisible())await page.locator('#writingTaskTabs button').nth(0).click();
+    await first.fill(value.task1);
+    const second=page.locator('[data-writing-task="task2"]');
+    if(!await second.isVisible())await page.locator('#writingTaskTabs button').nth(1).click();
+    await second.fill(value.task2);
+  }finally{await page.clock.resume();}
+}
+
 async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   assert.ok(['shared','k56-shared','k56-mini-shared','k56-test2-shared'].includes(client));
   assert.ok(uuid.test(identity.attempt_id)&&uuid.test(identity.student_ref));
@@ -152,6 +167,7 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
     const context=await browser.newContext({viewport:{width:1280,height:900}}); contexts.push(context);
     await context.tracing.start({screenshots:true,snapshots:true,sources:false});
     const page=await context.newPage(); page.setDefaultTimeout(20000);
+    await page.clock.install();
     page.on('pageerror',error=>errors.push(error.message));
     await context.route('**/*',route=>{if(route.request().url().startsWith(base+'/'))return route.continue();const url=new URL(route.request().url());errors.push('External request blocked: '+url.origin+url.pathname);return route.abort();});
     await page.addInitScript(({key,identity,initial})=>{
@@ -187,15 +203,7 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
     return {page,context,label};
   }
   const session=page=>page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)||'{}'),key);
-  async function fill(page,value){
-    const first=page.locator('[data-writing-task="task1"]');
-    if(!await first.isVisible())await page.locator('#writingTaskTabs button').nth(0).click();
-    await first.fill(value.task1);
-    // Trang có tab Task riêng: chọn tab để thao tác textarea thật, không sửa state bằng evaluate.
-    const second=page.locator('[data-writing-task="task2"]');
-    if(!await second.isVisible())await page.locator('#writingTaskTabs button').nth(1).click();
-    await second.fill(value.task2);
-  }
+  const fill=fillWritingPair;
   async function saved(page,expected){await page.waitForFunction(({key,expected})=>{const s=JSON.parse(sessionStorage.getItem(key)||'{}');return s.writingDirty===false&&s.drafts.writing.task1===expected.task1&&s.drafts.writing.task2===expected.task2;},{key,expected});}
   async function visiblePair(page,expected){const value=await session(page);assert.deepEqual(pair(value.drafts.writing),expected);assert.equal(await page.locator('[data-writing-task="task1"]').inputValue(),expected.task1);assert.equal(await page.locator('[data-writing-task="task2"]').inputValue(),expected.task2);return value;}
   try {
@@ -255,4 +263,4 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   }
   return receipt;
 }
-module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback,fixtureSpec,validateWritingClock};
+module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback,fixtureSpec,validateWritingClock,fillWritingPair};

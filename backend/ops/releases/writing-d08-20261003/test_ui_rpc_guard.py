@@ -130,5 +130,18 @@ class RpcGuard(unittest.TestCase):
         request=self.request('seed',1);request['ledger_canonical_sha256']='0'*64
         with self.assertRaisesRegex(ValueError,'binding'):execute(request,self.ledger,self.manifest,self.backend,self.journal)
         self.assertFalse(self.journal.lock.exists());self.assertEqual(self.backend.writes,0)
+    def test_database_binding_cannot_change_between_actions(self):
+        first=self.request('seed',1);first['database_bindings_sha256']='a'*64
+        execute(first,self.ledger,self.manifest,self.backend,self.journal)
+        second=self.request('read',2);second['database_bindings_sha256']='b'*64
+        with self.assertRaisesRegex(ValueError,'journal_binding_changed'):
+            execute(second,self.ledger,self.manifest,self.backend,self.journal)
+        self.assertEqual(self.backend.writes,1);self.assertEqual(self.backend.deletes,0)
+    def test_database_binding_cannot_disappear_between_actions(self):
+        first=self.request('seed',1);first['database_bindings_sha256']='a'*64
+        execute(first,self.ledger,self.manifest,self.backend,self.journal)
+        with self.assertRaisesRegex(ValueError,'journal_binding_changed'):
+            execute(self.request('cleanup',2),self.ledger,self.manifest,self.backend,self.journal)
+        self.assertEqual(self.backend.deletes,0);self.assertTrue(self.backend.present)
 
 if __name__=='__main__':unittest.main()

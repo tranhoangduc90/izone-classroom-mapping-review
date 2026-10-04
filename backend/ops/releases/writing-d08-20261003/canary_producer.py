@@ -74,7 +74,7 @@ from pathlib import Path
 packet=json.load(sys.stdin)
 with tempfile.TemporaryDirectory(prefix='codex-d08-canary-') as folder:
  for name,source in packet['files'].items():
-  if name not in ('release_remote.py','canary_remote.py'): raise RuntimeError('source_invalid')
+  if name not in ('release_remote.py','canary_remote.py','database_binding.py'): raise RuntimeError('source_invalid')
   (Path(folder)/name).write_text(source,encoding='utf-8')
  sys.path.insert(0,folder)
  import canary_remote as c
@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='codex-d08-canary-') as folder:
     password = ''
     try:
         stdin, stdout, stderr = client.exec_command('python3 -c ' + shlex.quote(remote), timeout=900)
-        packet = {'request': request, 'files': {name:(HERE/name).read_text(encoding='utf-8') for name in ('release_remote.py','canary_remote.py')}}
+        packet = {'request': request, 'files': {name:(HERE/name).read_text(encoding='utf-8') for name in ('release_remote.py','canary_remote.py','database_binding.py')}}
         stdin.write(json.dumps(packet,ensure_ascii=False))
         stdin.channel.shutdown_write()
         output = stdout.read().decode('utf-8')

@@ -22,9 +22,13 @@ class RedirectFence(unittest.TestCase):
             return original(command[5:],**kwargs)
         try:
             entry={'destination':{'container':'owned-fixture','public_api_base':'http://127.0.0.1:'+str(server.server_port)}}
+            class OwnedTransportBackend(remote.ProductionBackend):
+                # Chỉ transport HTTP localhost; topology có bộ kiểm riêng.
+                def __init__(self):pass
+                def sender_id(self,entry):return entry['destination']['container']
             with patch.object(remote.subprocess,'run',side_effect=owned_transport):
                 with self.assertRaisesRegex(ValueError,'sender_or_http_unknown'):
-                    remote.ProductionBackend({},[]).post(entry,{'synthetic':True})
+                    OwnedTransportBackend().post(entry,{'synthetic':True})
             self.assertEqual(calls,['/api/term-tests/writing'])
         finally:server.shutdown();server.server_close();thread.join(timeout=5)
 if __name__=='__main__':unittest.main()
