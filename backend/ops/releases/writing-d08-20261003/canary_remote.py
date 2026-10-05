@@ -246,7 +246,7 @@ def acceptance_path(value):
     for key in ('original_plan_digest','acceptance_digest','ui_ledger_sha256'):
         if not isinstance(value[key],str) or not re.fullmatch('[a-f0-9]{64}',value[key]):
             raise RuntimeError('acceptance_executor_digest_invalid')
-    if type(value['expected_generation']) is not int or value['expected_generation'] not in (0,2):
+    if type(value['expected_generation']) is not int or value['expected_generation'] not in (0,2,4):
         raise RuntimeError('acceptance_executor_generation_conflict')
     return r.RELEASE_ROOT/value['release_run_id']/'acceptance.executor.json'
 
@@ -288,6 +288,9 @@ def complete_api_acceptance(value,passed):
 
 
 def exercise(request):
+    # Generation4 chỉ tiếp tục UI bằng chứng cũ; tuyệt đối không chạy lại API.
+    if request.get('acceptance_binding',{}).get('expected_generation')==4:
+        raise RuntimeError('acceptance_ui_continuation_api_replay_forbidden')
     identities = validate(request)
     rows = r.probe(request['manifest'])
     if rows != request['expected'] or any(row['image'] != target['candidate_image'] or not row['running'] or row['healthy'] != 'healthy' for row, target in zip(rows, request['manifest']['targets'])):

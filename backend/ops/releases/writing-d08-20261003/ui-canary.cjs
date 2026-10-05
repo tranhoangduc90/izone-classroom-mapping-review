@@ -134,6 +134,20 @@ async function fillWritingPair(page,value){
   }finally{await page.clock.resume();}
 }
 
+// Bộ kiểm giữ yêu cầu để tạo hai tab cùng sửa; thời gian giữ này thuộc phép thử.
+// Dừng riêng đồng hồ tab đang giữ đến khi ACK được giao; API/SQL vẫn dùng giờ thật.
+// Lỗi vẫn nhả đồng hồ, giữ receipt thất bại và không tự gửi lại yêu cầu.
+async function holdBrowserRequest(page,waitForRelease,respond) {
+  const pausedAt=await page.evaluate(()=>Date.now()+1000);
+  await page.clock.pauseAt(pausedAt);
+  try {
+    await waitForRelease();
+    return await respond();
+  } finally {
+    await page.clock.resume();
+  }
+}
+
 async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   assert.ok(['shared','k56-shared','k56-mini-shared','k56-test2-shared'].includes(client));
   assert.ok(uuid.test(identity.attempt_id)&&uuid.test(identity.student_ref));
@@ -198,14 +212,18 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
         assert.equal(url.pathname,'/fixture-api/api/term-tests/writing');
         validatePayload(payload,identity);
         events.push({kind:'browser_dispatch',label,payload,at:new Date().toISOString()}); await save();
+        const respond=async()=>{
+          const response=await bridge.post(payload);
+          events.push({kind:'api_response',label,payload,response,at:new Date().toISOString()}); await save();
+          assert.equal(response.status,200); assert.equal(response.body.ok,true);
+          return await fulfill(response.body);
+        };
         if(blocked===label&&payload.action==='draft') {
           blocked=null;
-          await new Promise(resolve=>{releaseBlocked=resolve;});
+          return await holdBrowserRequest(page,
+            ()=>new Promise(resolve=>{releaseBlocked=resolve;}),respond);
         }
-        const response=await bridge.post(payload);
-        events.push({kind:'api_response',label,payload,response,at:new Date().toISOString()}); await save();
-        assert.equal(response.status,200); assert.equal(response.body.ok,true);
-        return await fulfill(response.body);
+        return await respond();
       }catch(error){errors.push(error.message); await route.abort().catch(()=>{});}
       finally{pending--;}
     });
@@ -277,4 +295,4 @@ async function runUiCanary({client,assets,identity,bridge,evidenceDir,scope}) {
   }
   return receipt;
 }
-module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback,fixtureSpec,validateWritingClock,fillWritingPair};
+module.exports={runUiCanary,validatePayload,hash,finalizeReceipt,closeContexts,listenLoopback,fixtureSpec,validateWritingClock,fillWritingPair,holdBrowserRequest};

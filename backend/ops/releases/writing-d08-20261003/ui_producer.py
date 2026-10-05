@@ -84,13 +84,21 @@ def run(config):
     public=adapter.public_readback(config)
     for entry in plan['entries']:
         check(entry['asset_hashes']==expected_assets(entry['client'],public),'ui_plan_assets_wrong_bundle')
+    reused=None
+    if config.get('acceptance_ui_resume'):
+        from ui_acceptance_continuation import validate_provenance
+        reused=validate_provenance(config,folder,ledger,public,manifest)
     rows=adapter.remote(config,'probe')
     check(len(rows)==3 and all(row['name']==target['name'] and row['image']==target['candidate_image'] and row['running'] and row['healthy']=='healthy' for row,target in zip(rows,manifest['targets'])),'ui_candidates_not_live')
     capture_database_bindings(config)
     save_new(folder/'production-ui-snapshot.json',rows)
     save_new(folder/'production-ui-public-preflight.json',public)
     aggregate={'schema':'d08-ui-production-outcome/v1','status':'in_progress','run_id':ledger['run_id'],'children':[]}
+    if reused:
+        aggregate['acceptance_ui_resume']=config['acceptance_ui_resume']
+        aggregate['children'].append(reused['shared_ref'])
     for entry in plan['entries']:
+        if reused and entry['case_id']=='shared-mapping':continue
         save_new(folder/('before-seed-'+entry['case_id']+'.json'),{'case_id':entry['case_id'],'identity':entry['identity'],'destination':entry['destination']})
         call(config,entry['case_id'],'seed')
         single={**plan,'entries':[{**entry,'fixture_seeded':True}]}

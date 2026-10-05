@@ -112,7 +112,7 @@ def perform(packet):
     check(json.loads(source)==ledger,'ui_raw_ledger_content_wrong')
     # UI chỉ tiếp tục executor đúng release/digest/sổ đã qua API; không sender khác.
     acceptance=packet.get('acceptance_binding')
-    c.require_acceptance(acceptance)
+    state=c.require_acceptance(acceptance)
     check(acceptance['ui_ledger_sha256']==request['ledger_sha256'],'ui_acceptance_ledger_changed')
     # Chỉ thư mục journal theo run/case đã có trong ledger hợp lệ.
     from ui_rpc_guard import validate_ledger
@@ -121,5 +121,24 @@ def perform(packet):
     bindings=packet.get('database_bindings')
     from ui_rpc_guard import canonical_hash
     check(isinstance(bindings,dict) and canonical_hash(bindings)==request.get('database_bindings_sha256'),'ui_database_binding_packet_wrong')
-    folder=r.RELEASE_ROOT/ledger['run_id']/'ui-canary'/request['case_id']
+    namespace='ui-canary'
+    if acceptance.get('expected_generation')==4:
+        from browser_receipt import ENTRIES
+        scope=state.get('ui_continuation',{})
+        check(scope.get('schema')=='d08-ui-continuation/v1' and scope.get('run_cases')==[case for case in ENTRIES if case!='shared-mapping']
+              and scope.get('reuse_cases')==['shared-mapping'],'ui_continuation_scope_invalid')
+        check(request['case_id'] in scope['run_cases'],'ui_continuation_shared_mutation_forbidden')
+        check(state.get('ui_ledger')==ledger and state.get('expected')==packet['expected'],'ui_continuation_ledger_or_runtime_changed')
+        # Khóa mới không đụng namespace cũ; đối soát lại hai cleanup trước lệnh UI.
+        for case,hashes in scope['old_ui_journals'].items():
+            old=r.RELEASE_ROOT/ledger['run_id']/'ui-canary'/case
+            raw=(old/'state.json').read_bytes();old_state=json.loads(raw)
+            cleanup=(old/(str(old_state['sequence'])+'.response.json')).read_bytes()
+            check(hashlib.sha256(raw).hexdigest()==hashes['state_sha256'] and hashlib.sha256(cleanup).hexdigest()==hashes['cleanup_sha256']
+                  and old_state.get('phase')=='cleaned' and not (old/'unknown.json').exists() and not (old/'executor.lock').exists(),'ui_continuation_old_cleanup_changed')
+        for case in scope['run_cases']:
+            if case!=scope['replaced_case']:
+                check(not (r.RELEASE_ROOT/ledger['run_id']/'ui-canary'/case).exists(),'ui_continuation_old_unrun_journal_present')
+        namespace='ui-canary-generation-6'
+    folder=r.RELEASE_ROOT/ledger['run_id']/namespace/request['case_id']
     return execute(request,ledger,packet['manifest'],ProductionBackend(packet['manifest'],packet['expected'],bindings),Journal(folder))

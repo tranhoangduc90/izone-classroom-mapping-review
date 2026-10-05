@@ -143,19 +143,30 @@ def validate_traces(child, folder):
         check(network==expected and network, 'browser_trace_uuid_payload_ack_mismatch')
 
 
-def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
+def validate(aggregate, ledger, ledger_hash, config, manifest, public, root, *, case_subset=None):
     root=Path(root)
     check(aggregate.get('schema')=='d08-ui-production-outcome/v1' and aggregate.get('status')=='passed', 'browser_aggregate_schema')
     check(ledger.get('schema')=='d08-ui-production-ledger/v1'
           and re.fullmatch('[0-9a-f]{32}',ledger.get('run_id','')) is not None, 'browser_ledger_schema')
     entries=ledger.get('entries',[])
     check(len(entries)==7 and {e.get('case_id') for e in entries}==set(ENTRIES), 'browser_ledger_entries')
+    # Subset chỉ dùng để kiểm Shared cũ; cổng cuối mặc định vẫn đủ bảy ca.
+    check(case_subset is None or case_subset=={'shared-mapping'}, 'browser_subset_forbidden')
+    selected=set(ENTRIES) if case_subset is None else case_subset
+    continuation=None
+    if config.get('acceptance_ui_resume'):
+        check(case_subset is None,'browser_resume_subset_forbidden')
+        from ui_acceptance_continuation import validate_provenance
+        continuation=validate_provenance(config,root,ledger,public,manifest)
+        check(ledger_hash==config['acceptance_binding']['ui_ledger_sha256'],'browser_resume_ledger_hash_changed')
+        check(aggregate.get('acceptance_ui_resume')==config['acceptance_ui_resume'], 'browser_resume_spec_changed')
     refs=aggregate.get('children',[])
-    check(len(refs)==7 and {e.get('case_id') for e in refs}==set(ENTRIES), 'browser_child_set')
+    check(len(refs)==len(selected) and {e.get('case_id') for e in refs}==selected, 'browser_child_set')
     references={ref['case_id']:ref for ref in refs}
     images={t['name']:t['candidate_image'] for t in manifest['targets']}
     seen=set();erp=set()
     for entry in entries:
+        if entry['case_id'] not in selected:continue
         client,target=ENTRIES[entry['case_id']]
         identity=entry['identity'];destination=entry['destination']
         check(identity['attempt_id']==str(uuid.UUID(identity['attempt_id'])) and identity['attempt_id'] not in seen, 'browser_uuid_duplicate')
@@ -168,10 +179,14 @@ def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
         expected={'container':target,'image':images[target],'public_api_base':DESTINATIONS[target][0],'database':DESTINATIONS[target][1]}
         check(destination==expected, 'browser_ledger_destination')
         ref=references[entry['case_id']];path,raw=file_hash(root,ref['path'],ref['sha256']);child=json.loads(raw)
+        entry_hash=ledger_hash;producer=config.get('ui_producer_sha256')
+        if continuation and entry['case_id']=='shared-mapping':
+            check(ref==continuation['shared_ref'],'browser_reused_shared_reference_changed')
+            entry_hash=continuation['old_ledger_hash'];producer=continuation['old_config']['ui_producer_sha256']
         check(child.get('schema')=='d08-ui-canary/v1' and child.get('scope')=='production_fixture'
               and child.get('status')=='passed' and child.get('client')==client, 'browser_offline_or_status')
         check(child.get('identity')==identity and child.get('binding')=={
-            'schema':'d08-ui-bridge/v1','run_id':ledger['run_id'],'ledger_sha256':ledger_hash,
+            'schema':'d08-ui-bridge/v1','run_id':ledger['run_id'],'ledger_sha256':entry_hash,
             'bundle_revision':config['product_revision'].removeprefix('d08-bundle:'),'destination':expected}, 'browser_binding_mismatch')
         assets=expected_assets(client,public)
         check(child.get('assetHashes')==assets and child.get('config_selected_api')==expected['public_api_base'], 'browser_wrong_assets_or_api')
@@ -182,7 +197,7 @@ def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
             check(observation.get('sha256')==sha and observation.get('status')==200, 'browser_public_get_mismatch')
         check(set(child.get('cases',[]))==CASES and child.get('pending_http')==0
               and type(child.get('pending_http')) is int and child.get('contexts_closed') is True and child.get('errors')==[], 'browser_cases_or_pending')
-        check(child.get('producer_source_sha256')==config.get('ui_producer_sha256') and re.fullmatch('[0-9a-f]{64}',config.get('ui_producer_sha256','')), 'browser_producer_source')
+        check(child.get('producer_source_sha256')==producer and re.fullmatch('[0-9a-f]{64}',producer or ''), 'browser_producer_source')
         check(at(child['finished_at'])>=at(child['started_at']), 'browser_time_inverted')
         validate_events(child,identity,expected)
         cleanup=child.get('cleanup',{})
@@ -192,4 +207,4 @@ def validate(aggregate, ledger, ledger_hash, config, manifest, public, root):
         check(set(child.get('artifacts',{}))==ARTIFACTS, 'browser_artifacts_missing')
         for name,sha in child['artifacts'].items():file_hash(path.parent,name,sha)
         validate_traces(child,path.parent)
-    return {'status':'passed','children_checked':7}
+    return {'status':'passed','children_checked':len(selected)}

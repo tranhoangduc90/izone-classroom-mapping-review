@@ -101,6 +101,14 @@ def validate(value, config, snapshots, public, root, manifest):
             'outcome_ledger_mismatch')
     require(len(ledger.get('identities', [])) == 3, 'outcome_identities_missing')
     validate_api(data['api_database'], ledger, manifest)
+    if config.get('acceptance_ui_resume'):
+        from ui_acceptance_continuation import validate_provenance
+        prior=validate_provenance(config,root,data['browser_ledger'],public,manifest)
+        require(data['api_database']==prior['api'] and ledger==prior['api_ledger'],'ui_resume_api_proof_relabelled')
+        api_ref=next(r for r in refs if r['role']=='api_database')
+        ledger_ref=next(r for r in refs if r['role']=='ledger')
+        old_refs=config['ui_resume_provenance']['artifacts']
+        require(api_ref['sha256']==old_refs['old_api_database']['sha256'] and ledger_ref['sha256']==old_refs['old_api_ledger']['sha256'],'ui_resume_api_bytes_changed')
     if config.get('acceptance_resume'):
         from acceptance_provenance import validate_reuse
         validate_reuse(config,root,ledger,data['api_database'])
