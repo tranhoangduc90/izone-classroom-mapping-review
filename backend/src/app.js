@@ -162,7 +162,9 @@ const writingSubmissionSchema = z.object({
   attemptToken: z.string().uuid(),
   action: z.enum(['start', 'draft', 'submit']),
   task1: z.string().max(12_000),
-  task2: z.string().max(12_000)
+  task2: z.string().max(12_000),
+  baseRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
 });
 const writingGradingWorkerSchema = z.string().trim().regex(/^[A-Za-z0-9_.:-]{3,100}$/);
 const writingGradingClaimSchema = z.object({
@@ -353,6 +355,7 @@ function serializeTermTestWriting(row, grading = null) {
   return {
     task1: String(row?.writing_task_1 || ''),
     task2: String(row?.writing_task_2 || ''),
+    revision: Number(row?.writing_draft_revision) || 0,
     started: Boolean(row?.writing_started_at),
     submitted: Boolean(row?.writing_submitted_at),
     deadlineAt: row?.writing_deadline_at || null,
@@ -1216,6 +1219,16 @@ export function createApp({
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_WRITING', message: 'Bài Writing không hợp lệ.' });
     }
+    // Nhận phiên bản máy chủ mà trình duyệt đã đọc; client cũ không được ghi nháp mù.
+    // Submit hết giờ được SQL chốt bản đã lưu; thiếu base trước giờ sẽ bị từ chối mà không mutation.
+    const clientUpdateRequired = () => res.status(409).json({
+      ok: false,
+      error: 'WRITING_CLIENT_UPDATE_REQUIRED',
+      message: 'Phiên bản trang này cần được cập nhật trước khi lưu Writing. Hãy giữ bản bài viết trên máy và tải lại trang.'
+    });
+    if (parsed.data.action === 'draft' && parsed.data.baseRevision === undefined) {
+      return clientUpdateRequired();
+    }
     const attemptSlugResult = await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken]);
     const attemptSlug = String(attemptSlugResult.rows[0]?.test_slug || '');
     const writingMinutes = supportsProtectedTest(attemptSlug)
@@ -1226,7 +1239,8 @@ export function createApp({
       parsed.data.task1,
       parsed.data.task2,
       parsed.data.action,
-      writingMinutes || 60
+      writingMinutes || 60,
+      parsed.data.baseRevision ?? null
     ]);
     if (saved.rowCount !== 1) {
       return res.status(404).json({
@@ -1235,13 +1249,25 @@ export function createApp({
         message: 'Chưa tìm thấy lượt Reading đã hoàn thành để lưu Writing.'
       });
     }
-    const grading = parsed.data.action === 'submit'
-      ? await ensureTermTestWritingGrading(saved.rows[0])
+    const row = saved.rows[0];
+    if (row.writing_reason === 'client_update_required') return clientUpdateRequired();
+    // SQL trả bài canonical và ACK nội dung riêng; hết giờ vẫn chấm bài đã lưu vừa chốt.
+    // Submit xung đột chưa nộp hoặc khác bài đã chốt không tạo công việc AI.
+    const shouldEnsureGrading = parsed.data.action === 'submit' && (
+      row.writing_accepted === true
+      || (row.writing_reason === 'deadline_expired' && Boolean(row.writing_submitted_at))
+    );
+    const grading = shouldEnsureGrading
+      ? await ensureTermTestWritingGrading(row)
       : null;
     return res.json({
       ok: true,
       attemptToken: saved.rows[0].attempt_token,
-      writing: serializeTermTestWriting(saved.rows[0], grading)
+      writing: {
+        ...serializeTermTestWriting(row, grading),
+        accepted: row.writing_accepted === true,
+        reason: row.writing_reason
+      }
     });
   }));
 

@@ -991,55 +991,75 @@ FROM resolved
 LIMIT 1;`;
 
 // Lưu nguyên văn Writing theo attempt token; sau khi nộp thì payload gửi lại không được sửa bài đã chốt.
-export const saveTermTestWritingSql = `WITH updated AS (
-  UPDATE assessment.term_test_attempt
-  SET
-    writing_task_1 = CASE
-      WHEN writing_deadline_at IS NULL OR now() <= writing_deadline_at THEN $2
-      ELSE writing_task_1
-    END,
-    writing_task_2 = CASE
-      WHEN writing_deadline_at IS NULL OR now() <= writing_deadline_at THEN $3
-      ELSE writing_task_2
-    END,
-    writing_started_at = coalesce(writing_started_at, now()),
-    writing_deadline_at = coalesce(writing_deadline_at, now() + make_interval(mins => $5::int)),
-    writing_updated_at = now(),
-    writing_submitted_at = CASE
-      WHEN $4 = 'submit' THEN coalesce(writing_submitted_at, now())
-      ELSE writing_submitted_at
-    END,
-    updated_at = now()
-  WHERE id = $1::uuid
-    AND completed_at IS NOT NULL
-    AND writing_submitted_at IS NULL
-  RETURNING *
-),
-resolved AS (
+// Nhận attempt, hai Task, hành động và baseRevision; khóa dòng rồi xét cùng một bản máy chủ.
+// Ghi hai Task/version nguyên tử; bản cũ không mutation, start giữ bài, hết giờ chỉ chốt canonical.
+// Trả bài chính thức + accepted/reason để UI phục hồi đúng; lỗi SQL rollback toàn câu lệnh.
+export const saveTermTestWritingSql = `WITH locked AS MATERIALIZED (
+  SELECT * FROM assessment.term_test_attempt
+  WHERE id=$1::uuid AND completed_at IS NOT NULL
+  FOR UPDATE
+), timed AS MATERIALIZED (
+  SELECT locked.*, clock_timestamp() AS request_at FROM locked
+), compared AS MATERIALIZED (
+  SELECT timed.*,
+    (writing_task_1=$2::text AND writing_task_2=$3::text) AS same_content,
+    (writing_deadline_at IS NOT NULL AND request_at>writing_deadline_at) AS expired
+  FROM timed
+), decision AS MATERIALIZED (
+  SELECT compared.*,
+    CASE
+      WHEN writing_submitted_at IS NOT NULL THEN same_content
+      WHEN expired THEN $4::text='submit' AND same_content
+      WHEN $4::text='start' THEN true
+      WHEN $6::bigint IS NULL THEN false
+      WHEN same_content THEN true
+      ELSE writing_draft_revision=$6::bigint
+    END AS accepted,
+    CASE
+      WHEN writing_submitted_at IS NOT NULL THEN 'already_submitted'
+      WHEN expired THEN 'deadline_expired'
+      WHEN $4::text='start' THEN 'started'
+      WHEN $6::bigint IS NULL THEN 'client_update_required'
+      WHEN NOT same_content AND writing_draft_revision<>$6::bigint THEN 'revision_conflict'
+      WHEN same_content AND $4::text='draft' THEN 'already_saved'
+      ELSE 'saved'
+    END AS reason
+  FROM compared
+), updated AS (
+  UPDATE assessment.term_test_attempt AS attempt SET
+    writing_task_1=CASE WHEN decision.reason='saved' THEN $2::text ELSE attempt.writing_task_1 END,
+    writing_task_2=CASE WHEN decision.reason='saved' THEN $3::text ELSE attempt.writing_task_2 END,
+    writing_draft_revision=decision.writing_draft_revision +
+      CASE WHEN decision.reason='saved' AND NOT decision.same_content THEN 1 ELSE 0 END,
+    writing_started_at=coalesce(decision.writing_started_at, decision.request_at),
+    writing_deadline_at=coalesce(decision.writing_deadline_at,
+      decision.request_at + make_interval(mins=>$5::int)),
+    writing_updated_at=decision.request_at,
+    writing_submitted_at=CASE WHEN $4::text='submit' THEN decision.request_at ELSE NULL END,
+    updated_at=decision.request_at
+  FROM decision
+  -- Chốt bài hết giờ độc lập với ACK nội dung: payload muộn khác canonical không được nhận.
+  WHERE attempt.id=decision.id
+    AND (decision.accepted OR (decision.expired AND $4::text='submit'))
+    AND decision.writing_submitted_at IS NULL
+    AND (
+      decision.writing_started_at IS NULL
+      OR (decision.reason='saved' AND NOT decision.same_content)
+      OR $4::text='submit'
+    )
+  RETURNING attempt.*
+), resolved AS (
   SELECT * FROM updated
   UNION ALL
-  SELECT existing.*
-  FROM assessment.term_test_attempt AS existing
-  WHERE existing.id = $1::uuid
-    AND existing.completed_at IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM updated)
+  SELECT * FROM locked WHERE NOT EXISTS (SELECT 1 FROM updated)
 )
-SELECT
-  id::text AS attempt_token,
-  test_slug,
-  writing_task_1,
-  writing_task_2,
-  writing_started_at,
-  writing_deadline_at,
-  writing_updated_at,
-  writing_submitted_at,
-  now() AS server_now,
-  CASE
-    WHEN writing_deadline_at IS NULL THEN false
-    ELSE now() > writing_deadline_at
-  END AS writing_timed_out
-FROM resolved
-LIMIT 1;`;
+SELECT resolved.id::text AS attempt_token, resolved.test_slug,
+  resolved.writing_task_1, resolved.writing_task_2, resolved.writing_draft_revision,
+  resolved.writing_started_at, resolved.writing_deadline_at,
+  resolved.writing_updated_at, resolved.writing_submitted_at,
+  decision.request_at AS server_now, decision.expired AS writing_timed_out,
+  decision.accepted AS writing_accepted, decision.reason AS writing_reason
+FROM resolved JOIN decision ON decision.id=resolved.id;`;
 
 export const findTermTestAttemptSlugSql = `SELECT test_slug
 FROM assessment.term_test_attempt
@@ -1063,6 +1083,7 @@ export const fetchTermTestResultSql = `SELECT
   attempt.completed_at,
   attempt.writing_task_1,
   attempt.writing_task_2,
+  attempt.writing_draft_revision,
   attempt.writing_started_at,
   attempt.writing_deadline_at,
   attempt.writing_updated_at,
