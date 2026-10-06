@@ -6,6 +6,8 @@ import helmet from "helmet";
 import { z } from "zod";
 import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
+import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
+import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
 import { buildErpGradePayload } from "./erp-sync.js";
@@ -438,6 +440,9 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
+  mountMiniAnswerSheet(app, { pool, requireContext, readLimiter:testReadLimiter,
+    writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
+
   app.get('/api/term-tests/roster', testReadLimiter, requireContext, asyncRoute(async (req, res) => {
     const parsed = z.object({ class: classCodeSchema, test: testSlugSchema }).safeParse(req.query);
     if (!parsed.success) {
@@ -509,7 +514,7 @@ export function createApp({
     }
     const token = parsed.data.attemptToken || parsed.data.examSessionToken;
     const tokenResult = parsed.data.attemptToken
-      ? await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken])
+      ? await pool.query(findTermTestClientEventAttemptSql, [parsed.data.attemptToken])
       : await pool.query(findTermTestExamSessionAssetSql, [parsed.data.examSessionToken, slug.data]);
     const storedSlug = String(tokenResult.rows[0]?.test_slug || '');
     if (tokenResult.rowCount !== 1 || storedSlug !== slug.data) {
@@ -651,6 +656,8 @@ export function createApp({
       ]);
       const attempt = latestAttempt.rows[0] || null;
       if (attempt) {
+        if (attempt.attempt_mode === 'answer_sheet') return res.status(409).json({
+          ok:false,error:'MODE_CONFLICT',message:'Lượt này là nhập đáp án trên giấy. Hãy mở đúng trang nhập đáp án.' });
         return res.json({
           ok: true,
           examSessionToken: attempt.exam_session_token || null,
@@ -685,6 +692,8 @@ export function createApp({
       ]);
       session = inserted.rows[0];
     }
+    if (session.attempt_mode === 'answer_sheet') return res.status(409).json({
+      ok:false,error:'MODE_CONFLICT',message:'Lượt này là nhập đáp án trên giấy. Hãy mở đúng trang nhập đáp án.' });
     return res.status(201).json({
       ok: true,
       examSessionToken: session.exam_session_token,

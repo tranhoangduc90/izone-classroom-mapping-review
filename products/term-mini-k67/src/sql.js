@@ -238,6 +238,7 @@ SELECT
   id::text AS exam_session_token,
   test_slug,
   prepared_at,
+  attempt_mode,
   listening_started_at,
   listening_deadline_at,
   listening_draft,
@@ -252,6 +253,7 @@ LIMIT 1;`;
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
   test_slug,
+  attempt_mode,
   prepared_at,
   listening_started_at,
   listening_deadline_at,
@@ -278,10 +280,12 @@ WHERE test_slug = $1
   AND erp_student_contact_id = $4::bigint
   AND listening_submitted_at IS NULL
   AND superseded_at IS NULL
+  AND attempt_mode <> 'answer_sheet'
   AND prepared_at < now() - interval '8 hours';`;
 
 export const findLatestTermTestAttemptForStudentSql = `SELECT
   attempt.id::text AS attempt_token,
+  attempt.attempt_mode,
   attempt.exam_session_id::text AS exam_session_token,
   attempt.student_name_snapshot AS student_name,
   attempt.listening_submitted_at,
@@ -385,6 +389,7 @@ SET
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
+  AND attempt_mode <> 'answer_sheet'
   AND superseded_at IS NULL
   AND prepared_at >= now() - interval '8 hours'
 RETURNING
@@ -475,6 +480,7 @@ JOIN assessment.test_definition AS definition
  AND definition.version = session.definition_version
 WHERE session.id = $1::uuid
   AND session.test_slug = $2
+  AND session.attempt_mode <> 'answer_sheet'
   AND session.superseded_at IS NULL
   AND session.listening_started_at IS NOT NULL;`;
 
@@ -653,6 +659,7 @@ JOIN assessment.test_definition AS definition
  AND definition.version = attempt.definition_version
 WHERE attempt.id = $1::uuid
   AND attempt.test_slug = $2
+  AND attempt.attempt_mode <> 'answer_sheet'
   AND attempt.superseded_at IS NULL;`;
 
 export const startReadingAttemptSql = `UPDATE assessment.term_test_attempt
@@ -662,6 +669,7 @@ SET
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
+  AND attempt_mode <> 'answer_sheet'
   AND completed_at IS NULL
   AND superseded_at IS NULL
 RETURNING
@@ -820,6 +828,12 @@ export const findTermTestAttemptSlugSql = `SELECT test_slug
 FROM assessment.term_test_attempt
 WHERE id = $1::uuid
   AND completed_at IS NOT NULL
+LIMIT 1;`;
+
+// Sự kiện lưu nháp phải nhận cả lượt chưa nộp; truy vấn kết quả vẫn giữ điều kiện riêng.
+export const findTermTestClientEventAttemptSql = `SELECT test_slug
+FROM assessment.term_test_attempt
+WHERE id = $1::uuid AND superseded_at IS NULL
 LIMIT 1;`;
 
 export const fetchTermTestResultSql = `SELECT
