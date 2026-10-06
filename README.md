@@ -33,7 +33,20 @@ Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom 
 
 Không đặt mật khẩu Metabase, mật khẩu PostgreSQL, API key, token hoặc dữ liệu học viên vào repo.
 
-API cũng phục vụ hai answer sheet Term Test tại `/api/term-tests/`. Danh sách lớp chỉ trả tên học viên cùng UUID ngẫu nhiên; bài Listening và Reading được lưu trong schema `assessment`. Đáp án đúng được seed riêng vào PostgreSQL production và không nằm trong repo công khai. Dashboard giảng viên dùng Google Sign-In và `mapping.reviewer_class_access` để chỉ trả kết quả của lớp đã được cấp quyền.
+**Term Test/Mini Test K67 từ 06/10/2026:** source và bộ dựng riêng ở
+[products/term-mini-k67](products/term-mini-k67/README.md); đọc
+[trạng thái đã kiểm](products/term-mini-k67/RELEASE_STATUS.md) và
+[hướng dẫn chuyển/quay lại](products/term-mini-k67/CUTOVER_PLAN.md) trước khi sửa.
+K67 dùng runtime `term-mini-k67-api`, DB `term_mini_k67`, Redis và bộ workflow
+riêng; API mới ở `https://ducizone.ddns.net:18869/term-mini-k67-api`. Đường
+Term/Mini cũ được giữ để chuyển tới K67; 13 bảng nguồn cũ giữ chỉ đọc. K56
+tiếp tục dùng runtime/tuyến hiện có. Không dựng lại backend chung để phát
+hành K67 hoặc chép dump cũ đè lên kho K67 đã có bài mới.
+
+Danh sách lớp K67 chỉ trả tên học viên cùng UUID ngẫu nhiên; bài Listening
+và Reading lưu trong schema `assessment` của kho K67 riêng. Đáp án được seed
+riêng, không nằm trong repo Pages công khai. Dashboard dùng Google Sign-In
+và bản đồng bộ quyền theo lớp; không dùng cookie teacher backend chung.
 
 Hợp đồng request/response nằm ở `docs/data-contract.md`; bản phác thảo PostgreSQL nằm ở `docs/schema.sql`.
 
