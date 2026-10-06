@@ -1,0 +1,838 @@
+{
+  "schema_version": 1,
+  "product_id": "PRODUCT-TERM-MINI-K67",
+  "bindings": [
+    {
+      "profile": "default",
+      "workflowId": "DJXBSBbsGU6T1jJt",
+      "sourceVersionId": "aeee27bb-5620-4e07-96c0-7460af62aaed",
+      "nodeId": "3f876176-2e4f-538f-a45c-d0c1a313f432",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "Xj9fT5l8PXHwARM3",
+      "sourceVersionId": "4adea448-d20f-446b-9d73-73a8592eab27",
+      "nodeId": "0fe9b492-5777-5709-a922-3ba87527ddb0",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "Xj9fT5l8PXHwARM3",
+      "sourceVersionId": "4adea448-d20f-446b-9d73-73a8592eab27",
+      "nodeId": "1a24ce23-cd81-563f-a49f-aeeb2eca0549",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "BZGN46wTdC6uoMcW",
+      "sourceVersionId": "4c647d3b-0298-46d1-aa03-ae3b1d26e78c",
+      "nodeId": "b2c2f1e4-a94a-5691-b60e-5fb212fada30",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "00exTw6Bp16lHhwN",
+      "sourceVersionId": "1f07168d-5ba6-4f84-9e6b-f17d6e480156",
+      "nodeId": "79eafc0f-6efe-5de4-bec8-c1c7cb6f2ea3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "fKEyq7u57faDOJrA",
+      "sourceVersionId": "66df0689-a93d-4c34-8906-5aba894ea037",
+      "nodeId": "35f09abf-ec26-5c90-b800-d039e80bc0f3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "0PeCOrdM1ujIkKU5",
+      "sourceVersionId": "e9d098e5-f93a-42e4-88fe-8abd9dd69e54",
+      "nodeId": "1e87fc8c-0a4d-569c-a3af-cb7c3b11ac6b",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "0PeCOrdM1ujIkKU5",
+      "sourceVersionId": "e9d098e5-f93a-42e4-88fe-8abd9dd69e54",
+      "nodeId": "470a3dd4-786a-5955-86c5-af8807b880f0",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "PRFZU9nrOiWWjtmE",
+      "sourceVersionId": "3c107aec-bfde-475e-90ef-75d946eb9930",
+      "nodeId": "bfb3db98-1e38-5bae-ae6b-7ce2a0c96171",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "iOsU892kd5nT6kZ4",
+      "sourceVersionId": "bb96a533-4743-42b5-8b39-4882f01f092b",
+      "nodeId": "ba37a381-8715-5ec7-a8c2-f0cd8710b086",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "CqVewjN7f1mfacsD",
+      "sourceVersionId": "ed394331-c954-49c7-bf8c-8f2396630071",
+      "nodeId": "e6e5b841-47ff-5e8d-ab11-d355b9baec82",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "qsHHDyV9X5ZrNG5q",
+      "sourceVersionId": "589b2937-b055-4f6d-bbd2-33ed3f03a31e",
+      "nodeId": "d47cdb12-b415-5bac-8dd3-74fb95eb7beb",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "6ixt6KiDHYCScYBs",
+      "sourceVersionId": "89944a90-1361-4f42-8ce2-4bbc09ac2960",
+      "nodeId": "cdebc7aa-3219-5fc3-af57-33e38a2371ef",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "6ixt6KiDHYCScYBs",
+      "sourceVersionId": "89944a90-1361-4f42-8ce2-4bbc09ac2960",
+      "nodeId": "0214cc3e-b7f8-5fa4-9995-949590d1f3f5",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "dOiDw7HYlz5ahuaG",
+      "sourceVersionId": "650f4f22-d1a4-452c-830e-8ea09557a689",
+      "nodeId": "597671a4-09fc-5cb9-9e04-49a4f110afd3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "dOiDw7HYlz5ahuaG",
+      "sourceVersionId": "650f4f22-d1a4-452c-830e-8ea09557a689",
+      "nodeId": "f9ad8566-b69a-50ec-ae2f-5d8c3e8c2538",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "0WtqAYNPdzgdIQYV",
+      "sourceVersionId": "c61de6e0-09b6-4ee5-9542-2b24dae444a2",
+      "nodeId": "00449ba0-9095-5c67-ad47-e78081d0e2cf",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "0WtqAYNPdzgdIQYV",
+      "sourceVersionId": "c61de6e0-09b6-4ee5-9542-2b24dae444a2",
+      "nodeId": "628a0eb0-5e37-5be9-992a-6d837e0d66ca",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "gazDbr6valsDMjLL",
+      "sourceVersionId": "9ee3b4f7-fa90-4396-8cc5-ae8273f04cf9",
+      "nodeId": "e397b57c-ce81-59e5-8a0d-d12613190ba9",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "gazDbr6valsDMjLL",
+      "sourceVersionId": "9ee3b4f7-fa90-4396-8cc5-ae8273f04cf9",
+      "nodeId": "5a21cb31-a7ad-552f-acdb-5783c24df39c",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "BwsiThzlnld4Qejl",
+      "sourceVersionId": "a74c2b78-43bf-46a4-b4b4-d51fa4ca36fe",
+      "nodeId": "0a78a224-da19-574e-ad98-ff466ea37809",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "Tv6tu9DQvuuowPwv",
+      "sourceVersionId": "d204fb1c-11d6-4dd6-a1d0-cd5321de568f",
+      "nodeId": "f7a24374-42d5-5906-a2d4-dac55a2f73a5",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "Tv6tu9DQvuuowPwv",
+      "sourceVersionId": "d204fb1c-11d6-4dd6-a1d0-cd5321de568f",
+      "nodeId": "53150dc3-1b58-5cd5-a80e-9b6e1621bc6f",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "LETUGryOpT4hdqkz",
+      "sourceVersionId": "4b9fd831-afa3-459a-ba56-e6ac51de59a3",
+      "nodeId": "d5a574ac-924f-5396-99f6-4398373333ef",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "w6j2A1pJLQf1Kioj",
+      "sourceVersionId": "dacde941-ec55-43cd-a87b-6f628bff9d9b",
+      "nodeId": "5e7edb28-c06f-5377-9825-28790edc7ee4",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "w6j2A1pJLQf1Kioj",
+      "sourceVersionId": "dacde941-ec55-43cd-a87b-6f628bff9d9b",
+      "nodeId": "534a5d99-ce1d-5d0c-bfcd-6c704a9bc1c9",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "VHa41O7dHsZc27Oo",
+      "sourceVersionId": "4aa6eb0e-28c6-45fc-a565-c334276561ac",
+      "nodeId": "fce847ce-5cc8-5084-8a24-ed3fb36520c5",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "VHa41O7dHsZc27Oo",
+      "sourceVersionId": "4aa6eb0e-28c6-45fc-a565-c334276561ac",
+      "nodeId": "647e9ca6-e196-5cc0-b929-80593d800b1b",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "dyNzYQ9B99eHbHXQ",
+      "sourceVersionId": "e734591b-459e-4ff3-ba99-311a32abc7db",
+      "nodeId": "cb0467d0-9a6b-5464-a1ed-a1b34d66cda7",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "eT6zuwHVDL8PGpgp",
+      "sourceVersionId": "eedda830-b738-49c6-bbe5-97b560a0ce5d",
+      "nodeId": "12edc9cc-bd35-5220-a431-83c5402d8622",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "eT6zuwHVDL8PGpgp",
+      "sourceVersionId": "eedda830-b738-49c6-bbe5-97b560a0ce5d",
+      "nodeId": "c398c80b-b153-5429-a4a6-6bbe768bc919",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "PHSyMsjBkj5bM3wU",
+      "sourceVersionId": "3fbc6576-f308-4f13-89b5-b816c051bf9f",
+      "nodeId": "ba68681c-4a0d-5947-bd03-f27ad49f2abc",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "f0SruSogzt8Wj3sh",
+      "sourceVersionId": "8da6a86c-741d-42fe-ba6f-f80ecf948e3e",
+      "nodeId": "8e88eecf-cb03-51e6-88cc-dca60985b1c8",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "V76Io4iZwUgOfvbh",
+      "sourceVersionId": "a00f6d20-d682-44e6-b3d3-8c33c0b0131a",
+      "nodeId": "5313b677-de03-58ed-b0df-d0800c135f2d",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "8Ji0DNMz359se2dA",
+      "sourceVersionId": "016920bd-d0bc-46d2-bf0d-e5b6be91f3a2",
+      "nodeId": "66891e6d-5aaa-5a5f-b042-5bb4a02ccdce",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "xPGNcbZAWYXTH6Bv",
+      "sourceVersionId": "e89c8dea-741a-4082-8442-6e7c9a04cf04",
+      "nodeId": "f3cf7e5e-6fd8-58b3-9ea0-1b6ae577e811",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "xPGNcbZAWYXTH6Bv",
+      "sourceVersionId": "e89c8dea-741a-4082-8442-6e7c9a04cf04",
+      "nodeId": "76cb101a-d64a-5bde-9e7d-c34674c3ad99",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "oFRT47Ebe2t4MrhM",
+      "sourceVersionId": "78e087fb-7692-4502-9bea-82e0d706c145",
+      "nodeId": "71f0c38b-83f9-5e2e-9fc4-393b2a02156f",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "oFRT47Ebe2t4MrhM",
+      "sourceVersionId": "78e087fb-7692-4502-9bea-82e0d706c145",
+      "nodeId": "06fc6743-1d81-59af-8ab2-b37c89207b2a",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "RQaCF5nFB2sdhuEM",
+      "sourceVersionId": "3d5892ca-508f-483c-9fa6-9d01f526cd16",
+      "nodeId": "3f876176-2e4f-538f-a45c-d0c1a313f432",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "veXw1V1ywwcLHrJd",
+      "sourceVersionId": "6d0027a0-4a94-4a36-858f-e952f1c6682a",
+      "nodeId": "0fe9b492-5777-5709-a922-3ba87527ddb0",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "veXw1V1ywwcLHrJd",
+      "sourceVersionId": "6d0027a0-4a94-4a36-858f-e952f1c6682a",
+      "nodeId": "1a24ce23-cd81-563f-a49f-aeeb2eca0549",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "PISkXDTVcjkeN5Hh",
+      "sourceVersionId": "9f1e0cd2-bf69-4e89-9eb9-1d367a885809",
+      "nodeId": "b2c2f1e4-a94a-5691-b60e-5fb212fada30",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "buzy5pWgpk9l8Jl4",
+      "sourceVersionId": "4bab9ba3-8f09-478e-a94d-71a9f6e1820a",
+      "nodeId": "79eafc0f-6efe-5de4-bec8-c1c7cb6f2ea3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "Jcxxz3xQlkxxIAqW",
+      "sourceVersionId": "6ff84358-fa46-426e-8cdd-7292e658abbb",
+      "nodeId": "35f09abf-ec26-5c90-b800-d039e80bc0f3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "7iedYkYlzpptCBGc",
+      "sourceVersionId": "8bce3225-6002-45fe-a1fe-83a86ee3334e",
+      "nodeId": "1e87fc8c-0a4d-569c-a3af-cb7c3b11ac6b",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "7iedYkYlzpptCBGc",
+      "sourceVersionId": "8bce3225-6002-45fe-a1fe-83a86ee3334e",
+      "nodeId": "470a3dd4-786a-5955-86c5-af8807b880f0",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "UBX9gDbhPYqaPYC6",
+      "sourceVersionId": "daef8edd-9092-4de9-9085-e2b63ebff7e4",
+      "nodeId": "bfb3db98-1e38-5bae-ae6b-7ce2a0c96171",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "ACdjlL2arjHK9Icq",
+      "sourceVersionId": "0bcf7941-2298-483a-b753-fa3bc75a41d3",
+      "nodeId": "ba37a381-8715-5ec7-a8c2-f0cd8710b086",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "1lpZjgarX0ETP4B3",
+      "sourceVersionId": "1724f83a-51dd-460b-b1da-bedc044b23cd",
+      "nodeId": "e6e5b841-47ff-5e8d-ab11-d355b9baec82",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "SnOEmlGSf3uytQB0",
+      "sourceVersionId": "a5887d71-82bf-4b76-a0ec-905b39f0457b",
+      "nodeId": "d47cdb12-b415-5bac-8dd3-74fb95eb7beb",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/structured",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "tcU6YhZQU2BtYZtv",
+      "sourceVersionId": "f3637e50-248c-48f4-a4e8-f2c9fa45bd4b",
+      "nodeId": "cdebc7aa-3219-5fc3-af57-33e38a2371ef",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "tcU6YhZQU2BtYZtv",
+      "sourceVersionId": "f3637e50-248c-48f4-a4e8-f2c9fa45bd4b",
+      "nodeId": "0214cc3e-b7f8-5fa4-9995-949590d1f3f5",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "ymWr22Jg9NH1masu",
+      "sourceVersionId": "dca87cd6-a23a-430f-912c-152cdf4e4541",
+      "nodeId": "597671a4-09fc-5cb9-9e04-49a4f110afd3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "ymWr22Jg9NH1masu",
+      "sourceVersionId": "dca87cd6-a23a-430f-912c-152cdf4e4541",
+      "nodeId": "f9ad8566-b69a-50ec-ae2f-5d8c3e8c2538",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "QTw1j7usnHnrdpLY",
+      "sourceVersionId": "e95603e1-3870-4b6b-b738-500f7886570e",
+      "nodeId": "00449ba0-9095-5c67-ad47-e78081d0e2cf",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "QTw1j7usnHnrdpLY",
+      "sourceVersionId": "e95603e1-3870-4b6b-b738-500f7886570e",
+      "nodeId": "628a0eb0-5e37-5be9-992a-6d837e0d66ca",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "x3BcbMr8U9VghV3X",
+      "sourceVersionId": "29eafddb-1f00-4263-b4df-e54b48dbb7e4",
+      "nodeId": "e397b57c-ce81-59e5-8a0d-d12613190ba9",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "default",
+      "workflowId": "x3BcbMr8U9VghV3X",
+      "sourceVersionId": "29eafddb-1f00-4263-b4df-e54b48dbb7e4",
+      "nodeId": "5a21cb31-a7ad-552f-acdb-5783c24df39c",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "https://ducizone.ddns.net/ai-gateway/v1/compat/plain",
+      "kind": "httpHeaderAuth",
+      "credential": {
+        "id": "pk7LZxI0lKarGnwy",
+        "name": "Cổng AI Trung tâm · Khóa gọi sản phẩm"
+      }
+    },
+    {
+      "profile": "izone-ai",
+      "workflowId": "NFgOTzvfzfjwqY9x",
+      "sourceVersionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "nodeId": "4414477a-acde-48f5-bca5-6b015e8477f2",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+      "kind": "oAuth2Api",
+      "credential": {
+        "id": "5t3dhy3tWIoPzmXc",
+        "name": "IZONE Keycloak Auth"
+      }
+    },
+    {
+      "profile": "izone-ai",
+      "workflowId": "NFgOTzvfzfjwqY9x",
+      "sourceVersionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "nodeId": "e261c8a7-0434-40ff-a34c-839756a8d917",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+      "kind": "oAuth2Api",
+      "credential": {
+        "id": "5t3dhy3tWIoPzmXc",
+        "name": "IZONE Keycloak Auth"
+      }
+    },
+    {
+      "profile": "izone-ai",
+      "workflowId": "NFgOTzvfzfjwqY9x",
+      "sourceVersionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "nodeId": "33a04bd0-fda2-48f0-8ced-022cabaa34e3",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+      "kind": "oAuth2Api",
+      "credential": {
+        "id": "5t3dhy3tWIoPzmXc",
+        "name": "IZONE Keycloak Auth"
+      }
+    },
+    {
+      "profile": "izone-ai",
+      "workflowId": "NFgOTzvfzfjwqY9x",
+      "sourceVersionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "nodeId": "f2ece298-2ccc-4b36-86e6-3122bb5d913a",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+      "kind": "oAuth2Api",
+      "credential": {
+        "id": "5t3dhy3tWIoPzmXc",
+        "name": "IZONE Keycloak Auth"
+      }
+    },
+    {
+      "profile": "izone-ai",
+      "workflowId": "NFgOTzvfzfjwqY9x",
+      "sourceVersionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "nodeId": "b1f8431e-d88c-433f-a640-50e275c30668",
+      "nodeType": "n8n-nodes-base.httpRequest",
+      "url": "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+      "kind": "oAuth2Api",
+      "credential": {
+        "id": "5t3dhy3tWIoPzmXc",
+        "name": "IZONE Keycloak Auth"
+      }
+    }
+  ]
+}

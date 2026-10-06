@@ -1,0 +1,3 @@
+* text eol=lf
+# Source ghim giữ byte xuống dòng của ảnh đã kiểm, kể cả bốn file CRLF.
+src/*.js -text
