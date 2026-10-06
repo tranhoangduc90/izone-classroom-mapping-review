@@ -69,7 +69,7 @@ Ngày 07/10, sau khi Đức cho phép kiểm đầy đủ trên VPS rồi phát 
 
 Backend mới đã chuyển, readiness/API công khai/CORS đạt. Migration chuyển 16 lượt giấy IC2304, so và giữ nguyên nội dung 156 attempt cùng 126 exam session trong giao dịch. Điểm bốn học viên được đọc lại, không nộp hoặc chấm lại. Cấu hình runtime, mount, Redis, nguồn ngữ cảnh và runtime chung/K56 giữ nguyên theo hash đối chiếu. Snapshot database đã kiểm đọc danh mục phục hồi; container cũ được giữ, không dùng để tự quay lại sau khi có bài giấy mới.
 
-**Còn kiểm sau phát hành Pages:** cache/tài nguyên live và hành trình Chrome qua màn xác nhận tới kết quả. Chưa quan sát một lớp thật đang làm bài và chưa kiểm tải 169 người đồng thời; không suy từ số ca kiểm thành chứng minh hai việc đó.
+Pages đã phát hành tại commit `90470fefeed01a0226528f9fca8a6540283e635e`. 11 tài nguyên live khớp source chuẩn hóa xuống dòng. Chrome sạch trên mobile/desktop đã xác nhận chọn lớp/tên trước khi mở, tải lại cần xác nhận lại, xem đúng điểm cả bốn học viên và không có lỗi JavaScript; không gửi đáp án thật. Backend healthy, không restart hoặc lỗi runtime trong cửa sổ quan sát. Chưa quan sát một lớp thật đang làm bài và chưa kiểm tải 169 người đồng thời; không suy từ số ca kiểm thành chứng minh hai việc đó.
 
 ## Thứ tự phát hành sau khi được phép
 
