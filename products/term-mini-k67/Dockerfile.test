@@ -1,0 +1,10 @@
+# Kiểm candidate trên VPS với dependency đã ghim; không dùng runtime sản phẩm chung.
+ARG NODE_IMAGE
+FROM ${NODE_IMAGE}
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY src ./src
+COPY test ./test
+USER node
+ENTRYPOINT ["node"]

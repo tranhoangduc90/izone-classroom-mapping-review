@@ -1,0 +1,400 @@
+{
+  "schema_version": 1,
+  "product_id": "PRODUCT-TERM-MINI-K67",
+  "captured_at": "2026-10-06T03:20:41Z",
+  "scope": "48 định nghĩa chấm default và một writer izone-ai; chỉ nguồn đã ghim, không phải quyền triển khai",
+  "workflows": [
+    {
+      "id": "vxwctiMNBc7BnSNn",
+      "name": "Chấm một Task Writing Term Test",
+      "profile": "default",
+      "versionId": "3ddc54e1-9124-4d32-87fd-57bfe60ff699",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Ch_m_m_t_Task_Writing_Term_Test_vxwctiMNBc7BnSNn_2026-10-06T03-13-31.json",
+      "sha256": "40ebdf9c2777076edb3f1bf2963e3ffda06aeb01bce61a64c6b777d588c03dc5"
+    },
+    {
+      "id": "isfTUNj1X1LJxKgg",
+      "name": "Chọn prompt TR CC",
+      "profile": "default",
+      "versionId": "34f6e8d8-c333-4fad-bb90-f8c290c99a88",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Ch_n_prompt_TR_CC_isfTUNj1X1LJxKgg_2026-10-06T03-15-14.json",
+      "sha256": "2a7d4354eda3a8519aa14fb83379737ff32c2cbd78b4b5a3d0a3df0db32c1362"
+    },
+    {
+      "id": "SGtuBV91Yc9oxEVt",
+      "name": "Nhận bài, chấm Writing và trả kết quả cho webapp Term Test / Mini Test",
+      "profile": "default",
+      "versionId": "2c998b66-0e65-4517-bdcc-968e9898d6e0",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Nh_n_b_i__ch_m_Writing_v__tr__k_t_qu__cho_webapp_T_SGtuBV91Yc9oxEVt_2026-10-06T03-15-00.json",
+      "sha256": "38f11c2a59827169cb17c73497aaf608ee6b09c7c973cc99565a85700c6abc54"
+    },
+    {
+      "id": "DHUgPXJdCfVZWj56",
+      "name": "Nhận bài Writing Term Test ngay khi học viên nộp",
+      "profile": "default",
+      "versionId": "b2df3105-c6a1-4697-8c62-cfa93b09aea9",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Nh_n_b_i_Writing_Term_Test_ngay_khi_h_c_vi_n_n_p_DHUgPXJdCfVZWj56_2026-10-06T03-14-54.json",
+      "sha256": "9424c08d4aff9b56e1538e5c97477df5a42ba704342441ac700af55d4a93c030"
+    },
+    {
+      "id": "rL024IFriAhDl1M8",
+      "name": "Writing Term Test 1 · Chấm đủ chuyên môn Test 56–67",
+      "profile": "default",
+      "versionId": "985e4825-d965-4118-aa95-d541348d1f39",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Ch_m____chuy_n_m_n_Test_56_6_rL024IFriAhDl1M8_2026-10-06T03-15-22.json",
+      "sha256": "21b1824314b1a0b3c4be9759527d2f6034cfa409662ab32479535cb682107d23"
+    },
+    {
+      "id": "DJXBSBbsGU6T1jJt",
+      "name": "Writing Term Test 1 · Cover đề",
+      "profile": "default",
+      "versionId": "aeee27bb-5620-4e07-96c0-7460af62aaed",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Cover____DJXBSBbsGU6T1jJt_2026-10-06T03-15-42.json",
+      "sha256": "d51a7e2b885489929647121c14b2a98d4ac1eb7da19c7eb7381075c800436b78"
+    },
+    {
+      "id": "Xj9fT5l8PXHwARM3",
+      "name": "Writing Term Test 1 · Phân tích ngữ pháp",
+      "profile": "default",
+      "versionId": "4adea448-d20f-446b-9d73-73a8592eab27",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Ph_n_t_ch_ng__ph_p_Xj9fT5l8PXHwARM3_2026-10-06T03-16-50.json",
+      "sha256": "e4335e46a8d3387be3874a5ff3e1898b49e9f25b31218024c3451e2ad7a70732"
+    },
+    {
+      "id": "BZGN46wTdC6uoMcW",
+      "name": "Writing Term Test 1 · Phát triển ý",
+      "profile": "default",
+      "versionId": "4c647d3b-0298-46d1-aa03-ae3b1d26e78c",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Ph_t_tri_n___BZGN46wTdC6uoMcW_2026-10-06T03-15-57.json",
+      "sha256": "a6c8db952fc57436fe64f469f7e36a1c238f38e1a17931b4ec7fccfaa34df4bf"
+    },
+    {
+      "id": "00exTw6Bp16lHhwN",
+      "name": "Writing Term Test 1 · Quan điểm",
+      "profile": "default",
+      "versionId": "1f07168d-5ba6-4f84-9e6b-f17d6e480156",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Quan__i_m_00exTw6Bp16lHhwN_2026-10-06T03-15-52.json",
+      "sha256": "3774b85a888b4bd871b1af564d79abc6bbe1d0647476c578e930cdf4d8a4ca22"
+    },
+    {
+      "id": "fKEyq7u57faDOJrA",
+      "name": "Writing Term Test 1 · Sắp xếp ý",
+      "profile": "default",
+      "versionId": "66df0689-a93d-4c34-8906-5aba894ea037",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___S_p_x_p___fKEyq7u57faDOJrA_2026-10-06T03-16-03.json",
+      "sha256": "9b75120dd32b00cd1ea4cf7588001c21994137ace48ceba6379d499c448adccf"
+    },
+    {
+      "id": "0PeCOrdM1ujIkKU5",
+      "name": "Writing Term Test 1 · Từ nối",
+      "profile": "default",
+      "versionId": "e9d098e5-f93a-42e4-88fe-8abd9dd69e54",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___T__n_i_0PeCOrdM1ujIkKU5_2026-10-06T03-16-07.json",
+      "sha256": "11076966892a42a54ad99924c7c3890b0c199d422c136c8b1d4758cdf76c39ec"
+    },
+    {
+      "id": "PRFZU9nrOiWWjtmE",
+      "name": "Writing Term Test 1 · Tổng hợp Coherence and Cohesion",
+      "profile": "default",
+      "versionId": "3c107aec-bfde-475e-90ef-75d946eb9930",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___T_ng_h_p_Coherence_and_Cohes_PRFZU9nrOiWWjtmE_2026-10-06T03-17-05.json",
+      "sha256": "bfda9fa341e6571f3c2d40f3c487a96b4162ce159e936728f97b5647520c1628"
+    },
+    {
+      "id": "iOsU892kd5nT6kZ4",
+      "name": "Writing Term Test 1 · Tổng hợp Grammatical Range and Accuracy",
+      "profile": "default",
+      "versionId": "bb96a533-4743-42b5-8b39-4882f01f092b",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___T_ng_h_p_Grammatical_Range_a_iOsU892kd5nT6kZ4_2026-10-06T03-17-13.json",
+      "sha256": "331e30351b9b51ebb1a1cab3416313d70d7701d2ad26cd1e484aef4a95867bd4"
+    },
+    {
+      "id": "CqVewjN7f1mfacsD",
+      "name": "Writing Term Test 1 · Tổng hợp Lexical Resource",
+      "profile": "default",
+      "versionId": "ed394331-c954-49c7-bf8c-8f2396630071",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___T_ng_h_p_Lexical_Resource_CqVewjN7f1mfacsD_2026-10-06T03-17-09.json",
+      "sha256": "84c6781e75991592f280ae285898097ad9574eab23899a49e4a0ec07fad398d6"
+    },
+    {
+      "id": "qsHHDyV9X5ZrNG5q",
+      "name": "Writing Term Test 1 · Tổng hợp Task Response",
+      "profile": "default",
+      "versionId": "589b2937-b055-4f6d-bbd2-33ed3f03a31e",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___T_ng_h_p_Task_Response_qsHHDyV9X5ZrNG5q_2026-10-06T03-16-59.json",
+      "sha256": "9065cee27a0a6bd3fced084ff0a61ffaeeb1e72d02a6c6138158dafed47ad9d4"
+    },
+    {
+      "id": "6ixt6KiDHYCScYBs",
+      "name": "Writing Term Test 1 · Tham chiếu và thay thế",
+      "profile": "default",
+      "versionId": "89944a90-1361-4f42-8ce2-4bbc09ac2960",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Tham_chi_u_v__thay_th__6ixt6KiDHYCScYBs_2026-10-06T03-16-18.json",
+      "sha256": "eb6e16811533bea3b1e0515a17220498fc6bca8a4ef44267c6dbe5593e4b85ab"
+    },
+    {
+      "id": "dOiDw7HYlz5ahuaG",
+      "name": "Writing Term Test 1 · Vốn từ",
+      "profile": "default",
+      "versionId": "650f4f22-d1a4-452c-830e-8ea09557a689",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___V_n_t__dOiDw7HYlz5ahuaG_2026-10-06T03-16-22.json",
+      "sha256": "29c3479e7bdb3bd982255c3104fc25c5f120f392348a0b47f61bebe840abdba9"
+    },
+    {
+      "id": "0WtqAYNPdzgdIQYV",
+      "name": "Writing Term Test 1 · Word choice",
+      "profile": "default",
+      "versionId": "c61de6e0-09b6-4ee5-9542-2b24dae444a2",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Word_choice_0WtqAYNPdzgdIQYV_2026-10-06T03-16-29.json",
+      "sha256": "39a829edda88f9ab326308cdbd6931b21f7167ae67bfbf41e57bba7041890365"
+    },
+    {
+      "id": "gazDbr6valsDMjLL",
+      "name": "Writing Term Test 1 · Word formation & Spelling",
+      "profile": "default",
+      "versionId": "9ee3b4f7-fa90-4396-8cc5-ae8273f04cf9",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_1___Word_formation___Spelling_gazDbr6valsDMjLL_2026-10-06T03-16-34.json",
+      "sha256": "2f8448d9af1f2d5ec64563786108d8cd27c8a148b3c36a9aa770d15eff750977"
+    },
+    {
+      "id": "BwsiThzlnld4Qejl",
+      "name": "Writing Term Test 2 · Task 1 · Đặc điểm chính và tổng quan",
+      "profile": "default",
+      "versionId": "a74c2b78-43bf-46a4-b4b4-d51fa4ca36fe",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1_____c__i_m_ch_nh_v__t_BwsiThzlnld4Qejl_2026-10-06T03-17-18.json",
+      "sha256": "48e4963d32dd593a051209bb070876d8889a3c6bb8d63bef5a4e5f7b2d324a04"
+    },
+    {
+      "id": "Tv6tu9DQvuuowPwv",
+      "name": "Writing Term Test 2 · Task 1 · Cấu tạo từ và chính tả",
+      "profile": "default",
+      "versionId": "d204fb1c-11d6-4dd6-a1d0-cd5321de568f",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___C_u_t_o_t__v__ch_nh_Tv6tu9DQvuuowPwv_2026-10-06T03-18-25.json",
+      "sha256": "b3a883f9a4e7a11119c727ad20b7a7fb2169e80ec3eda703bb3d7edbe058b706"
+    },
+    {
+      "id": "9Rq8t3zaFC07NSRP",
+      "name": "Writing Term Test 2 · Task 1 · Chấm đủ chuyên môn Test 56–67",
+      "profile": "default",
+      "versionId": "e46d61d4-723c-40b6-be3f-96dc6271e271",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___Ch_m____chuy_n_m_n__9Rq8t3zaFC07NSRP_2026-10-06T03-15-33.json",
+      "sha256": "8abe1b9be860e307f009ef6d8ce39afbfb86c04e2cb57bdbf8cb31ad4508ff65"
+    },
+    {
+      "id": "LETUGryOpT4hdqkz",
+      "name": "Writing Term Test 2 · Task 1 · Dẫn chứng số liệu",
+      "profile": "default",
+      "versionId": "4b9fd831-afa3-459a-ba56-e6ac51de59a3",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___D_n_ch_ng_s__li_u_LETUGryOpT4hdqkz_2026-10-06T03-17-26.json",
+      "sha256": "0c004ffe38c80536aa89da210da0e1db68eae12827857f84280f7d271c20bc22"
+    },
+    {
+      "id": "w6j2A1pJLQf1Kioj",
+      "name": "Writing Term Test 2 · Task 1 · Lựa chọn từ",
+      "profile": "default",
+      "versionId": "dacde941-ec55-43cd-a87b-6f628bff9d9b",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___L_a_ch_n_t__w6j2A1pJLQf1Kioj_2026-10-06T03-18-15.json",
+      "sha256": "9c3c1265ece31ad4604df6f15a61073ffaae9a69762f8ff3f87949000fb4c87b"
+    },
+    {
+      "id": "VHa41O7dHsZc27Oo",
+      "name": "Writing Term Test 2 · Task 1 · Phân tích ngữ pháp",
+      "profile": "default",
+      "versionId": "4aa6eb0e-28c6-45fc-a565-c334276561ac",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___Ph_n_t_ch_ng__ph_p_VHa41O7dHsZc27Oo_2026-10-06T03-18-32.json",
+      "sha256": "8e5b80c034fe6549c0315ab46911b6329e6ced6a68493635846c6424e82a616c"
+    },
+    {
+      "id": "dyNzYQ9B99eHbHXQ",
+      "name": "Writing Term Test 2 · Task 1 · Sắp xếp thông tin",
+      "profile": "default",
+      "versionId": "e734591b-459e-4ff3-ba99-311a32abc7db",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___S_p_x_p_th_ng_tin_dyNzYQ9B99eHbHXQ_2026-10-06T03-17-39.json",
+      "sha256": "553aab6550bfddcdf565214cdc8de8210b18a3a07f855cab4376f0b4d0b78239"
+    },
+    {
+      "id": "eT6zuwHVDL8PGpgp",
+      "name": "Writing Term Test 2 · Task 1 · Từ nối",
+      "profile": "default",
+      "versionId": "eedda830-b738-49c6-bbe5-97b560a0ce5d",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___T__n_i_eT6zuwHVDL8PGpgp_2026-10-06T03-17-48.json",
+      "sha256": "ba12523a74ad8e5be67f9e4896e6d6199b19a271cf14cef07ad488b3ea43c4d4"
+    },
+    {
+      "id": "PHSyMsjBkj5bM3wU",
+      "name": "Writing Term Test 2 · Task 1 · Tổng hợp Coherence and Cohesion",
+      "profile": "default",
+      "versionId": "3fbc6576-f308-4f13-89b5-b816c051bf9f",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___T_ng_h_p_Coherence__PHSyMsjBkj5bM3wU_2026-10-06T03-18-55.json",
+      "sha256": "b314bab8346fe980030a9c5c070db282faa57288e94d1544013003c418613f9e"
+    },
+    {
+      "id": "f0SruSogzt8Wj3sh",
+      "name": "Writing Term Test 2 · Task 1 · Tổng hợp Grammatical Range and Accuracy",
+      "profile": "default",
+      "versionId": "8da6a86c-741d-42fe-ba6f-f80ecf948e3e",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___T_ng_h_p_Grammatica_f0SruSogzt8Wj3sh_2026-10-06T03-19-10.json",
+      "sha256": "fb5841390d3dd28241c82b84ef4ec8c6dd0a33d3cc535a1a13cf56cd4a30ed07"
+    },
+    {
+      "id": "V76Io4iZwUgOfvbh",
+      "name": "Writing Term Test 2 · Task 1 · Tổng hợp Lexical Resource",
+      "profile": "default",
+      "versionId": "a00f6d20-d682-44e6-b3d3-8c33c0b0131a",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___T_ng_h_p_Lexical_Re_V76Io4iZwUgOfvbh_2026-10-06T03-19-04.json",
+      "sha256": "ae61a64df540af521da6edbd58611483479490e9ca5942c52717e3ee457c9662"
+    },
+    {
+      "id": "8Ji0DNMz359se2dA",
+      "name": "Writing Term Test 2 · Task 1 · Tổng hợp Task Achievement",
+      "profile": "default",
+      "versionId": "016920bd-d0bc-46d2-bf0d-e5b6be91f3a2",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___T_ng_h_p_Task_Achie_8Ji0DNMz359se2dA_2026-10-06T03-18-46.json",
+      "sha256": "c158067910e5963e0810d8e218d796db31d743111a548977b64bf8fd39b832d9"
+    },
+    {
+      "id": "xPGNcbZAWYXTH6Bv",
+      "name": "Writing Term Test 2 · Task 1 · Tham chiếu và thay thế",
+      "profile": "default",
+      "versionId": "e89c8dea-741a-4082-8442-6e7c9a04cf04",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___Tham_chi_u_v__thay__xPGNcbZAWYXTH6Bv_2026-10-06T03-18-01.json",
+      "sha256": "33f2d40f585a5285c6c2bad876512085bd525ac63147cb61add678c8803ba3b8"
+    },
+    {
+      "id": "oFRT47Ebe2t4MrhM",
+      "name": "Writing Term Test 2 · Task 1 · Vốn từ",
+      "profile": "default",
+      "versionId": "78e087fb-7692-4502-9bea-82e0d706c145",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_1___V_n_t__oFRT47Ebe2t4MrhM_2026-10-06T03-18-08.json",
+      "sha256": "6b988c125ddb243b46a6088d022be69a94ad7107f2835183b73a11da7f7ed4a4"
+    },
+    {
+      "id": "AQww0LqrvXmW76nC",
+      "name": "Writing Term Test 2 · Task 2 · Chấm đủ chuyên môn Test 56–67",
+      "profile": "default",
+      "versionId": "fd51b991-d4bf-4790-a71a-f88543531b78",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Ch_m____chuy_n_m_n__AQww0LqrvXmW76nC_2026-10-06T03-15-37.json",
+      "sha256": "a5838d243488a7097f6adc91d6a8d3898b5ce2173982b403614a57d103ec3030"
+    },
+    {
+      "id": "RQaCF5nFB2sdhuEM",
+      "name": "Writing Term Test 2 · Task 2 · Cover đề",
+      "profile": "default",
+      "versionId": "3d5892ca-508f-483c-9fa6-9d01f526cd16",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Cover____RQaCF5nFB2sdhuEM_2026-10-06T03-19-14.json",
+      "sha256": "c06a944841ef3eb6a706556b787e6fe419534f399280268dfcd13b2a22737be0"
+    },
+    {
+      "id": "veXw1V1ywwcLHrJd",
+      "name": "Writing Term Test 2 · Task 2 · Phân tích ngữ pháp",
+      "profile": "default",
+      "versionId": "6d0027a0-4a94-4a36-858f-e952f1c6682a",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Ph_n_t_ch_ng__ph_p_veXw1V1ywwcLHrJd_2026-10-06T03-20-16.json",
+      "sha256": "a58c41c6efdbef0dae24d928ec2a853bd2ec730f92b2b1a9d93fc3b02fc8c386"
+    },
+    {
+      "id": "PISkXDTVcjkeN5Hh",
+      "name": "Writing Term Test 2 · Task 2 · Phát triển ý",
+      "profile": "default",
+      "versionId": "9f1e0cd2-bf69-4e89-9eb9-1d367a885809",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Ph_t_tri_n___PISkXDTVcjkeN5Hh_2026-10-06T03-19-27.json",
+      "sha256": "c09dca2f6fe83c02f9c48e8b59e2dd679408f2654f292f244ce4d240603d1711"
+    },
+    {
+      "id": "buzy5pWgpk9l8Jl4",
+      "name": "Writing Term Test 2 · Task 2 · Quan điểm",
+      "profile": "default",
+      "versionId": "4bab9ba3-8f09-478e-a94d-71a9f6e1820a",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Quan__i_m_buzy5pWgpk9l8Jl4_2026-10-06T03-19-21.json",
+      "sha256": "40a16878b776044f9c52fb247883cbf5c71b38d47edf6976a2fa2c2afbb56512"
+    },
+    {
+      "id": "Jcxxz3xQlkxxIAqW",
+      "name": "Writing Term Test 2 · Task 2 · Sắp xếp ý",
+      "profile": "default",
+      "versionId": "6ff84358-fa46-426e-8cdd-7292e658abbb",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___S_p_x_p___Jcxxz3xQlkxxIAqW_2026-10-06T03-19-32.json",
+      "sha256": "0abc1fa1c26652350dea40e2a9cfb4d83e50eadff5494152fbe4291e5043e3c9"
+    },
+    {
+      "id": "7iedYkYlzpptCBGc",
+      "name": "Writing Term Test 2 · Task 2 · Từ nối",
+      "profile": "default",
+      "versionId": "8bce3225-6002-45fe-a1fe-83a86ee3334e",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___T__n_i_7iedYkYlzpptCBGc_2026-10-06T03-19-46.json",
+      "sha256": "0c5f3a7672321d4a0327a8a9646c3fcbf34b3e109e08424918743d7ad32de609"
+    },
+    {
+      "id": "UBX9gDbhPYqaPYC6",
+      "name": "Writing Term Test 2 · Task 2 · Tổng hợp Coherence and Cohesion",
+      "profile": "default",
+      "versionId": "daef8edd-9092-4de9-9085-e2b63ebff7e4",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___T_ng_h_p_Coherence__UBX9gDbhPYqaPYC6_2026-10-06T03-20-31.json",
+      "sha256": "cd81f27f5ffb056c954613e540fed1c17ddd07e73a08d6c0bc5064ec0217efc1"
+    },
+    {
+      "id": "ACdjlL2arjHK9Icq",
+      "name": "Writing Term Test 2 · Task 2 · Tổng hợp Grammatical Range and Accuracy",
+      "profile": "default",
+      "versionId": "0bcf7941-2298-483a-b753-fa3bc75a41d3",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___T_ng_h_p_Grammatica_ACdjlL2arjHK9Icq_2026-10-06T03-20-41.json",
+      "sha256": "8970d3e90957c74870a2e7b564c251aa0a5a764a1e28f39e5ae4249f31eac15b"
+    },
+    {
+      "id": "1lpZjgarX0ETP4B3",
+      "name": "Writing Term Test 2 · Task 2 · Tổng hợp Lexical Resource",
+      "profile": "default",
+      "versionId": "1724f83a-51dd-460b-b1da-bedc044b23cd",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___T_ng_h_p_Lexical_Re_1lpZjgarX0ETP4B3_2026-10-06T03-20-36.json",
+      "sha256": "46dd16fcfdf73e05f49b1a08a4689df1cfc1a28277d1e8a0f68c5b3a19ff3f4c"
+    },
+    {
+      "id": "SnOEmlGSf3uytQB0",
+      "name": "Writing Term Test 2 · Task 2 · Tổng hợp Task Response",
+      "profile": "default",
+      "versionId": "a5887d71-82bf-4b76-a0ec-905b39f0457b",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___T_ng_h_p_Task_Respo_SnOEmlGSf3uytQB0_2026-10-06T03-20-25.json",
+      "sha256": "9cef4da23710880f3b1ef9f0a294e235be7ed9bb2990bd59eb45ae7f572ae39f"
+    },
+    {
+      "id": "tcU6YhZQU2BtYZtv",
+      "name": "Writing Term Test 2 · Task 2 · Tham chiếu và thay thế",
+      "profile": "default",
+      "versionId": "f3637e50-248c-48f4-a4e8-f2c9fa45bd4b",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Tham_chi_u_v__thay__tcU6YhZQU2BtYZtv_2026-10-06T03-19-56.json",
+      "sha256": "0123db5279c260d5817746445cf4bbdcc99efc237af68769eb87b53b06173a27"
+    },
+    {
+      "id": "ymWr22Jg9NH1masu",
+      "name": "Writing Term Test 2 · Task 2 · Vốn từ",
+      "profile": "default",
+      "versionId": "dca87cd6-a23a-430f-912c-152cdf4e4541",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___V_n_t__ymWr22Jg9NH1masu_2026-10-06T03-20-03.json",
+      "sha256": "308b7042a2a29dcaf0538ed361219f036dabc90380cf880efe74115a7d1a3658"
+    },
+    {
+      "id": "QTw1j7usnHnrdpLY",
+      "name": "Writing Term Test 2 · Task 2 · Word choice",
+      "profile": "default",
+      "versionId": "e95603e1-3870-4b6b-b738-500f7886570e",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Word_choice_QTw1j7usnHnrdpLY_2026-10-06T03-20-06.json",
+      "sha256": "2d844a4e511b7992e3df63dc745ca77f9082a108b14182b36fc89b2c89225c29"
+    },
+    {
+      "id": "x3BcbMr8U9VghV3X",
+      "name": "Writing Term Test 2 · Task 2 · Word formation & Spelling",
+      "profile": "default",
+      "versionId": "29eafddb-1f00-4263-b4df-e54b48dbb7e4",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/grading-snapshots/Writing_Term_Test_2___Task_2___Word_formation___Sp_x3BcbMr8U9VghV3X_2026-10-06T03-20-10.json",
+      "sha256": "2c483e1f6d912fca678fc80a5684a61fdbea1582fa61e0c19e1005d9d0bb553c"
+    },
+    {
+      "id": "NFgOTzvfzfjwqY9x",
+      "name": "Đồng bộ điểm Term Test vào kết quả lớp",
+      "profile": "izone-ai",
+      "versionId": "1d6e4651-00aa-4d8e-a4e6-fafbdaa239c9",
+      "path": "E:/Codex-Data/k67-backend-separation-20261006/writer-snapshots/__ng_b___i_m_Term_Test_v_o_k_t_qu__l_p_NFgOTzvfzfjwqY9x_2026-10-06T03-13-27.json",
+      "sha256": "9fdec87aba98295d31f0eb72e63017f5be805e985a940ba4c76b87e8dbe7bf6f"
+    }
+  ]
+}
