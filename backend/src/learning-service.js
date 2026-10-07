@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule } from './learning-schedule-plan.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
@@ -236,8 +237,20 @@ function buildStudentCourseJourney(row) {
 }
 
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
-  testResultReader = null }) {
+  testResultReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
+  const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
+  async function attachComments(view,classId,studentRef=null) {
+    if(!comments) return view;
+    view={...view,journeyCommentsEnabled:true};
+    const notes=await comments.readComments(classId,studentRef,{visibleOnly:!!studentRef});
+    const byKey=new Map(notes.map(note=>[note.studentRef+':'+note.sessionNumber,note]));
+    if(view.sessions && studentRef) return {...view,sessions:view.sessions.map(session=>({...session,
+      sessionComment:byKey.get(studentRef+':'+session.sessionNumber)||null}))};
+    return {...view,students:view.students.map(student=>({...student,
+      ...(student.cells?{cells:student.cells.map(cell=>({...cell,sessionComment:byKey.get(student.studentRef+':'+cell.sessionNumber)||null}))}
+        :{sessionComment:byKey.get(student.studentRef+':'+view.sessionNumber)||null})}))};
+  }
 
   async function readErpSchedule(classId) {
     if (!erpScheduleReader) {
@@ -259,6 +272,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   }
 
   return {
+    ...(comments||{}),
     async getPublicAssignment(publicToken) {
       const result = await pool.query(fetchPublicLearningAssignmentSql, [publicToken]);
       return publicAssignment(assertSingleRow(
@@ -670,7 +684,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           }
         }
       }
-      return journey;
+      return attachComments(journey,row.class_id,row.student_ref);
     },
 
     // Link/tên được kiểm bằng cùng nguồn Journey; chỉ trả bài nộp của đúng lớp/người/buổi.
@@ -679,6 +693,11 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const journey = await this.getStudentCourseJourney(input);
       const session = journey.sessions.find(item => item.sessionNumber === input.sessionNumber);
       if (!session) throw new LearningError('JOURNEY_SESSION_NOT_FOUND', 'Không tìm thấy buổi học trong hành trình.', 404);
+      if (session.completeness !== 'complete' && session.sessionComment) return {
+        classId:journey.class.classId,student:journey.student,sessionNumber:input.sessionNumber,
+        sessionDate:session.sessionDate,status:session.assignmentId?'not_submitted':'no_assignment',
+        definition:null,responses:{},gradingItems:[],sessionComment:session.sessionComment,
+        testResult:session.testResult||null};
       if (session.completeness !== 'complete') throw new LearningError('JOURNEY_SUBMISSION_NOT_READY',
         'Buổi này chưa có phiếu hoàn tất; hãy mở Progress Log theo lịch học.', 409);
       const result = await pool.query(fetchCourseSessionDetailSql,
@@ -692,7 +711,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       return {classId:journey.class.classId, student:journey.student, sessionNumber:input.sessionNumber,
         sessionDate:session.sessionDate, status:'complete', definition:parseFormDefinition(asObject(row.public_definition)),
         submissionId:row.submission_id, responses:asObject(row.responses), gradingItems:asArray(row.grading_items),
-        teacherSessionFeedback:session.teacherSessionFeedback || null,
+        teacherSessionFeedback:session.teacherSessionFeedback || null,sessionComment:session.sessionComment||null,
         attendanceStatus:session.attendanceStatus, portalSync:session.portalSync};
     },
 
@@ -1113,13 +1132,13 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
             const results=await testResultReader.readClass({classId,studentRefs:overview.students.map(s=>s.studentRef),
               testSlugs:mapped.map(source=>source.testSlug)});
             const bySlug=new Map(mapped.map(source=>[source.testSlug,source.sessionNumber]));
-            return buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
+            return attachComments(buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
               currentRoster:roster.rows,rows:status.rows,testCoverage:'connected',
-              testResults:results.map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))});
+              testResults:results.map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))}),target.class_id);
           } catch { /* Nguồn Test lỗi không chặn xem dữ liệu Progress Log của lớp. */ }
         }
       }
-      return overview;
+      return attachComments(overview,target.class_id);
     },
 
     async getCourseSessionDetail({classId,sessionNumber,studentRef,reviewer}) {
@@ -1135,7 +1154,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         testResult:cell.testResult,testCoverage:overview.testCoverage,
         definition:row?parseFormDefinition(asObject(row.public_definition)):null,
         submissionId:row?.submission_id||null,responses:asObject(row?.responses),
-        gradingItems:asArray(row?.grading_items),teacherSessionFeedback:row?.teacher_session_feedback||null};
+        gradingItems:asArray(row?.grading_items),teacherSessionFeedback:row?.teacher_session_feedback||null,
+        sessionComment:cell.sessionComment||null};
     },
 
     async getQuestionAnalytics({assignmentId, reviewer}) {
@@ -1156,6 +1176,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       ]);
       const row = assertSingleRow(result, 'ASSIGNMENT_ACCESS_DENIED', 'Không tìm thấy phiếu trong phạm vi được cấp quyền.', 404);
       const scoreRows = await pool.query(fetchLearningAssignmentCheckpointScoresSql, [assignmentId]);
+      const commentClass=comments?await pool.query('SELECT erp_course_class_id::text AS class_id FROM learning.form_assignment WHERE id=$1::uuid',[assignmentId]):null;
+      const notes=comments?await comments.readComments(commentClass.rows[0].class_id):[];
+      const noteMap=new Map(notes.filter(note=>note.sessionNumber===Number(row.session_number)).map(note=>[note.studentRef,note]));
       const scoresByStudent = new Map();
       for (const scoreRow of scoreRows.rows) {
         const definition = studentFeedbackDefinition(scoreRow.public_definition, scoreRow.answer_release_override);
@@ -1174,6 +1197,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         assignmentId: row.assignment_id,
         title: row.title,
         sessionNumber: Number(row.session_number),
+        classId:commentClass?.rows[0]?.class_id||null,
+        journeyCommentsEnabled,
         className: row.class_name,
         publicToken: row.public_token,
         status: row.status,
@@ -1183,6 +1208,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         classInsights: asArray(row.class_insights),
         students: asArray(row.students).map(student => ({
           ...student,
+          sessionComment:noteMap.get(student.studentRef)||null,
           checkpointScores: scoresByStudent.get(student.studentRef) || []
         }))
       };
@@ -1200,10 +1226,13 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         'Không tìm thấy phiếu trong phạm vi được cấp quyền.',
         404
       );
+      const assignment=comments?await pool.query('SELECT erp_course_class_id::text AS class_id,session_number FROM learning.form_assignment WHERE id=$1::uuid',[assignmentId]):null;
+      const notes=comments?await comments.readComments(assignment.rows[0].class_id):[];
+      const noteMap=new Map(notes.filter(note=>note.sessionNumber===Number(assignment?.rows[0]?.session_number)).map(note=>[note.studentRef,note]));
       return {
         assignmentId: row.assignment_id,
         generatedAt: row.generated_at,
-        students: asArray(row.students).map(teacherLiveStudent)
+        students: asArray(row.students).map(student=>({...teacherLiveStudent(student),...(comments?{sessionComment:noteMap.get(student.studentRef)||null}:{})}))
       };
     },
 

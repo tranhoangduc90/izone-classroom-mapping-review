@@ -1097,7 +1097,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
   FROM learning.student_progress_access
   WHERE token_hash = $1
     AND status = 'active'
-    AND expires_at > now()
+    AND (expires_at IS NULL OR expires_at > now())
   UNION ALL
   SELECT assignment.erp_course_class_id, roster.student_ref, NULL::timestamptz AS expires_at
   FROM learning.form_assignment AS assignment
@@ -1110,10 +1110,10 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     access.erp_course_class_id,
     access.student_ref,
     access.expires_at,
-    roster.student_name_snapshot AS student_name,
-    assignment.class_name_snapshot AS class_name
+    COALESCE(roster.student_name_snapshot,person.erp_student_name_snapshot) AS student_name,
+    COALESCE(assignment.class_name_snapshot,classroom.erp_class_name_snapshot) AS class_name
   FROM access
-  JOIN LATERAL (
+  LEFT JOIN LATERAL (
     SELECT candidate.*
     FROM learning.form_assignment AS candidate
     JOIN learning.form_assignment_roster AS candidate_roster
@@ -1123,9 +1123,13 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     ORDER BY candidate.session_number DESC, candidate.created_at DESC
     LIMIT 1
   ) AS assignment ON true
-  JOIN learning.form_assignment_roster AS roster
+  LEFT JOIN learning.form_assignment_roster AS roster
     ON roster.assignment_id = assignment.id
     AND roster.student_ref = access.student_ref
+  LEFT JOIN mapping.student_mapping_review AS person ON person.public_id=access.student_ref
+    AND person.erp_course_class_id=access.erp_course_class_id
+  LEFT JOIN mapping.classroom_course_mapping AS classroom ON classroom.erp_course_class_id=access.erp_course_class_id
+  WHERE roster.student_ref IS NOT NULL OR person.public_id IS NOT NULL
 ), session_numbers AS (
   SELECT generate_series(1, GREATEST(
     COALESCE((SELECT max(a.session_number) FROM learning.form_assignment AS a

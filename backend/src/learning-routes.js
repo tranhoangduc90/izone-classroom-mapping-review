@@ -7,6 +7,7 @@ import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './
 import { createLearningDemoGrant,createLearningDraftDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
 import {createLearningFormDraftService} from './learning-form-drafts.js';
 import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
+import {createProgressLinkCipher} from './learning-journey-comments.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -178,6 +179,15 @@ const studentProgressLinkSchema = z.object({
   expiresInDays: z.number().int().min(1).max(365).default(90),
   operationId: uuidSchema
 }).strict();
+const commentTarget={classId:z.string().regex(/^[1-9]\d{0,17}$/u),studentRef:uuidSchema,
+  sessionNumber:z.coerce.number().int().min(1).max(100)};
+const commentWriteSchema=z.object({...commentTarget,noteText:z.string().trim().min(1)
+  .refine(value=>[...value].length<=1000),expectedRevision:z.number().int().min(0),operationId:uuidSchema}).strict();
+const commentHideSchema=z.object({...commentTarget,expectedRevision:z.number().int().min(0),operationId:uuidSchema}).strict();
+const commentHistorySchema=z.object(commentTarget).strict();
+const progressResolveSchema=z.object({classId:commentTarget.classId,studentRef:uuidSchema,operationId:uuidSchema}).strict();
+const progressChangeSchema=progressResolveSchema.extend({expectedAccessId:uuidSchema.nullable()}).strict();
+const studentCommentsSchema=z.union([studentJourneySchema,z.object({attemptToken:uuidSchema}).strict()]);
 
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -200,11 +210,12 @@ function attemptRateKey(req) {
 }
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
-  testSourceReader = null, testResultReader = null, demoSourceSecret = '', logger = null }) {
+  testSourceReader = null, testResultReader = null, demoSourceSecret = '', logger = null,
+  journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1' }) {
   const router = express.Router();
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
-    if(logger?.info&&/^\/teacher\/(erp-schedule|journey-plan|form-drafts|classes\/|assignments\/)/u.test(req.path)) {
+    if(logger?.info&&/^\/teacher\/(erp-schedule|journey-plan|form-drafts|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
       const started=performance.now(),correlation=randomUUID();
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
@@ -215,7 +226,9 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     }
     next();
   });
-  const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader });
+  const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader,
+    journeyCommentsEnabled,progressLinkCipher:journeyCommentsEnabled?
+      createProgressLinkCipher({keys:progressLinkKeys,activeVersion:progressLinkKeyVersion}):null });
   const drafts=createLearningFormDraftService({pool});
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
@@ -373,6 +386,35 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     res.set('Cache-Control', 'no-store');
     return res.json({ok:true, detail});
   }));
+  router.post('/student/session-comments',journeyLimiter,asyncRoute(async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    if(!journeyCommentsEnabled) return res.status(503).json({ok:false,error:'JOURNEY_COMMENTS_UNAVAILABLE',message:'Nhận xét theo buổi chưa được bật.'});
+    const input=parseOrReply(studentCommentsSchema,req.body,res,'INVALID_COMMENT_IDENTITY');if(!input)return;
+    return res.json({ok:true,...await service.getStudentSessionComments(input)});
+  }));
+  const featureReady=(_req,res,next)=>{
+    res.set('Cache-Control','no-store');
+    if(!journeyCommentsEnabled) return res.status(503).json({ok:false,error:'JOURNEY_COMMENTS_UNAVAILABLE',message:'Hành trình riêng và nhận xét đang được cập nhật.'});
+    next();
+  };
+  router.put('/teacher/session-comments',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentWriteSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
+    return res.json({ok:true,comment:await service.saveSessionComment({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/session-comments/hide',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentHideSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
+    return res.json({ok:true,comment:await service.hideSessionComment({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/session-comments/history',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentHistorySchema,req.query,res,'INVALID_COMMENT_TARGET');if(!input)return;
+    return res.json({ok:true,history:await service.getSessionCommentHistory({...input,reviewer:req.reviewer})});
+  }));
+  for(const [action,method] of [['resolve','resolveStudentProgressLink'],['rotate','rotateStudentProgressLink'],['revoke','revokeStudentProgressLink']]) {
+    router.post('/teacher/student-progress-links/'+action,authenticate,featureReady,asyncRoute(async(req,res)=>{
+      const input=parseOrReply(action==='resolve'?progressResolveSchema:progressChangeSchema,req.body,res,'INVALID_PROGRESS_LINK_REQUEST');if(!input)return;
+      return res.json({ok:true,link:await service[method]({...input,reviewer:req.reviewer})});
+    }));
+  }
 
   router.get('/teacher/options', authenticate, asyncRoute(async (req, res) => {
     const options = await service.listTeacherOptions({
@@ -599,11 +641,9 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   router.post('/teacher/student-progress-links', authenticate, asyncRoute(async (req, res) => {
-    const input = parseOrReply(studentProgressLinkSchema, req.body, res, 'INVALID_PROGRESS_LINK_REQUEST');
-    if (!input) return;
-    const link = await service.createStudentProgressLink({ ...input, reviewer: req.reviewer });
-    res.set('Cache-Control', 'no-store');
-    return res.status(201).json({ ok: true, link });
+    // Client cũ tự tạo token: cần tải trang mới trước thao tác thay link.
+    res.set('Cache-Control','no-store');
+    return res.status(409).json({ok:false,error:'PROGRESS_LINK_CLIENT_UPGRADE_REQUIRED',message:'Tải lại trang để lấy link Hành trình riêng. Link đã gửi vẫn được giữ nguyên.'});
   }));
 
   router.use((error, _req, res, next) => {

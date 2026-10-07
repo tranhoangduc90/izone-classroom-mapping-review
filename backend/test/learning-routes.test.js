@@ -168,7 +168,7 @@ test('Journey trong Progress Log bắt buộc xác nhận tên và UUID hợp l�
   }
 });
 
-test('tạo link hành trình bắt buộc identity và token đủ mạnh', async () => {
+test('client tạo link kiểu cũ được báo nâng cấp trước khi truy vấn database', async () => {
   const response = await request(appWithPool(failIfQueriedPool()))
     .post('/api/learning/teacher/student-progress-links')
     .send({
@@ -178,8 +178,8 @@ test('tạo link hành trình bắt buộc identity và token đủ mạnh', asy
       expiresInDays: 30,
       operationId: '33333333-3333-4333-8333-333333333333'
     });
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, 'INVALID_PROGRESS_LINK_REQUEST');
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'PROGRESS_LINK_CLIENT_UPGRADE_REQUIRED');
 });
 
 test('nhận xét Speaking trống hoặc quá dài bị chặn trước database', async () => {

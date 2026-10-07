@@ -147,10 +147,14 @@ test('bản thử tự tạo từ ba kiểu phiếu, cô lập giảng viên và
     }).expect(200);
     assert.equal(feedback.body.feedback.revision, 1);
     const accessToken = crypto.randomBytes(32).toString('base64url');
-    await request(app).post('/api/learning/teacher/student-progress-links').set(teacherA).send({
-      assignmentId: first.body.run.assignmentId, studentRef, accessToken,
-      expiresInDays: 1, operationId: crypto.randomUUID()
-    }).expect(201);
+    // Link legacy đã phát trước khi nâng cấp: kiểm reset vô hiệu hóa đúng link đó.
+    await pool.query(`INSERT INTO learning.student_progress_access
+      (id,erp_course_class_id,student_ref,token_hash,status,expires_at,created_by_email,operation_key,idempotency_key)
+      SELECT gen_random_uuid(),erp_course_class_id,$2::uuid,$3,'active',now()+interval '1 day',$4,
+        gen_random_uuid()::text,gen_random_uuid()::text
+      FROM learning.form_assignment WHERE id=$1::uuid`,[
+      first.body.run.assignmentId,studentRef,crypto.createHash('sha256').update(accessToken).digest('hex'),
+      'teacher-a@example.test']);
     const journey = await request(app).post('/api/learning/student/course-journey').set(demoHeaders)
       .send({ accessToken }).expect(200);
     assert.equal(journey.body.journey.sessions.find(session => session.sessionNumber === 4)
