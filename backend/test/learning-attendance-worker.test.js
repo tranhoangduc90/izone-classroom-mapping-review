@@ -8,5 +8,5 @@ test('lease điểm danh dài hơn thời gian tối đa của cả batch cộng
   assert.ok(Number.isInteger(attendanceWorker.ATTENDANCE_JOB_BATCH_LIMIT));
   assert.ok(Number.isInteger(attendanceWorker.ATTENDANCE_JOB_LEASE_SECONDS));
   assert.ok(attendanceWorker.ATTENDANCE_JOB_LEASE_SECONDS * 1000
-    >= attendanceWorker.ATTENDANCE_JOB_BATCH_LIMIT * maxPortalTimeoutMs + safetyMarginMs);
+    >= attendanceWorker.ATTENDANCE_JOB_BATCH_LIMIT * maxPortalTimeoutMs * 2 + safetyMarginMs);
 });

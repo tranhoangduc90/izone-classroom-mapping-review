@@ -38,11 +38,13 @@ RETURNING
   job.operation_key,
   job.idempotency_key,
   job.payload,
+  job.worker_id,
   job.attempt_count,
   job.max_attempts;`;
 
 const completeJobSql = `UPDATE learning.outbox_job
 SET status = $7,
+    result_json = CASE WHEN job_type = 'sync_portal_attendance' THEN $9::jsonb ELSE result_json END,
     worker_id = NULL,
     leased_at = NULL,
     lease_until = NULL,
@@ -52,10 +54,12 @@ SET status = $7,
 WHERE id = $1::uuid
   AND worker_id = $2
   AND status = 'processing'
+  AND lease_until > clock_timestamp()
   AND entity_key = $3
   AND unit_key = $4
   AND operation_key = $5
-  AND idempotency_key = $6;`;
+  AND idempotency_key = $6
+  AND attempt_count = $8;`;
 
 const failJobSql = `UPDATE learning.outbox_job
 SET status = CASE WHEN attempt_count >= max_attempts OR $4::boolean THEN 'failed' ELSE 'retry_wait' END,
@@ -66,7 +70,10 @@ SET status = CASE WHEN attempt_count >= max_attempts OR $4::boolean THEN 'failed
     next_attempt_at = now() + ($3::integer * interval '1 millisecond'),
     updated_at = now()
 WHERE id = $1::uuid
-  AND status = 'processing';`;
+  AND status = 'processing'
+  AND worker_id = $5
+  AND attempt_count = $6
+  AND lease_until > clock_timestamp();`;
 
 export class LearningJobIdentityError extends Error {
   constructor(message = 'Output không khớp identity của job.') {
@@ -79,6 +86,7 @@ export class LearningJobIdentityError extends Error {
 function normalizeJob(row) {
   return {
     id: row.id,
+    workerId: row.worker_id,
     jobType: row.job_type,
     entityKey: row.entity_key,
     unitKey: row.unit_key,
@@ -121,15 +129,19 @@ async function finishJob(pool, workerId, job, output) {
     output.unitKey,
     output.operationKey,
     output.idempotencyKey,
-    output.status
+    output.status,
+    job.attemptCount,
+    JSON.stringify({ portalStatus: output.portalStatus, targetSessionId: output.targetSessionId,
+      bindingRevision: output.bindingRevision, reviewReason: output.reviewReason,
+      sessionDate: output.sessionDate })
   ]);
   if (result.rowCount !== 1) throw new LearningJobIdentityError('Job đã mất lease hoặc identity đã thay đổi.');
 }
 
-async function failJob(pool, job, error) {
+async function failJob(pool, workerId, job, error) {
   const terminal = error instanceof LearningJobIdentityError;
   const errorCode = terminal ? error.code : String(error?.code || 'HANDLER_FAILED').slice(0, 100);
-  await pool.query(failJobSql, [job.id, errorCode, retryDelayMs(job.attemptCount), terminal]);
+  await pool.query(failJobSql, [job.id, errorCode, retryDelayMs(job.attemptCount), terminal, workerId, job.attemptCount]);
 }
 
 export async function processLearningJob({ pool, workerId, job, handler }) {
@@ -138,7 +150,7 @@ export async function processLearningJob({ pool, workerId, job, handler }) {
     await finishJob(pool, workerId, job, output);
     return { jobId: job.id, status: output.status };
   } catch (error) {
-    await failJob(pool, job, error);
+    await failJob(pool, workerId, job, error);
     return { jobId: job.id, status: 'failed_or_retry', errorCode: error.code || 'HANDLER_FAILED' };
   }
 }

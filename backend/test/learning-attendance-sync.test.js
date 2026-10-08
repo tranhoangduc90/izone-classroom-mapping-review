@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createLearningAttendanceSync } from '../src/learning-attendance-sync.js';
+import { createLearningAttendanceSync as createActualSync } from '../src/learning-attendance-sync.js';
 import { LearningJobIdentityError } from '../src/learning-outbox.js';
 
 const payload = {
@@ -26,12 +26,22 @@ const config = {
   learningAttendanceSyncTimeoutMs: 1000
 };
 
+const binding = { targetSessionId: '35817', bindingRevision: 1, scheduleFingerprint: 'schedule-fixture' };
+function createLearningAttendanceSync(options) {
+  return createActualSync({ bindingStore: {
+    async read() { return null; },
+    async reserve() { return binding; },
+    async record() {}
+  }, ...options });
+}
+
 function response(status, overrides = {}) {
   return {
     ok: true,
     status: 200,
     async json() {
-      return { ok: true, status, ...identity, classId: '1294', studentId: '17810', sessionNumber: 2, ...overrides };
+      return { ok: true, status, ...identity, classId: '1294', studentId: '17810', sessionNumber: 2,
+        ...binding, resolvedSessionId: binding.targetSessionId, sessionDate: '2026-10-05', ...overrides };
     }
   };
 }
@@ -42,14 +52,15 @@ test('đồng bộ thành công gửi đúng identity và trả complete', async
     config,
     fetchImpl: async (_url, options) => {
       request = options;
-      return response('synced');
+      return response(JSON.parse(options.body).commit ? 'synced' : 'resolved');
     }
   });
   const output = await sync(job);
   assert.equal(output.status, 'complete');
   assert.equal(output.portalStatus, 'synced');
   assert.equal(request.headers['x-learning-attendance-sync'], config.learningAttendanceSyncSecret);
-  assert.deepEqual(JSON.parse(request.body), { ...payload, ...identity, commit: true });
+  assert.deepEqual(JSON.parse(request.body), { ...payload, ...identity, commit: true,
+    targetSessionId: binding.targetSessionId, bindingRevision: 1, expectedScheduleFingerprint: binding.scheduleFingerprint });
 });
 
 test('Portal đã điểm danh vẫn hoàn tất idempotent, còn xung đột cần GV xem', async () => {
@@ -103,9 +114,10 @@ test('xác nhận của giảng viên dùng attendance event, không giả làm 
       return {
         ok: true, status: 200,
         async json() {
-          return { ok: true, status: 'synced', ...overrideIdentity,
+          return { ok: true, status: sent.commit ? 'synced' : 'resolved', ...overrideIdentity,
             classId: overridePayload.classId, studentId: overridePayload.studentId,
-            sessionNumber: overridePayload.sessionNumber };
+            sessionNumber: overridePayload.sessionNumber, ...binding,
+            resolvedSessionId: binding.targetSessionId, sessionDate: '2026-10-05' };
         }
       };
     }
