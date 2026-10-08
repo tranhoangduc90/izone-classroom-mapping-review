@@ -129,5 +129,10 @@ export async function setupDatabase(connection=null) {
     'utf8'
   );
   await database.exec(journeyPlanMigration);
+  // Kho giả phải có cùng bảng đồng bộ và hạn nhận bài với runtime hiện hành.
+  await database.exec(await readFile(new URL(
+    '../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql',
+    import.meta.url
+  ), 'utf8'));
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }

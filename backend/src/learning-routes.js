@@ -266,6 +266,24 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     keyGenerator: attemptRateKey,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Phiếu đang được nộp lại quá nhiều lần; hãy chờ một chút.' }
   });
+  // Đọc biên nhận sau lỗi không được tiêu hao quyền gửi lại bài.
+  const resultLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    keyGenerator: attemptRateKey,
+    message: { ok: false, error: 'RATE_LIMITED', message: 'Kết quả đang được kiểm tra quá thường xuyên; hãy chờ một chút.' }
+  });
+  // Mỗi phần có quota riêng, để phiếu nhiều phần vẫn nộp cuối được.
+  const checkpointLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 6,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    keyGenerator: req => `${attemptRateKey(req)}:checkpoint:${String(req.body?.blockId || 'invalid')}`,
+    message: { ok: false, error: 'RATE_LIMITED', message: 'Phần này đang được nộp lại quá nhiều lần; hãy chờ một chút.' }
+  });
   const journeyLimiter = rateLimit({
     windowMs: 60_000,
     limit: 30,
@@ -355,7 +373,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     return res.json({ ok: true, ...submission });
   }));
 
-  router.post('/attempts/checkpoints/submit', submitLimiter, asyncRoute(async (req, res) => {
+  router.post('/attempts/checkpoints/submit', checkpointLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(checkpointSubmitSchema, req.body, res, 'INVALID_CHECKPOINT_SUBMISSION');
     if (!input) return;
     const checkpointSubmission = await service.submitCheckpoint(input);
@@ -363,7 +381,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     return res.status(201).json({ ok: true, checkpointSubmission });
   }));
 
-  router.post('/attempts/result', submitLimiter, asyncRoute(async (req, res) => {
+  router.post('/attempts/result', resultLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(resultSchema, req.body, res, 'INVALID_RESULT_REQUEST');
     if (!input) return;
     const result = await service.getResult(input);

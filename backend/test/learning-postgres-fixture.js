@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createLearningService } from '../src/learning-service.js';
 
 // Chỉ tạo database ngắn hạn trên loopback dành riêng cho ca kiểm, không nhận URL production.
-export async function postgresFixture({ clock = null } = {}) {
+export async function postgresFixture({ clock = null, asApplication = false, deadlineGrant = true, studentCount = 18 } = {}) {
   const url = new URL(process.env.PROGRESS_LOG_FIXTURE_URL || 'postgresql://missing');
   if (url.hostname !== '127.0.0.1' || url.port !== '16547' || url.pathname !== '/progress_log_fixture') {
     throw new Error('Cần PostgreSQL fixture riêng trên 127.0.0.1:16547.');
@@ -19,7 +19,7 @@ export async function postgresFixture({ clock = null } = {}) {
   await pool.query(`INSERT INTO mapping.classroom_course_mapping VALUES (2139, 'Lớp kiểm PostgreSQL');
     INSERT INTO mapping.reviewer_account VALUES ('teacher@example.test', 'active');
     INSERT INTO mapping.reviewer_class_access VALUES ('teacher@example.test', 2139);`);
-  for (let index = 1; index <= 18; index++) {
+  for (let index = 1; index <= studentCount; index++) {
     await pool.query(`INSERT INTO mapping.student_mapping_review
       (public_id, erp_course_class_id, erp_student_contact_id, erp_student_name_snapshot)
       VALUES ($1::uuid, 2139, $2, $3)`, [crypto.randomUUID(), 9000 + index, `Học viên mẫu ${index}`]);
@@ -32,6 +32,9 @@ export async function postgresFixture({ clock = null } = {}) {
     '202610060001_attendance_binding_and_submission_deadline.sql']) {
     await pool.query(await readFile(new URL(`../ops/learning-migrations/${filename}`, import.meta.url), 'utf8'));
   }
+  if (deadlineGrant) await pool.query(await readFile(new URL('../ops/learning-migrations/202610080001_submission_deadline_permissions.sql', import.meta.url), 'utf8'));
+  // Bản production cho learning_api đọc mapping; fixture chỉ cấp đọc các bảng mapping giả.
+  await pool.query('GRANT USAGE ON SCHEMA mapping TO learning_api; GRANT SELECT ON ALL TABLES IN SCHEMA mapping TO learning_api');
   } catch (error) {
     // Khởi tạo lỗi vẫn thu hồi database riêng, tránh để runner chờ connection còn mở.
     await pool.end();
@@ -41,11 +44,27 @@ export async function postgresFixture({ clock = null } = {}) {
   }
   // Đồng hồ cố định chỉ ở adapter thử, không đọc thời gian do trình duyệt gửi.
   const sqlFor = sql => clock ? sql.replaceAll('clock_timestamp()', `'${new Date(clock.value).toISOString()}'::timestamptz`) : sql;
-  const clockPool = { query: (sql, params) => pool.query(sqlFor(sql), params), async connect() {
-    const client = await pool.connect();
+  // Mỗi connection của service phải dùng quyền learning_api khi kiểm role production.
+  // Pool quản trị chỉ seed/đọc đối soát; không được dùng nó để chứng nhận nộp bài của ứng dụng.
+  const applicationPool = new pg.Pool({ connectionString: url.toString(), max: 24 });
+  async function connectService() {
+    const client = await (asApplication ? applicationPool : pool).connect();
+    if (asApplication) {
+      try { await client.query('SET ROLE learning_api'); }
+      catch (error) { client.release(); throw error; }
+    }
+    return client;
+  }
+  const clockPool = { async query(sql, params) {
+    const client = await connectService();
+    try { return await client.query(sqlFor(sql), params); }
+    finally { client.release(); }
+  }, async connect() {
+    const client = await connectService();
     return { query: (sql, params) => client.query(sqlFor(sql), params), release: () => client.release() };
   } };
   return { pool, clockPool, service: createLearningService({ pool: clockPool }), async close() {
+    await applicationPool.end();
     await pool.end();
     await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
     await admin.end();
