@@ -273,6 +273,7 @@ RETURNING draft_revision, draft_hash, draft_updated_at;`;
 
 export const findLearningSubmissionSql = `SELECT
   submission.id::text AS submission_id,
+  submission.assignment_id::text AS assignment_id,
   submission.attempt_id::text AS attempt_id,
   submission.student_ref::text AS student_ref,
   submission.response_hash,
@@ -1097,7 +1098,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
   FROM learning.student_progress_access
   WHERE token_hash = $1
     AND status = 'active'
-    AND expires_at > now()
+    AND (expires_at IS NULL OR expires_at > now())
   UNION ALL
   SELECT assignment.erp_course_class_id, roster.student_ref, NULL::timestamptz AS expires_at
   FROM learning.form_assignment AS assignment
@@ -1110,10 +1111,10 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     access.erp_course_class_id,
     access.student_ref,
     access.expires_at,
-    roster.student_name_snapshot AS student_name,
-    assignment.class_name_snapshot AS class_name
+    COALESCE(roster.student_name_snapshot,person.erp_student_name_snapshot) AS student_name,
+    COALESCE(assignment.class_name_snapshot,classroom.erp_class_name_snapshot) AS class_name
   FROM access
-  JOIN LATERAL (
+  LEFT JOIN LATERAL (
     SELECT candidate.*
     FROM learning.form_assignment AS candidate
     JOIN learning.form_assignment_roster AS candidate_roster
@@ -1123,9 +1124,13 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     ORDER BY candidate.session_number DESC, candidate.created_at DESC
     LIMIT 1
   ) AS assignment ON true
-  JOIN learning.form_assignment_roster AS roster
+  LEFT JOIN learning.form_assignment_roster AS roster
     ON roster.assignment_id = assignment.id
     AND roster.student_ref = access.student_ref
+  LEFT JOIN mapping.student_mapping_review AS person ON person.public_id=access.student_ref
+    AND person.erp_course_class_id=access.erp_course_class_id
+  LEFT JOIN mapping.classroom_course_mapping AS classroom ON classroom.erp_course_class_id=access.erp_course_class_id
+  WHERE roster.student_ref IS NOT NULL OR person.public_id IS NOT NULL
 ), session_numbers AS (
   SELECT generate_series(1, GREATEST(
     COALESCE((SELECT max(a.session_number) FROM learning.form_assignment AS a
@@ -1177,7 +1182,10 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     student_status.submitted_at,
     student_status.attendance_status,
     CASE WHEN portal_job.status IS NULL THEN NULL ELSE jsonb_build_object(
-      'status', portal_job.status, 'updatedAt', portal_job.updated_at
+      'status', portal_job.status, 'updatedAt', portal_job.updated_at,
+      'targetSessionId', portal_job.target_session_id::text,
+      'portalStatus', portal_job.portal_status, 'readbackAt', portal_job.readback_at,
+      'reviewReason', portal_job.review_reason
     ) END AS portal_sync,
     COALESCE(evidence.evidence_count, 0) AS evidence_count,
     COALESCE(evidence.source_systems, '[]'::jsonb) AS evidence_sources,
@@ -1225,8 +1233,11 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     ON student_status.assignment_id = assignment.id
     AND student_status.student_ref = access.student_ref
   LEFT JOIN LATERAL (
-    SELECT job.status, job.updated_at
+    SELECT job.status, job.updated_at, operation.target_session_id,
+      COALESCE(operation.status, job.result_json->>'portalStatus') AS portal_status,
+      job.result_json->>'reviewReason' AS review_reason, operation.readback_at
     FROM learning.outbox_job AS job
+    LEFT JOIN learning.portal_attendance_operation AS operation ON operation.operation_key = job.operation_key
     WHERE job.job_type = 'sync_portal_attendance'
       AND job.entity_key = 'student:' || access.student_ref::text
       AND job.unit_key = 'portal-attendance:' || assignment.id::text
@@ -1375,9 +1386,17 @@ export const fetchLearningTeacherDashboardSql = `SELECT
         SELECT jsonb_build_object(
           'status', job.status,
           'updatedAt', job.updated_at,
-          'lastErrorCode', job.last_error_code
+          'lastErrorCode', job.last_error_code,
+          'targetSessionId', operation.target_session_id::text,
+          'portalStatus', COALESCE(operation.status, job.result_json->>'portalStatus'),
+          'reviewReason', job.result_json->>'reviewReason',
+          'readbackAt', operation.readback_at,
+          'bindingRevision', operation.binding_revision,
+          'reviewRequired', binding.review_required
         )
         FROM learning.outbox_job AS job
+        LEFT JOIN learning.portal_attendance_operation AS operation ON operation.operation_key = job.operation_key
+        LEFT JOIN learning.portal_attendance_binding AS binding ON binding.assignment_id = assignment.id
         WHERE job.job_type = 'sync_portal_attendance'
           AND job.entity_key = 'student:' || status.student_ref::text
           AND job.unit_key = 'portal-attendance:' || assignment.id::text || ':session:' || assignment.session_number::text

@@ -1355,6 +1355,8 @@ export function createApp({
     });
     app.use('/api/learning', createLearningRouter({
       pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret, logger,
+      journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
+      progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: createLearningTestResultReader({ pool })

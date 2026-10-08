@@ -1,7 +1,7 @@
 import { runLearningJobBatch } from './learning-outbox.js';
 
-export const ATTENDANCE_JOB_BATCH_LIMIT = 10;
-export const ATTENDANCE_JOB_LEASE_SECONDS = 180;
+export const ATTENDANCE_JOB_BATCH_LIMIT = 1;
+export const ATTENDANCE_JOB_LEASE_SECONDS = 90;
 
 // Nhận một pool PostgreSQL và hàm gọi Portal; mỗi nhịp chỉ lấy job điểm danh,
 // xử lý tuần tự theo lease và để job tự retry nếu Portal tạm thời lỗi.

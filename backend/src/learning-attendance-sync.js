@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LearningJobIdentityError } from './learning-outbox.js';
+import { createAttendanceBindingStore } from './learning-attendance-binding.js';
 
 const uuid = z.string().uuid();
 const submissionPayloadSchema = z.object({
@@ -26,14 +27,20 @@ const payloadSchema = z.union([submissionPayloadSchema, overridePayloadSchema]);
 
 const responseSchema = z.object({
   ok: z.literal(true),
-  status: z.enum(['synced', 'already_present', 'conflict']),
+  status: z.enum(['resolved', 'synced', 'already_present', 'conflict', 'target_changed']),
   entityKey: z.string().min(1),
   unitKey: z.string().min(1),
   operationKey: z.string().min(1),
   idempotencyKey: z.string().min(1),
   classId: z.string().regex(/^\d+$/),
   studentId: z.string().regex(/^\d+$/),
-  sessionNumber: z.number().int().min(1).max(100)
+  sessionNumber: z.number().int().min(1).max(100),
+  targetSessionId: z.string().regex(/^[1-9]\d*$/),
+  resolvedSessionId: z.string().regex(/^[1-9]\d*$/).nullable(),
+  bindingRevision: z.number().int().min(1).nullable(),
+  scheduleFingerprint: z.string().min(1).max(30000),
+  sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  scheduleChanged: z.boolean().default(false)
 }).strict();
 
 function identityFor(payload) {
@@ -66,8 +73,9 @@ function assertExactIdentity(job, payload, response) {
   return expected;
 }
 
-export function createLearningAttendanceSync({ config, fetchImpl = fetch }) {
+export function createLearningAttendanceSync({ config, pool, bindingStore, fetchImpl = fetch }) {
   if (!config.learningAttendanceSyncUrl || !config.learningAttendanceSyncSecret) return null;
+  const store = bindingStore || createAttendanceBindingStore(pool);
 
   return async function syncLearningAttendance(job) {
     let payload;
@@ -82,46 +90,79 @@ export function createLearningAttendanceSync({ config, fetchImpl = fetch }) {
       throw new LearningJobIdentityError('Identity của job điểm danh không khớp payload.');
     }
 
-    let response;
-    try {
-      response = await fetchImpl(config.learningAttendanceSyncUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-learning-attendance-sync': config.learningAttendanceSyncSecret
-        },
-        body: JSON.stringify({
-          ...payload,
-          ...expected,
-          commit: true
-        }),
-        signal: AbortSignal.timeout(config.learningAttendanceSyncTimeoutMs)
-      });
-    } catch (error) {
-      const wrapped = new Error('Không gọi được luồng ghi điểm danh Portal.');
-      wrapped.code = error?.name === 'TimeoutError' ? 'PORTAL_ATTENDANCE_TIMEOUT' : 'PORTAL_ATTENDANCE_NETWORK_ERROR';
-      throw wrapped;
+    async function callPortal(binding, commit) {
+      let response;
+      // Pha đọc tìm đích; pha ghi chỉ dùng liên kết đã lưu, cùng định danh của job.
+      try {
+        response = await fetchImpl(config.learningAttendanceSyncUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-learning-attendance-sync': config.learningAttendanceSyncSecret
+          },
+          body: JSON.stringify({
+            ...payload,
+            ...expected,
+            ...(binding ? {
+              targetSessionId: binding.targetSessionId,
+              bindingRevision: binding.bindingRevision,
+              expectedScheduleFingerprint: binding.scheduleFingerprint
+            } : {}),
+            commit
+          }),
+          signal: AbortSignal.timeout(config.learningAttendanceSyncTimeoutMs)
+        });
+      } catch (error) {
+        const wrapped = new Error('Không gọi được luồng ghi điểm danh Portal.');
+        wrapped.code = error?.name === 'TimeoutError' ? 'PORTAL_ATTENDANCE_TIMEOUT' : 'PORTAL_ATTENDANCE_NETWORK_ERROR';
+        throw wrapped;
+      }
+
+      if (!response.ok) {
+        const error = new Error('Luồng ghi điểm danh Portal trả lỗi HTTP.');
+        error.code = `PORTAL_ATTENDANCE_HTTP_${response.status}`;
+        throw error;
+      }
+
+      let output;
+      try {
+        output = responseSchema.parse(await response.json());
+      } catch {
+        const error = new Error('Phản hồi điểm danh Portal không đúng contract.');
+        error.code = 'PORTAL_ATTENDANCE_INVALID_RESPONSE';
+        throw error;
+      }
+      assertExactIdentity(job, payload, output);
+      if (binding && output.targetSessionId !== binding.targetSessionId) {
+        throw new LearningJobIdentityError('Portal trả khác đích ERP đã khóa.');
+      }
+      if (commit && output.bindingRevision !== binding.bindingRevision) {
+        throw new LearningJobIdentityError('Portal trả sai phiên bản liên kết.');
+      }
+      if ((!commit && output.status === 'synced') || (commit && output.status === 'resolved')) {
+        throw new LearningJobIdentityError('Portal trả sai pha tìm/ghi điểm danh.');
+      }
+      return output;
     }
 
-    if (!response.ok) {
-      const error = new Error('Luồng ghi điểm danh Portal trả lỗi HTTP.');
-      error.code = `PORTAL_ATTENDANCE_HTTP_${response.status}`;
-      throw error;
+    const prior = await store.read(payload.assignmentId);
+    const resolved = await callPortal(prior, false);
+    const binding = await store.reserve(job, payload, resolved);
+    if (binding.reviewRequired) {
+      if (binding.canReadbackKnown) await store.record(job, payload, binding, resolved);
+      return { ...expected, status: 'review_required', portalStatus: 'target_changed',
+        targetSessionId: binding.targetSessionId, bindingRevision: binding.bindingRevision,
+        reviewReason: binding.reason || 'schedule_changed' };
     }
-
-    let output;
-    try {
-      output = responseSchema.parse(await response.json());
-    } catch {
-      const error = new Error('Phản hồi điểm danh Portal không đúng contract.');
-      error.code = 'PORTAL_ATTENDANCE_INVALID_RESPONSE';
-      throw error;
-    }
-    assertExactIdentity(job, payload, output);
+    const output = resolved.status === 'resolved' ? await callPortal(binding, true) : resolved;
+    await store.record(job, payload, binding, output);
     return {
       ...expected,
-      status: output.status === 'conflict' ? 'review_required' : 'complete',
-      portalStatus: output.status
+      status: output.scheduleChanged || ['conflict', 'target_changed'].includes(output.status) ? 'review_required' : 'complete',
+      portalStatus: output.status,
+      targetSessionId: binding.targetSessionId,
+      bindingRevision: binding.bindingRevision,
+      sessionDate: output.sessionDate
     };
   };
 }

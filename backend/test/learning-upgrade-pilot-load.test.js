@@ -28,7 +28,10 @@ test('Pilot: 20 người nộp/retry dưới 60 giây, 620 ô overview và aggre
       INSERT INTO learning.class_journey_plan(erp_course_class_id,total_sessions,revision,confirmed_by_email)
         VALUES(1294,31,1,'teacher@example.test');`);
     const rawPool=createPGlitePool(database),queries=[];
-    const pool={...rawPool,async query(sql,params){queries.push(sql);return rawPool.query(sql,params);}};
+    // Ghim giờ nhận bài trước 22:00: ca tải không phụ thuộc giờ chạy kiểm thử trên máy.
+    const pinClock=sql=>sql.replaceAll('clock_timestamp()', "'2026-10-08T13:00:00Z'::timestamptz");
+    const pool={...rawPool,async query(sql,params){queries.push(sql);return rawPool.query(pinClock(sql),params);},
+      async connect(){const client=await rawPool.connect();return {...client,query:(sql,params)=>client.query(pinClock(sql),params)};}};
     const service=createLearningService({pool}),reviewer={email:'teacher@example.test',canAccessAllClasses:false};
     const published=await service.publishReflectionForm({reviewer,title:'Phiếu tải giả',courseCode:'ic23',classId:'1294',sessionNumber:1,
       items:[{libraryItemId:'10000000-0000-4000-8000-000000000001',checkpoint:1,required:true}]});

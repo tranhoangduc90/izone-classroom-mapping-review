@@ -153,8 +153,39 @@ async function setupDatabase() {
     'utf8'
   );
   await database.exec(journeyPlanMigration);
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
+
+test('ba học viên nộp đủ kích hoạt hạn 22:00 ngày người thứ ba, receipt retry giữ hạn', async () => {
+  const { database, service } = await setupDatabase();
+  try {
+    const published = await service.publishReflectionForm({
+      reviewer: { email: 'teacher@example.test', canAccessAllClasses: false },
+      title: 'Phiếu kiểm hạn nhận bài', courseCode: 'course-67', classId: '2139',
+      sessionNumber: 3, opensAt: null, closesAt: null,
+      items: [{ libraryItemId: '10000000-0000-4000-8000-000000000001', checkpoint: 1, required: true }]
+    });
+    const assignment = await service.getPublicAssignment(published.publicToken);
+    const itemId = assignment.definition.blocks[0].items[0].itemVersionId;
+    let lastInput, lastResult;
+    for (const student of assignment.roster.slice(0, 3)) {
+      const attempt = await service.startAttempt({ publicToken: published.publicToken,
+        studentRef: student.studentRef, identityConfirmed: true, clientIdempotencyKey: crypto.randomUUID() });
+      lastInput = { attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
+        definitionHash: published.definitionHash, draftRevision: 0,
+        responses: { [itemId]: 'Nội dung đầy đủ để kiểm hạn nhận bài.' } };
+      lastResult = await service.submit(lastInput);
+    }
+    const vietnamDay = new Date(Date.parse(lastResult.receipt.receivedAt) + 7 * 3600_000).toISOString().slice(0, 10);
+    assert.equal(lastResult.submissionWindow?.autoClosesAt, `${vietnamDay}T15:00:00.000Z`);
+    assert.equal(lastResult.submissionWindow?.completeStudents, 3);
+    const replay = await service.submit(lastInput);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.submissionWindow.autoClosesAt, lastResult.submissionWindow.autoClosesAt);
+    assert.equal(Number((await database.query('SELECT count(*) AS count FROM learning.submission')).rows[0].count), 3);
+  } finally { await database.close(); }
+});
 
 test('migration V2 chấp nhận nhiều block cùng checkpoint nhưng vẫn khóa theo block_id', async () => {
   const database = await createV1Database();
@@ -881,7 +912,9 @@ test('submit idempotent, draft cũ fail-closed và readback không đổi nhầm
     pool: poolFrom(database, sql => submitQueries.push(String(sql).trim().split(/\s+/u)[0]))
   });
   const first = await measuredService.submit(submissionInput);
-  assert.deepEqual(submitQueries, ['BEGIN', 'SELECT', 'WITH', 'COMMIT']);
+  assert.equal(submitQueries[0], 'BEGIN');
+  assert.equal(submitQueries.at(-1), 'COMMIT');
+  assert.ok(submitQueries.length <= 8, 'Nhận bài và khóa hạn dùng số lượt trao đổi cố định.');
   const replay = await service.submit(submissionInput);
   assert.equal(first.receipt.attendanceStatus, 'self_confirmed');
   assert.equal(replay.replayed, true);
@@ -996,7 +1029,7 @@ test('giảng viên xác nhận có mặt tạo đúng một job Portal cho đú
   await database.close();
 });
 
-test('quiz 40 câu vẫn ghi đủ dữ liệu bằng bốn lượt trao đổi database', async () => {
+test('quiz 40 câu vẫn ghi đủ dữ liệu với số lượt trao đổi database cố định, gồm khóa hạn', async () => {
   const { database } = await setupDatabase();
   const formVersionId = '24000000-0000-4000-8000-000000000002';
   const assignmentId = '24000000-0000-4000-8000-000000000004';
@@ -1100,7 +1133,9 @@ test('quiz 40 câu vẫn ghi đủ dữ liệu bằng bốn lượt trao đổi 
     responses
   });
   assert.equal(submitted.result.summary.scoreEarned, 40);
-  assert.deepEqual(submitQueries, ['BEGIN', 'SELECT', 'WITH', 'COMMIT']);
+  assert.equal(submitQueries[0], 'BEGIN');
+  assert.equal(submitQueries.at(-1), 'COMMIT');
+  assert.ok(submitQueries.length <= 8, 'Số câu hỏi không làm tăng số lượt trao đổi database.');
   const counts = await database.query(`SELECT
     (SELECT count(*)::int FROM learning.response_item WHERE submission_id = '24000000-0000-4000-8000-000000000007') AS responses,
     (SELECT count(*)::int FROM learning.grading_result_item item
@@ -1725,7 +1760,7 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
     learningAttendanceSyncTimeoutMs: 1000
   };
   const firstHandler = createLearningAttendanceSync({
-    config, fetchImpl: async () => ({ ok: false, status: 503 })
+    config, pool, fetchImpl: async () => ({ ok: false, status: 503 })
   });
   const failed = await processLearningJob({
     pool, workerId: 'portal-test-1', job, handler: firstHandler
@@ -1744,13 +1779,15 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
   });
   assert.equal(retried.id, job.id);
   let sent;
-  const recoveryHandler = createLearningAttendanceSync({ config, fetchImpl: async (_url, options) => {
+  const recoveryHandler = createLearningAttendanceSync({ config, pool, fetchImpl: async (_url, options) => {
     sent = JSON.parse(options.body);
     return { ok: true, status: 200, async json() {
-      return { ok: true, status: 'synced', entityKey: job.entityKey,
+      return { ok: true, status: sent.commit ? 'synced' : 'resolved', entityKey: job.entityKey,
         unitKey: job.unitKey, operationKey: job.operationKey,
         idempotencyKey: job.idempotencyKey, classId: job.payload.classId,
-        studentId: job.payload.studentId, sessionNumber: job.payload.sessionNumber };
+        studentId: job.payload.studentId, sessionNumber: job.payload.sessionNumber,
+        targetSessionId: '35817', resolvedSessionId: '35817', bindingRevision: sent.bindingRevision ?? null,
+        scheduleFingerprint: 'fixture-schedule', sessionDate: '2026-10-05' };
     } };
   } });
   const completed = await processLearningJob({

@@ -22,6 +22,29 @@ function failIfQueriedPool() {
   };
 }
 
+test('đọc biên nhận không dùng quota nộp; mỗi học viên có quota riêng khi cùng IP',async()=>{
+  const app=appWithPool({query:async()=>({rows:[],rowCount:0})});
+  const token='11111111-1111-4111-8111-111111111111';
+  // Sáu lần nộp bị validation từ chối vẫn có giới hạn; đọc để khôi phục phải tới DB.
+  for(let i=0;i<6;i++) assert.equal((await request(app).post('/api/learning/attempts/submit').send({attemptToken:token})).status,400);
+  for(let i=0;i<8;i++) assert.equal((await request(app).post('/api/learning/attempts/result').send({attemptToken:token})).status,404);
+  assert.equal((await request(app).post('/api/learning/attempts/submit').send({attemptToken:token})).status,429);
+  for(let i=1;i<=20;i++) {
+    const attemptToken=`60000000-0000-4000-8000-${String(i).padStart(12,'0')}`;
+    assert.equal((await request(app).post('/api/learning/attempts/submit').send({attemptToken})).status,400);
+  }
+});
+
+test('nộp các phần dùng quota riêng từng phần, không chặn nộp cuối',async()=>{
+  const app=appWithPool(failIfQueriedPool());
+  const attemptToken='11111111-1111-4111-8111-111111111111';
+  for(let block=1;block<=8;block++) for(let retry=0;retry<3;retry++) {
+    const blockId=`70000000-0000-4000-8000-${String(block).padStart(12,'0')}`;
+    assert.equal((await request(app).post('/api/learning/attempts/checkpoints/submit').send({attemptToken,blockId})).status,400);
+  }
+  assert.equal((await request(app).post('/api/learning/attempts/submit').send({attemptToken})).status,400);
+});
+
 test('token assignment sai bị từ chối trước khi chạm database', async () => {
   const response = await request(appWithPool(failIfQueriedPool()))
     .post('/api/learning/assignments/open')
@@ -168,7 +191,7 @@ test('Journey trong Progress Log bắt buộc xác nhận tên và UUID hợp l�
   }
 });
 
-test('tạo link hành trình bắt buộc identity và token đủ mạnh', async () => {
+test('client tạo link kiểu cũ được báo nâng cấp trước khi truy vấn database', async () => {
   const response = await request(appWithPool(failIfQueriedPool()))
     .post('/api/learning/teacher/student-progress-links')
     .send({
@@ -178,8 +201,8 @@ test('tạo link hành trình bắt buộc identity và token đủ mạnh', asy
       expiresInDays: 30,
       operationId: '33333333-3333-4333-8333-333333333333'
     });
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, 'INVALID_PROGRESS_LINK_REQUEST');
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'PROGRESS_LINK_CLIENT_UPGRADE_REQUIRED');
 });
 
 test('nhận xét Speaking trống hoặc quá dài bị chặn trước database', async () => {

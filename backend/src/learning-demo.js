@@ -29,7 +29,8 @@ const demoMigrations = [
   '202609240001_teacher_session_speaking_feedback.sql',
   '202609280001_assignment_answer_release.sql',
   '202609280001_progress_log_admin_scope.sql',
-  '202609290001_teacher_confirmed_journey_plan.sql'
+  '202609290001_teacher_confirmed_journey_plan.sql',
+  '202610060001_attendance_binding_and_submission_deadline.sql'
 ];
 
 function sqlResult(result) {
@@ -86,6 +87,7 @@ export async function initializeLearningDemoDatabase(database) {
       const migration = await readFile(new URL('../ops/learning-migrations/202609290001_teacher_confirmed_journey_plan.sql', import.meta.url), 'utf8');
       await database.exec(migration);
     }
+    await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
     return;
   }
   if (marker.rows[0].learning_table) throw new Error('Từ chối biến kho dữ liệu khác thành kho demo.');
