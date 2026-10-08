@@ -6,6 +6,12 @@ Nộp cuối gọi `refreshSubmissionDeadline` sau nâng cấp tự khóa lúc 2
 
 Migration sửa `202610080001_submission_deadline_permissions.sql` chỉ cấp UPDATE `auto_submission_threshold_at` và `auto_submission_closes_at` cho `learning_api`. Giữ migration lịch sử và quyền bất biến của version/identity.
 
+## Kết quả production đã đọc lại ngày 08/10
+
+Đã phục hồi 14 bài đủ bằng chứng trước hạn qua service thật, giữ mã phục hồi cố định, thời gian xử lý thật và audit lý do. Readback có 14 submission, 14 attendance, 14 job hoàn tất và 14 operation Portal `synced` có `readback_at`. Sau chuyển limiter, cả 14 biên nhận đọc qua HTTPS trả 200/complete và các số đối soát vẫn đủ. Operation Portal được ghi trước lần chuyển limiter; không phải 14 lần ghi mới sau image.
+
+Image `izone-progress-submit:20261008-fixed` có SHA `769e23a00388291b4d254fca32747badcbbad8bc6b83e3b4117558a09f391ed2`, healthy. Đối chiếu 66 module source và cấu hình container: chỉ routes đổi, 65 module khác giữ nguyên. Không sửa n8n workflow hay mở lại hạn chung. Backup/container trước chuyển giữ riêng để quay lui.
+
 Tách quota: nộp cuối 6/phút/attempt, checkpoint 6/phút/attempt/block, đọc biên nhận 30/phút/attempt. Giữ giới hạn IP; đọc kết quả và nộp từng phần không lấy mất quota nộp cuối.
 
 ## Kiểm chứng
@@ -14,6 +20,7 @@ Tách quota: nộp cuối 6/phút/attempt, checkpoint 6/phút/attempt/block, đ�
 - 20 người nộp đồng thời và retry: đúng 20 submission, 20 attendance, 20 job Portal; giữ mốc 22:00 và quyền không được sửa `form_version_id`.
 - HTTP: kết quả vẫn đọc được sau khi hết quota nộp; phiếu 8 phần và retry vẫn nộp cuối được. Các ca này RED trên limiter cũ và GREEN trên bản sửa.
 - Fixture Journey nhận schema đồng bộ hiện hành; fixture tải ghim giờ trước hạn để không phụ thuộc giờ máy. Không dùng fixture quản trị để chứng nhận quyền production.
+- Full suite cuối đạt **357/357**, 69 file, không skip; image ứng viên 3/3 gồm auth 90/365 bằng HTTP thật/adapter fetch riêng cho test. Git integration ngày 09/10 dùng lại bằng chứng 08/10 vì source, migrations và toàn bộ test không đổi; chỉ bổ sung tài liệu kết quả. Không phát hành lại API chỉ để nhập Git.
 
 ## Source và phát hành
 
