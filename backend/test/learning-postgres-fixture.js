@@ -29,10 +29,13 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
     '202609160003_portal_attendance_outbox.sql', '202609160006_portal_attendance_dashboard_index.sql',
     '202609240001_teacher_session_speaking_feedback.sql', '202609280001_assignment_answer_release.sql',
     '202609280001_progress_log_admin_scope.sql', '202609290001_teacher_confirmed_journey_plan.sql',
-    '202610060001_attendance_binding_and_submission_deadline.sql']) {
+    '202610060001_attendance_binding_and_submission_deadline.sql',
+    '202610090001_journey_schedule_changes.sql']) {
     await pool.query(await readFile(new URL(`../ops/learning-migrations/${filename}`, import.meta.url), 'utf8'));
   }
   if (deadlineGrant) await pool.query(await readFile(new URL('../ops/learning-migrations/202610080001_submission_deadline_permissions.sql', import.meta.url), 'utf8'));
+  await pool.query(`CREATE TABLE IF NOT EXISTS learning.form_draft_class_lock(erp_course_class_id bigint PRIMARY KEY);
+    GRANT SELECT,INSERT,UPDATE ON learning.form_draft_class_lock TO learning_api`);
   // Bản production cho learning_api đọc mapping; fixture chỉ cấp đọc các bảng mapping giả.
   await pool.query('GRANT USAGE ON SCHEMA mapping TO learning_api; GRANT SELECT ON ALL TABLES IN SCHEMA mapping TO learning_api');
   } catch (error) {

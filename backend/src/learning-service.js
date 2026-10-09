@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule } from './learning-schedule-plan.js';
+import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
@@ -253,12 +254,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         :{sessionComment:byKey.get(student.studentRef+':'+view.sessionNumber)||null})}))};
   }
 
-  async function readErpSchedule(classId) {
+  async function readErpSchedule(classId, fresh = false) {
     if (!erpScheduleReader) {
       throw new LearningError('ERP_SCHEDULE_NOT_CONFIGURED',
         'Nguồn lịch ERP chưa được cấu hình. Hãy giữ bản chốt và thử đọc lại sau.', 503);
     }
-    try { return await erpScheduleReader(classId); }
+    try { return await erpScheduleReader(classId, { fresh }); }
     catch {
       throw new LearningError('ERP_SCHEDULE_UNAVAILABLE',
         'Chưa đọc được lịch ERP; bản chốt vẫn được giữ. Hãy thử đọc lại.', 503);
@@ -280,33 +281,61 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           ? 'Phiếu đã khóa nhận bài từ 22:00 ngày học viên thứ ba nộp đủ.'
           : 'Phiếu chưa mở hoặc đã hết thời gian nhận bài.', 409);
     }
+    await guardAssignmentSchedule(database, assignmentId);
     return window;
+  }
+
+  // Phiếu có mốc ERP đã chốt: kiểm đúng ID/ngày, giữ đích khi nhận bài.
+  // Lỗi mạng giữ bản chốt; xung đột lịch thật giữ nháp và yêu cầu GV đối chiếu.
+  async function guardAssignmentSchedule(database, assignmentId, capture = false) {
+    if (!erpScheduleReader) return;
+    const row = (await database.query(`SELECT a.erp_course_class_id::text AS class_id,
+      a.session_number, p.session_dates, p.revision FROM learning.form_assignment a
+      LEFT JOIN learning.class_journey_plan p ON p.erp_course_class_id=a.erp_course_class_id
+      WHERE a.id=$1::uuid`, [assignmentId])).rows[0];
+    const confirmed = normalizeJourneySessionDates(row?.session_dates)
+      .find(s => s.sessionNumber === Number(row?.session_number));
+    if (!confirmed?.erpSessionId) return;
+    let schedule;
+    try { schedule = decorateSchedule(row.class_id, await readErpSchedule(row.class_id)); }
+    catch { if (!capture) return; }
+    const target = schedule?.sessions.find(s => s.erpSessionId === confirmed.erpSessionId);
+    const baseline=(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[row.class_id])).rows[0]?.erp_snapshot;
+    const priorTime=baseline?.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
+    if (schedule && (schedule.ambiguous || !target || ![0, 1].includes(target.statusCode)
+      || target.date !== confirmed.date || (priorTime && (priorTime.startsAt!==target.startsAt || priorTime.endsAt!==target.endsAt)))) throw new LearningError('ERP_SESSION_REVIEW_REQUIRED',
+      'Lịch buổi học đã đổi. Bản nhập vẫn được giữ; giảng viên cần xác nhận lại lịch trước khi nhận bài.', 409);
+    const binding = (await database.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id=$1::uuid', [assignmentId])).rows[0];
+    if (binding && (String(binding.target_session_id) !== confirmed.erpSessionId || binding.review_required))
+      throw new LearningError('ERP_SESSION_REVIEW_REQUIRED', 'Đích điểm danh cần đối chiếu. Bản nhập vẫn được giữ.', 409);
+    if (capture) {
+      // Portal và Metabase dùng cùng ảnh lịch chuẩn hóa; đích đã nhận bài không đổi theo thứ tự ngày.
+      const fingerprint = schedule ? JSON.stringify([String(row.class_id), [...schedule.sessions]
+        .sort((a,b)=>a.startsAt.localeCompare(b.startsAt))
+        .map(s=>[s.erpSessionId,s.startsAt,s.endsAt,s.statusCode])])
+        : `confirmed-plan:${row.revision}:${confirmed.erpSessionId}`;
+      await database.query(`INSERT INTO learning.portal_attendance_binding
+        (assignment_id,class_id,session_number,target_session_id,schedule_fingerprint,accepted_at)
+        VALUES($1::uuid,$2::bigint,$3,$4::bigint,$5,clock_timestamp())
+        ON CONFLICT(assignment_id) DO UPDATE SET
+          schedule_fingerprint=CASE WHEN learning.portal_attendance_binding.accepted_at IS NULL
+            AND NOT learning.portal_attendance_binding.write_started THEN EXCLUDED.schedule_fingerprint
+            ELSE learning.portal_attendance_binding.schedule_fingerprint END,
+          accepted_at=COALESCE(learning.portal_attendance_binding.accepted_at,EXCLUDED.accepted_at)`,
+      [assignmentId,row.class_id,Number(row.session_number),confirmed.erpSessionId,fingerprint]);
+    }
   }
 
   async function attachCurrentSchedule(view, classId) {
     if (!erpScheduleReader) return view;
     try {
       const schedule = decorateSchedule(classId, await readErpSchedule(classId));
-      if (schedule.ambiguous) return { ...view, scheduleStatus: 'needs_review' };
-      const byNumber = new Map(schedule.sessions.filter(s => s.proposalEligible).map(s => [s.erpSessionNumber, s]));
-      const byId = new Map(schedule.sessions.map(s => [s.erpSessionId, s]));
+      const plan = await pool.query(fetchLearningJourneyPlanSql, [classId]);
+      const baseline = await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId]);
       const bindings = await pool.query(`SELECT binding.* FROM learning.portal_attendance_binding AS binding
         JOIN learning.form_assignment AS assignment ON assignment.id = binding.assignment_id
-        WHERE assignment.erp_course_class_id = $1::bigint AND binding.write_started`, [classId]);
-      const pinnedByNumber = new Map(bindings.rows.map(row => [Number(row.session_number), row]));
-      const sessions = view.sessions.map(session => {
-        const ordinal = byNumber.get(session.sessionNumber);
-        const binding = pinnedByNumber.get(session.sessionNumber);
-        const pinned = binding && byId.get(String(binding.target_session_id));
-        const current = binding ? pinned : ordinal;
-        const needsReview = binding && (binding.review_required || !pinned
-          || pinned.statusCode === 2 || ordinal?.erpSessionId !== String(binding.target_session_id));
-        return { ...session, previouslyPlannedDate: session.sessionDate || null,
-          sessionDate: current?.date || null,
-          erpSessionId: binding ? String(binding.target_session_id) : current?.erpSessionId || null,
-          scheduleStatus: needsReview ? 'needs_review' : current ? 'connected' : 'session_missing' };
-      });
-      return { ...view, scheduleStatus: sessions.some(s => s.scheduleStatus === 'needs_review') ? 'needs_review' : 'connected', sessions };
+        WHERE assignment.erp_course_class_id = $1::bigint AND (binding.write_started OR binding.accepted_at IS NOT NULL)`, [classId]);
+      return reconcileJourneySchedule(view, schedule, normalizeJourneySessionDates(plan.rows[0]?.session_dates), bindings.rows, baseline.rows[0]?.erp_snapshot);
     } catch { return { ...view, scheduleStatus: 'temporarily_unavailable' }; }
   }
 
@@ -530,6 +559,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         const completeness = evaluateCompleteness(definition, responses);
         const quizResult = gradeLearningSubmission({ definition, gradingKey, responses });
         const admission = await requireSubmissionWindow(client, context.assignment_id);
+        if (completeness.complete && context.course_code !== 'DEMO-56' && context.course_code !== 'DEMO-67')
+          await guardAssignmentSchedule(client, context.assignment_id, true);
         const receivedAt = admission.serverNow;
         const receipt = buildSubmissionReceipt({ submissionId, receivedAt, completeness, quizResult });
         const evidence = buildEvidenceEnvelope({
@@ -981,12 +1012,19 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
 
     async getTeacherErpSchedule({ assignmentId, classId, reviewer }) {
       const target = await authorizeJourneyTarget(pool, {assignmentId,classId,reviewer});
-      const schedule = await readErpSchedule(target.class_id);
+      const schedule = await readErpSchedule(target.class_id, true);
       const current = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
+      const baseline=(await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[target.class_id])).rows[0]?.erp_snapshot;
+      const usage = await pool.query(`SELECT DISTINCT a.session_number FROM learning.form_assignment a
+        WHERE a.erp_course_class_id=$1::bigint AND (EXISTS(SELECT 1 FROM learning.attempt t WHERE t.assignment_id=a.id)
+        OR EXISTS(SELECT 1 FROM learning.portal_attendance_binding b WHERE b.assignment_id=a.id AND (b.write_started OR b.accepted_at IS NOT NULL)))`, [target.class_id]);
+      const decorated=decorateSchedule(target.class_id,schedule,normalizeJourneySessionDates(current.rows[0]?.session_dates));
       return { classId: target.class_id, className: target.class_name,
+        scheduleChanges:reconcileJourneySchedule({sessions:normalizeJourneySessionDates(current.rows[0]?.session_dates).map(s=>({...s,sessionDate:s.date}))},decorated,
+          normalizeJourneySessionDates(current.rows[0]?.session_dates),[],baseline).scheduleChanges,
+        usedSessionNumbers: usage.rows.map(s=>Number(s.session_number)),
         assignmentSessionNumbers: asArray(target.assignment_session_numbers).map(Number),
-        ...decorateSchedule(target.class_id, schedule,
-          normalizeJourneySessionDates(current.rows[0]?.session_dates)) };
+        ...decorated };
     },
 
     async getTeacherTestSources({ assignmentId, classId, reviewer }) {
@@ -1023,11 +1061,22 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     },
 
     async saveTeacherJourneyPlan({ assignmentId, classId, totalSessions, testSessionNumbers,
-      testSources, sessionDates, expectedRevision, expectedScheduleFingerprint, reviewer }) {
+      testSources, sessionDates, expectedRevision, expectedScheduleFingerprint, operationId, reviewer }) {
+      const requestHash = sha256(stableStringify({ totalSessions, testSessionNumbers, testSources,
+        sessionDates, expectedRevision, expectedScheduleFingerprint }));
+      const operationTarget = operationId ? await authorizeJourneyTarget(pool, {assignmentId,classId,reviewer}) : null;
+      if (operationId) {
+        const previous = (await pool.query('SELECT request_hash,next_plan FROM learning.journey_plan_change WHERE class_id=$1::bigint AND operation_id=$2::uuid',
+          [operationTarget.class_id,operationId])).rows[0];
+        if (previous) {
+          if (previous.request_hash !== requestHash) throw new LearningError('JOURNEY_OPERATION_CONFLICT','Mã xác nhận đã dùng cho một bản chỉnh khác.',409);
+          return {...previous.next_plan,replayed:true};
+        }
+      }
       let validatedSchedule = null;
       if (expectedScheduleFingerprint) {
         const target = await authorizeJourneyTarget(pool, {assignmentId,classId,reviewer});
-        const schedule = decorateSchedule(target.class_id, await readErpSchedule(target.class_id));
+        const schedule = decorateSchedule(target.class_id, await readErpSchedule(target.class_id, true));
         validatedSchedule = schedule;
         if (schedule.fingerprint !== expectedScheduleFingerprint) {
           throw new LearningError('ERP_SCHEDULE_STALE',
@@ -1045,9 +1094,10 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           return prior?.erpSessionId !== item.erpSessionId || prior?.date !== item.date;
         });
         if (changed.length) {
-          const schedule = validatedSchedule || await readErpSchedule(target.class_id);
+          const schedule = validatedSchedule || decorateSchedule(target.class_id, await readErpSchedule(target.class_id, true));
           const byId = new Map(schedule.sessions.map(item => [item.erpSessionId, item]));
-          if (changed.some(item => byId.get(item.erpSessionId)?.date !== item.date)) {
+          if (schedule.ambiguous || changed.some(item => byId.get(item.erpSessionId)?.date !== item.date
+            || ![0,1].includes(byId.get(item.erpSessionId)?.statusCode))) {
             throw new LearningError('ERP_SCHEDULE_MAPPING_CHANGED',
               'Dòng lịch ERP không thuộc lớp này hoặc ngày đã đổi; hãy tải lại lịch để xác nhận.', 409);
           }
@@ -1079,6 +1129,18 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       }
       return withTransaction(pool, async client => {
         const target = await authorizeJourneyTarget(client, {assignmentId,classId,reviewer});
+        // Cùng khóa với publish, sau đó khóa phiếu theo ID trước kiểm usage.
+        if (operationId) {
+          await client.query('INSERT INTO learning.form_draft_class_lock VALUES ($1::bigint) ON CONFLICT DO NOTHING', [target.class_id]);
+          await client.query('SELECT erp_course_class_id FROM learning.form_draft_class_lock WHERE erp_course_class_id=$1::bigint FOR UPDATE', [target.class_id]);
+          const priorOperation = (await client.query('SELECT request_hash,next_plan FROM learning.journey_plan_change WHERE class_id=$1::bigint AND operation_id=$2::uuid', [target.class_id,operationId])).rows[0];
+          if (priorOperation) {
+            if (priorOperation.request_hash !== requestHash) throw new LearningError('JOURNEY_OPERATION_CONFLICT','Mã xác nhận đã dùng cho một bản chỉnh khác.',409);
+            return {...priorOperation.next_plan,replayed:true};
+          }
+        }
+        await client.query('SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint ORDER BY id FOR UPDATE', [target.class_id]);
+        Object.assign(target, await authorizeJourneyTarget(client, {assignmentId,classId,reviewer}));
         if (totalSessions < Number(target.highest_known_session || 0)) {
           throw new LearningError('JOURNEY_PLAN_TOO_SHORT',
             'Tổng số buổi nhỏ hơn số buổi cao nhất đã có dữ liệu.', 409);
@@ -1088,13 +1150,25 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         const datesToSave = normalizeJourneySessionDates(sessionDates ?? prior?.session_dates ?? []);
         const assignedNumbers = new Set(asArray(target.assignment_session_numbers).map(Number));
         const newByNumber = new Map(datesToSave.map(item => [item.sessionNumber, item]));
+        const baseline = operationId ? (await client.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[target.class_id])).rows[0]?.erp_snapshot : null;
+        const oldTimes = new Map((baseline?.sessions || []).map(s=>[s.erpSessionId,s]));
+        const newTimes = new Map((validatedSchedule?.sessions || []).map(s=>[s.erpSessionId,s]));
         for (const old of normalizeJourneySessionDates(prior?.session_dates)) {
           if (!assignedNumbers.has(old.sessionNumber)) continue;
           const next = newByNumber.get(old.sessionNumber);
-          if (!next || next.erpSessionId !== old.erpSessionId
+          if (!next || (!operationId && next.erpSessionId !== old.erpSessionId)
             || (!old.erpSessionId && next.date !== old.date)) {
             throw new LearningError('ERP_ASSIGNED_SESSION_LOCKED',
               'Buổi đã có phiếu phải giữ ánh xạ đã chốt. Cần đối chiếu riêng trước khi đổi đích điểm danh.', 409);
+          }
+          const beforeTime=oldTimes.get(old.erpSessionId),afterTime=newTimes.get(old.erpSessionId);
+          const changed = !next || next.erpSessionId !== old.erpSessionId || next.date !== old.date
+            || (beforeTime && afterTime && (beforeTime.startsAt!==afterTime.startsAt || beforeTime.endsAt!==afterTime.endsAt));
+          if (changed) {
+            const usage = await client.query(`SELECT 1 FROM learning.form_assignment a WHERE a.erp_course_class_id=$1::bigint AND a.session_number=$2
+              AND (EXISTS(SELECT 1 FROM learning.attempt t WHERE t.assignment_id=a.id)
+                OR EXISTS(SELECT 1 FROM learning.portal_attendance_binding b WHERE b.assignment_id=a.id AND (b.write_started OR b.accepted_at IS NOT NULL)))`, [target.class_id,old.sessionNumber]);
+            if (usage.rowCount) throw new LearningError('ERP_SESSION_IN_USE','Buổi đã có lượt làm hoặc điểm danh. Giữ dữ liệu và đối chiếu riêng trước khi đổi lịch.',409);
           }
         }
         const sourcesToSave = normalizeJourneyTestSources(testSources ?? prior?.test_sources ?? []);
@@ -1119,7 +1193,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           && JSON.stringify(normalizeJourneyTestSources(prior.test_sources)) === JSON.stringify(sourcesToSave)
           && JSON.stringify(normalizeJourneySessionDates(prior.session_dates)) === JSON.stringify(datesToSave);
         if (Number(prior?.revision || 0) !== expectedRevision) {
-          if (same && Number(prior.revision) === expectedRevision + 1) {
+          if (!operationId && same && Number(prior.revision) === expectedRevision + 1) {
             return {
               classId: target.class_id, className: target.class_name,
               highestKnownSession: Number(target.highest_known_session || 0),
@@ -1150,13 +1224,34 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           throw new LearningError('JOURNEY_PLAN_READBACK_MISMATCH',
             'Kế hoạch lưu không khớp dữ liệu đã gửi.', 500);
         }
-        return {
+        const outcome = {
           classId: target.class_id, className: target.class_name,
           highestKnownSession: Number(target.highest_known_session || 0),
           totalSessions, testSessionNumbers, testSources: sourcesToSave,
           sessionDates: datesToSave, revision: Number(row.revision),
           confirmedBy: row.confirmed_by_email, confirmedAt: row.confirmed_at, replayed: false
         };
+        if (operationId) {
+          // Các binding chưa dùng được cập nhật cùng transaction, không chuyển job đã nhận.
+          for (const next of datesToSave) {
+            const old = normalizeJourneySessionDates(prior?.session_dates).find(s=>s.sessionNumber===next.sessionNumber);
+            if (old && old.date!==next.date) {
+              const days=(Date.parse(next.date+'T00:00:00Z')-Date.parse(old.date+'T00:00:00Z'))/86400000;
+              await client.query(`UPDATE learning.form_assignment SET
+                opens_at=opens_at+($3 * interval '1 day'),closes_at=closes_at+($3 * interval '1 day')
+                WHERE erp_course_class_id=$1::bigint AND session_number=$2`, [target.class_id,next.sessionNumber,days]);
+            }
+          }
+          for (const next of datesToSave.filter(s=>s.erpSessionId)) await client.query(`UPDATE learning.portal_attendance_binding b
+            SET target_session_id=$3::bigint,schedule_fingerprint=$4,revision=revision+1,updated_at=now()
+            FROM learning.form_assignment a WHERE a.id=b.assignment_id AND a.erp_course_class_id=$1::bigint AND a.session_number=$2
+            AND NOT b.write_started AND b.accepted_at IS NULL AND b.target_session_id<>$3::bigint`,
+          [target.class_id,next.sessionNumber,next.erpSessionId,validatedSchedule?.fingerprint || expectedScheduleFingerprint || 'confirmed-plan']);
+          await client.query(`INSERT INTO learning.journey_plan_change(class_id,operation_id,request_hash,previous_plan,next_plan,schedule_fingerprint,actor_email,erp_snapshot)
+            VALUES($1::bigint,$2::uuid,$3,$4::jsonb,$5::jsonb,$6,$7,$8::jsonb)`,
+          [target.class_id,operationId,requestHash,JSON.stringify(prior || null),JSON.stringify(outcome),validatedSchedule?.fingerprint || null,reviewer.email,JSON.stringify(validatedSchedule || null)]);
+        }
+        return outcome;
       });
     },
 
@@ -1416,7 +1511,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     },
 
     async overrideAttendance({ assignmentId, studentRef, status, reason, reviewer, operationKey }) {
-      const result = await pool.query(overrideLearningAttendanceSql, [
+      return withTransaction(pool, async client => {
+      await client.query('SELECT id FROM learning.form_assignment WHERE id=$1::uuid FOR UPDATE', [assignmentId]);
+      const result = await client.query(overrideLearningAttendanceSql, [
         assignmentId,
         studentRef,
         status,
@@ -1426,6 +1523,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         operationKey
       ]);
       const row = assertSingleRow(result, 'ATTENDANCE_OVERRIDE_DENIED', 'Không thể cập nhật điểm danh cho học viên này.', 403);
+      if (row.portal_sync_queued && !row.replayed) await guardAssignmentSchedule(client, assignmentId, true);
       return {
         assignmentId: row.assignment_id,
         studentRef: row.student_ref,
@@ -1436,6 +1534,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         portalSyncQueued: row.portal_sync_queued,
         replayed: row.replayed
       };
+      });
     },
 
     async setBlockRelease({ assignmentId, blockId, status, reviewer, operationId }) {

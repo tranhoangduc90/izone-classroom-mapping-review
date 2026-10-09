@@ -3,6 +3,7 @@ import express from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { LearningError, createLearningService } from './learning-service.js';
+import { createScheduleMonitor } from './learning-schedule-reconciliation.js';
 import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
 import { createLearningDemoGrant,createLearningDraftDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
 import {createLearningFormDraftService} from './learning-form-drafts.js';
@@ -112,7 +113,8 @@ const teacherJourneyPlanSchema = z.object({
     erpSessionId: z.string().regex(/^\d{1,18}$/).optional()
   }).strict()).max(100).optional(),
   expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  expectedScheduleFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional()
+  expectedScheduleFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  operationId: uuidSchema.optional()
 }).strict().superRefine((value, context) => {
   if(Boolean(value.assignmentId)===Boolean(value.classId)) context.addIssue({code:'custom',path:['classId'],message:'Chọn đúng một lớp hoặc phiếu.'});
   const numbers = value.testSessionNumbers;
@@ -226,10 +228,14 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     }
     next();
   });
-  const service = createLearningService({ pool, erpScheduleReader, testSourceReader, testResultReader,
+  // Thí điểm IC2305; một lần đọc/lớp/5 phút, tối đa 10 lớp, không gọi AI.
+  const monitoredReader = createScheduleMonitor(erpScheduleReader, {
+    classIds: String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ?? (process.env.NODE_ENV==='production'?'1294':'')).split(',')
+  });
+  const service = createLearningService({ pool, erpScheduleReader: monitoredReader, testSourceReader, testResultReader,
     journeyCommentsEnabled,progressLinkCipher:journeyCommentsEnabled?
       createProgressLinkCipher({keys:progressLinkKeys,activeVersion:progressLinkKeyVersion}):null });
-  const drafts=createLearningFormDraftService({pool});
+  const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader});
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
     limit: 12_000,

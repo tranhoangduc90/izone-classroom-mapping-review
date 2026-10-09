@@ -134,5 +134,6 @@ export async function setupDatabase(connection=null) {
     '../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql',
     import.meta.url
   ), 'utf8'));
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202610090001_journey_schedule_changes.sql', import.meta.url), 'utf8'));
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }

@@ -154,8 +154,49 @@ async function setupDatabase() {
   );
   await database.exec(journeyPlanMigration);
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202610090001_journey_schedule_changes.sql', import.meta.url), 'utf8'));
+  await database.exec('CREATE TABLE IF NOT EXISTS learning.form_draft_class_lock(erp_course_class_id bigint PRIMARY KEY)');
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
+
+test('đổi lịch: giữ ID/số/ngày đã chốt, xác nhận có audit, retry không trùng và không chuyển lượt đang làm', async()=>{
+  const {database}=await setupDatabase();
+  const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
+  const row=(id,date,statusCode=0)=>({erpSessionId:id,date,startsAt:date+' 18:30:00',endsAt:date+' 21:00:00',statusCode});
+  let sessions=[row('35819','2026-10-12'),row('35820','2026-10-15')];
+  const pool=poolFrom(database),service=createLearningService({pool,erpScheduleReader:async()=>({sessions})});
+  try {
+    const plan=await service.saveTeacherJourneyPlan({classId:'2139',totalSessions:9,testSessionNumbers:[7],
+      sessionDates:[{sessionNumber:8,date:'2026-10-12',erpSessionId:'35819'},{sessionNumber:9,date:'2026-10-15',erpSessionId:'35820'}],
+      expectedRevision:0,reviewer});
+    const published=await service.publishReflectionForm({reviewer,title:'Phiếu kiểm dời lịch',courseCode:'56',classId:'2139',sessionNumber:8,
+      opensAt:null,closesAt:null,items:[{libraryItemId:'10000000-0000-4000-8000-000000000001',checkpoint:1,required:true}]});
+    sessions=[row('35820','2026-10-15'),row('35819','2026-10-19')];
+    const overview=await service.getCourseOverview({classId:'2139',reviewer});
+    const slot=overview.sessions.find(s=>s.sessionNumber===8);
+    assert.equal(slot.sessionDate,'2026-10-12');assert.equal(slot.erpSessionId,'35819');
+    assert.equal(slot.scheduleStatus,'needs_review');
+    assert.equal(overview.scheduleChanges[0].after.date,'2026-10-19');
+    const schedule=await service.getTeacherErpSchedule({classId:'2139',reviewer});
+    const input={classId:'2139',totalSessions:9,testSessionNumbers:[7],sessionDates:[{sessionNumber:8,date:'2026-10-19',erpSessionId:'35819'},plan.sessionDates[1]],
+      expectedRevision:1,expectedScheduleFingerprint:schedule.fingerprint,operationId:crypto.randomUUID(),reviewer};
+    const applied=await service.saveTeacherJourneyPlan(input);assert.equal(applied.revision,2);
+    assert.equal((await service.saveTeacherJourneyPlan(input)).replayed,true);
+    assert.equal((await database.query('SELECT count(*)::int AS n FROM learning.journey_plan_change')).rows[0].n,1);
+    await assert.rejects(()=>service.saveTeacherJourneyPlan({...input,totalSessions:10}),e=>e.code==='JOURNEY_OPERATION_CONFLICT');
+    assert.equal((await service.getCourseOverview({classId:'2139',reviewer})).sessions[7].sessionDate,'2026-10-19');
+    const assignment=await service.getPublicAssignment(published.publicToken);
+    const attempt=await service.startAttempt({publicToken:published.publicToken,studentRef:assignment.roster[0].studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()});
+    sessions=[row('35820','2026-10-15'),row('35819','2026-10-22')];
+    const fresh=await service.getTeacherErpSchedule({classId:'2139',reviewer});
+    assert.deepEqual(fresh.usedSessionNumbers,[8]);
+    await assert.rejects(()=>service.saveTeacherJourneyPlan({...input,expectedRevision:2,expectedScheduleFingerprint:fresh.fingerprint,
+      operationId:crypto.randomUUID(),sessionDates:[{...input.sessionDates[0],date:'2026-10-22'},input.sessionDates[1]]}),e=>e.code==='ERP_SESSION_IN_USE');
+    assert.equal((await database.query('SELECT status FROM learning.attempt WHERE attempt_token=$1::uuid',[attempt.attemptToken])).rows[0].status,'active');
+    assert.equal((await service.getTeacherJourneyPlan({classId:'2139',reviewer})).revision,2);
+    await assert.rejects(()=>service.startAttempt({publicToken:published.publicToken,studentRef:assignment.roster[1].studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()}),e=>e.code==='ERP_SESSION_REVIEW_REQUIRED');
+  }finally{await database.close();}
+});
 
 test('ba học viên nộp đủ kích hoạt hạn 22:00 ngày người thứ ba, receipt retry giữ hạn', async () => {
   const { database, service } = await setupDatabase();
@@ -628,8 +669,8 @@ test('O01/O03/E07: lớp chưa có phiếu vẫn đọc/chốt kế hoạch đú
   const {database}=await setupDatabase();
   const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
   const service=createLearningService({pool:poolFrom(database),erpScheduleReader:async()=>({sessions:[
-    {erpSessionId:'401',date:'2026-10-05',startsAt:'2026-10-05 18:30:00',endsAt:'2026-10-05 20:00:00',status:1},
-    {erpSessionId:'402',date:'2026-10-08',startsAt:'2026-10-08 18:30:00',endsAt:'2026-10-08 20:00:00',status:1}]})});
+    {erpSessionId:'401',date:'2026-10-05',startsAt:'2026-10-05 18:30:00',endsAt:'2026-10-05 20:00:00',statusCode:1},
+    {erpSessionId:'402',date:'2026-10-08',startsAt:'2026-10-08 18:30:00',endsAt:'2026-10-08 20:00:00',statusCode:1}]})});
   try {
     const initial=await service.getTeacherJourneyPlan({classId:'2139',reviewer});
     assert.equal(initial.revision,0);assert.equal(initial.highestKnownSession,0);

@@ -29,11 +29,14 @@ export function createAttendanceBindingStore(pool) {
         if (target.rowCount !== 1) throw new LearningJobIdentityError('Đích điểm danh không thuộc học viên/phiếu của lớp.');
         const found = await db.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id = $1::uuid FOR UPDATE', [payload.assignmentId]);
         let binding = found.rows[0];
+        const priorOperation = await db.query('SELECT status FROM learning.portal_attendance_operation WHERE operation_key = $1', [job.operationKey]);
         const changed = binding && String(binding.target_session_id) !== resolved.resolvedSessionId;
-        if (binding?.review_required || (changed && binding?.write_started)) {
+        const acceptedScheduleChanged = binding?.accepted_at && binding.schedule_fingerprint !== resolved.scheduleFingerprint;
+        if (binding?.review_required || acceptedScheduleChanged || (changed && (binding?.write_started || binding?.accepted_at))) {
           await db.query('UPDATE learning.portal_attendance_binding SET review_required = true, updated_at = now() WHERE assignment_id = $1::uuid', [payload.assignmentId]);
           return { ...normalize(binding), reviewRequired: true,
-            canReadbackKnown: resolved.status === 'already_present' && resolved.targetSessionId === String(binding.target_session_id) };
+            canReadbackKnown: Boolean(priorOperation.rowCount) && resolved.status === 'already_present'
+              && resolved.targetSessionId === String(binding.target_session_id) };
         }
         if (!binding) {
           const legacy = await db.query('SELECT 1 FROM learning.portal_attendance_legacy_guard WHERE unit_key = $1', [job.unitKey]);
@@ -53,7 +56,6 @@ export function createAttendanceBindingStore(pool) {
         if (resolved.targetSessionId !== String(binding.target_session_id)) {
           throw new LearningJobIdentityError('Đích đọc lại không khớp liên kết chung của phiếu.');
         }
-        const priorOperation = await db.query('SELECT status FROM learning.portal_attendance_operation WHERE operation_key = $1', [job.operationKey]);
         if (priorOperation.rows[0]?.status === 'intent' && resolved.status === 'resolved') {
           // Timeout không chứng minh execution cũ đã dừng; chỉ đọc lại, không PUT lần hai.
           await db.query('UPDATE learning.portal_attendance_binding SET review_required = true WHERE assignment_id = $1::uuid', [payload.assignmentId]);

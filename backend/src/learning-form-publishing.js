@@ -4,13 +4,14 @@ import {withTransaction} from './db.js';
 import {validateAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {sha256,stableStringify} from './learning-domain.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
+import {decorateSchedule} from './learning-schedule-plan.js';
 import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
 
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const scored=definition=>definition.blocks.some(block=>block.items.some(item=>item.graderType!=='none'||item.maxScore>0));
 
-export function createLearningFormPublishingService({pool,authorizeClass,owned,dto}) {
+export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null}) {
   async function authority(database,email,definition,ownerEmail) {
     if(!scored(definition)) return email.toLowerCase()===ownerEmail.toLowerCase();
     if(!definition.courseCode) return false;
@@ -105,6 +106,21 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
         // Khóa một dòng lớp để hai nháp cùng buổi không vượt qua bước kiểm trùng đồng thời.
         await client.query('INSERT INTO learning.form_draft_class_lock VALUES ($1::bigint) ON CONFLICT DO NOTHING;',[row.erp_course_class_id]);
         await client.query('SELECT erp_course_class_id FROM learning.form_draft_class_lock WHERE erp_course_class_id=$1::bigint FOR UPDATE;',[row.erp_course_class_id]);
+        if (erpScheduleReader) {
+          const plan=(await client.query('SELECT session_dates FROM learning.class_journey_plan WHERE erp_course_class_id=$1::bigint',[row.erp_course_class_id])).rows[0];
+          const dates=typeof plan?.session_dates==='string'?JSON.parse(plan.session_dates):plan?.session_dates || [];
+          const confirmed=dates.find(s=>Number(s.sessionNumber)===Number(row.session_number));
+          if (!confirmed?.erpSessionId) throw fail('ERP_SESSION_NOT_CONFIRMED','Xác nhận mốc ERP trong kế hoạch lớp trước khi phát phiếu.');
+          let schedule;
+          try {schedule=decorateSchedule(String(row.erp_course_class_id),await erpScheduleReader(String(row.erp_course_class_id),{fresh:true}));}
+          catch {throw fail('ERP_SCHEDULE_UNAVAILABLE','Chưa đọc được lịch ERP; nháp và bản duyệt vẫn được giữ.',503);}
+          const source=schedule.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
+          const baseline=(await client.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[row.erp_course_class_id])).rows[0]?.erp_snapshot;
+          const priorTime=baseline?.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
+          if (schedule.ambiguous || !source || ![0,1].includes(source.statusCode) || source.date!==confirmed.date
+            || (priorTime && (priorTime.startsAt!==source.startsAt || priorTime.endsAt!==source.endsAt)))
+            throw fail('ERP_SESSION_REVIEW_REQUIRED','ERP đã đổi mốc buổi này; đối chiếu kế hoạch trước khi phát phiếu.');
+        }
         const conflict=await client.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
           AND session_number=$2 AND status IN ('published','closed') LIMIT 1;`,[row.erp_course_class_id,row.session_number]);
         if(conflict.rowCount) throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu. Không tạo phiếu thứ hai hoặc thay bài đã nộp.');
