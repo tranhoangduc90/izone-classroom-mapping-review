@@ -9,6 +9,7 @@ import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
+import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
@@ -305,7 +306,8 @@ function addCors(config) {
 export function createApp({
   config, pool, verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
-  termTestWritingGradingService = null, termTestAssetService = null, logger = console
+  termTestWritingGradingService = null, termTestAssetService = null, logger = console,
+  resultStreamOptions = {}
 }) {
   const app = express();
   
@@ -1172,6 +1174,8 @@ export function createApp({
       }
     });
   }));
+
+  registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = resultRequestSchema.safeParse(req.body);
