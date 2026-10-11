@@ -16,7 +16,7 @@ function dto(row,{includeKey=true}={}) {
     updatedAt:row.updated_at,assignmentId:row.published_assignment_id||null};
 }
 
-export function createLearningFormDraftService({pool}) {
+export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
   async function authorizeClass(database,classId,reviewer) {
     const result=await database.query(authorizeLearningClassSql,[reviewer.email,reviewer.canAccessAllClasses,classId]);
     if(result.rowCount!==1) throw error('DRAFT_CLASS_ACCESS_DENIED','Bạn chưa được cấp quyền soạn phiếu cho lớp này.',403);
@@ -50,7 +50,7 @@ export function createLearningFormDraftService({pool}) {
     });
   }
   return {
-    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto}),
+    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader}),
     create,
     async demoSource({grant}) {
       const active=await pool.query(`SELECT account.email,account.role,account.can_access_all_classes,

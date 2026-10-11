@@ -202,7 +202,7 @@ test('A13/A14: payload đúng cấu trúc nhưng tráo học viên ERP dừng �
   } finally { await fixture.close(); }
 });
 
-test('A04/A10: Journey giữ mã ERP đã ghi khi thứ tự đổi; cùng mã ERP đổi ngày được cập nhật kế hoạch', async () => {
+test('A04/A10: Journey giữ mã ERP đã ghi khi thứ tự đổi; buổi đã có lượt làm giữ ngày để đối chiếu riêng', async () => {
   const fixture = await postgresFixture();
   try {
     const { published, inputs } = await publishedFixture(fixture, 1);
@@ -215,10 +215,10 @@ test('A04/A10: Journey giữ mã ERP đã ghi khi thứ tự đổi; cùng mã E
       testSessionNumbers:[],expectedRevision:0,reviewer,
       sessionDates:[{sessionNumber:1,date:'2026-10-05',erpSessionId:'35817'}]});
     schedule.sessions[0] = {...schedule.sessions[0],date:'2026-10-06',startsAt:'2026-10-06 18:30:00'};
-    const changed = await service.saveTeacherJourneyPlan({assignmentId:published.assignmentId,totalSessions:2,
+    await assert.rejects(()=>service.saveTeacherJourneyPlan({assignmentId:published.assignmentId,totalSessions:2,
       testSessionNumbers:[],expectedRevision:1,reviewer,
-      sessionDates:[{sessionNumber:1,date:'2026-10-06',erpSessionId:'35817'}]});
-    assert.equal(changed.sessionDates[0].date, '2026-10-06');
+      sessionDates:[{sessionNumber:1,date:'2026-10-06',erpSessionId:'35817'}]}),e=>e.code==='ERP_SESSION_IN_USE');
+    assert.equal((await service.getTeacherJourneyPlan({assignmentId:published.assignmentId,reviewer})).revision,1);
     await fixture.service.submit(inputs[0]);
     const portal = portalFixture();
     const handler = createLearningAttendanceSync({config,pool:fixture.pool,fetchImpl:portal.fetch});
@@ -228,7 +228,7 @@ test('A04/A10: Journey giữ mã ERP đã ghi khi thứ tự đổi; cùng mã E
     const student = (await fixture.pool.query('SELECT student_ref FROM learning.attempt WHERE attempt_token=$1', [inputs[0].attemptToken])).rows[0];
     const journey = await service.getStudentCourseJourney({publicToken:published.publicToken,studentRef:student.student_ref});
     assert.equal(journey.sessions[0].erpSessionId, '35817');
-    assert.equal(journey.sessions[0].sessionDate, '2026-10-06');
+    assert.equal(journey.sessions[0].sessionDate, '2026-10-05');
     assert.equal(journey.sessions[0].scheduleStatus, 'needs_review');
   } finally { await fixture.close(); }
 });
