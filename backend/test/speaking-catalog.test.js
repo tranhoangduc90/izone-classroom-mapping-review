@@ -8,6 +8,7 @@ import { createSpeakingCatalog } from '../src/speaking-catalog.js';
 import { createSpeakingHomeworkService } from '../src/speaking-homework.js';
 import { speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { createSpeakingHomeworkRouter } from '../src/speaking-homework-routes.js';
+import { createIndependentSource } from '../src/speaking-independent-source.js';
 
 const ref = '71000000-0000-4000-8000-000000000001';
 const other = '71000000-0000-4000-8000-000000000002';
@@ -303,5 +304,21 @@ test('Cầu nối bài cũ: SQL thật giữ tiến độ, đúng Docs và quy�
     await assert.rejects(bridge.start({...input,studentRef:other}),e=>e.code==='STUDENT_NOT_ACTIVE');
     await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_going' WHERE erp_student_contact_id=3");
     assert.equal(await bridge.start({...input,studentRef:dropped}),null);
+  }finally{await f.db.close();}
+});
+
+// SQL thật bảo vệ roster dự phòng: tên ERP, đúng lớp/đăng ký; approved không bị nới.
+test('roster tự chọn bao gồm học viên chưa ghép, còn roster xác nhận chỉ approved',async()=>{
+  const f=await fixture();try{
+    await f.pool.query(`UPDATE mapping.student_mapping_review SET status='pending_review',classroom_user_id=NULL WHERE public_id=$1`,[ref]);
+    const source=createIndependentSource({pool:f.pool});
+    const c=await source.context({assignmentCode:code,classCode:'IC2304'});
+    assert.deepEqual(c.students,[]);
+    assert.deepEqual(c.selectionStudents,[{student_ref:ref,name:'Tên trùng'}]);
+    await assert.rejects(source.context({assignmentCode:code,classCode:'IC2304',studentRef:ref}),{code:'STUDENT_NOT_ACTIVE'});
+    await f.pool.query("UPDATE mapping.student_mapping_review SET status='rejected' WHERE public_id=$1",[ref]);
+    assert.equal((await source.context({assignmentCode:code,classCode:'IC2304'})).selectionStudents.length,1);
+    await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET source_state='missing' WHERE erp_course_class_id=2304 AND erp_student_contact_id=1");
+    assert.equal((await source.context({assignmentCode:code,classCode:'IC2304'})).selectionStudents.length,0);
   }finally{await f.db.close();}
 });

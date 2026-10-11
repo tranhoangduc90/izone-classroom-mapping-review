@@ -60,13 +60,22 @@ export function createIndependentSource({ pool, independentBase='', workerSecret
       ORDER BY m.erp_student_name_snapshot,m.public_id`,[scope.class_id]);
     const member = studentRef ? students.find(s => s.student_ref === studentRef) : null;
     if (studentRef && !member) throw new SpeakingHomeworkError('STUDENT_NOT_ACTIVE','Hồ sơ này chưa có đăng ký hợp lệ trong lớp.',403);
+    // Danh sách tự chọn lấy tên ERP của lớp đang học, kể cả tài khoản chưa duyệt.
+    // Giữ students/member ở trên chỉ gồm mapping approved cho luồng xác nhận nguồn.
+    const selectionStudents = studentRef ? [] : (await pool.query(`SELECT m.public_id AS student_ref,
+      m.erp_student_name_snapshot AS name FROM mapping.student_mapping_review m
+      WHERE m.erp_course_class_id=$1 AND EXISTS
+        (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+         WHERE e.erp_course_class_id=m.erp_course_class_id AND e.erp_student_contact_id=m.erp_student_contact_id
+           AND e.source_state='active' AND lower(trim(coalesce(e.registration_status,''))) NOT IN ('dropped','on_hold'))
+      ORDER BY m.erp_student_name_snapshot,m.public_id`,[scope.class_id])).rows;
     const recommendations = member ? (await pool.query(`SELECT exercise_id,recommendation_count,practice_count,
       waiting,proposed_at,last_practiced_at FROM speaking_homework.doctor_recommendation
       WHERE class_id=$1 AND student_ref=$2`,[scope.class_id,studentRef])).rows : [];
     const excludedStudents=(await pool.query(`SELECT m.classroom_user_id AS google_user_id
       FROM mapping.student_mapping_review m WHERE m.erp_course_class_id=$1
         AND m.status='approved' AND m.classroom_user_id IS NOT NULL AND NOT(${active})`,[scope.class_id])).rows;
-    return { template:t, scope, students, excludedStudents, member, exercises, recommendations };
+    return { template:t, scope, students, selectionStudents, excludedStudents, member, exercises, recommendations };
   }
   async function teacher({ classId, reviewer }) {
     if (reviewer.canAccessAllClasses) return true;

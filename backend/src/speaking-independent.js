@@ -14,6 +14,15 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
   if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
   const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function context(input) { return source.context(input); }
+  async function unitContext(u) {
+    // Tên tự chọn chỉ thuộc hồ sơ Docs; chưa nhập lịch sử của hồ sơ đã duyệt.
+    const selected=u.profile_kind==='document' && !u.course_id && u.student_ref;
+    const c=await context({assignmentCode:u.assignment_code,...(u.student_ref?{
+      classCode:u.class_code,...(selected?{}:{studentRef:u.student_ref})}:{})});
+    if(selected && !c.selectionStudents?.some(s=>s.student_ref===u.student_ref))
+      fail('STUDENT_NOT_ACTIVE','Học viên không còn trong danh sách đang học của lớp.',403);
+    return c;
+  }
   async function classes({assignmentCode}) {
     const c=await context({assignmentCode});
     return Promise.all(c.classes.map(async s=>{
@@ -97,7 +106,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
     [hash(identity.accessToken),identity.studentRef]);
     if (!u) fail('SESSION_INVALID','Phiên làm bài không còn hợp lệ. Hãy mở lại bài.',403);
     // Danh sách đã nhớ không cấp quyền: kiểm đăng ký hiện hành ở mỗi lượt.
-    await context({assignmentCode:u.assignment_code,...(u.student_ref?{classCode:u.class_code,studentRef:u.student_ref}:{})});
+    await unitContext(u);
     return u;
   }
   async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows; }
@@ -126,7 +135,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
         if (!p) fail('INVALID_PART','Phần bài chưa hợp lệ.',400);
         min=Number(p.min_questions);
       } else {
-        const c=await context({assignmentCode:u.assignment_code,...(u.student_ref?{classCode:u.class_code,studentRef:u.student_ref}:{})});
+        const c=await unitContext(u);
         const e=c.exercises.find(e=>e.id===exerciseId);
         if (!e) fail('EXERCISE_NOT_FOUND','Bài luyện chưa có trong danh mục.',404);
         title=e.title;
@@ -173,7 +182,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
     });
   }
   async function catalog(u) {
-    const c=await context({assignmentCode:u.assignment_code,...(u.student_ref?{classCode:u.class_code,studentRef:u.student_ref}:{})});
+    const c=await unitContext(u);
     return {exercises:c.exercises,digest:hash(JSON.stringify(c.exercises))};
   }
   async function listDoctor(identity) {
@@ -199,7 +208,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       const owner=randomUUID();
       await db.query(`UPDATE speaking_independent.job SET status='processing',owner=$2,lease_until=now()+interval '2 minutes',
         attempts=attempts+1,updated_at=now() WHERE id=$1`,[j.id,owner]);
-      const {rows:[u]}=await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref FROM speaking_independent.work_unit u
+      const {rows:[u]}=await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id FROM speaking_independent.work_unit u
         JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[j.work_unit_id]);
       const l=j.link_id?(await db.query('SELECT * FROM speaking_independent.link WHERE id=$1',[j.link_id])).rows[0]:null;
       const r=(await db.query('SELECT id FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id])).rows[0];

@@ -19,7 +19,7 @@ const fingerprint=n=>String(n).repeat(64).slice(0,64);
 const template={assignmentCode:code,title:'Lesson 6',lesson:6,requiredPracticeCount:2,doctorEnabled:true,digest:'a'.repeat(64),
   parts:[{part_key:'benefit_harm',min_questions:0},{part_key:'reason_action',min_questions:2},{part_key:'freestyle',min_questions:1}]};
 
-async function fixture({start=true,recommendations=[]}={}) {
+async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   let db,nativePool;
   if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) {
     const url=new URL(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL);
@@ -49,6 +49,7 @@ async function fixture({start=true,recommendations=[]}={}) {
     if(!i.classCode) return {template,classes,exercises};
     if(i.classCode!=='IC2304'||(i.studentRef&&(i.studentRef!==ref||!active))) throw Object.assign(new Error('Hồ sơ không hoạt động'),{code:'STUDENT_NOT_ACTIVE'});
     return {template,scope:classes[0],students:[{student_ref:ref,name:'Học viên fixture',google_user_id:'fixture-user'}],member:i.studentRef?{student_ref:ref,name:'Học viên fixture'}:null,
+      selectionStudents:active?[{student_ref:ref,name:'Học viên fixture'},...(unapproved?[{student_ref:exercise(88),name:'Tên ERP chưa ghép'}]:[])]:[],
       exercises,recommendations};},
     async teacher(_class,headers){return headers.cookie==='teacher=allowed';}};
   const service=createIndependentSpeaking({pool,source,accessSecret:'fixture-secret-32-characters-long-only'});
@@ -153,7 +154,7 @@ test('Docs ngoài Classroom được nhận theo nội dung thật, có hồ sơ
     const assignment=await docs.open({documentId:document.documentId,assignmentCode:code});
     assert.equal(assignment.classCode,'DOCS');assert.equal(assignment.intakeMode,'document');
     assert.notEqual(assignment.students[0].student_ref,ref);
-    const session=await docs.start({documentId:document.documentId,assignmentCode:code,studentRef:assignment.students[0].student_ref});
+    const session=await docs.start({documentId:document.documentId,assignmentCode:code,classCode:'DOCS',studentRef:assignment.students[0].student_ref});
     assert.equal(session.documentId,document.documentId);
     assert.equal((await f.service.open({accessToken:session.accessToken,studentRef:session.studentRef})).status,'draft');
     assert.equal((await f.pool.query("SELECT course_id,student_ref FROM speaking_independent.profile WHERE kind='document'")).rows[0].course_id,null);
@@ -262,5 +263,83 @@ if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) test('PostgreSQL nhiều conne
     const receipts=await Promise.all(Array.from({length:12},()=>f.service.finish(f.identity)));
     assert.equal(new Set(receipts.map(r=>r.id)).size,1);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,1);
+  }finally{await f.db.close();}
+});
+
+// Chọn tên chỉ nhận diện bài Docs, không cấp quyền hồ sơ đã duyệt hoặc nhập Doctor cũ.
+test('Docs chưa khớp hiện cả lớp, chọn tên ERP chưa duyệt và phục hồi đúng bài',async()=>{
+  const f=await fixture({start:false,unapproved:true});try{
+    const document=documentFixture();
+    const docs=createIndependentDocuments({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',gateway:{async get(){return document;}}});
+    const input={documentId:document.documentId,assignmentCode:code,classCode:'IC2304'};
+    const a=await docs.open(input);assert.equal(a.intakeMode,'unmatched');assert.equal(a.students.length,2);
+    assert.equal(a.students[1].name,'Tên ERP chưa ghép');
+    await assert.rejects(docs.start({...input,studentRef:exercise(99)}),{code:'STUDENT_NOT_ACTIVE'});
+    const session=await docs.start({...input,studentRef:exercise(88)});
+    assert.equal(session.studentRef,exercise(88));assert.equal(session.classCode,'IC2304');assert.equal(session.documentId,document.documentId);
+    const identity={accessToken:session.accessToken,studentRef:session.studentRef};
+    assert.equal((await f.service.open(identity)).workUnitId,session.workUnitId);
+    assert.equal((await f.service.listDoctor(identity)).personalCount,0);
+    const p=(await f.pool.query("SELECT * FROM speaking_independent.profile WHERE kind='document'")).rows[0];
+    assert.equal(p.student_name,'Tên ERP chưa ghép');assert.equal(p.course_id,null);assert.equal(p.linked_profile_id,null);
+    assert.equal((await docs.open(input)).selectedStudentRef,exercise(88));
+    assert.equal((await docs.start({...input,studentRef:exercise(88)})).workUnitId,session.workUnitId);
+    await f.service.requestCheck({...identity,part:'benefit_harm',rawUrl:url(7)});
+    await assert.rejects(docs.start({...input,studentRef:ref}),{code:'DOCUMENT_IDENTITY_LOCKED'});
+    for(const [part,n,count] of [['reason_action',8,2],['freestyle',9,1]]) {
+      await f.service.requestCheck({...identity,part,rawUrl:url(n)});
+      const job=await f.service.claimJob();
+      await f.service.workerService(job).completeCheck({qualityPassed:true,questionCount:count,fingerprint:fingerprint(n)});
+    }
+    for(let slot=1;slot<=2;slot++) {
+      await f.service.requestPracticeCheck({...identity,slot,exerciseId:exercise(slot),rawUrl:url(slot+9)});
+      let job=await f.service.claimJob();
+      if(job.kind==='analyze_practice') {
+        const adapter=f.service.workerService(job),catalog=await adapter.getPracticeDoctorCatalog();
+        await adapter.completePracticeAnalysisJob({catalogDigest:catalog.digest,matches:[]});
+        job=await f.service.claimJob();
+      }
+      assert.equal((await f.service.workerService(job).getPracticeDoctorCatalog()).exercises.length,2);
+      await f.service.workerService(job).completePracticeCheck({qualityPassed:true,questionCount:1,matchedExerciseId:exercise(slot),fingerprint:fingerprint(slot+9)});
+    }
+    const receipt=await f.service.finish(identity);
+    assert.equal((await f.service.finish(identity)).id,receipt.id);
+    assert.equal((await f.service.teacherReceipt(receipt.id,{cookie:'teacher=allowed'})).student_name,'Tên ERP chưa ghép');
+    const write=(await f.pool.query("SELECT u.document_id FROM speaking_independent.job j JOIN speaking_independent.work_unit u ON u.id=j.work_unit_id WHERE j.kind='write_doc'")).rows;
+    assert.deepEqual(write,[{document_id:document.documentId}]);
+    f.drop();await assert.rejects(f.service.open(identity),{code:'STUDENT_NOT_ACTIVE'});
+  }finally{await f.db.close();}
+});
+
+test('Nguồn Classroom đến sau khác tên tự chọn phải vào review và giữ tiến độ',async()=>{
+  const f=await fixture({start:false,unapproved:true});try{
+    let doc=documentFixture();
+    const docs=createIndependentDocuments({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',gateway:{async get(){return doc;}}});
+    const input={documentId:doc.documentId,assignmentCode:code,classCode:'IC2304',studentRef:exercise(88)};
+    const s=await docs.start(input);
+    await docs.register({courseId:'826336470852',courseWorkId:'123456',assignmentCode:code,classroomState:'PUBLISHED'});
+    await docs.sync({courseId:'826336470852',courseWorkId:'123456',submissions:[{id:'fixture-submission',userId:'fixture-user',documentId:doc.documentId}]});
+    const plan=await docs.plan({documentId:doc.documentId,document:doc});doc=documentFixture(doc.documentId,plan.url);
+    const result=await docs.verify({documentId:doc.documentId,document:doc});
+    assert.equal(result.status,'review');assert.equal(result.reason,'SELECTED_IDENTITY_CONFLICT');
+    const p=(await f.pool.query('SELECT student_ref,course_id FROM speaking_independent.profile WHERE id=(SELECT profile_id FROM speaking_independent.work_unit WHERE id=$1)',[s.workUnitId])).rows[0];
+    assert.equal(p.student_ref,exercise(88));assert.equal(p.course_id,null);
+  }finally{await f.db.close();}
+});
+
+test('Nguồn xác nhận cùng tên chuyển về một học viên và từ chối người khác',async()=>{
+  const f=await fixture({start:false,unapproved:true});try{
+    let doc=documentFixture();
+    const docs=createIndependentDocuments({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',gateway:{async get(){return doc;}}});
+    const input={documentId:doc.documentId,assignmentCode:code,classCode:'IC2304',studentRef:ref};
+    const s=await docs.start(input);
+    await docs.register({courseId:'826336470852',courseWorkId:'123456',assignmentCode:code,classroomState:'PUBLISHED'});
+    await docs.sync({courseId:'826336470852',courseWorkId:'123456',submissions:[{id:'fixture-submission',userId:'fixture-user',documentId:doc.documentId}]});
+    const plan=await docs.plan({documentId:doc.documentId,document:doc});doc=documentFixture(doc.documentId,plan.url);
+    assert.equal((await docs.verify({documentId:doc.documentId,document:doc})).status,'linked');
+    const a=await docs.open(input);assert.equal(a.intakeMode,'linked');assert.deepEqual(a.students,[{student_ref:ref,name:'Học viên fixture'}]);
+    assert.equal((await docs.start(input)).workUnitId,s.workUnitId);
+    await assert.rejects(docs.start({...input,studentRef:exercise(88)}),{code:'DOCUMENT_PROFILE_MISMATCH'});
+    await assert.rejects(docs.start({...input,classCode:'OTHER'}),{code:'CLASS_MISMATCH'});
   }finally{await f.db.close();}
 });

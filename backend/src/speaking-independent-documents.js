@@ -25,7 +25,7 @@ export function validateIndependentDocument(document,{documentId,assignmentCode}
 }
 
 // Đọc Docs thực qua cầu nối có quyền. File chưa nằm trong Classroom vẫn có hồ sơ riêng.
-// Chỉ nguồn Classroom đã đối soát mới gắn lớp/học viên; không suy chủ file từ tên người chọn.
+// Tên tự chọn thuộc riêng bài Docs; chỉ nguồn Classroom đối soát mới nối hồ sơ cá nhân.
 export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
   const mint=u=>createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function ensure({documentId,assignmentCode}) {
@@ -34,7 +34,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     const verified=validateIndependentDocument(document,{documentId,assignmentCode});
     const prepared=await withTransaction(pool,async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`document:${documentId}:${verified.tabId}`]);
-      let u=(await db.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_code,p.student_ref
+      let u=(await db.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_id,p.class_code,p.student_ref,p.course_id
         FROM speaking_independent.document_binding b JOIN speaking_independent.work_unit u ON u.id=b.work_unit_id
         JOIN speaking_independent.profile p ON p.id=u.profile_id
         WHERE b.document_id=$1 AND b.tab_id=$2 AND b.assignment_code=$3`,[documentId,verified.tabId,assignmentCode])).rows[0];
@@ -57,18 +57,54 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
       AND assignment_code=$2 AND cta_verified_at IS NOT NULL AND status='pending'`,[documentId,assignmentCode])).rows;
     if(known.length===1) {
       await verify({documentId,document});
-      prepared.u=(await pool.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_code,p.student_ref
+      prepared.u=(await pool.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_id,p.class_code,p.student_ref,p.course_id
         FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[prepared.u.id])).rows[0];
     }
     return prepared;
   }
   async function open(input) {
     const {u,template}=await ensure(input);
-    return {...template,classCode:u.class_code||'DOCS',intakeMode:u.class_code?'linked':'document',assignmentStatus:'open',
+    if(!u.course_id && (u.class_code||(input.classCode && input.classCode!=='DOCS'))) {
+      if(u.class_code && input.classCode && u.class_code!==input.classCode)
+        error('CLASS_MISMATCH','Lớp đã chọn chưa khớp bản Docs này.');
+      const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code||input.classCode});
+      return {...c.template,classCode:c.scope.class_code,intakeMode:'unmatched',assignmentStatus:c.template.assignmentStatus||'open',
+        students:c.selectionStudents,selectedStudentRef:u.student_ref||''};
+    }
+    if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
+    return {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
       students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}]};
   }
   async function start(input) {
-    const {u}=await ensure(input);
+    let {u}=await ensure(input);
+    if(!u.course_id && (u.class_code||(input.classCode && input.classCode!=='DOCS'))) {
+      if(u.class_code && input.classCode && u.class_code!==input.classCode) error('CLASS_MISMATCH','Lớp đã chọn chưa khớp bản Docs này.');
+      const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code||input.classCode});
+      const member=c.selectionStudents?.find(s=>s.student_ref===input.studentRef);
+      if(!member) error('STUDENT_NOT_ACTIVE','Chọn đúng tên trong danh sách đang học của lớp.');
+      u=await withTransaction(pool,async db=>{
+        // Khóa cùng bài với thao tác lưu link để hai tab không đổi chủ bài đang làm.
+        const current=(await db.query(`SELECT u.*,p.identity_ref,p.class_id,p.class_code,p.student_ref,p.course_id
+          FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id
+          WHERE u.id=$1 FOR UPDATE OF u,p`,[u.id])).rows[0];
+        if(current.course_id) {
+          if(current.student_ref!==input.studentRef || current.class_code!==c.scope.class_code)
+            error('DOCUMENT_PROFILE_MISMATCH','Chủ bài đã được xác nhận; hãy mở lại đúng tên.');
+          return current;
+        }
+        const changed=current.student_ref!==member.student_ref || current.class_code!==c.scope.class_code;
+        const hasProgress=(await db.query(`SELECT 1 FROM speaking_independent.link WHERE work_unit_id=$1
+          UNION ALL SELECT 1 FROM speaking_independent.receipt WHERE work_unit_id=$1 LIMIT 1`,[u.id])).rows.length;
+        if(changed && (hasProgress || current.status==='submitted'))
+          error('DOCUMENT_IDENTITY_LOCKED','Bản Docs đã có bài làm. Nhờ giảng viên kiểm tra nếu bạn đã chọn nhầm tên.');
+        await db.query(`UPDATE speaking_independent.profile SET class_id=$2,class_code=$3,student_ref=$4,student_name=$5 WHERE id=$1`,
+          [u.profile_id,c.scope.class_id,c.scope.class_code,member.student_ref,member.name]);
+        if(changed) await db.query(`INSERT INTO speaking_independent.event(work_unit_id,kind,details)
+          VALUES($1,'identity_selected',$2)`,[u.id,JSON.stringify({classCode:c.scope.class_code,studentRef:member.student_ref})]);
+        return {...current,class_code:c.scope.class_code,student_ref:member.student_ref};
+      });
+    }
+    if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
     if(![u.identity_ref,u.student_ref].includes(input.studentRef)) error('DOCUMENT_PROFILE_MISMATCH','Phiên chưa khớp hồ sơ của bản Docs.');
     return {accessToken:mint(u),studentRef:input.studentRef,classCode:u.class_code||'DOCS',documentId:u.document_id,workUnitId:u.id};
   }
@@ -134,7 +170,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     const c=await source.context({assignmentCode:b.assignment_code,classCode:b.class_code,studentRef:b.student_ref});
     return withTransaction(pool,async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`member:${b.class_id}:${b.student_ref}`]);
-      const units=(await db.query(`SELECT u.*,p.identity_ref,p.kind AS profile_kind,p.course_id AS profile_course
+      const units=(await db.query(`SELECT u.*,p.identity_ref,p.kind AS profile_kind,p.course_id AS profile_course,p.class_id,p.student_ref
         FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id
         WHERE u.assignment_code=$1 AND ((p.class_id=$2 AND p.student_ref=$3) OR u.document_id=$4) FOR UPDATE OF u,p`,
       [b.assignment_code,b.class_id,b.student_ref,input.documentId])).rows;
@@ -144,6 +180,10 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
         return {documentId:input.documentId,verified:true,status:'review',reason:'EXISTING_PROGRESS_CONFLICT'};
       }
       let u=unique[0];
+      if(u?.profile_kind==='document' && u.student_ref && (u.student_ref!==b.student_ref || String(u.class_id)!==String(b.class_id))) {
+        await db.query("UPDATE speaking_independent.source_binding SET status='review' WHERE document_id=$1",[input.documentId]);
+        return {documentId:input.documentId,verified:true,status:'review',reason:'SELECTED_IDENTITY_CONFLICT'};
+      }
       // Chưa làm bài: chỉ lưu nguồn. Khi mở lần đầu, bản Docs tự tạo hồ sơ rồi gắn lại.
       if(u) {
         await db.query('SAVEPOINT bind_source');
