@@ -1,5 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import crypto from "node:crypto";
+import { mountDesignDemo } from "./design-demo.js";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
@@ -7,6 +8,8 @@ import { z } from "zod";
 import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
+import { registerTermTestPlanning } from './term-test-planning.js';
+import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
@@ -303,7 +306,8 @@ function addCors(config) {
 export function createApp({
   config, pool, verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
-  termTestWritingGradingService = null, termTestAssetService = null, logger = console
+  termTestWritingGradingService = null, termTestAssetService = null, logger = console,
+  resultStreamOptions = {}
 }) {
   const app = express();
   
@@ -1111,6 +1115,9 @@ export function createApp({
     });
   }));
 
+  // Giữ dàn ý riêng từng Task; dùng giới hạn nháp và kho K67 như bài Writing chính.
+  registerTermTestPlanning(app, { pool, limiter: testDraftLimiter });
+
   app.post('/api/term-tests/writing', testDraftLimiter, asyncRoute(async (req, res) => {
     const parsed = writingSubmissionSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1167,6 +1174,8 @@ export function createApp({
       }
     });
   }));
+
+  registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = resultRequestSchema.safeParse(req.body);
@@ -1227,6 +1236,7 @@ export function createApp({
 
   const auth = createAuthService({ config, pool, verifyGoogleToken });
   const authenticate = auth.authenticate;
+  mountDesignDemo(app, { pool, auth, requireContext, limiter: testReadLimiter, assets: termTestAssetService });
   const authLoginLimiter = rateLimit({
     windowMs: 10 * 60_000,
     limit: 20,
