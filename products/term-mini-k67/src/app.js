@@ -1,6 +1,7 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import crypto from "node:crypto";
 import { mountDesignDemo } from "./design-demo.js";
+import { createDemoGoogleAuth } from "./design-demo-auth.js";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
@@ -1236,7 +1237,7 @@ export function createApp({
 
   const auth = createAuthService({ config, pool, verifyGoogleToken });
   const authenticate = auth.authenticate;
-  mountDesignDemo(app, { pool, auth, requireContext, limiter: testReadLimiter, assets: termTestAssetService });
+  mountDesignDemo(app, { pool, auth: createDemoGoogleAuth({ config, verifyGoogleToken }), requireContext, limiter: testReadLimiter, assets: termTestAssetService });
   const authLoginLimiter = rateLimit({
     windowMs: 10 * 60_000,
     limit: 20,

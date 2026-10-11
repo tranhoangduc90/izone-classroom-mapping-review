@@ -10,7 +10,11 @@ const gradeSchema = z.object({ definitionVersion: z.literal(1), listening: answe
 
 export function mountDesignDemo(app, { pool, auth, requireContext, limiter, assets }) {
   const base = '/api/term-tests/teacher/design-demo';
-  app.use(base, (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); next(); }, limiter, auth.authenticate, requireContext);
+  app.use(base, (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); next(); }, limiter);
+  app.post(base + '/session', auth.login);
+  app.get(base + '/session', auth.authenticate, (req, res) => res.json({ ok: true, reviewer: req.reviewer }));
+  app.delete(base + '/session', auth.authenticate, auth.logout);
+  app.use(base, auth.authenticate, requireContext);
   const route = (path, handler, method = 'get') => app[method](base + path, async (req, res, next) => {
     try {
       const parsed = querySchema.safeParse(req.query);

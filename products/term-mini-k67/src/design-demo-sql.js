@@ -1,11 +1,12 @@
-// Đọc lớp được phân quyền, đề và lần nộp trong cùng câu SQL; không tạo phiên thi.
-import { teacherCanReadClass } from './sql.js';
+// Demo mở cho mọi Google đã xác minh, cố định IC2200/Term Test 2; không tạo phiên thi.
 
 export const demoSourceSql = `WITH target AS (
   SELECT erp_course_class_id FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = $1
 ), permitted AS (
-  SELECT * FROM target WHERE ${teacherCanReadClass('$3', '$4', 'target.erp_course_class_id')}
+  SELECT * FROM target WHERE $1 = 'IC2200' AND $2 = 'term-test-2' AND length($3::text) > 0
+    AND $4::jsonb->>'source' = 'demo_google'
+    AND length($4::jsonb->>'googleSubject') > 0
 ), definition AS (
   SELECT slug AS test_slug, title AS test_title, version AS definition_version,
     listening_definition, reading_definition, listening_band_adjustment

@@ -6,13 +6,13 @@ const def={questions:[{number:1,type:'gapfill',accepted:['colour']}]};
 function fixture(changes={}){
  const row={class_count:1,authorized_class_count:1,test_slug:'term-test-2',test_title:'Synthetic',definition_version:1,listening_definition:def,reading_definition:def,listening_band_adjustment:0,attempts:[],snapshot:null,...changes};
  const queries=[];const app=express();app.use(express.json());
- mountDesignDemo(app,{pool:{query:async(sql,args)=>{queries.push({sql,args});return {rows:[row]};}},auth:{authenticate:(req,res,next)=>{if(req.get('authorization')!=='fixture')return res.status(401).json({ok:false});req.reviewer={email:'fixture@example.test'};next();},readAuthorization:()=>({source:'session',tokenHash:'test-only'})},requireContext:(_req,_res,next)=>next(),limiter:(_req,_res,next)=>next(),assets:{getContent:async()=>({baseTestSlug:'term-test-2'}),getTiming:()=>({}),streamDemoAudio:async(_slug,_req,res)=>res.type('audio/mpeg').send('synthetic')}});
+ mountDesignDemo(app,{pool:{query:async(sql,args)=>{queries.push({sql,args});return {rows:[row]};}},auth:{login:(_req,res)=>res.json({ok:true}),logout:(_req,res)=>res.json({ok:true}),authenticate:(req,res,next)=>{if(req.get('authorization')!=='fixture')return res.status(401).json({ok:false});req.reviewer={email:'fixture@example.test'};next();},readAuthorization:()=>({source:'demo_google',googleSubject:'test-only'})},requireContext:(_req,_res,next)=>next(),limiter:(_req,_res,next)=>next(),assets:{getContent:async()=>({baseTestSlug:'term-test-2'}),getTiming:()=>({}),streamDemoAudio:async(_slug,_req,res)=>res.type('audio/mpeg').send('synthetic')}});
  return {api:request(app),queries,row};
 }
 test('demo: tất cả dữ liệu và audio từ chối khi chưa đăng nhập',async()=>{
  const f=fixture();for(const p of ['/attempts','/content','/snapshot','/audio']){const r=await f.api.get(prefix+p+scope);assert.equal(r.status,401);assert.match(r.headers['cache-control'],/no-store/);}assert.equal(f.queries.length,0);
 });
-test('demo: lớp ngoài quyền không đọc nội dung/điểm, scope khác bị từ chối',async()=>{
+test('demo: chứng cứ đăng nhập không hợp lệ hoặc scope khác bị từ chối',async()=>{
  const f=fixture({authorized_class_count:0});for(const p of ['/attempts','/content','/snapshot','/audio'])assert.equal((await f.api.get(prefix+p+scope).set('authorization','fixture')).status,403);
  assert.equal((await f.api.get(prefix+'/content?class=OTHER&test=term-test-2').set('authorization','fixture')).status,400);
 });
