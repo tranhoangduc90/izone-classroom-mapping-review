@@ -276,3 +276,32 @@ test('registry giữ lịch sử đã đóng khi đối soát đúng bài hiện
     assert.equal((await f.pool.query("SELECT assignment_code FROM speaking_homework.assignment WHERE course_work_id='099'")).rows[0].assignment_code,code+'-deleted-20260928');
   } finally {await f.db.close();}
 });
+test('Cầu nối bài cũ: SQL thật giữ tiến độ, đúng Docs và quyền người học',async()=>{
+  const {createSpeakingLegacyBridge}=await import('../src/speaking-legacy-bridge.js');
+  const {createIndependentSource}=await import('../src/speaking-independent-source.js');
+  const f=await fixture();try{
+    // Mẫu fixture có một phần; đồng bộ danh mục của fixture để kiểm hành vi bridge.
+    await f.pool.query(`UPDATE speaking_homework.assignment_template SET parts=$2 WHERE assignment_code=$1`,
+      [code,JSON.stringify([{part_key:'clarify_1',min_questions:3}])]);
+    const source=createIndependentSource({pool:f.pool});
+    const bridge=createSpeakingLegacyBridge({pool:f.pool,source,catalog:f.catalog,service:f.service});
+    const input={assignmentCode:code,classCode:'IC2304',studentRef:ref,identityConfirmed:true};
+    const app=express();app.use(express.json());app.use(createSpeakingHomeworkRouter({pool:f.pool,workerSecret:'fixture-worker',accessSecret:'fixture-secret-only-32-characters-long',authenticate:(_q,_s,n)=>n()}));
+    const endpoint='/internal/independent/legacy-session';
+    assert.equal((await request(app).post(endpoint).send(input)).status,401);
+    const reply=await request(app).post(endpoint).set('x-speaking-worker-secret','fixture-worker').send(input);
+    assert.equal(reply.status,200);assert.equal(reply.body.session.intakeMode,'legacy');
+    const s=await bridge.start(input);assert.equal(s.documentId,'document-a');assert.equal(s.intakeMode,'legacy');
+    await f.service.requestCheck({accessToken:s.accessToken,studentRef:ref,part:'clarify_1',rawUrl:'https://chatgpt.com/share/'+('1'.repeat(32))});
+    await f.pool.query("UPDATE speaking_homework.assignment_document SET cta_verified_at=NULL WHERE document_id='document-a'");
+    await assert.rejects(bridge.start(input),e=>e.code==='ASSIGNMENT_NOT_FOUND');
+    await f.pool.query("UPDATE speaking_homework.assignment_document SET cta_verified_at=now() WHERE document_id='document-a'");
+    const resumed=await bridge.start(input);assert.equal(resumed.documentId,'document-a');
+    const opened=await f.service.open({accessToken:resumed.accessToken,studentRef:ref});
+    assert.equal(opened.links.length,1);assert.equal(opened.links[0].check_status,'pending');
+    await assert.rejects(bridge.start({...input,studentRef:dropped}),e=>e.code==='STUDENT_NOT_ACTIVE');
+    await assert.rejects(bridge.start({...input,studentRef:other}),e=>e.code==='STUDENT_NOT_ACTIVE');
+    await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_going' WHERE erp_student_contact_id=3");
+    assert.equal(await bridge.start({...input,studentRef:dropped}),null);
+  }finally{await f.db.close();}
+});

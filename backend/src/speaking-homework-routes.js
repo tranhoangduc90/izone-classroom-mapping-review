@@ -7,6 +7,8 @@ import { createSpeakingDocsJobs } from './speaking-docs-jobs.js';
 import { createSpeakingAlerts } from './speaking-alerts.js';
 import { createSpeakingClassroomCopies } from './speaking-classroom-copies.js';
 import { createSpeakingCatalog } from './speaking-catalog.js';
+import { createSpeakingLegacyBridge } from './speaking-legacy-bridge.js';
+import { createIndependentSource } from './speaking-independent-source.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -253,8 +255,31 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   }));
 
   router.use('/internal', workerAuth(workerSecret));
+  const independentSource = createIndependentSource({ pool,workerSecret,
+    independentBase:process.env.SPEAKING_INDEPENDENT_API_URL||'http://speaking67-independent-api:4338/api/speaking-homework-independent' });
+  router.post('/internal/independent/context', asyncRoute(async (req, res) => {
+    const input = parseOrReply(directOpen.partial({ classCode:true }).extend({
+      studentRef:z.string().uuid().optional() }).strict(),req.body,res);
+    if (input) res.json({ok:true,...await independentSource.context(input)});
+  }));
+  const legacyBridge=createSpeakingLegacyBridge({pool,source:independentSource,catalog,service});
+  router.post('/internal/independent/legacy-open',asyncRoute(async(req,res)=>{
+    const input=parseOrReply(assignmentOpen,req.body,res);
+    if(input) res.json({ok:true,assignment:await legacyBridge.open(input)});
+  }));
+  router.post('/internal/independent/legacy-session',asyncRoute(async(req,res)=>{
+    const input=parseOrReply(selectedSession,req.body,res);
+    if(input) res.json({ok:true,session:await legacyBridge.start(input)});
+  }));
+  router.get('/internal/independent/teacher-access/:classId', authenticate, asyncRoute(async (req,res) => {
+    if (!/^(\d+|unlinked)$/.test(req.params.classId)) return res.status(400).json({ok:false,error:'INVALID_CLASS'});
+    res.json({ok:true,allowed:await independentSource.teacher({classId:req.params.classId,reviewer:req.reviewer})});
+  }));
+  router.use(async (req,res,next)=>{try{await independentSource.forward(req,res,next);}catch(e){next(e);}});
   router.get('/internal/assignments/scopes', asyncRoute(async (_req, res) => {
-    res.json({ ok: true, assignments: await catalog.assignmentScopes() });
+    const old=await catalog.assignmentScopes();
+    const current=await independentSource.scopes();
+    res.json({ ok: true, assignments: [...old.filter(a=>!current.some(c=>c.course_id===a.course_id&&c.course_work_id===a.course_work_id)),...current] });
   }));
   router.post('/internal/classes/sync', asyncRoute(async (req, res) => {
     const input = parseOrReply(scopeSnapshot, req.body, res);
