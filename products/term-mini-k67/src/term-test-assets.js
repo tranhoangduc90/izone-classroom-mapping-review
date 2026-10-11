@@ -137,7 +137,32 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     });
   }
 
-  return { supports, getContent, getPreview, getTiming, getSessionAudioKey, streamEncryptedAudio };
+
+  // Audio đề thật chỉ được route demo có đăng nhập/quyền lớp gọi; hỗ trợ tua bằng Range.
+  async function streamDemoAudio(testSlug, request, response) {
+    const sourcePath = resolveAsset(assetDir, getDefinition(testSlug).audio);
+    const { size } = await fs.promises.stat(sourcePath);
+    const range = request.headers.range;
+    let start = 0, end = size - 1;
+    if (range) {
+      const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+      if (!match || Number(match[1]) >= size || (match[2] && Number(match[2]) < Number(match[1]))) {
+        response.set('Content-Range', `bytes */${size}`);
+        response.status(416).end(); return;
+      }
+      start = Number(match[1]); end = match[2] ? Math.min(Number(match[2]), size - 1) : end;
+      response.status(206).set('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+    response.set({ 'Content-Type':'audio/mpeg', 'Content-Length':String(end-start+1),
+      'Accept-Ranges':'bytes', 'Cache-Control':'no-store, private' });
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(sourcePath, { start, end });
+      stream.once('error', reject); response.once('close', () => { stream.destroy(); resolve(); });
+      response.once('finish', resolve); stream.pipe(response);
+    });
+  }
+
+  return { supports, getContent, getPreview, getTiming, getSessionAudioKey, streamEncryptedAudio, streamDemoAudio };
 }
 
 export const termTestAudioEnvelope = Object.freeze({

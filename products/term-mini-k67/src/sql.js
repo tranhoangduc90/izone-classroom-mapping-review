@@ -1,7 +1,7 @@
 // SQL Term/Mini được ghim từ bản chạy; mapping ở đây phải là ngữ cảnh trong DB K67 riêng.
 // Quyền và dữ liệu được đọc trong cùng snapshot SQL. Không dùng cờ admin đã giữ từ request cũ.
 // Các đối số dưới đây là vị trí tham số/tên cột cố định trong source, không nhận chuỗi từ người dùng.
-function teacherCanReadClass(email, authorization, classId) {
+export function teacherCanReadClass(email, authorization, classId) {
   return `(
     (${authorization}::jsonb->>'source' = 'legacy' AND ${email} = 'legacy@mapping.local')
     OR EXISTS (
