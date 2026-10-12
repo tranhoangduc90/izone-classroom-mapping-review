@@ -1,5 +1,5 @@
 // Demo riêng trong sản phẩm K67: chỉ đọc đề/bài chấm và chấm thử L/R trong bộ nhớ.
-// Mọi route đều kiểm phiên và quyền lớp; không nhận token bài thi và không ghi bảng assessment.
+// Demo mở trực tiếp, cố định lớp/bài; không nhận token bài thi và không ghi bảng assessment.
 import { z } from 'zod';
 import { demoSourceSql } from './design-demo-sql.js';
 import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests.js';
@@ -8,19 +8,16 @@ const querySchema = z.object({ class: z.literal('IC2200'), test: z.literal('term
 const answers = z.record(z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/), z.string().max(120));
 const gradeSchema = z.object({ definitionVersion: z.literal(1), listening: answers, reading: answers });
 
-export function mountDesignDemo(app, { pool, auth, requireContext, limiter, assets }) {
+export function mountDesignDemo(app, { pool, requireContext, limiter, assets }) {
   const base = '/api/term-tests/teacher/design-demo';
   app.use(base, (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); next(); }, limiter);
-  app.post(base + '/session', auth.login);
-  app.get(base + '/session', auth.authenticate, (req, res) => res.json({ ok: true, reviewer: req.reviewer }));
-  app.delete(base + '/session', auth.authenticate, auth.logout);
-  app.use(base, auth.authenticate, requireContext);
+  app.use(base, requireContext);
   const route = (path, handler, method = 'get') => app[method](base + path, async (req, res, next) => {
     try {
       const parsed = querySchema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ ok: false, error: 'INVALID_DEMO_SCOPE' });
       const q = parsed.data;
-      const { rows } = await pool.query(demoSourceSql, [q.class, q.test, req.reviewer.email, auth.readAuthorization(req), q.attempt || null]);
+      const { rows } = await pool.query(demoSourceSql, [q.class, q.test, q.attempt || null]);
       const row = rows[0];
       if (!row || row.class_count !== 1) return res.status(404).json({ ok: false, error: 'DEMO_NOT_FOUND' });
       if (row.authorized_class_count !== 1) return res.status(403).json({ ok: false, error: 'ACCESS_DENIED' });
