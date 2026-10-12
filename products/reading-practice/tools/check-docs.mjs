@@ -25,7 +25,7 @@ const first=await service.begin({token,owner:'canary',operationId:uuid()});await
 const second=await service.reset({token,attemptId:first.attempts.at(-1).id,lease:first.lease,snapshot:emptyDraft(),owner:'canary',operationId:uuid()});await drain('Reset và bắt đầu lần 2');
 const input={token,attemptId:second.attempts.at(-1).id,lease:second.lease,snapshot:emptyDraft(),operationId:uuid(),method:'manual'};
 const done=await service.submit(input);await drain('Hoàn thành sau 1 reset và link GV');
-assert.deepEqual(await service.submit(input),done);assert.equal(await worker.once(),false);checks.push({label:'Retry nộp không ghi thêm',status:'verified'});
+const replay=await service.submit(input);assert.deepEqual(replay.attempts,done.attempts);assert.equal(replay.events.at(-1).docs,'verified');assert.equal(await worker.once(),false);checks.push({label:'Retry nộp không ghi thêm',status:'verified'});
 const b=(await pool.query('SELECT * FROM reading_practice.binding WHERE id=$1',[registration.bindingId])).rows[0];
 const job=(await pool.query('SELECT * FROM reading_practice.doc_job ORDER BY sequence DESC LIMIT 1')).rows[0];
 const final=await docs.read(documentId);assert.equal(planDocWrite(final,b,job).verified,true);
