@@ -41,7 +41,14 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
  app.post('/api/teacher/login',wrap(async(req,res)=>{
   const {credential}=z.object({credential:z.string().min(10).max(10000)}).strict().parse(req.body);
-  const identity=await verifyGoogle(credential);
+  let identity;
+  try{identity=await verifyGoogle(credential);}catch(error){
+   // Thư viện Google có thể chứa token trong lỗi: chỉ nhận diện lỗi xác minh, không trả nội dung gốc.
+   // Lỗi lấy chứng chỉ/kết nối vẫn đi qua xử lý lỗi hệ thống, không bị gọi nhầm là tài khoản sai.
+   const invalidToken=/^(Wrong recipient,|Wrong number of segments in token:|Can't parse token (?:envelope|payload):|No pem found for envelope:|Invalid token signature:|No (?:issue|expiration) time in token:|(?:iat|exp) field using invalid format|Expiration time too far in future:|Token used too (?:early|late),|Invalid issuer,)/.test(error?.message||'');
+   if(!invalidToken)throw error;
+   throw new ReadingError('GOOGLE_IDENTITY_INVALID','Phiên đăng nhập Google không hợp lệ hoặc đã hết hạn. Hãy đăng nhập lại.',401);
+  }
   if(!identity?.email_verified||!identity.email||!identity.sub)throw new ReadingError('GOOGLE_IDENTITY_INVALID','Google chưa xác minh tài khoản.',401);
   const value=secret();await pool.query('INSERT INTO reading_practice.teacher_session(token_hash,email,google_subject,expires_at) VALUES($1,$2,$3,$4)',[hash(value),identity.email.toLowerCase(),identity.sub,new Date(Date.now()+3600000).toISOString()]);
   const secure=req.secure||req.headers['x-forwarded-proto']==='https';

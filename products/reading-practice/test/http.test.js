@@ -25,3 +25,19 @@ test('HTTP: chỉ chủ Docs mở bài, không rò key trước nộp, teacher k
  f.setTeacher(false);assert.equal((await request(app).get(`/api/teacher/result/${submissionId}`).set('Authorization',`Bearer ${teacher.body.token}`)).status,403);
  assert.equal((await request(app).post('/api/begin').set('Authorization',`Bearer ${teacher.body.token}`).send({operationId:uuid(),owner:'browser'})).status,401);
 });
+
+test('HTTP: token Google sai đối tượng hoặc chữ ký bị từ chối, lỗi kết nối không giả thành đăng nhập sai',async()=>{
+ let writes=0;
+ const app=createApp({pool:{query:async()=>{writes++;}},service:{},origins:[],googleClientId:'fixture',adminKey:secret(),verifyGoogle:async credential=>{
+  if(credential==='wrong-audience-fixture')throw new Error('Wrong recipient, payload audience != requiredAudience');
+  if(credential==='invalid-signature-fixture')throw new Error('Invalid token signature: private-token-must-not-be-returned');
+  throw new Error('Google certificate endpoint unavailable');
+ }});
+ for(const credential of ['wrong-audience-fixture','invalid-signature-fixture']){
+  const response=await request(app).post('/api/teacher/login').send({credential});
+  assert.equal(response.status,401);assert.equal(response.body.error.code,'GOOGLE_IDENTITY_INVALID');
+  assert.equal(JSON.stringify(response.body).includes('private-token'),false);
+ }
+ assert.equal((await request(app).post('/api/teacher/login').send({credential:'network-unavailable-fixture'})).status,500);
+ assert.equal(writes,0);
+});
