@@ -6,7 +6,7 @@ import {CODE,secret,uuid,emptyDraft} from '../src/domain.js';
 
 // Chỉ dùng database thử Reading riêng: nhận URL qua môi trường, kiểm 30 phiên và tranh chấp SQL.
 // Không gọi Google, không tạo dữ liệu học viên, không chạy trong database bài làm thật.
-const pool=new pg.Pool({connectionString:process.env.READING_NATIVE_CHECK_DATABASE_URL,max:30});
+const pool=new pg.Pool({connectionString:process.env.READING_NATIVE_CHECK_DATABASE_URL,max:8});
 try{
  const db=(await pool.query('SELECT current_database() AS db')).rows[0].db;
  if(!/^reading_practice_canary_[a-z0-9_]+$/.test(db))throw new Error('Native check requires a separate canary database');
@@ -17,7 +17,7 @@ try{
  const context={student:async(c,id)=>c==='1124'?members.find(x=>x.studentRef===id):undefined,roster:async()=>members,teacher:async()=>false};
  const service=createReadingService({pool,context,clock:()=>clock,pageBase:'https://example.test/reading-practice/',verifyBinding:async i=>({fixtureOnly:true,studentRef:i.studentRef,documentId:i.documentId})});
  const key=Object.fromEntries(Array.from({length:13},(_,i)=>[i+14,[i<7?'i':i<10?'A':'word']]));
- await service.seedContent({code:CODE,version:'native-fixture-v1',totalMs:1200000,key,explanations:{entries:{}},definition:{passage:Object.fromEntries('ABCDEFG'.split('').map(n=>[n,'Fixture paragraph'])),headings:Array.from({length:8},(_,i)=>[String(i),'Fixture heading']),mcq:[21,22,23].map(n=>({n,text:'Fixture question',options:['A','B','C','D']})),summary:[24,25,26].map(question=>({question}))}});
+ await service.seedContent({code:CODE,version:'native-fixture-v1',totalMs:1200000,key,explanations:{entries:Object.fromEntries(Object.keys(key).map(n=>[n,{number:+n}]))},definition:{passage:Object.fromEntries('ABCDEFG'.split('').map(n=>[n,'Fixture paragraph'])),headings:Array.from({length:8},(_,i)=>[String(i),'Fixture heading']),mcq:[21,22,23].map(n=>({n,text:'Fixture question',options:['A','B','C','D']})),summary:[24,25,26].map(question=>({question}))}});
  const users=[];
  for(const member of members){
   const entryToken=secret();await service.register({classId:'1124',classCode:'NATIVE CANARY',studentRef:member.studentRef,documentId:'native_'+uuid().replaceAll('-',''),tabId:'t.0',contentVersion:'native-fixture-v1',entryToken});
