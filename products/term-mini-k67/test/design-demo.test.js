@@ -17,7 +17,7 @@ test('demo: mở đề, bài chấm và audio không cần cookie/đăng nhập'
  assert.equal(f.queries.length,4);assert.deepEqual(f.queries[0].args,['IC2200','term-test-2',null]);
  assert.equal((await f.api.get(prefix+'/session')).status,404);
 });
-test('demo: chỉ scope IC2200/Term Test 2 được đọc',async()=>{
+test('demo: chỉ lớp IC2200 và các bài K67 được đọc',async()=>{
  const f=fixture({authorized_class_count:0});for(const p of ['/attempts','/content','/snapshot','/audio'])assert.equal((await f.api.get(prefix+p+scope)).status,403);
  assert.equal((await f.api.get(prefix+'/content?class=OTHER&test=term-test-2')).status,400);
 });
@@ -34,4 +34,17 @@ test('demo: chấm L/R dùng scorer thật, phân biệt bỏ trống; không mu
 });
 test('demo: đáp án/phiên bản không hợp lệ không chấm',async()=>{
  const f=fixture();for(const body of [{definitionVersion:2,listening:{},reading:{}},{definitionVersion:1,listening:{41:'x'},reading:{}}])assert.equal((await f.api.post(prefix+'/grade'+scope).send(body)).status,400);
+});
+
+test('demo: Term1 giữ chỉ Task2, Mini không cần Writing; phiên bản đề không bị ghim 1',async()=>{
+ for(const [slug,tasks]of [['term-test-1',[{taskNumber:2,taskScore:0}]],['mini-test-lesson-5',[]]]){
+  const f=fixture({test_slug:slug,definition_version:3,snapshot:{definitionVersion:3,grading:{ready:true,tasks}}});
+  const q='?class=IC2200&test='+slug;
+  const r=await f.api.get(prefix+'/snapshot'+q);assert.equal(r.status,200);assert.deepEqual(r.body.snapshot.grading.tasks,tasks);
+  assert.deepEqual(f.queries[0].args,['IC2200',slug,null]);
+  assert.equal((await f.api.post(prefix+'/grade'+q).send({definitionVersion:3,listening:{},reading:{}})).status,200);
+ }
+ const f=fixture({snapshot:{definitionVersion:1,grading:{ready:true}}});
+ assert.equal((await f.api.get(prefix+'/snapshot'+scope)).status,409);
+ assert.equal((await fixture().api.get(prefix+'/content?class=IC2200&test=unrelated')).status,400);
 });
