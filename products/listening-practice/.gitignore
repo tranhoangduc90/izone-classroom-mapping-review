@@ -1,0 +1,9 @@
+node_modules/
+.env
+.owner.env
+.secrets/
+.env.*
+!.env.example
+private/
+data/
+test-results/
