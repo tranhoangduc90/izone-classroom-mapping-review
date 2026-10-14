@@ -23,7 +23,8 @@ async function transaction(pool, run) {
 }
 function problem(code, message, status=409) { return Object.assign(new Error(message), { code, status }); }
 function serialize(row, session=false) {
-  return { ok:true, attemptMode:row.attempt_mode, policy:{ timed:false, autoSubmit:false },
+  return { ok:true, examMode:row.exam_mode||'lis_first',examDelivery:'answer_sheet',
+    readingSubmitted:Boolean(row.reading_submitted_at||row.completed_at),attemptMode:row.attempt_mode, policy:{ timed:false, autoSubmit:false },
     attemptToken: session ? row.attempt_id : row.id, examSessionToken:session ? row.id : row.exam_session_id,
     generation:Number(row.generation), studentName:row.student_name_snapshot, className:row.class_name_snapshot,
     listeningSubmitted:session ? Boolean(row.listening_submitted_at) : true, completed:Boolean(row.completed_at),

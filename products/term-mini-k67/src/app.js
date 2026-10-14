@@ -9,6 +9,7 @@ import { z } from "zod";
 import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
+import { mountExamOrder } from './exam-order.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -446,6 +447,9 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
+  mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readLimiter:testReadLimiter,
+    writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,logEvent:logTermTestEvent,
+    syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
   mountMiniAnswerSheet(app, { pool, requireContext, readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
 
@@ -503,6 +507,8 @@ export function createApp({
       attemptToken: attempt.attempt_token,
       examSessionToken: attempt.exam_session_token || null,
       studentName: attempt.student_name,
+      examMode: 'lis_first',
+      readingSubmitted: Boolean(attempt.completed_at),
       listeningSubmitted: true,
       readingStartedAt: attempt.reading_started_at || null,
       readingDeadlineAt: attempt.reading_deadline_at || null,
@@ -670,6 +676,8 @@ export function createApp({
           studentName: attempt.student_name,
           listeningStartedAt: attempt.listening_started_at || null,
           listeningDeadlineAt: attempt.listening_deadline_at || null,
+          examMode: 'lis_first',
+          readingSubmitted: Boolean(attempt.completed_at),
           listeningSubmitted: true,
           attemptToken: attempt.attempt_token,
           readingStartedAt: attempt.reading_started_at || null,
@@ -708,6 +716,7 @@ export function createApp({
       listeningDeadlineAt: session.listening_deadline_at || null,
       listeningDraft: session.listening_draft || {},
       listeningDraftRevision: Number(session.listening_draft_revision) || 0,
+      examMode: 'lis_first',
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
       serverNow: session.server_now || null,
@@ -786,6 +795,8 @@ export function createApp({
       studentName: attempt.student_name,
       listeningStartedAt: attempt.listening_started_at || null,
       listeningDeadlineAt: attempt.listening_deadline_at || null,
+      examMode: 'lis_first',
+      readingSubmitted: Boolean(attempt.completed_at),
       listeningSubmitted: true,
       readingStartedAt: attempt.reading_started_at || null,
       readingDeadlineAt: attempt.reading_deadline_at || null,
@@ -827,6 +838,7 @@ export function createApp({
       listeningStartedAt: session.listening_started_at,
       listeningDeadlineAt: session.listening_deadline_at,
       serverNow: session.server_now,
+      examMode: 'lis_first',
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
       audioKey: audioKey.toString('base64'),

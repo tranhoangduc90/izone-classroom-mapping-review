@@ -6,6 +6,7 @@ const secret = z.string().min(32);
 const positive = (min, max, fallback) => z.coerce.number().int().min(min).max(max).default(fallback);
 const schema = z.object({
   K67_ENV: z.enum(['production', 'test', 'development']).default('production'),
+  K67_READ_FIRST_NEW_ENABLED: z.enum(['true','false']).default('false'),
   K67_PORT: positive(1, 65535, 8796),
   K67_DATABASE_URL: z.url(),
   K67_DB_POOL_MAX: positive(1, 10, 5),
@@ -64,6 +65,7 @@ export function loadConfig(env = process.env) {
   }
   return Object.freeze({
     nodeEnv: p.K67_ENV, port: p.K67_PORT,
+    readFirstNewEnabled: p.K67_READ_FIRST_NEW_ENABLED === 'true',
     databaseUrl: p.K67_DATABASE_URL, databaseName, dbPoolMax: p.K67_DB_POOL_MAX,
     authMode: p.K67_AUTH_MODE, googleClientId: p.K67_GOOGLE_CLIENT_ID,
     legacyReviewToken: p.K67_LEGACY_REVIEW_TOKEN,
