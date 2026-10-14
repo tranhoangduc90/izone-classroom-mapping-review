@@ -1,14 +1,23 @@
 import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {createApp} from '../../src/app.js';
+import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture() {
+export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+  if(process.env.K67_ORDER_NATIVE_URL) {
+    const {db,pool}=await createNativeOrderFixture({examOrder});
+    return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
+      config:{...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
+  }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
   const schema=await readFile(new URL('../../db/003-assessment.sql',import.meta.url),'utf8');
   for(const name of ['test_definition','term_test_attempt','term_test_exam_session','term_test_roster','term_test_temporary_student'])
     await db.exec(schema.match(new RegExp(`CREATE TABLE assessment\\.${name} \\([\\s\\S]*?\\n\\);`))[0]);
+  if(completeSchema)for(const [,sql,name] of schema.matchAll(/(CREATE TABLE assessment\.(\w+) \([\s\S]*?\n\);)/g)) {
+    if(!['test_definition','term_test_attempt','term_test_exam_session','term_test_roster','term_test_temporary_student'].includes(name))await db.exec(sql);
+  }
   for(const [sql] of schema.matchAll(/^CREATE UNIQUE INDEX .*;$/gm))
     if(/ON assessment\.term_test_(attempt|exam_session) /.test(sql))await db.exec(sql);
   await db.exec(`CREATE TABLE mapping.classroom_course_mapping(erp_course_class_id bigint,erp_class_name_snapshot text);
@@ -20,12 +29,14 @@ export async function createMiniFixture() {
       ('11111111-1111-4111-8111-111111111111',1293,900001,'Học viên mô phỏng','approved'),
       ('44444444-4444-4444-8444-444444444444',1293,900002,'Người khác','approved');`);
   await db.exec(await readFile(new URL('../../db/007-mini-answer-sheet.sql',import.meta.url),'utf8'));
+  if(examOrder)await db.exec(await readFile(new URL('../../db/008-exam-order.sql',import.meta.url),'utf8'));
   const section=(count,start)=>({questions:Array.from({length:count},(_,i)=>({number:i+start,type:'Câu thử',accepted:['A']}))});
   await db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
     VALUES('mini-test-lesson-5','Đề mô phỏng',1,$1,$2,true)`,[JSON.stringify(section(20,11)),JSON.stringify(section(13,14))]);
   // Một connection PostgreSQL nhúng: xếp hàng giao dịch để mô phỏng pool an toàn.
   let queue=Promise.resolve();
-  const query=async(sql,args)=>{const r=await db.query(sql,args);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
+  const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
-  return {db,app:createApp({pool,config:{allowedOrigins:new Set(['https://tranhoangduc90.github.io']),trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
+  return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
+    config:{...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
 }
