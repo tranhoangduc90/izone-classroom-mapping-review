@@ -30,6 +30,8 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
       ('44444444-4444-4444-8444-444444444444',1293,900002,'Người khác','approved');`);
   await db.exec(await readFile(new URL('../../db/007-mini-answer-sheet.sql',import.meta.url),'utf8'));
   if(examOrder)await db.exec(await readFile(new URL('../../db/008-exam-order.sql',import.meta.url),'utf8'));
+  await db.exec('ALTER TABLE assessment.term_test_exam_session ADD PRIMARY KEY(id);CREATE ROLE k67_app;');
+  await db.exec(await readFile(new URL('../../db/009-audio-recovery-events.sql',import.meta.url),'utf8'));
   const section=(count,start)=>({questions:Array.from({length:count},(_,i)=>({number:i+start,type:'Câu thử',accepted:['A']}))});
   await db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
     VALUES('mini-test-lesson-5','Đề mô phỏng',1,$1,$2,true)`,[JSON.stringify(section(20,11)),JSON.stringify(section(13,14))]);

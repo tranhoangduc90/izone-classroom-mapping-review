@@ -10,6 +10,7 @@ import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountExamOrder } from './exam-order.js';
+import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -75,7 +76,11 @@ const examSessionPrepareSchema = z.object({
   legacyElapsedSeconds: z.number().int().min(0).max(7200).optional().default(0)
 });
 
-const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid() });
+const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
+  heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
+const audioProgressSchema = z.object({examSessionToken:z.uuid(),heardSeconds:z.number().min(0).max(7200),
+  state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered']),eventId:z.uuid().optional(),
+  generation:z.number().int().nonnegative().optional()});
 
 const attemptResumeSchema = z.object({
   classCode: classCodeSchema,
@@ -829,6 +834,12 @@ export function createApp({
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
     }
     const session = started.rows[0];
+    let audioProgress={listeningResumeAtSeconds:Number(session.listening_audio_checkpoint_seconds)||0,
+      listeningRecoverySeconds:Number(session.listening_recovery_seconds)||0};
+    if(!session.listening_submitted_at&&(parsed.data.audioEventId||parsed.data.heardSeconds!==undefined))audioProgress=await checkpointListeningAudio(pool,{
+      examSessionToken:parsed.data.examSessionToken,slug:slug.data,
+      heardSeconds:parsed.data.heardSeconds??(Number(session.listening_audio_checkpoint_seconds)||0),
+      state:'resume',eventId:parsed.data.audioEventId,durationSeconds:timing.listeningDurationSeconds});
     const content = await termTestAssetService.getContent(slug.data);
     const audioKey = termTestAssetService.getSessionAudioKey(slug.data, parsed.data.examSessionToken);
     return res.json({
@@ -838,6 +849,7 @@ export function createApp({
       listeningStartedAt: session.listening_started_at,
       listeningDeadlineAt: session.listening_deadline_at,
       serverNow: session.server_now,
+      ...audioProgress,
       examMode: 'lis_first',
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
@@ -846,6 +858,18 @@ export function createApp({
       timing,
       content
     });
+  }));
+
+  // Tiến độ có bộ đếm riêng để không chiếm quota lưu đáp án; không phụ thuộc bộ đệm lớp mới.
+  const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
+    keyGenerator:req=>String(req.body?.examSessionToken||'invalid'),message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
+  app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
+    const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
+    if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
+    const data=await checkpointListeningAudio(pool,{...parsed.data,slug:slug.data,durationSeconds:termTestAssetService.getTiming(slug.data).listeningDurationSeconds});
+    if(parsed.data.state!=='playing'||data.grantedRecoverySeconds>0)logTermTestEvent('audio_'+parsed.data.state,slug.data,parsed.data.examSessionToken,
+      {section:'listening',heardSeconds:data.listeningResumeAtSeconds,grantedRecoverySeconds:data.grantedRecoverySeconds,totalRecoverySeconds:data.listeningRecoverySeconds});
+    res.json(data);
   }));
 
   app.post('/api/term-tests/:testSlug/listening/draft', testDraftLimiter, asyncRoute(async (req, res) => {
@@ -1536,6 +1560,7 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     if (error instanceof TermTestWritingGradingError) {
       return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message });
     }
