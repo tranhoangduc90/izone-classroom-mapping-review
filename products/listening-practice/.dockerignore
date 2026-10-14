@@ -1,0 +1,13 @@
+**
+!package.json
+!package-lock.json
+!Dockerfile
+!src/
+!src/**
+!db/
+!db/**
+!tools/
+!tools/bootstrap-database.mjs
+!tools/seed-content.mjs
+!tools/register-copy.mjs
+!tools/operate.mjs

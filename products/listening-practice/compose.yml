@@ -1,0 +1,73 @@
+services:
+  reading-db:
+    image: postgres:16-alpine
+    container_name: izone-listening-practice67-db
+    environment:
+      POSTGRES_DB: listening_practice_db
+      POSTGRES_USER: listening_practice_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/reading_db_owner_password
+    secrets:
+      - reading_db_owner_password
+    volumes:
+      - reading-data:/var/lib/postgresql/data
+    networks: [reading-private]
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U listening_practice_owner -d listening_practice_db"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  listening-owner-source:
+    image: ${LISTENING_IMAGE:?Set the approved Listening image}
+    build: .
+    container_name: izone-listening-owner-source
+    command: ["node", "src/owner-source-server.js"]
+    env_file: .owner.env
+    restart: unless-stopped
+    networks: [reading-private, context-readonly]
+    read_only: true
+    tmpfs: [/tmp:size=16m]
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8819/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  listening-practice:
+    image: ${LISTENING_IMAGE:?Set the approved Listening image}
+    build: .
+    container_name: izone-listening-practice67
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8818:8818"
+    networks:
+      - reading-private
+      - context-readonly
+    volumes:
+      - ./private/audio.mp3:/private/audio.mp3:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 256m
+    cpus: 0.5
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8818/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  reading-private:
+    internal: false
+  context-readonly:
+    external: true
+    name: n8n-net
+volumes:
+  reading-data:
+secrets:
+  reading_db_owner_password:
+    file: .secrets/db-owner-password
