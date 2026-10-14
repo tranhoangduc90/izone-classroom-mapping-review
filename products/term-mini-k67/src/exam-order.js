@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { findStudentForTermTestSql } from './sql.js';
 import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests.js';
+import {recordListeningAudio} from './audio-recovery.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -9,6 +10,7 @@ const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
+  heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional(),
   generation:z.number().int().nonnegative().optional(),orderClientVersion:z.literal(1).optional(),
   revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   draftRevision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
@@ -26,6 +28,7 @@ export function orderState(row) {
     listeningSubmitted,readingSubmitted,completed:Boolean(row.completed_at),completedAt:row.completed_at,
     nextSection:!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'?'result':'writing',
     listeningStartedAt:row.session_started_at||null,listeningDeadlineAt:row.session_deadline_at||null,
+    listeningResumeAtSeconds:Number(row.session_checkpoint_seconds)||0,listeningRecoverySeconds:Number(row.session_recovery_seconds)||0,
     readingStartedAt:row.reading_started_at,readingDeadlineAt:row.reading_deadline_at,
     listeningDraft:row.session_draft||{},listeningDraftRevision:Number(row.session_revision)||0,
     readingDraft:row.reading_draft||{},readingDraftRevision:Number(row.reading_draft_revision)||0,
@@ -34,6 +37,7 @@ export function orderState(row) {
     result:row.combined_result||null,resultAvailable:Boolean(row.completed_at),serverNow:new Date(row.server_now||Date.now()).toISOString()};
 }
 const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
+  s.listening_audio_checkpoint_seconds AS session_checkpoint_seconds,s.listening_recovery_seconds AS session_recovery_seconds,
   s.listening_draft AS session_draft,s.listening_draft_revision AS session_revision,
   s.listening_draft_updated_at,
   s.superseded_at AS session_superseded_at,s.generation AS session_generation,
@@ -232,7 +236,12 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
           updated_at=clock_timestamp() WHERE id=$1`,[r.id,assets.getTiming(slug).readingDurationMinutes,r.server_now]);
         else await db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=coalesce(listening_started_at,$3::timestamptz),
           listening_deadline_at=CASE WHEN attempt_mode='cbt' THEN coalesce(listening_deadline_at,$3::timestamptz+make_interval(secs=>$2::double precision)) ELSE NULL END,
+          listening_audio_checkpoint_at=coalesce(listening_audio_checkpoint_at,$3::timestamptz),
           updated_at=clock_timestamp() WHERE id=$1`,[r.exam_session_id,assets.getTiming(slug).listeningTotalSeconds,r.server_now]);
+        if(section==='listening'&&r.exam_delivery==='cbt'&&(data.audioEventId||data.heardSeconds!==undefined)) {
+          await recordListeningAudio(db,{examSessionToken:r.exam_session_id,slug,heardSeconds:data.heardSeconds??(Number(r.session_checkpoint_seconds)||0),
+            state:'resume',eventId:data.audioEventId,generation:data.generation,durationSeconds:assets.getTiming(slug).listeningDurationSeconds});
+        }
         return reload(db,r.id);
       }
       if(r[`${section}_submitted_at`]) {

@@ -5,7 +5,10 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-const base='http://term-mini-k67-gateway-fixture:8876/term-mini-k67-api';
+const base=process.env.K67_LIVE_FIXTURE_BASE_URL||'http://term-mini-k67-gateway-fixture:8876/term-mini-k67-api';
+// Cho phép chạy cùng suite trên server.js thật ở localhost; không mở đích production tùy ý.
+if(process.env.K67_LIVE_FIXTURE_BASE_URL){assert.equal(new URL(base).hostname,'127.0.0.1');assert.equal(new URL(base).protocol,'http:');}
+const assetRoot=process.env.K67_LIVE_FIXTURE_ASSET_DIR||'/private-assets';
 const refs=JSON.parse(process.env.K67_LIVE_FIXTURE_REFS || '{}');
 const pins=JSON.parse(process.env.K67_LIVE_ASSET_PINS || '[]');
 assert.equal(process.env.K67_LIVE_FIXTURE_CONFIRMATION,'synthetic-live-http-v1');
@@ -27,14 +30,14 @@ test('Server K67 giữ sống có DB/phiên bản riêng và không phục vụ 
 for(const slug of ['term-test-1','term-test-2','mini-test-lesson-5'])test(`Asset thật ${slug}: đề, nghe thử và audio mã hóa khớp nguồn`,async()=>{
   const rows=pins.filter(row=>row.slug===slug);
   for(const pin of rows) {
-    const raw=fs.readFileSync(path.join('/private-assets',pin.path));
+    const raw=fs.readFileSync(path.join(assetRoot,pin.path));
     assert.equal(raw.length,pin.bytes); assert.equal(hash(raw),pin.sha256);
   }
   const prepare=await (await request(`/api/term-tests/${slug}/session/prepare`,{classCode:'K67SIM',studentRef:refs[slug]})).json();
   const preview=Buffer.from(await (await request(prepare.previewAudioUrl)).arrayBuffer());
   assert.equal(hash(preview),rows.find(row=>row.path.endsWith('preview-30s.mp3')).sha256);
   const started=await (await request(`/api/term-tests/${slug}/session/start`,{examSessionToken:prepare.examSessionToken})).json();
-  assert.deepEqual(started.content,JSON.parse(fs.readFileSync(`/private-assets/${slug}/content.json`,'utf8')));
+  assert.deepEqual(started.content,JSON.parse(fs.readFileSync(path.join(assetRoot,slug,'content.json'),'utf8')));
   assert.deepEqual(started.content.writing?.tasks?.map(task=>task.id)||[],slug==='term-test-1'?['task2']:slug==='term-test-2'?['task1','task2']:[]);
   const audio=await request(prepare.encryptedAudioUrl);
   let header=Buffer.alloc(0),tail=Buffer.alloc(0),decipher=null,total=0;

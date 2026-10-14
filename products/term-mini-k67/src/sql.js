@@ -386,6 +386,8 @@ SET
     listening_deadline_at,
     now() + make_interval(secs => ($3::double precision - listening_resume_offset_seconds::double precision))
   ),
+  listening_audio_checkpoint_seconds=greatest(listening_audio_checkpoint_seconds,listening_resume_offset_seconds),
+  listening_audio_checkpoint_at=coalesce(listening_audio_checkpoint_at,clock_timestamp()),
   updated_at = now()
 WHERE id = $1::uuid
   AND test_slug = $2
@@ -398,6 +400,8 @@ RETURNING
   student_name_snapshot AS student_name,
   listening_started_at,
   listening_deadline_at,
+  listening_audio_checkpoint_seconds,
+  listening_recovery_seconds,
   listening_submitted_at,
   attempt_id::text AS attempt_token,
   now() AS server_now;`;
