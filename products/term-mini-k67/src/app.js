@@ -1,6 +1,7 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import crypto from "node:crypto";
 import { mountDesignDemo } from "./design-demo.js";
+import { mountDesignTrial } from './design-trial.js';
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
@@ -345,6 +346,7 @@ export function createApp({
   }
   app.get('/health', (_req, res) => res.json({ ok: true, build }));
   const requireContext = createContextGuard({ pool });
+  mountDesignTrial(app, { pool });
 
   async function ensureTermTestWritingGrading(row) {
     if (!termTestWritingGradingService || !row?.writing_submitted_at) return null;

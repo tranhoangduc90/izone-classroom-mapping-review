@@ -1,10 +1,10 @@
-// Demo công khai cố định IC2200/Term Test 2; không tạo phiên thi.
+// Demo công khai giới hạn IC2200 và ba bài Term/Mini K67; không tạo phiên thi.
 
 export const demoSourceSql = `WITH target AS (
   SELECT erp_course_class_id FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = $1
 ), permitted AS (
-  SELECT * FROM target WHERE $1 = 'IC2200' AND $2 = 'term-test-2'
+  SELECT * FROM target WHERE $1 = 'IC2200' AND $2 IN ('term-test-1','term-test-2','mini-test-lesson-5')
 ), definition AS (
   SELECT slug AS test_slug, title AS test_title, version AS definition_version,
     listening_definition, reading_definition, listening_band_adjustment
@@ -13,7 +13,7 @@ export const demoSourceSql = `WITH target AS (
   SELECT a.* FROM assessment.term_test_attempt a
   JOIN permitted p ON p.erp_course_class_id = a.erp_course_class_id
   WHERE a.test_slug = $2 AND a.superseded_at IS NULL
-    AND a.completed_at IS NOT NULL AND a.writing_submitted_at IS NOT NULL
+    AND a.completed_at IS NOT NULL AND ($2='mini-test-lesson-5' OR a.writing_submitted_at IS NOT NULL)
 ), selected AS (
   SELECT * FROM attempts WHERE id = $3::uuid
 )
