@@ -47,7 +47,12 @@ test('xem lại: chỉ sau nộp, đúng học viên/lớp GV; range audio hoạ
  const teacherGet=url=>request(app).get(url).set('Authorization',`Bearer ${teacher.body.token}`);
  assert.equal((await teacherGet(`/api/teacher/result/${submissionId}`)).body.review.contentVersion,review.contentVersion);
  assert.equal((await teacherGet(`/api/teacher/review-audio/${submissionId}`)).status,200);
+ const cookie=teacher.headers['set-cookie'][0].split(';')[0];
+ const cookieAudio=await request(app).get(`/api/teacher/review-audio/${submissionId}`).set('Cookie',cookie).set('Range','bytes=0-15');
+ assert.equal(cookieAudio.status,206);assert.ok(cookieAudio.headers['set-cookie']);
  f.setTeacher(false);assert.equal((await teacherGet(`/api/teacher/review-audio/${submissionId}`)).status,403);
+ assert.equal((await request(app).post('/api/teacher/logout').set('Origin','https://page.test').set('X-Izone-Csrf','1').set('Cookie',cookie).send({})).status,200);
+ assert.equal((await request(app).get(`/api/teacher/review-audio/${submissionId}`).set('Cookie',cookie)).status,401);
  f.setEligible(false);assert.equal((await get(`/api/review-audio/${id}`)).status,403);f.setEligible(true);
  assert.deepEqual(await f.service.read({token:f.token}),stateBefore);
 });

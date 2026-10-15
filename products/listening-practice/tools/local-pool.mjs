@@ -15,5 +15,6 @@ export async function localPool(path){
   await db.exec(await readFile(new URL('../db/001-schema.sql',import.meta.url),'utf8'));
  else if(!(await pool.query("SELECT 1 FROM information_schema.columns WHERE table_schema='listening_practice' AND table_name='binding' AND column_name='owner_proof'")).rows.length)
   await db.exec(`ALTER TABLE listening_practice.binding ADD COLUMN owner_proof jsonb NOT NULL DEFAULT '{"fixtureOnly":true}'`);
+ await db.exec(await readFile(new URL('../db/003-teacher-session.sql',import.meta.url),'utf8'));
  return pool;
 }

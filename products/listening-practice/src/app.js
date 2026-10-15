@@ -3,18 +3,20 @@ import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
 import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
-import {ListeningError,hash,secret,uuid} from './domain.js';
+import {ListeningError,uuid} from './domain.js';
+import {createTeacherSessions} from './teacher-session.js';
 import {matchingReview} from './review.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash,review=null}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash,review=null,teacherCookiePath='/listening-practice-api/api'}){
+ const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
   const origin=req.headers.origin;
   if(origin&&!origins.includes(origin))return res.status(403).json({error:{code:'ORIGIN_DENIED',message:'Trang gọi API không được phép.'}});
   if(origin){res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');res.set('Access-Control-Allow-Credentials','true');}
-  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Listening-Admin');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   if(req.method==='OPTIONS')return res.sendStatus(204);next();
  });
  app.use(express.json({limit:'512kb'}));
@@ -58,8 +60,9 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const result=await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
   sendReviewAudio(result,res);
  }));
+ app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
-  const {credential}=z.object({credential:z.string().min(10).max(10000)}).strict().parse(req.body);
+  const {credential,remember}=z.object({credential:z.string().min(10).max(10000),remember:z.boolean().default(true)}).strict().parse(req.body);
   let identity;
   try{identity=await verifyGoogle(credential);}catch(error){
    // Thư viện Google có thể chứa token trong lỗi: chỉ nhận diện lỗi xác minh, không trả nội dung gốc.
@@ -69,23 +72,21 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
    throw new ListeningError('GOOGLE_IDENTITY_INVALID','Phiên đăng nhập Google không hợp lệ hoặc đã hết hạn. Hãy đăng nhập lại.',401);
   }
   if(!identity?.email_verified||!identity.email||!identity.sub)throw new ListeningError('GOOGLE_IDENTITY_INVALID','Google chưa xác minh tài khoản.',401);
-  const value=secret();await pool.query('INSERT INTO listening_practice.teacher_session(token_hash,email,google_subject,expires_at) VALUES($1,$2,$3,$4)',[hash(value),identity.email.toLowerCase(),identity.sub,new Date(Date.now()+3600000).toISOString()]);
-  const secure=req.secure||req.headers['x-forwarded-proto']==='https';
-  res.cookie('listening_teacher',value,{httpOnly:true,secure,sameSite:secure?'none':'strict',path:'/api',maxAge:3600000});res.json({email:identity.email,token:value});
+  res.json(await teacherSessions.create(req,res,identity,remember));
+ }));
+ app.post('/api/teacher/logout',wrap(async(req,res)=>{
+  if(!origins.includes(req.headers.origin)||req.headers['x-izone-csrf']!=='1')throw new ListeningError('CSRF_REJECTED','Yêu cầu đăng xuất không hợp lệ.',403);
+  await teacherSessions.logout(req,res);res.json({ok:true});
  }));
  app.get('/api/teacher/result/:submissionId',wrap(async(req,res)=>{
-  const cookie=token(req)||/(?:^|;\s*)listening_teacher=([\w-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
-  const identity=cookie&&(await pool.query('SELECT email,google_subject FROM listening_practice.teacher_session WHERE token_hash=$1 AND expires_at>now()',[hash(cookie)])).rows[0];
-  if(!identity)throw new ListeningError('TEACHER_LOGIN_REQUIRED','Giảng viên cần đăng nhập Google.',401);
+  const identity=await teacherSessions.read(req);
   const id=z.uuid().parse(req.params.submissionId),result=await service.teacherResult({submissionId:id,email:identity.email,subject:identity.google_subject});
-  res.set('Cache-Control','no-store');res.json(withReview(result,`teacher/review-audio/${id}`));
+  await teacherSessions.refresh(req,res,identity);res.json(withReview(result,`teacher/review-audio/${id}`));
  }));
  app.get('/api/teacher/review-audio/:submissionId',wrap(async(req,res)=>{
-  const cookie=token(req)||/(?:^|;\s*)listening_teacher=([\w-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
-  const identity=cookie&&(await pool.query('SELECT email,google_subject FROM listening_practice.teacher_session WHERE token_hash=$1 AND expires_at>now()',[hash(cookie)])).rows[0];
-  if(!identity)throw new ListeningError('TEACHER_LOGIN_REQUIRED','Giảng viên cần đăng nhập Google.',401);
+  const identity=await teacherSessions.read(req);
   const result=await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject});
-  sendReviewAudio(result,res);
+  await teacherSessions.refresh(req,res,identity);sendReviewAudio(result,res);
  }));
  app.use('/api/admin',(req,res,next)=>{
   const value=req.headers['x-listening-admin'];

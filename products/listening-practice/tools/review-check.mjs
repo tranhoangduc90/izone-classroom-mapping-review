@@ -43,10 +43,13 @@ try{
  assert.equal((await get('/review-audio/'+id,null)).status,401);
  const before=await service.read({token:login.token});
  const audio=await get('/review-audio/'+id,login.token,{Range:'bytes=0-1023'});assert.equal(audio.status,206);assert.equal((await audio.arrayBuffer()).byteLength,1024);
- const teacher=await (await fetch(base+'/teacher/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:'canary-google-fixture'})})).json();
+ const loginResponse=await fetch(base+'/teacher/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:'canary-google-fixture'})});
+ const teacherCookie=loginResponse.headers.get('set-cookie');assert.ok(teacherCookie.includes('Path=/listening-practice-api/api'));
+ const teacher=await loginResponse.json();
  const sid=result.attempt.submissionId;
  assert.equal((await get('/teacher/result/'+sid,teacher.token)).status,200);
  const teacherAudio=await get('/teacher/review-audio/'+sid,teacher.token,{Range:'bytes=0-1023'});assert.equal(teacherAudio.status,206);await teacherAudio.arrayBuffer();
+ const cookieAudio=await get('/teacher/review-audio/'+sid,null,{Cookie:teacherCookie.split(';')[0],Range:'bytes=0-1023'});assert.equal(cookieAudio.status,206);await cookieAudio.arrayBuffer();
  teacherAllowed=false;assert.equal((await get('/teacher/review-audio/'+sid,teacher.token)).status,403);
  assert.deepEqual(await service.read({token:login.token}),before);
  console.log(JSON.stringify({status:'passed',database:db,score:10,questions:Object.keys(review.questions).length,audioHash,

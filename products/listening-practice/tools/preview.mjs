@@ -19,7 +19,7 @@ const service=createListeningService({pool,context,pageBase:base,verifyBinding:a
 const bundle=JSON.parse(await readFile(contentPath,'utf8'));await service.seedContent(bundle);
 const registered=await service.register({classId:'1124',classCode:'CHẠY THỬ 67',studentRef:member.studentRef,documentId:'local_listening_document_1234567890',tabId:'t.0',contentVersion:bundle.version,entryToken:fixture.entryToken});
 await pool.query("UPDATE listening_practice.assignment SET status='open'");await pool.query('UPDATE listening_practice.binding SET cta_verified_at=now()');
-const app=createApp({pool,service,origins:[new URL(base).origin],googleClientId:'',adminKey:fixture.adminKey,staticRoot,audioFile:path.resolve(path.dirname(contentPath),'audio.mp3'),audioHash:bundle.definition.audio.sha256,
+const app=createApp({pool,service,teacherCookiePath:'/api',origins:[new URL(base).origin],googleClientId:'',adminKey:fixture.adminKey,staticRoot,audioFile:path.resolve(path.dirname(contentPath),'audio.mp3'),audioHash:bundle.definition.audio.sha256,
  verifyGoogle:async credential=>credential==='LOCAL_TEST_CREDENTIAL'?{email:'teacher@example.test',sub:'local-google',email_verified:true}:null});
 const server=app.listen(port,'127.0.0.1');
 await writeFile(path.join(dataPath,'open.json'),JSON.stringify({entryUrl:registered.entryUrl,studentRef:member.studentRef,apiBase:base+'api'}),'utf8');
