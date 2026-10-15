@@ -19,7 +19,8 @@ const key=randomBytes(32);
 // Âm thanh thử ngắn được tạo tại máy; không lấy audio đề thi thật.
 // Test audio gián đoạn cần đoạn giả dài hơn; mặc định vẫn là 2 giây của bản thử cũ.
 const toneSeconds=Number(process.env.K67_PREVIEW_AUDIO_SECONDS||2);
-if(!Number.isInteger(toneSeconds)||toneSeconds<2||toneSeconds>180)throw new Error('Thời lượng audio giả không hợp lệ.');
+// Cho phép bản giả dài tới 35 phút để nghiệm thu thiết bị; không đổi thời lượng đề thật.
+if(!Number.isInteger(toneSeconds)||toneSeconds<2||toneSeconds>2100)throw new Error('Thời lượng audio giả không hợp lệ.');
 const toneSamples=8000*toneSeconds;
 const wav=Buffer.alloc(44+toneSamples*2);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);
 wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);
@@ -48,6 +49,9 @@ const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[s
 const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
 if(protection)for(const value of Object.values(timing)){value.listeningDurationSeconds=toneSeconds;value.listeningTotalSeconds=toneSeconds+120;}
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+// Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
+await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
+await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});
