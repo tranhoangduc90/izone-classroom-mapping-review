@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'node:path';
-import {randomBytes,createCipheriv} from 'node:crypto';
+import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {readFile} from 'node:fs/promises';
 
@@ -41,11 +41,13 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
   writing:slug==='mini-test-lesson-5'?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],listeningReviewSeconds:120}),
+  getAudioManifest:async()=>{const sha256=createHash('sha256').update(wav).digest('hex');return{assetVersion:`sha256-${sha256}`,sha256,byteLength:wav.length,encryptedByteLength:wav.length+33,envelopeVersion:'IZTT1'};},
   getContent:async slug=>content(slug),getSessionAudioKey:()=>key,getPreview:async()=>wav,
   streamEncryptedAudio:async(_slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
     res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(wav),cipher.final(),cipher.getAuthTag()]));}};
 const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if(protection)for(const value of Object.values(timing)){value.listeningDurationSeconds=toneSeconds;value.listeningTotalSeconds=toneSeconds+120;}
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});
@@ -65,8 +67,9 @@ outer.get('/preview/audio-state',async(req,res)=>{
 });
 // Điều khiển thời gian chỉ tồn tại ở công cụ localhost chứa dữ liệu giả; không mount trong app production.
 if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)=>{
-  const {id,seconds,deadlineSeconds,recoveryUsed}=req.body;
-  if(!/^[0-9a-f-]{36}$/.test(id||'')||![seconds,deadlineSeconds,recoveryUsed].every(x=>x===undefined||Number.isFinite(x)))return res.status(400).json({ok:false});
+  const {id,seconds,deadlineSeconds,recoveryUsed,startedSecondsAgo}=req.body;
+  if(!/^[0-9a-f-]{36}$/.test(id||'')||![seconds,deadlineSeconds,recoveryUsed,startedSecondsAgo].every(x=>x===undefined||Number.isFinite(x)))return res.status(400).json({ok:false});
+  if(startedSecondsAgo!==undefined)await fixture.db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=clock_timestamp()-make_interval(secs=>$2::double precision) WHERE id=$1`,[id,startedSecondsAgo]);
   if(seconds!==undefined)await fixture.db.query(`UPDATE assessment.term_test_audio_incident SET opened_at=clock_timestamp()-make_interval(secs=>$2::double precision) WHERE exam_session_id=$1 AND resolved_at IS NULL`,[id,seconds]);
   if(deadlineSeconds!==undefined)await fixture.db.query(`UPDATE assessment.term_test_exam_session SET listening_deadline_at=clock_timestamp()+make_interval(secs=>$2::double precision) WHERE id=$1`,[id,deadlineSeconds]);
   if(recoveryUsed!==undefined)await fixture.db.query('UPDATE assessment.term_test_exam_session SET listening_recovery_seconds=$2 WHERE id=$1',[id,recoveryUsed]);

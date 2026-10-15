@@ -7,7 +7,7 @@ const base=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonne
 const position=z.number().min(0).max(7200);
 const answers=z.record(z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),z.string().max(120));
 const incidentInput=base.extend({eventId:z.uuid(),incidentId:z.uuid(),heardSeconds:position,
-  reason:z.enum(['manual','pause','waiting','stalled','error','startup_failed']),
+  reason:z.enum(['manual','pause','waiting','stalled','error','startup_failed','reload']),
   answers:answers.optional(),draftRevision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional()});
 const resumeInput=base.extend({eventId:z.uuid(),incidentId:z.uuid(),resumeAttemptId:z.uuid(),
   phase:z.enum(['prepare','confirm']),heardSeconds:position});

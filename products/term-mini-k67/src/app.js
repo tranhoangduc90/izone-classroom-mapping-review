@@ -12,6 +12,7 @@ import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
+import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -78,6 +79,7 @@ const examSessionPrepareSchema = z.object({
 });
 
 const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
+  generation:z.number().int().nonnegative().optional(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
 const audioProgressSchema = z.object({examSessionToken:z.uuid(),heardSeconds:z.number().min(0).max(7200),
@@ -719,6 +721,7 @@ export function createApp({
       ok: true,
       examSessionToken: session.exam_session_token,
       studentName: student.student_name,
+      generation: Number(session.generation) || 0,
       listeningStartedAt: session.listening_started_at || null,
       listeningDeadlineAt: session.listening_deadline_at || null,
       listeningDraft: session.listening_draft || {},
@@ -751,7 +754,8 @@ export function createApp({
     if (!requireTermTestAssets(res)) return;
     const session = await findAssetSession(req, res);
     if (!session) return;
-    await termTestAssetService.streamEncryptedAudio(session.slug, session.token, res);
+    await termTestAssetService.streamEncryptedAudio(session.slug, session.token, res,
+      config.audioCacheEnabled?await audioManifestFor(pool,termTestAssetService,session.slug,session.token):null);
   }));
 
   app.get('/api/term-tests/:testSlug/session/:examSessionToken/preview', testReadLimiter, asyncRoute(async (req, res) => {
@@ -828,6 +832,7 @@ export function createApp({
     }
     const timing = termTestAssetService.getTiming(slug.data);
     const beginSession=async db=>{
+      if(config.audioCacheEnabled)await authorizeAudioSession(db,parsed.data,slug.data);
       if(parsed.data.audioProtocolVersion===1)await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled);
       return db.query(startTermTestListeningSessionSql, [
       parsed.data.examSessionToken,
@@ -835,7 +840,7 @@ export function createApp({
       timing.listeningTotalSeconds
       ]);
     };
-    const started=parsed.data.audioProtocolVersion===1
+    const started=parsed.data.audioProtocolVersion===1||config.audioCacheEnabled
       ?await audioTransaction(pool,beginSession):await beginSession(pool);
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
@@ -862,6 +867,7 @@ export function createApp({
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
       audioKey: audioKey.toString('base64'),
+      audioManifest: config.audioCacheEnabled?await audioManifestFor(pool,termTestAssetService,slug.data,parsed.data.examSessionToken):null,
       audioEnvelope: { magic: 'IZTT1', ivBytes: 12, tagBytes: 16 },
       timing,
       content
@@ -872,6 +878,7 @@ export function createApp({
   const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
     keyGenerator:req=>String(req.body?.examSessionToken||'invalid'),message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
+  mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});

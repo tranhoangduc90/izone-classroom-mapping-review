@@ -4,6 +4,7 @@ import { findStudentForTermTestSql } from './sql.js';
 import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests.js';
 import {recordListeningAudio} from './audio-recovery.js';
 import {activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
+import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -193,7 +194,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
     if(row.superseded_at||row.session_superseded_at)throw error('STALE_ATTEMPT','Lượt bài đã được thay thế. Hãy xác nhận lại tên.');
     if(Number(row.session_generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     if(row.exam_delivery!=='cbt'||!row.reading_submitted_at)throw error('SECTION_NOT_OPEN','Audio chỉ mở khi bạn đã nộp Reading và tiếp tục thi trên máy.');
-    if(kind==='audio')return assets.streamEncryptedAudio(row.test_slug,token.data,res);
+    if(kind==='audio')return assets.streamEncryptedAudio(row.test_slug,token.data,res,config.audioCacheEnabled?await audioManifestFor(pool,assets,row.test_slug,token.data):null);
     const preview=await assets.getPreview(row.test_slug);res.set({'Content-Type':'audio/mpeg','Cache-Control':'no-store, private'}).send(preview);
   }));
   app.post('/api/term-tests/:testSlug/session/resume-attempt',route(async(req,res,next)=>{
@@ -231,6 +232,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
       if(action.endsWith('start')) {
+        if(action==='listening/start'&&r.exam_delivery==='cbt'&&config.audioCacheEnabled)await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug);
         if(state.nextSection!==section&&!r[`${section}_submitted_at`])throw error('SECTION_NOT_OPEN','Hãy hoàn thành kỹ năng trước.');
         if(r[`${section}_submitted_at`])return r;
         if(section==='reading')await db.query(`UPDATE assessment.term_test_attempt SET reading_started_at=coalesce(reading_started_at,$3::timestamptz),
@@ -306,6 +308,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
     if(action==='listening/start'&&out.exam_delivery==='cbt')Object.assign(response,{content:await assets.getContent(slug),timing:assets.getTiming(slug),
       audioKey:assets.getSessionAudioKey(slug,out.exam_session_id).toString('base64'),audioEnvelope:{magic:'IZTT1',ivBytes:12,tagBytes:16}});
     if(action==='listening/start'&&data.audioProtocolVersion===1)Object.assign(response,await listeningAudioSnapshot(pool,out.exam_session_id));
+    if(action==='listening/start'&&out.exam_delivery==='cbt'&&config.audioCacheEnabled)response.audioManifest=await audioManifestFor(pool,assets,slug,out.exam_session_id);
     res.json(response);
   }
   for(const [suffix,action] of [['session/start','listening/start'],['reading/start','reading/start'],['reading/draft','reading/draft'],['listening/draft','listening/draft'],['reading','reading'],['listening','listening']])

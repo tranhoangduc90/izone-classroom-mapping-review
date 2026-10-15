@@ -238,6 +238,7 @@ SELECT
   id::text AS exam_session_token,
   test_slug,
   prepared_at,
+  generation,
   attempt_mode,
   listening_started_at,
   listening_deadline_at,
@@ -252,6 +253,7 @@ LIMIT 1;`;
 
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
+  generation,
   test_slug,
   attempt_mode,
   prepared_at,
