@@ -64,7 +64,7 @@ outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-
 outer.get('/preview/audio-state',async(req,res)=>{
   if(!/^[0-9a-f-]{36}$/.test(req.query.id||''))return res.status(400).json({ok:false});
   const row=(await fixture.db.query(`SELECT listening_audio_checkpoint_seconds,listening_audio_checkpoint_at,
-    listening_audio_state,listening_recovery_seconds,listening_deadline_at,listening_submitted_at,
+    listening_audio_state,listening_recovery_seconds,listening_started_at,listening_deadline_at,listening_submitted_at,
     listening_audio_protocol_version,listening_audio_revision,listening_audio_incident_id,listening_draft,listening_draft_revision
     FROM assessment.term_test_exam_session WHERE id=$1`,[req.query.id])).rows[0];
   res.json({ok:true,fixtureOnly:true,...row});

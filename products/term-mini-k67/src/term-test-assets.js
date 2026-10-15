@@ -68,6 +68,7 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     throw new Error('Tài nguyên Term Test cần thư mục riêng và bí mật phiên tối thiểu 32 ký tự.');
   }
   const contentCache = new Map();
+  const manifestWork = new Map();
 
   async function getContent(testSlug) {
     if (contentCache.has(testSlug)) return contentCache.get(testSlug);
@@ -105,11 +106,18 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
   }
 
   async function getAudioManifest(testSlug) {
-    const hash=crypto.createHash('sha256');let byteLength=0;
-    for await(const chunk of fs.createReadStream(resolveAsset(assetDir,getDefinition(testSlug).audio))){hash.update(chunk);byteLength+=chunk.length;}
-    const sha256=hash.digest('hex');
-    return {assetVersion:`sha256-${sha256}`,sha256,byteLength,
-      encryptedByteLength:byteLength+33,envelopeVersion:'IZTT1'};
+    // Chỉ chia sẻ công việc đang chạy cùng file; lần sau vẫn hash mới để phát hiện file đổi.
+    // Không giữ cache hash dài hạn hoặc giữ connection DB trong khi đọc audio.
+    if(manifestWork.has(testSlug))return manifestWork.get(testSlug);
+    const work=(async()=>{
+      const hash=crypto.createHash('sha256');let byteLength=0;
+      for await(const chunk of fs.createReadStream(resolveAsset(assetDir,getDefinition(testSlug).audio))){hash.update(chunk);byteLength+=chunk.length;}
+      const sha256=hash.digest('hex');
+      return {assetVersion:`sha256-${sha256}`,sha256,byteLength,
+        encryptedByteLength:byteLength+33,envelopeVersion:'IZTT1'};
+    })();
+    manifestWork.set(testSlug,work);
+    try{return await work;}finally{manifestWork.delete(testSlug);}
   }
 
   async function streamEncryptedAudio(testSlug, sessionToken, response, expectedManifest=null) {

@@ -91,7 +91,25 @@ async function runProfile(profile,assetDir,assetHash,assetBytes){
       const p=await call(u,'session/prepare',{classCode:u.classCode,studentRef:u.studentRef,examMode:'lis_first',examDelivery:'cbt'},[200,201]);
       if(![200,201].includes(p.status))return;u.fields.examSessionToken=p.body.examSessionToken;u.fields.generation=p.body.generation;
       const claim=await call(u,'session/audio-owner',{action:'claim'});if(claim.status!==200)return;u.fields.ownerEpoch=claim.body.ownerEpoch;
-      const started=await call(u,'session/start',{audioProtocolVersion:1,audioEventId:randomUUID()});if(started.status!==200)return;
+      if(profile.startGuard){
+        const began=performance.now();let status=0,okay=false,error;
+        try{
+          const response=await fetch(ready.base+`/api/term-tests/${u.slug}/session/${u.fields.examSessionToken}/preview`,{
+            headers:{'X-Forwarded-For':profile.sharedIp?'198.18.0.1':`198.18.${Math.floor(u.index/250)}.${u.index%250+1}`},signal:AbortSignal.timeout(2500)});
+          status=response.status;okay=response.ok&&(await response.arrayBuffer()).byteLength===4096;
+        }catch(e){error=e.name;}
+        records.push({label:'preflight-preview',status,ms:performance.now()-began,expected:okay,error});if(!okay)return;
+      }
+      const started=await call(u,'session/start',{audioProtocolVersion:1,...(profile.startGuard?{audioStartGuardVersion:1}:{}),audioEventId:randomUUID()});if(started.status!==200)return;
+      if(profile.startGuard){
+        // Client mới chỉ mở bài sau khi xác nhận player tiến; giữ lại mọi lỗi handshake trong thống kê.
+        if(!started.body.activeIncident?.startup){started.record.expected=false;return;}
+        const incidentId=started.body.activeIncident.incidentId,resumeAttemptId=randomUUID(),anchor=started.body.activeIncident.anchorSeconds;
+        const prepared=await call(u,'session/audio-resume',{incidentId,resumeAttemptId,eventId:randomUUID(),phase:'prepare',heardSeconds:anchor},[200],'startup-prepare');if(prepared.status!==200)return;
+        await wait(150);
+        const confirmed=await call(u,'session/audio-resume',{incidentId,resumeAttemptId,eventId:randomUUID(),phase:'confirm',heardSeconds:anchor+.1},[200],'startup-confirm');
+        if(confirmed.status!==200||confirmed.body.activeIncident){confirmed.record.expected=false;return;}
+      }
       u.key=started.body.audioKey;u.active=true;
     }));
     // Pacing mở theo thời gian thực: 5 giây/mốc, 15 giây/nháp; không nén 1 phút thành 1 giây.
@@ -129,7 +147,7 @@ async function runProfile(profile,assetDir,assetHash,assetBytes){
     if(profile.coldDownloads)await Promise.all(users.filter(u=>u.active&&!u.submitted).slice(0,8).map(async u=>{
       const began=performance.now();let okay=false,status=0,bytes=0,error;
       try{
-        const response=await fetch(ready.base+`/api/term-tests/${u.slug}/session/${u.fields.examSessionToken}/audio`,{headers:{'X-Forwarded-For':`198.19.0.${u.index+1}`},signal:AbortSignal.timeout(30000)});status=response.status;if(!response.ok)throw new Error('DOWNLOAD_HTTP');
+        const response=await fetch(ready.base+`/api/term-tests/${u.slug}/session/${u.fields.examSessionToken}/audio`,{headers:{'X-Forwarded-For':profile.sharedIp?'198.18.0.1':`198.19.0.${u.index+1}`},signal:AbortSignal.timeout(30000)});status=response.status;if(!response.ok)throw new Error('DOWNLOAD_HTTP');
         let head=Buffer.alloc(0),tail=Buffer.alloc(0),decipher;const hash=createHash('sha256');
         for await(const chunk of response.body){let data=Buffer.from(chunk);if(!decipher){head=Buffer.concat([head,data]);if(head.length<17)continue;assert.equal(head.subarray(0,5).toString(),'IZTT1');decipher=createDecipheriv('aes-256-gcm',Buffer.from(u.key,'base64'),head.subarray(5,17));data=head.subarray(17);head=Buffer.alloc(0);}data=Buffer.concat([tail,data]);if(data.length<=16){tail=data;continue;}const plain=decipher.update(data.subarray(0,-16));hash.update(plain);bytes+=plain.length;tail=data.subarray(-16);}
         decipher.setAuthTag(tail);const last=decipher.final();hash.update(last);bytes+=last.length;okay=bytes===assetBytes&&hash.digest('hex')===assetHash;
@@ -155,10 +173,11 @@ async function main(){
   const assetMiB=args.includes('--asset-mib')?Number(args[args.indexOf('--asset-mib')+1]):40;assert.ok([1,40].includes(assetMiB),'Chỉ hỗ trợ đối chứng 1 hoặc 40 MiB');
   const assetDir=path.join(out,'synthetic-assets'),bytes=Buffer.alloc(assetMiB*1048576,0x67),assetHash=createHash('sha256').update(bytes).digest('hex');
   for(const slug of slugs){const dir=path.join(assetDir,slug);await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'listening-audio.mp3'),bytes);await writeFile(path.join(dir,'content.json'),JSON.stringify({baseTestSlug:slug,writing:null}),'utf8');await writeFile(path.join(dir,'listening-preview-30s.mp3'),bytes.subarray(0,4096));}
-  const profiles=[{id:'25-shared-ip',users:25,sharedIp:true},{id:'60-shared-ip',users:60,sharedIp:true},{id:'60-distinct-ips',users:60,sharedIp:false},{id:'120-distinct-ips',users:120,sharedIp:false,coldDownloads:true}];
+  const profiles=[{id:'25-shared-ip',users:25,sharedIp:true},{id:'60-shared-ip',users:60,sharedIp:true},{id:'60-distinct-ips',users:60,sharedIp:false},{id:'120-distinct-ips',users:120,sharedIp:false,coldDownloads:true},{id:'120-shared-ip',users:120,sharedIp:true,coldDownloads:true}];
   const extra=[{id:'25-busy-typing',users:25,sharedIp:true,busyTyping:true},{id:'60-reconnect-storm',users:60,sharedIp:false,ticks:0,reconnect:true},{id:'120-start-diagnostic',users:120,sharedIp:false,ticks:0}];
   const selected=args.includes('--smoke')?[{id:'smoke',users:3,sharedIp:false}]:args.includes('--extra')?extra:profiles;
   const requested=args.includes('--profile')?args[args.indexOf('--profile')+1]:null,chosen=requested?selected.filter(p=>p.id===requested):selected;assert.ok(chosen.length,'Profile không tồn tại');
+  if(args.includes('--start-guard'))for(const profile of chosen)profile.startGuard=true;
   const runnerBytes=await readFile(here);await writeFile(path.join(out,'runner-executed.mjs'),runnerBytes);
   const summary={at:new Date().toISOString(),source:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),runnerSha256:createHash('sha256').update(runnerBytes).digest('hex'),assetMiB,node:process.version,host:{platform:process.platform,cpuCount:os.cpus().length,totalMemoryGiB:os.totalmem()/1073741824},basis:'Exploratory envelopes, not actual concurrent class counts. Classes of 25 are synthetic grouping only.',productionChanged:false,profiles:[]};
   for(const profile of chosen){const result=await runProfile(profile,assetDir,assetHash,bytes.length);await writeFile(path.join(out,profile.id+'.json'),JSON.stringify(result,null,2),'utf8');summary.profiles.push({...result,records:undefined});await writeFile(path.join(out,'load-summary.json'),JSON.stringify(summary,null,2),'utf8');console.log(JSON.stringify({id:profile.id,outcome:result.outcome,requests:result.requests,unexpected:result.unexpected,invariants:result.invariants,metrics:result.metrics}));}

@@ -5,18 +5,24 @@ import {assertAudioOwner} from './audio-owner.js';
 
 // Nhận mã phiên từ POST; kiểm quyền hiện tại trước khi cấp metadata hoặc khóa trong RAM.
 // Metadata ghim một lần: thay file trên server không được đổi nội dung của phiên đang thi.
-export async function pinAudioManifest(db,assets,slug,token) {
-  if(!assets?.getAudioManifest)return null; // Server/fixture cũ không quảng bá cache bền.
+async function pinAudioManifest(db,token,manifest) {
   let row=(await db.query('SELECT listening_audio_manifest FROM assessment.term_test_exam_session WHERE id=$1 FOR UPDATE',[token])).rows[0];
   if(!row)return null;
   if(!row.listening_audio_manifest){
-    const manifest=await assets.getAudioManifest(slug);
     row=(await db.query(`UPDATE assessment.term_test_exam_session SET listening_audio_manifest=$2
       WHERE id=$1 RETURNING listening_audio_manifest`,[token,JSON.stringify(manifest)])).rows[0];
   }
   return row.listening_audio_manifest;
 }
-export const audioManifestFor=async(pool,assets,slug,token)=>audioTransaction(pool,db=>pinAudioManifest(db,assets,slug,token));
+export async function audioManifestFor(pool,assets,slug,token){
+  if(!assets?.getAudioManifest)return null;
+  const row=(await pool.query('SELECT listening_audio_manifest FROM assessment.term_test_exam_session WHERE id=$1',[token])).rows[0];
+  if(!row)return null;
+  if(row.listening_audio_manifest)return row.listening_audio_manifest;
+  // Hash file trước khi lấy connection/khóa ghi; giao dịch chỉ chốt bản ghim một lần.
+  const manifest=await assets.getAudioManifest(slug);
+  return audioTransaction(pool,db=>pinAudioManifest(db,token,manifest));
+}
 
 export async function authorizeAudioSession(db,input,slug,skipOwner=false,onlyOwner=false){
   const row=(await db.query(`SELECT * FROM assessment.term_test_exam_session WHERE id=$1 AND test_slug=$2 FOR UPDATE`,[input.examSessionToken,slug])).rows[0];
@@ -40,9 +46,11 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled}) {
       const input=schema.safeParse(req.body),slug=req.params.testSlug;
       if(!input.success||!assets?.supports(slug))return res.status(400).json({ok:false,error:'INVALID_AUDIO_ACCESS'});
       if(!enabled||!assets.getAudioManifest)return res.set('Cache-Control','no-store, private').json({ok:true,audioCacheSupported:false});
+      await audioTransaction(pool,db=>authorizeAudioSession(db,input.data,slug));
+      const manifest=await audioManifestFor(pool,assets,slug,input.data.examSessionToken);
       const value=await audioTransaction(pool,async db=>{
+        // Xác thực lại sau bước đọc file: quyền/owner có thể đã đổi trong lúc chờ hash.
         const {row,now}=await authorizeAudioSession(db,input.data,slug);
-        const manifest=await pinAudioManifest(db,assets,slug,row.id);
         return {ok:true,audioCacheSupported:true,examSessionToken:row.id,generation:Number(row.generation),
           audioManifest:manifest,cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
           listeningDurationSeconds:assets.getTiming(slug).listeningDurationSeconds,

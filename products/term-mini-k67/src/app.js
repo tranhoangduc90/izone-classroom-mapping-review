@@ -11,9 +11,10 @@ import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
-import {mountAudioIncidents,audioTransaction,activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
+import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {audioOwnerPool,audioOwnerContext,mountAudioOwner} from './audio-owner.js';
+import {examRateIdentity,examRateKey} from './exam-rate-limit.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -80,6 +81,7 @@ const examSessionPrepareSchema = z.object({
 });
 
 const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
+  audioStartGuardVersion:z.literal(1).optional(),
   generation:z.number().int().nonnegative().optional(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
@@ -321,6 +323,7 @@ export function createApp({
   termTestWritingGradingService = null, termTestAssetService = null, logger = console,
   resultStreamOptions = {}
 }) {
+  const rateIdentity=examRateIdentity(pool);
   pool=audioOwnerPool(pool);
   const app = express();
   
@@ -328,14 +331,16 @@ export function createApp({
   app.set('trust proxy', config.trustProxyHops);
   app.use(helmet());
   app.use(addCors(config));
+  app.use(express.json({ limit: '768kb', strict: true }));
+  app.use(rateIdentity);
   app.use(rateLimit({
     windowMs: 60_000,
     limit: 900,
+    keyGenerator:examRateKey,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   }));
-  app.use(express.json({ limit: '768kb', strict: true }));
   app.use(audioOwnerContext);
 
   const build = Object.freeze({
@@ -438,6 +443,7 @@ export function createApp({
   }));
 
   const testReadLimiter = rateLimit({
+    keyGenerator:examRateKey,
     windowMs: 60_000,
     limit: 240,
     standardHeaders: 'draft-8',
@@ -445,6 +451,7 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   });
   const testWriteLimiter = rateLimit({
+    keyGenerator:examRateKey,
     windowMs: 60_000,
     limit: 120,
     standardHeaders: 'draft-8',
@@ -452,6 +459,7 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều lượt gửi; vui lòng chờ một phút.' }
   });
   const testDraftLimiter = rateLimit({
+    keyGenerator:examRateKey,
     windowMs: 60_000,
     limit: 600,
     standardHeaders: 'draft-8',
@@ -841,12 +849,14 @@ export function createApp({
         if(config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
           throw new AudioRecoveryError('AUDIO_OWNER_REQUIRED','Hãy tải lại trang và xác nhận quyền phát audio trước khi bắt đầu.');
       }
-      if(parsed.data.audioProtocolVersion===1)await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled);
-      return db.query(startTermTestListeningSessionSql, [
+      const before=parsed.data.audioProtocolVersion===1?await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled):null;
+      const result=await db.query(startTermTestListeningSessionSql, [
       parsed.data.examSessionToken,
       slug.data,
       timing.listeningTotalSeconds
       ]);
+      if(result.rowCount===1&&before&&config.audioIncidentEnabled)await guardListeningStart(db,parsed.data,slug.data,timing.listeningDurationSeconds,before);
+      return result;
     };
     const started=parsed.data.audioProtocolVersion===1||config.audioCacheEnabled||config.audioOwnerEnabled
       ?await audioTransaction(pool,beginSession):await beginSession(pool);
@@ -886,7 +896,7 @@ export function createApp({
 
   // Tiến độ có bộ đếm riêng để không chiếm quota lưu đáp án; không phụ thuộc bộ đệm lớp mới.
   const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
-    keyGenerator:req=>String(req.body?.examSessionToken||'invalid'),message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
+    keyGenerator:examRateKey,message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
   mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled});
   mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled});

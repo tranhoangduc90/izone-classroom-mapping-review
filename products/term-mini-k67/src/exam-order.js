@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { findStudentForTermTestSql } from './sql.js';
 import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests.js';
 import {recordListeningAudio} from './audio-recovery.js';
-import {activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
+import {activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
@@ -12,6 +12,7 @@ const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
+  audioStartGuardVersion:z.literal(1).optional(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional(),
   generation:z.number().int().nonnegative().optional(),orderClientVersion:z.literal(1).optional(),
@@ -244,11 +245,12 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
           reading_deadline_at=CASE WHEN attempt_mode='answer_sheet' THEN NULL ELSE coalesce(reading_deadline_at,$3::timestamptz+make_interval(mins=>$2)) END,
           updated_at=clock_timestamp() WHERE id=$1`,[r.id,assets.getTiming(slug).readingDurationMinutes,r.server_now]);
         else {
-          if(data.audioProtocolVersion===1)await activateListeningProtection(db,{...data,examSessionToken:r.exam_session_id},slug,config.audioIncidentEnabled);
+          const before=data.audioProtocolVersion===1?await activateListeningProtection(db,{...data,examSessionToken:r.exam_session_id},slug,config.audioIncidentEnabled):null;
           await db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=coalesce(listening_started_at,$3::timestamptz),
           listening_deadline_at=CASE WHEN attempt_mode='cbt' THEN coalesce(listening_deadline_at,$3::timestamptz+make_interval(secs=>$2::double precision)) ELSE NULL END,
           listening_audio_checkpoint_at=coalesce(listening_audio_checkpoint_at,$3::timestamptz),
           updated_at=clock_timestamp() WHERE id=$1`,[r.exam_session_id,assets.getTiming(slug).listeningTotalSeconds,r.server_now]);
+          if(before&&config.audioIncidentEnabled)await guardListeningStart(db,{...data,examSessionToken:r.exam_session_id},slug,assets.getTiming(slug).listeningDurationSeconds,before);
         }
         if(section==='listening'&&r.exam_delivery==='cbt'&&(data.audioEventId||data.heardSeconds!==undefined)) {
           await recordListeningAudio(db,{examSessionToken:r.exam_session_id,slug,heardSeconds:data.heardSeconds??(Number(r.session_checkpoint_seconds)||0),

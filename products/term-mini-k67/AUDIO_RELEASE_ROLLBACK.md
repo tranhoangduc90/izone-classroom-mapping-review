@@ -1,6 +1,6 @@
 # K67 — phương án phát hành và quay lui bảo vệ audio
 
-Chuẩn bị ngày 15/10/2026. **Chưa được phát hành.** Không dùng tài liệu này thay quyền merge/push/production riêng. Có lỗi tải ở đợt 60 người chung IP và 120 người bắt đầu đồng thời. Lỗi start đã commit nhưng chưa bảo vệ thời gian khi mất phản hồi phải được sửa trước phát hành, kể cả nhóm nhỏ; quota và công suất phải được kiểm lại ở phạm vi thực tế sẽ mở. Bộ thiết bị thật còn Chưa chạy.
+Chuẩn bị ngày 15/10/2026. **Chưa được phát hành.** Không dùng tài liệu này thay quyền merge/push/production riêng. Hai lỗi start mất phản hồi/quota chung IP đã [sửa và kiểm local](AUDIO_START_NETWORK_FIX.md); nhóm 120 chung IP với file giả 40 MiB đạt. Chưa chứng minh công suất dưới quota/mạng production; bộ thiết bị thật còn Chưa chạy. Các bước bên dưới vẫn là phương án, chưa thực thi production.
 
 ## Phạm vi và ràng buộc
 

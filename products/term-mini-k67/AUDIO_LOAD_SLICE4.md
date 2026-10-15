@@ -2,6 +2,8 @@
 
 Ngày 15/10/2026. **Chưa sẵn sàng phát hành; không thay production.** Đây là phép đo và chuẩn bị nghiệm thu, không phải chứng nhận khả năng chịu tải production.
 
+**Cập nhật tiếp theo cùng ngày:** hai lỗi P1 dưới đây đã được sửa/kiểm local trong [bản sửa start và quota chung mạng](AUDIO_START_NETWORK_FIX.md). Giữ số đo và kết luận của lượt trước nguyên nghĩa lịch sử; không biến log RED dưới đây thành GREEN. Nghiệm thu thiết bị thật và công suất production vẫn chưa hoàn tất.
+
 ## Lỗi cần xử lý trước phát hành
 
 1. **P1 — start đã ghi nhưng trình duyệt nhận 500:** lượt chẩn đoán 120 người có 25 lỗi chờ kết nối PostgreSQL; đọc lại thấy chính 25 phiên đó đã bắt đầu nhưng không mở hold. Thời gian có thể trôi khi học viên chưa vào được màn hình nghe. Kết quả này nghiêm trọng hơn việc mở bài chậm; không dùng số 25 người đạt để bỏ qua lỗi mất ACK/5xx, vì lỗi đó có thể xảy ra ở tải thấp vì nguyên nhân khác.

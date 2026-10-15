@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {AudioRecoveryError} from './audio-recovery.js';
 import {assertAudioOwner} from './audio-owner.js';
+import {randomUUID} from 'node:crypto';
 
 // Nhận yêu cầu đúng phiên; giao dịch giữ mốc/nháp/bù giờ cùng một khóa session.
 // Kết quả luôn là snapshot đã ghi. Sự cố chưa rõ hoặc quá 900 giây giữ bài chờ giáo viên.
@@ -41,6 +42,7 @@ function snapshot(row,incident,granted=0){
   return{audioProtocolVersion:Number(row.listening_audio_protocol_version)||0,audioRevision:Number(row.listening_audio_revision)||0,
     audioPhase:row.listening_submitted_at?'submitted':incident?(incident.needs_teacher?'waiting_teacher':'holding'):'playing',
     activeIncident:incident?{incidentId:incident.incident_id,anchorSeconds:Number(incident.anchor_seconds),
+      startup:incident.request_payload?.startupGuardVersion===1,
       openedAt:new Date(incident.opened_at).toISOString(),remainingMs:Number(incident.remaining_ms)}:null,
     needsTeacher:Boolean(incident?.needs_teacher),canSubmit:!incident&&!row.listening_submitted_at,
     listeningDeadlineAt:row.listening_deadline_at?new Date(row.listening_deadline_at).toISOString():null,
@@ -55,6 +57,15 @@ export async function activateListeningProtection(db,input,slug,enabled){
     await db.query(`UPDATE assessment.term_test_exam_session SET listening_audio_protocol_version=1
       WHERE id=$1`,[row.id]);
   }
+  return row;
+}
+// Giữ thời gian trong chính giao dịch start; mất ACK/5xx sau commit không để phiên trôi giờ.
+// Chỉ client có handshake phát đầu tiên mới dùng; không nâng phiên cũ đã bắt đầu giữa bài.
+export async function guardListeningStart(db,input,slug,duration,before){
+  if(input.audioStartGuardVersion!==1||before?.listening_started_at)return;
+  const id=randomUUID();
+  await openIncident(db,{...input,eventId:id,incidentId:id,reason:'startup_failed',startupGuardVersion:1,
+    heardSeconds:Number(before?.listening_audio_checkpoint_seconds||before?.listening_resume_offset_seconds)||0},slug,duration);
 }
 async function openIncident(db,input,slug,duration){
   const row=await lockedSession(db,input,slug);
