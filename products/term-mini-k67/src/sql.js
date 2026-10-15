@@ -240,6 +240,7 @@ SELECT
   prepared_at,
   generation,
   attempt_mode,
+  audio_owner_protocol,
   listening_started_at,
   listening_deadline_at,
   listening_draft,
@@ -254,6 +255,7 @@ LIMIT 1;`;
 export const resumeTermTestExamSessionSql = `SELECT
   id::text AS exam_session_token,
   generation,
+  audio_owner_protocol,
   test_slug,
   attempt_mode,
   prepared_at,
@@ -404,6 +406,8 @@ RETURNING
   listening_deadline_at,
   listening_audio_checkpoint_seconds,
   listening_recovery_seconds,
+  audio_owner_protocol,
+  generation,
   listening_submitted_at,
   attempt_id::text AS attempt_token,
   now() AS server_now;`;

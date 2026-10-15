@@ -13,6 +13,7 @@ import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
 import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
+import {audioOwnerPool,audioOwnerContext,mountAudioOwner} from './audio-owner.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -320,6 +321,7 @@ export function createApp({
   termTestWritingGradingService = null, termTestAssetService = null, logger = console,
   resultStreamOptions = {}
 }) {
+  pool=audioOwnerPool(pool);
   const app = express();
   
   app.disable('x-powered-by');
@@ -334,6 +336,7 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   }));
   app.use(express.json({ limit: '768kb', strict: true }));
+  app.use(audioOwnerContext);
 
   const build = Object.freeze({
     version: config.appVersion || '1.0.0',
@@ -722,6 +725,7 @@ export function createApp({
       examSessionToken: session.exam_session_token,
       studentName: student.student_name,
       generation: Number(session.generation) || 0,
+      audioOwnerSupported: Boolean(config.audioOwnerEnabled||Number(session.audio_owner_protocol)===1),
       listeningStartedAt: session.listening_started_at || null,
       listeningDeadlineAt: session.listening_deadline_at || null,
       listeningDraft: session.listening_draft || {},
@@ -832,7 +836,11 @@ export function createApp({
     }
     const timing = termTestAssetService.getTiming(slug.data);
     const beginSession=async db=>{
-      if(config.audioCacheEnabled)await authorizeAudioSession(db,parsed.data,slug.data);
+      if(config.audioCacheEnabled||config.audioOwnerEnabled){
+        const auth=await authorizeAudioSession(db,parsed.data,slug.data);
+        if(config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
+          throw new AudioRecoveryError('AUDIO_OWNER_REQUIRED','Hãy tải lại trang và xác nhận quyền phát audio trước khi bắt đầu.');
+      }
       if(parsed.data.audioProtocolVersion===1)await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled);
       return db.query(startTermTestListeningSessionSql, [
       parsed.data.examSessionToken,
@@ -840,12 +848,13 @@ export function createApp({
       timing.listeningTotalSeconds
       ]);
     };
-    const started=parsed.data.audioProtocolVersion===1||config.audioCacheEnabled
+    const started=parsed.data.audioProtocolVersion===1||config.audioCacheEnabled||config.audioOwnerEnabled
       ?await audioTransaction(pool,beginSession):await beginSession(pool);
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
     }
     const session = started.rows[0];
+    if(Number(session.audio_owner_protocol)===1)await audioTransaction(pool,db=>authorizeAudioSession(db,parsed.data,slug.data));
     let audioProgress={listeningResumeAtSeconds:Number(session.listening_audio_checkpoint_seconds)||0,
       listeningRecoverySeconds:Number(session.listening_recovery_seconds)||0};
     if(!session.listening_submitted_at&&(parsed.data.audioEventId||parsed.data.heardSeconds!==undefined))audioProgress=await checkpointListeningAudio(pool,{
@@ -858,6 +867,7 @@ export function createApp({
       ok: true,
       examSessionToken: session.exam_session_token,
       studentName: session.student_name,
+      generation: Number(session.generation)||0,
       listeningStartedAt: session.listening_started_at,
       listeningDeadlineAt: session.listening_deadline_at,
       serverNow: session.server_now,
@@ -879,6 +889,7 @@ export function createApp({
     keyGenerator:req=>String(req.body?.examSessionToken||'invalid'),message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
   mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled});
+  mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
@@ -1576,6 +1587,7 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});
     if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
     if(error?.code==='P6702')return res.status(409).json({ok:false,error:'AUDIO_SESSION_REQUIRED',message:'Hãy dùng đúng phiên Listening đang mở để nộp bài.'});
     if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});

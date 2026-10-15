@@ -47,7 +47,7 @@ const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[s
     res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(wav),cipher.final(),cipher.getAuthTag()]));}};
 const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
 if(protection)for(const value of Object.values(timing)){value.listeningDurationSeconds=toneSeconds;value.listeningTotalSeconds=toneSeconds+120;}
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});

@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {AudioRecoveryError} from './audio-recovery.js';
+import {assertAudioOwner} from './audio-owner.js';
 
 // Nhận yêu cầu đúng phiên; giao dịch giữ mốc/nháp/bù giờ cùng một khóa session.
 // Kết quả luôn là snapshot đã ghi. Sự cố chưa rõ hoặc quá 900 giây giữ bài chờ giáo viên.
@@ -7,7 +8,7 @@ const base=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonne
 const position=z.number().min(0).max(7200);
 const answers=z.record(z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),z.string().max(120));
 const incidentInput=base.extend({eventId:z.uuid(),incidentId:z.uuid(),heardSeconds:position,
-  reason:z.enum(['manual','pause','waiting','stalled','error','startup_failed','reload']),
+  reason:z.enum(['manual','pause','waiting','stalled','error','startup_failed','reload','muted','freeze','lifecycle','output_lost','output_change','media_pause','media_seek']),
   answers:answers.optional(),draftRevision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional()});
 const resumeInput=base.extend({eventId:z.uuid(),incidentId:z.uuid(),resumeAttemptId:z.uuid(),
   phase:z.enum(['prepare','confirm']),heardSeconds:position});
@@ -28,6 +29,7 @@ async function lockedSession(db,input,slug){
     FROM assessment.term_test_attempt WHERE exam_session_id=$1 AND superseded_at IS NULL`,[row.id])).rows[0];
   if((attempt&&(Number(attempt.generation)!==Number(row.generation)||attempt.listening_submitted_at))
     ||(row.exam_mode==='read_first'&&(!attempt?.reading_submitted_at)))throw fail('AUDIO_PROGRESS_LOCKED','Kỹ năng Listening chưa mở hoặc đã kết thúc.');
+  assertAudioOwner(row);
   return row;
 }
 export async function listeningAudioSnapshot(db,id){

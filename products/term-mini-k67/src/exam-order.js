@@ -41,6 +41,7 @@ export function orderState(row) {
 }
 const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
   s.listening_audio_checkpoint_seconds AS session_checkpoint_seconds,s.listening_recovery_seconds AS session_recovery_seconds,
+  s.audio_owner_protocol AS session_owner_protocol,
   s.listening_draft AS session_draft,s.listening_draft_revision AS session_revision,
   s.listening_draft_updated_at,
   s.superseded_at AS session_superseded_at,s.generation AS session_generation,
@@ -149,7 +150,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
       if(req.path.endsWith('/order/open'))return res.json({ok:true,examMode:'lis_first'});
       return next();
     }
-    res.json({...orderState(out),studentRef:data.studentRef,
+    res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
       encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
       previewAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/preview`});
   }
@@ -207,7 +208,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
     const owner=identity.safeParse(req.body);if(!owner.success)throw error('IDENTITY_REQUIRED','Hãy xác nhận lại tên.',400);
     const found=await pool.query(findStudentForTermTestSql,[owner.data.classCode,row.test_slug,owner.data.studentRef]);
     if(found.rows[0]?.student_id!==String(row.erp_student_contact_id)||found.rows[0]?.class_id!==String(row.erp_course_class_id))throw error('ATTEMPT_NOT_FOUND','Không tìm thấy lượt bài của người này.',404);
-    res.json({...orderState(row),content:await assets.getContent(row.test_slug),timing:assets.getTiming(row.test_slug)});
+    res.json({...orderState(row),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(row.session_owner_protocol)===1),content:await assets.getContent(row.test_slug),timing:assets.getTiming(row.test_slug)});
   }));
   async function handle(req,res,next,action,paper=false) {
     const slug=paper?'mini-test-lesson-5':req.params.testSlug;
@@ -232,7 +233,11 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
       if(action.endsWith('start')) {
-        if(action==='listening/start'&&r.exam_delivery==='cbt'&&config.audioCacheEnabled)await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug);
+        if(action==='listening/start'&&r.exam_delivery==='cbt'){
+          const auth=await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug,false,!config.audioCacheEnabled&&!config.audioOwnerEnabled);
+          if(config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
+            throw error('AUDIO_OWNER_REQUIRED','Hãy tải lại trang để xác nhận quyền phát audio.');
+        }
         if(state.nextSection!==section&&!r[`${section}_submitted_at`])throw error('SECTION_NOT_OPEN','Hãy hoàn thành kỹ năng trước.');
         if(r[`${section}_submitted_at`])return r;
         if(section==='reading')await db.query(`UPDATE assessment.term_test_attempt SET reading_started_at=coalesce(reading_started_at,$3::timestamptz),

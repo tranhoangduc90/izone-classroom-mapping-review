@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {audioTransaction,listeningAudioSnapshot} from './audio-incidents.js';
 import {AudioRecoveryError} from './audio-recovery.js';
+import {assertAudioOwner} from './audio-owner.js';
 
 // Nhận mã phiên từ POST; kiểm quyền hiện tại trước khi cấp metadata hoặc khóa trong RAM.
 // Metadata ghim một lần: thay file trên server không được đổi nội dung của phiên đang thi.
@@ -17,9 +18,10 @@ export async function pinAudioManifest(db,assets,slug,token) {
 }
 export const audioManifestFor=async(pool,assets,slug,token)=>audioTransaction(pool,db=>pinAudioManifest(db,assets,slug,token));
 
-export async function authorizeAudioSession(db,input,slug){
+export async function authorizeAudioSession(db,input,slug,skipOwner=false,onlyOwner=false){
   const row=(await db.query(`SELECT * FROM assessment.term_test_exam_session WHERE id=$1 AND test_slug=$2 FOR UPDATE`,[input.examSessionToken,slug])).rows[0];
   const now=(await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
+  if(onlyOwner&&Number(row?.audio_owner_protocol)!==1)return{row,now};
   if(!row||row.superseded_at||row.listening_submitted_at||row.attempt_mode==='answer_sheet'
     ||Number(row.generation)!==Number(input.generation??0))throw new AudioRecoveryError('AUDIO_ACCESS_LOCKED','Phiên audio không còn hợp lệ.');
   const attempt=(await db.query(`SELECT generation,superseded_at,listening_submitted_at,reading_submitted_at
@@ -27,6 +29,7 @@ export async function authorizeAudioSession(db,input,slug){
   if((attempt&&(attempt.superseded_at||attempt.listening_submitted_at||Number(attempt.generation)!==Number(row.generation)))
     ||(row.exam_mode==='read_first'&&!attempt?.reading_submitted_at)
     ||(!attempt&&new Date(now)-new Date(row.prepared_at)>8*3600_000))throw new AudioRecoveryError('AUDIO_ACCESS_LOCKED','Phiên audio đã hết quyền truy cập.');
+  if(!skipOwner)assertAudioOwner(row);
   return {row,now};
 }
 
