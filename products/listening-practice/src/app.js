@@ -4,9 +4,10 @@ import {rateLimit} from 'express-rate-limit';
 import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
 import {ListeningError,hash,secret,uuid} from './domain.js';
+import {matchingReview} from './review.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash,review=null}){
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
@@ -20,6 +21,12 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
+ // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
+ const withReview=(result,path)=>matchingReview(review,result)?{...result,review,reviewAudioUrl:path}:result;
+ const sendReviewAudio=(result,res)=>{
+  if(!matchingReview(review,result)||!audioFile||review.audioSha256!==audioHash)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
+  res.set('Cache-Control','private, no-store');res.type('audio/mpeg');res.sendFile(audioFile);
+ };
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
  const session=z.object({attemptId:z.uuid()});
  const lease=z.object({id:z.uuid(),token:z.string().regex(/^[\w-]{43}$/),owner:z.string().min(1).max(100)}).strict();
@@ -43,7 +50,14 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.json(await service[action]({...input,token:token(req)}));
  }));
  app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
- app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
+ app.get('/api/result/:attemptId',wrap(async(req,res)=>{
+  const id=z.uuid().parse(req.params.attemptId),result=await service.result({token:token(req),attemptId:id});
+  res.set('Cache-Control','no-store');res.json(withReview(result,`review-audio/${id}`));
+ }));
+ app.get('/api/review-audio/:attemptId',wrap(async(req,res)=>{
+  const result=await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
+  sendReviewAudio(result,res);
+ }));
  app.post('/api/teacher/login',wrap(async(req,res)=>{
   const {credential}=z.object({credential:z.string().min(10).max(10000)}).strict().parse(req.body);
   let identity;
@@ -63,7 +77,15 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const cookie=token(req)||/(?:^|;\s*)listening_teacher=([\w-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
   const identity=cookie&&(await pool.query('SELECT email,google_subject FROM listening_practice.teacher_session WHERE token_hash=$1 AND expires_at>now()',[hash(cookie)])).rows[0];
   if(!identity)throw new ListeningError('TEACHER_LOGIN_REQUIRED','Giảng viên cần đăng nhập Google.',401);
-  res.set('Cache-Control','no-store');res.json(await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject}));
+  const id=z.uuid().parse(req.params.submissionId),result=await service.teacherResult({submissionId:id,email:identity.email,subject:identity.google_subject});
+  res.set('Cache-Control','no-store');res.json(withReview(result,`teacher/review-audio/${id}`));
+ }));
+ app.get('/api/teacher/review-audio/:submissionId',wrap(async(req,res)=>{
+  const cookie=token(req)||/(?:^|;\s*)listening_teacher=([\w-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
+  const identity=cookie&&(await pool.query('SELECT email,google_subject FROM listening_practice.teacher_session WHERE token_hash=$1 AND expires_at>now()',[hash(cookie)])).rows[0];
+  if(!identity)throw new ListeningError('TEACHER_LOGIN_REQUIRED','Giảng viên cần đăng nhập Google.',401);
+  const result=await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject});
+  sendReviewAudio(result,res);
  }));
  app.use('/api/admin',(req,res,next)=>{
   const value=req.headers['x-listening-admin'];
