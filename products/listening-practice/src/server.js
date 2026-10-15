@@ -9,6 +9,7 @@ import {createListeningService} from './service.js';
 import {createApp} from './app.js';
 import {createDocsAdapter,createDocsWorker} from './docs.js';
 import {createOwnerVerifier} from './owner.js';
+import {loadReview} from './review.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -26,7 +27,8 @@ const verifyBinding=createOwnerVerifier({url:c.LISTENING_OWNER_SOURCE_URL,key:c.
 const service=createListeningService({pool,context,pageBase:c.LISTENING_PAGE_BASE,verifyBinding});
 const verifier=new OAuth2Client(c.LISTENING_GOOGLE_CLIENT_ID);
 const audioHash=crypto.createHash('sha256').update(await readFile(c.LISTENING_AUDIO_FILE)).digest('hex');
-const app=createApp({pool,service,audioFile:c.LISTENING_AUDIO_FILE,audioHash,origins:c.origins,googleClientId:c.LISTENING_GOOGLE_CLIENT_ID,adminKey:c.LISTENING_ADMIN_KEY,
+const review=await loadReview(c.LISTENING_REVIEW_FILE,audioHash);
+const app=createApp({pool,service,review,audioFile:c.LISTENING_AUDIO_FILE,audioHash,origins:c.origins,googleClientId:c.LISTENING_GOOGLE_CLIENT_ID,adminKey:c.LISTENING_ADMIN_KEY,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.LISTENING_GOOGLE_CLIENT_ID})).getPayload()});
 const worker=createDocsWorker({pool,docs});
 let stopping=false;

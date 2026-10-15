@@ -49,6 +49,7 @@ services:
       - context-readonly
     volumes:
       - ./private/audio.mp3:/private/audio.mp3:ro
+      - ./private/review.json:/private/review.json:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m
