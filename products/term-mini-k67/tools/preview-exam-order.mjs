@@ -35,7 +35,7 @@ const configs=new Map();for(const slug of Object.keys(timing))configs.set(slug,a
 const questions=(slug,skill)=>configs.get(slug)[skill].controls.map(c=>`<p data-question-number="${c.number}">Câu ${c.number} · Đáp án thử <span data-answer-slot="${c.number}"></span></p>`).join('');
 const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUntilComplete:true,
   timing:{readingMinutes:timing[slug].readingDurationMinutes,writingMinutes:timing[slug].writingDurationMinutes},
-  audio:{label:'Âm thanh mô phỏng 2 giây',durationLabel:'02:00',src:'/preview-tone.wav'},
+  audio:{label:`Âm thanh mô phỏng ${toneSeconds} giây`,durationLabel:`${Math.floor(toneSeconds/60)}:${String(toneSeconds%60).padStart(2,'0')}`,src:'/preview-tone.wav'},
   listening:{instructions:['Đây là câu hỏi giả để thử hành trình. Nhập một đáp án và nộp để chuyển phần.'],sections:[{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}]},
   reading:{instructions:['Đề giả; thời gian và thứ tự dùng chính sách K67.'],sections:[{label:'Reading thử',title:'Bài đọc mô phỏng',range:'Questions',passageHtml:'<p>Đây là bài đọc thử. Không phải nội dung đề thi đang chạy.</p>',questionsHtml:questions(slug,'reading')}]},
   writing:slug==='mini-test-lesson-5'?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
@@ -44,7 +44,8 @@ const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[s
   getContent:async slug=>content(slug),getSessionAudioKey:()=>key,getPreview:async()=>wav,
   streamEncryptedAudio:async(_slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
     res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(wav),cipher.final(),cipher.getAuthTag()]));}};
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});
@@ -57,9 +58,19 @@ outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-
 outer.get('/preview/audio-state',async(req,res)=>{
   if(!/^[0-9a-f-]{36}$/.test(req.query.id||''))return res.status(400).json({ok:false});
   const row=(await fixture.db.query(`SELECT listening_audio_checkpoint_seconds,listening_audio_checkpoint_at,
-    listening_audio_state,listening_recovery_seconds,listening_deadline_at,listening_submitted_at
+    listening_audio_state,listening_recovery_seconds,listening_deadline_at,listening_submitted_at,
+    listening_audio_protocol_version,listening_audio_revision,listening_audio_incident_id,listening_draft,listening_draft_revision
     FROM assessment.term_test_exam_session WHERE id=$1`,[req.query.id])).rows[0];
   res.json({ok:true,fixtureOnly:true,...row});
+});
+// Điều khiển thời gian chỉ tồn tại ở công cụ localhost chứa dữ liệu giả; không mount trong app production.
+if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)=>{
+  const {id,seconds,deadlineSeconds,recoveryUsed}=req.body;
+  if(!/^[0-9a-f-]{36}$/.test(id||'')||![seconds,deadlineSeconds,recoveryUsed].every(x=>x===undefined||Number.isFinite(x)))return res.status(400).json({ok:false});
+  if(seconds!==undefined)await fixture.db.query(`UPDATE assessment.term_test_audio_incident SET opened_at=clock_timestamp()-make_interval(secs=>$2::double precision) WHERE exam_session_id=$1 AND resolved_at IS NULL`,[id,seconds]);
+  if(deadlineSeconds!==undefined)await fixture.db.query(`UPDATE assessment.term_test_exam_session SET listening_deadline_at=clock_timestamp()+make_interval(secs=>$2::double precision) WHERE id=$1`,[id,deadlineSeconds]);
+  if(recoveryUsed!==undefined)await fixture.db.query('UPDATE assessment.term_test_exam_session SET listening_recovery_seconds=$2 WHERE id=$1',[id,recoveryUsed]);
+  res.json({ok:true,fixtureOnly:true});
 });
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(`window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`));
 outer.get('/preview-tone.wav',(_req,res)=>res.type('audio/wav').send(wav));

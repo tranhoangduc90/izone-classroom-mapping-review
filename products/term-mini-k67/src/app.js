@@ -11,6 +11,7 @@ import { createContextGuard } from './context-guard.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
+import {mountAudioIncidents,audioTransaction,activateListeningProtection,listeningAudioSnapshot} from './audio-incidents.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -77,6 +78,7 @@ const examSessionPrepareSchema = z.object({
 });
 
 const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
+  audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
 const audioProgressSchema = z.object({examSessionToken:z.uuid(),heardSeconds:z.number().min(0).max(7200),
   state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered']),eventId:z.uuid().optional(),
@@ -825,11 +827,16 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu bắt đầu bài thi không hợp lệ.' });
     }
     const timing = termTestAssetService.getTiming(slug.data);
-    const started = await pool.query(startTermTestListeningSessionSql, [
+    const beginSession=async db=>{
+      if(parsed.data.audioProtocolVersion===1)await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled);
+      return db.query(startTermTestListeningSessionSql, [
       parsed.data.examSessionToken,
       slug.data,
       timing.listeningTotalSeconds
-    ]);
+      ]);
+    };
+    const started=parsed.data.audioProtocolVersion===1
+      ?await audioTransaction(pool,beginSession):await beginSession(pool);
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
     }
@@ -850,6 +857,7 @@ export function createApp({
       listeningDeadlineAt: session.listening_deadline_at,
       serverNow: session.server_now,
       ...audioProgress,
+      ...(parsed.data.audioProtocolVersion===1?await listeningAudioSnapshot(pool,parsed.data.examSessionToken):{}),
       examMode: 'lis_first',
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
@@ -863,6 +871,7 @@ export function createApp({
   // Tiến độ có bộ đếm riêng để không chiếm quota lưu đáp án; không phụ thuộc bộ đệm lớp mới.
   const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
     keyGenerator:req=>String(req.body?.examSessionToken||'invalid'),message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
+  mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
@@ -1560,6 +1569,8 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
+    if(error?.code==='P6702')return res.status(409).json({ok:false,error:'AUDIO_SESSION_REQUIRED',message:'Hãy dùng đúng phiên Listening đang mở để nộp bài.'});
     if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     if (error instanceof TermTestWritingGradingError) {
       return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message });
