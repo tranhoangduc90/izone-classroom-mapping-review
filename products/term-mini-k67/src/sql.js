@@ -1143,7 +1143,10 @@ SELECT
         AND stored.erp_student_contact_id = student.erp_student_contact_id
         AND stored.writing_submitted_at IS NOT NULL
         AND stored.superseded_at IS NULL
-      ORDER BY stored.writing_submitted_at DESC, stored.created_at DESC, stored.id DESC
+      -- Phiếu dự phòng có thể thu Writing trắng sau khi hết giờ; không để nó che bài thật.
+      -- Nếu chỉ có bài trắng vẫn giữ lượt/bài chấm đó, không thay đổi dữ liệu đã lưu.
+      ORDER BY ((coalesce(stored.writing_task_1, '') || coalesce(stored.writing_task_2, '')) ~ '[^[:space:]]') DESC,
+        stored.writing_submitted_at DESC, stored.created_at DESC, stored.id DESC
       LIMIT 1
     ) AS writing_attempt ON true
     LEFT JOIN LATERAL (
@@ -1229,7 +1232,8 @@ latest_attempt AS (
           AND temporary.active = true
       )
     )
-  ORDER BY attempt.writing_submitted_at DESC, attempt.created_at DESC, attempt.id DESC
+  ORDER BY ((coalesce(attempt.writing_task_1, '') || coalesce(attempt.writing_task_2, '')) ~ '[^[:space:]]') DESC,
+    attempt.writing_submitted_at DESC, attempt.created_at DESC, attempt.id DESC
   LIMIT 1
 ),
 detail AS (
