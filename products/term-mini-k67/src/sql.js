@@ -579,10 +579,15 @@ export const insertListeningAttemptSql = `WITH inserted AS (
     student_name_snapshot,
     listening_answers,
     listening_result,
-    listening_submitted_at
+    listening_submitted_at,writing_scope,writing_source_attempt_id
   ) VALUES (
     $1::uuid, $2, $3::int, $4::bigint, $5, $6::bigint, $7,
-    $8::jsonb, $9::jsonb, now()
+    $8::jsonb, $9::jsonb, now(),'lr_only',
+    (SELECT previous.id FROM assessment.term_test_attempt previous
+      WHERE previous.test_slug=$2 AND previous.definition_version=$3::int
+        AND previous.erp_course_class_id=$4::bigint AND previous.erp_student_contact_id=$6::bigint
+        AND previous.writing_scope='exam' AND previous.superseded_at IS NULL
+      ORDER BY previous.created_at DESC,previous.id DESC LIMIT 1)
   )
   ON CONFLICT DO NOTHING
   RETURNING *
@@ -769,7 +774,7 @@ LIMIT 1;`;
 
 export const saveTermTestWritingSql = `WITH locked AS MATERIALIZED (
   SELECT * FROM assessment.term_test_attempt
-  WHERE id=$1::uuid AND completed_at IS NOT NULL
+  WHERE id=$1::uuid AND completed_at IS NOT NULL AND writing_scope='exam'
   FOR UPDATE
 ), timed AS MATERIALIZED (
   SELECT locked.*, clock_timestamp() AS request_at FROM locked
@@ -830,11 +835,12 @@ SELECT resolved.id::text AS attempt_token, resolved.test_slug,
   resolved.writing_task_1, resolved.writing_task_2, resolved.writing_draft_revision,
   resolved.writing_started_at, resolved.writing_deadline_at,
   resolved.writing_updated_at, resolved.writing_submitted_at,
+  resolved.writing_scope,resolved.writing_source_attempt_id,
   decision.request_at AS server_now, decision.expired AS writing_timed_out,
   decision.accepted AS writing_accepted, decision.reason AS writing_reason
 FROM resolved JOIN decision ON decision.id=resolved.id;`;
 
-export const findTermTestAttemptSlugSql = `SELECT test_slug
+export const findTermTestAttemptSlugSql = `SELECT test_slug,writing_scope
 FROM assessment.term_test_attempt
 WHERE id = $1::uuid
   AND completed_at IS NOT NULL
@@ -867,6 +873,7 @@ export const fetchTermTestResultSql = `SELECT
   attempt.writing_deadline_at,
   attempt.writing_updated_at,
   attempt.writing_submitted_at,
+  attempt.writing_scope,attempt.writing_source_attempt_id,
   attempt.listening_result,
   attempt.combined_result,
   definition.title AS test_title,
@@ -1142,11 +1149,10 @@ SELECT
         AND stored.erp_course_class_id = student.erp_course_class_id
         AND stored.erp_student_contact_id = student.erp_student_contact_id
         AND stored.writing_submitted_at IS NOT NULL
+        AND stored.writing_scope = 'exam'
         AND stored.superseded_at IS NULL
-      -- Phiếu dự phòng có thể thu Writing trắng sau khi hết giờ; không để nó che bài thật.
-      -- Nếu chỉ có bài trắng vẫn giữ lượt/bài chấm đó, không thay đổi dữ liệu đã lưu.
-      ORDER BY ((coalesce(stored.writing_task_1, '') || coalesce(stored.writing_task_2, '')) ~ '[^[:space:]]') DESC,
-        stored.writing_submitted_at DESC, stored.created_at DESC, stored.id DESC
+      -- Bài chính thức mới nhất được giữ kể cả điểm 0; phiếu L/R được loại bằng scope.
+      ORDER BY stored.writing_submitted_at DESC, stored.created_at DESC, stored.id DESC
       LIMIT 1
     ) AS writing_attempt ON true
     LEFT JOIN LATERAL (
@@ -1204,6 +1210,7 @@ latest_attempt AS (
   WHERE attempt.test_slug = $2
     AND attempt.definition_version = (SELECT version FROM definition)
     AND attempt.writing_submitted_at IS NOT NULL
+    AND attempt.writing_scope = 'exam'
     AND attempt.superseded_at IS NULL
     AND (
       EXISTS (
@@ -1232,8 +1239,7 @@ latest_attempt AS (
           AND temporary.active = true
       )
     )
-  ORDER BY ((coalesce(attempt.writing_task_1, '') || coalesce(attempt.writing_task_2, '')) ~ '[^[:space:]]') DESC,
-    attempt.writing_submitted_at DESC, attempt.created_at DESC, attempt.id DESC
+  ORDER BY attempt.writing_submitted_at DESC, attempt.created_at DESC, attempt.id DESC
   LIMIT 1
 ),
 detail AS (
@@ -1243,6 +1249,9 @@ detail AS (
       'taskNumber', run.task_number,
       'taskScore', run.task_score,
       'wordCount', run.word_count,
+      'gradingMethod',run.result_json->>'gradingMethod',
+      'ruleVersion',run.result_json->>'ruleVersion',
+      'source',run.result_json->'source',
       'essay', coalesce(
         CASE WHEN run.task_number = 1 THEN attempt.writing_task_1 ELSE attempt.writing_task_2 END,
         ''

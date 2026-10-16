@@ -9,7 +9,9 @@ export const notificationStatusSql = `SELECT
     ELSE next_attempt_at END) FILTER (WHERE status IN ('queued','retry_wait','processing')) AS next_at,
   min(lease_until) FILTER (WHERE status='processing' AND lease_until>now()) AS next_lease,
   now() AS server_now
-FROM assessment.term_test_writing_grading_job;`;
+FROM assessment.term_test_writing_grading_job
+WHERE run_id IN (SELECT run.id FROM assessment.term_test_writing_grading_run run
+  JOIN assessment.term_test_attempt attempt ON attempt.id=run.attempt_id WHERE attempt.writing_scope='exam');`;
 
 export function createTermTestWritingNotifier({
   pool,

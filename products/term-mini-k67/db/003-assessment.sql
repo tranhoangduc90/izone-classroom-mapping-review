@@ -97,6 +97,8 @@ CREATE TABLE assessment.term_test_attempt (
     reading_draft_revision bigint DEFAULT 0 NOT NULL,
     superseded_at timestamp with time zone,
     writing_draft_revision bigint DEFAULT 0 NOT NULL,
+    writing_scope text DEFAULT 'exam' NOT NULL CHECK (writing_scope IN ('exam','lr_only')),
+    writing_source_attempt_id uuid,
     CONSTRAINT term_test_attempt_completion_check CHECK ((((completed_at IS NULL) AND (reading_answers IS NULL) AND (reading_result IS NULL) AND (combined_result IS NULL)) OR ((completed_at IS NOT NULL) AND (reading_answers IS NOT NULL) AND (reading_result IS NOT NULL) AND (combined_result IS NOT NULL)))),
     CONSTRAINT term_test_attempt_section_deadline_check CHECK ((((reading_started_at IS NULL) AND (reading_deadline_at IS NULL)) OR ((reading_started_at IS NOT NULL) AND (reading_deadline_at > reading_started_at)))),
     CONSTRAINT term_test_attempt_writing_draft_revision_check CHECK ((writing_draft_revision >= 0)),

@@ -2,7 +2,7 @@
 
 Gói này phục vụ thi, chấm và xem kết quả K67. Mã nghiệp vụ được ghim từ snapshot backend đang chạy; ứng dụng không khởi động Speaking, Progress Log hoặc Writing ngoài Term.
 
-**Bản kết quả 17/10/2026:** đọc [Writing có nội dung, hai Term và hai thứ tự](WRITING_RESULT_RELEASE_20261017.md) trước các snapshot phát hành cũ. Giữ bản audio Pages hiện hành; lượt Writing rỗng mới không che bài thật đã nộp. Chỉ module SQL thay trên exact image live, không suy toàn main tương đương runtime.
+**Bản hiện hành 17/10/2026:** đọc [Quy tắc bài trắng và phiếu dự phòng](BLANK_WRITING_RELEASE_20261017.md). Áp dụng Term 1/2, Listening trước và Reading trước: bài chính thức nộp trắng nhận 0 không gọi AI; phiếu L/R không tạo Writing. Bản này thay luật ưu tiên bài có nội dung của [đợt khôi phục trước](WRITING_RESULT_RELEASE_20261017.md). Giữ ảnh audio làm nền; không suy toàn main tương đương runtime.
 
 ## Cách dựng và chạy
 

@@ -270,6 +270,7 @@ function hasValidSharedSecret(supplied, expected) {
 
 function serializeTermTestWriting(row, grading = null) {
   return {
+    ...(row?.writing_scope ? {scope:row.writing_scope,sourceAttemptId:row.writing_source_attempt_id||null}:{}),
     task1: String(row?.writing_task_1 || ''),
     task2: String(row?.writing_task_2 || ''),
     revision: Number(row?.writing_draft_revision) || 0,
@@ -370,6 +371,7 @@ export function createApp({
   mountDesignTrial(app, { pool });
 
   async function ensureTermTestWritingGrading(row) {
+    if (row?.writing_scope==='lr_only') return null;
     if (!termTestWritingGradingService || !row?.writing_submitted_at) return null;
     if (!termTestAssetService) {
       throw new TermTestWritingGradingError(
@@ -1212,6 +1214,9 @@ export function createApp({
       return clientUpdateRequired();
     }
     const attemptSlugResult = await pool.query(findTermTestAttemptSlugSql, [parsed.data.attemptToken]);
+    if (attemptSlugResult.rows[0]?.writing_scope==='lr_only') return res.status(409).json({
+      ok:false,error:'WRITING_NOT_APPLICABLE',message:'Phiếu này chỉ nhập Listening/Reading. Writing được giữ ở lượt thi chính thức.'
+    });
     const attemptSlug = String(attemptSlugResult.rows[0]?.test_slug || '');
     const writingMinutes = supportsProtectedTest(attemptSlug)
       ? termTestAssetService.getTiming(attemptSlug).writingDurationMinutes

@@ -51,7 +51,7 @@ for(const slug of Object.keys(timings))for(const delivery of ['cbt','answer_shee
     assert.equal((Date.parse(listen.body.listeningDeadlineAt)-Date.parse(listen.body.listeningStartedAt))/1000,timings[slug].listeningTotalSeconds);assert.ok(listen.body.audioKey);
   }
   const submitted=await post(`${base}/listening`,{...token,answers:{11:'A'},clientSubmissionId:randomUUID()});assert.equal(submitted.status,200,JSON.stringify(submitted.body));
-  assert.equal(submitted.body.completed,true);assert.equal(submitted.body.next,slug.startsWith('term')?'writing':'result');
+  assert.equal(submitted.body.completed,true);assert.equal(submitted.body.next,slug.startsWith('term')&&delivery==='cbt'?'writing':'result');
   assert.equal(submitted.body.result.listening.correct,1);assert.equal(submitted.body.result.reading.correct,1);
   const again=await post(`${base}/listening`,{...token,answers:{11:'B'},clientSubmissionId:randomUUID()});assert.deepEqual(again.body.result,submitted.body.result);
   const rows=(await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows;assert.equal(rows.length,1);assert.deepEqual(rows[0].reading_answers,{14:'A'});assert.deepEqual(rows[0].listening_answers,{11:'A'});

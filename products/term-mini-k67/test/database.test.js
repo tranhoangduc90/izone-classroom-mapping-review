@@ -147,7 +147,7 @@ test('Hàng chấm thật giữ trần bốn job, lease 180 phút và từ chố
     await appPool.query(`UPDATE assessment.term_test_attempt
       SET reading_answers='{}',reading_result='{}',combined_result='{}',reading_submitted_at=now(),
           completed_at=now(),writing_started_at=now(),writing_updated_at=now(),
-          writing_submitted_at=now(),writing_task_1='Bài mô phỏng'
+          writing_submitted_at=now(),writing_task_1='Bài mô phỏng',writing_scope='exam'
       WHERE id=$1`, [row.attempt_token]);
     await service.ensureSubmission({ attemptToken: row.attempt_token, testSlug: 'term-test-1', task1: 'Bài mô phỏng', task2: '', taskDefinitions: [{ id: 'task1', prompt: 'Đề mô phỏng K67' }] });
   }
