@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { mountDesignDemo } from "./design-demo.js";
 import { mountDesignTrial } from './design-trial.js';
 import express from "express";
+import {mountReadiness} from './readiness.js';
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import { z } from "zod";
@@ -321,7 +322,7 @@ export function createApp({
   config, pool, verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   termTestWritingGradingService = null, termTestAssetService = null, logger = console,
-  resultStreamOptions = {}
+  resultStreamOptions = {}, readinessAudioSource
 }) {
   const rateIdentity=examRateIdentity(pool);
   pool=audioOwnerPool(pool);
@@ -332,6 +333,8 @@ export function createApp({
   app.use(helmet());
   app.use(addCors(config));
   app.use(express.json({ limit: '768kb', strict: true }));
+  // Tuyến làm quen có limiter/phiên riêng, không tiêu hạn mức bài thi của cả lớp cùng IP.
+  mountReadiness(app,{pool,config,requireContext:createContextGuard({pool}),audioSource:readinessAudioSource});
   app.use(rateIdentity);
   app.use(rateLimit({
     windowMs: 60_000,
