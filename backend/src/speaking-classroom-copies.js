@@ -34,7 +34,16 @@ function hasWhiteCtaStyle(style) {
 }
 
 export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
-  const page = assignmentCode === LESSON_4_CODE
+  // Mã bài quyết định trang; giữ Doc ID và lớp để mở đúng bản homework riêng.
+  const page = assignmentCode === '67-speaking-so_sanh'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-8.html'
+    : assignmentCode === '67-speaking-cach_lam_mot_viec'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-7.html'
+    : assignmentCode === '67-speaking-ly_do_hanh_vi'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-6.html'
+    : assignmentCode === '67-speaking-on_tap_lam_ro_diem_giua'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-5.html'
+    : assignmentCode === LESSON_4_CODE
     ? '/izone-ai-team-pages/speaking-homework/lesson-4.html'
     : assignmentCode === '67-speaking-paraphrase'
       ? '/izone-ai-team-pages/speaking-homework/' : PAGE_PATH;
