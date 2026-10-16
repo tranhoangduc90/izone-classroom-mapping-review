@@ -9,6 +9,7 @@ export async function createReadinessFixture({audioSource,allowedOrigins=new Set
     getSessionAudioKey:()=>Buffer.alloc(32,9)};
   const f=await createMiniFixture({assets});
   await f.db.exec(await readFile(new URL('../../db/013-readiness.sql',import.meta.url),'utf8'));
+  await f.db.exec(await readFile(new URL('../../db/014-readiness-reading-writing.sql',import.meta.url),'utf8'));
   const config={readinessEnabled:enabled,readinessClasses:new Set(['IC2304']),
     termTestSessionSecret:'readiness-local-test-secret-32-characters',allowedOrigins,trustProxyHops:0,
     authMode:'legacy',legacyReviewToken:'fixture-only-key'};

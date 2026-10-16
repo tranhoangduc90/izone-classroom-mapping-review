@@ -73,7 +73,9 @@ export function mountReadiness(app,{pool,config,requireContext,audioSource}) {
   const publicRow=r=>({id:r.id,classCode:r.class_code,studentRef:r.student_ref,studentName:r.student_name,
     packVersion:r.pack_version,sameComputer:r.same_computer,sameHeadphones:r.same_headphones,answers:r.answers,
     revision:Number(r.draft_revision),heardSeconds:Number(r.heard_seconds),heardConfirmed:r.heard_confirmed,
-    cacheState:r.cache_state,submittedAt:r.submitted_at,expiresAt:r.expires_at,serverNow:new Date().toISOString()});
+    cacheState:r.cache_state,submittedAt:r.submitted_at,expiresAt:r.expires_at,serverNow:new Date().toISOString(),
+    practice:Object.fromEntries(['reading','writing'].map(skill=>[skill,{data:r[skill+'_draft'],
+      revision:Number(r[skill+'_revision']),submittedAt:r[skill+'_submitted_at']}]))});
   const read=async hash=>(await pool.query(`SELECT r.*,c.erp_class_name_snapshot AS class_code,s.erp_student_name_snapshot AS student_name
     FROM assessment.k67_readiness_session r JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id=r.class_id
     JOIN mapping.student_mapping_review s ON s.public_id=r.student_ref AND s.erp_course_class_id=r.class_id WHERE token_hash=$1`,[hash])).rows[0];
@@ -148,6 +150,38 @@ export function mountReadiness(app,{pool,config,requireContext,audioSource}) {
       WHERE token_hash=$1 AND submitted_at IS NULL AND draft_revision=$3 RETURNING id`,[r.token_hash,p.heardConfirmed,p.revision]);
     const final=await read(r.token_hash);
     if(!saved.rowCount&&!final.submitted_at)return fail(res,409,'READINESS_DRAFT_CHANGED','Bản nháp chưa khớp. Hãy tải lại để xem bản mới nhất.');
+    res.json({ok:true,session:publicRow(final)});
+  }));
+  // Tên cột chỉ lấy từ danh sách cố định. Hai kỹ năng có revision độc lập;
+  // cùng revision khác dữ liệu bị từ chối, nộp yêu cầu đúng bản đã đọc lại.
+  const practiceSkill=(req,res)=>{
+    const skill=req.params.skill;
+    if(!['reading','writing'].includes(skill)){fail(res,404,'READINESS_SKILL_INVALID','Phần làm quen không hợp lệ.');return null;}
+    if(!req.readiness.submitted_at){fail(res,409,'READINESS_LISTENING_REQUIRED','Hãy hoàn thành kiểm âm thanh trước.');return null;}
+    return skill;
+  };
+  const sameData=(a,b)=>JSON.stringify(Object.entries(a).sort())===JSON.stringify(Object.entries(b).sort());
+  router.post('/practice/:skill/draft',wrap(authorize),wrap(async(req,res)=>{
+    const skill=practiceSkill(req,res);if(!skill)return;
+    const data=skill==='reading'?z.object({1:z.string().max(120).optional(),2:z.string().max(120).optional(),3:z.string().max(120).optional()}).strict():z.object({text:z.string().max(12000)}).strict();
+    const p=parse(base.extend({revision:z.number().int().min(1).max(1e9),data}),req,res);if(!p)return;
+    const r=req.readiness;
+    if(r[skill+'_submitted_at'])return fail(res,409,'READINESS_ALREADY_SUBMITTED','Phần này đã nộp; hãy xem lại kết quả.');
+    await pool.query(`UPDATE assessment.k67_readiness_session SET ${skill}_draft=$2,${skill}_revision=$3
+      WHERE token_hash=$1 AND ${skill}_submitted_at IS NULL AND ${skill}_revision<$3`,[r.token_hash,JSON.stringify(p.data),p.revision]);
+    const final=await read(r.token_hash);
+    if(Number(final[skill+'_revision'])===p.revision&&!sameData(final[skill+'_draft'],p.data))
+      return fail(res,409,'READINESS_DRAFT_CONFLICT','Bản nháp đã đổi ở nơi khác. Tải lại trước khi tiếp tục.');
+    res.json({ok:true,session:publicRow(final)});
+  }));
+  router.post('/practice/:skill/submit',wrap(authorize),wrap(async(req,res)=>{
+    const skill=practiceSkill(req,res);if(!skill)return;
+    const p=parse(base.extend({revision:z.number().int().min(1).max(1e9)}),req,res);if(!p)return;
+    const r=req.readiness;
+    await pool.query(`UPDATE assessment.k67_readiness_session SET ${skill}_submitted_at=clock_timestamp()
+      WHERE token_hash=$1 AND ${skill}_submitted_at IS NULL AND ${skill}_revision=$2`,[r.token_hash,p.revision]);
+    const final=await read(r.token_hash);
+    if(!final[skill+'_submitted_at'])return fail(res,409,'READINESS_DRAFT_CHANGED','Bản nháp chưa khớp. Hãy tải lại để xem bản mới nhất.');
     res.json({ok:true,session:publicRow(final)});
   }));
   router.use((_req,res)=>fail(res,404,'READINESS_ROUTE_NOT_FOUND','Đường làm quen không hợp lệ.'));
