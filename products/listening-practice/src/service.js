@@ -180,7 +180,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   const b=await binding(pool,{token}),state=(await pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state;
   const a=state?.attempts.find(x=>x.id===attemptId&&x.status==='submitted');
   if(!a)fail('RESULT_NOT_AVAILABLE','Chỉ mở đáp án sau khi nộp bài.',404);
-  return{...await view(pool,b,state),attempt:publicAttempt(a),key:b.answer_key,explanations:b.explanations,definition:b.definition};
+  return{...await view(pool,b,state),attempt:publicAttempt(a),key:b.answer_key,explanations:b.explanations,definition:b.definition,contentVersion:b.version};
  }
  async function teacherResult({submissionId,email,subject}){
   const rows=(await pool.query(`SELECT w.binding_id,w.state,a.class_id FROM listening_practice.work w
@@ -189,7 +189,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   if(rows.length!==1)fail('RESULT_NOT_FOUND','Không tìm thấy kết quả.',404);
   if(!await context.teacher(rows[0].class_id,email,subject))fail('ACCESS_DENIED','Tài khoản này chưa có quyền lớp.',403);
   const b=await binding(pool,{bindingId:rows[0].binding_id,history:true}),state=rows[0].state,a=state.attempts.find(x=>x.submissionId===submissionId);
-  return{...await view(pool,b,state),attempt:publicAttempt(a),key:b.answer_key,explanations:b.explanations,definition:b.definition};
+  return{...await view(pool,b,state),attempt:publicAttempt(a),key:b.answer_key,explanations:b.explanations,definition:b.definition,contentVersion:b.version};
  }
  async function audioAccess({token,attemptId}){
   const b=await binding(pool,{token}),state=(await pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state;

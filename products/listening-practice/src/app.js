@@ -3,23 +3,32 @@ import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
 import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
-import {ListeningError,hash,secret,uuid} from './domain.js';
+import {ListeningError,uuid} from './domain.js';
+import {createTeacherSessions} from './teacher-session.js';
+import {matchingReview} from './review.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,teacherCookiePath='/listening-practice-api/api'}){
+ const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
   const origin=req.headers.origin;
   if(origin&&!origins.includes(origin))return res.status(403).json({error:{code:'ORIGIN_DENIED',message:'Trang gọi API không được phép.'}});
   if(origin){res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');res.set('Access-Control-Allow-Credentials','true');}
-  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Listening-Admin');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   if(req.method==='OPTIONS')return res.sendStatus(204);next();
  });
  app.use(express.json({limit:'512kb'}));
  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
+ // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
+ const withReview=(result,path)=>matchingReview(review,result)?{...result,review,reviewAudioUrl:path}:result;
+ const sendReviewAudio=(result,res)=>{
+  if(!matchingReview(review,result)||!audioFile||review.audioSha256!==audioHash)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
+  res.set('Cache-Control','private, no-store');res.type('audio/mpeg');res.sendFile(audioFile);
+ };
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
  const session=z.object({attemptId:z.uuid()});
  const lease=z.object({id:z.uuid(),token:z.string().regex(/^[\w-]{43}$/),owner:z.string().min(1).max(100)}).strict();
@@ -43,9 +52,17 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.json(await service[action]({...input,token:token(req)}));
  }));
  app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
- app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
+ app.get('/api/result/:attemptId',wrap(async(req,res)=>{
+  const id=z.uuid().parse(req.params.attemptId),result=await service.result({token:token(req),attemptId:id});
+  res.set('Cache-Control','no-store');res.json(withReview(result,`review-audio/${id}`));
+ }));
+ app.get('/api/review-audio/:attemptId',wrap(async(req,res)=>{
+  const result=await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
+  sendReviewAudio(result,res);
+ }));
+ app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
-  const {credential}=z.object({credential:z.string().min(10).max(10000)}).strict().parse(req.body);
+  const {credential,remember}=z.object({credential:z.string().min(10).max(10000),remember:z.boolean().default(true)}).strict().parse(req.body);
   let identity;
   try{identity=await verifyGoogle(credential);}catch(error){
    // Thư viện Google có thể chứa token trong lỗi: chỉ nhận diện lỗi xác minh, không trả nội dung gốc.
@@ -55,15 +72,21 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
    throw new ListeningError('GOOGLE_IDENTITY_INVALID','Phiên đăng nhập Google không hợp lệ hoặc đã hết hạn. Hãy đăng nhập lại.',401);
   }
   if(!identity?.email_verified||!identity.email||!identity.sub)throw new ListeningError('GOOGLE_IDENTITY_INVALID','Google chưa xác minh tài khoản.',401);
-  const value=secret();await pool.query('INSERT INTO listening_practice.teacher_session(token_hash,email,google_subject,expires_at) VALUES($1,$2,$3,$4)',[hash(value),identity.email.toLowerCase(),identity.sub,new Date(Date.now()+3600000).toISOString()]);
-  const secure=req.secure||req.headers['x-forwarded-proto']==='https';
-  res.cookie('listening_teacher',value,{httpOnly:true,secure,sameSite:secure?'none':'strict',path:'/api',maxAge:3600000});res.json({email:identity.email,token:value});
+  res.json(await teacherSessions.create(req,res,identity,remember));
+ }));
+ app.post('/api/teacher/logout',wrap(async(req,res)=>{
+  if(!origins.includes(req.headers.origin)||req.headers['x-izone-csrf']!=='1')throw new ListeningError('CSRF_REJECTED','Yêu cầu đăng xuất không hợp lệ.',403);
+  await teacherSessions.logout(req,res);res.json({ok:true});
  }));
  app.get('/api/teacher/result/:submissionId',wrap(async(req,res)=>{
-  const cookie=token(req)||/(?:^|;\s*)listening_teacher=([\w-]{43})(?:;|$)/.exec(req.headers.cookie||'')?.[1];
-  const identity=cookie&&(await pool.query('SELECT email,google_subject FROM listening_practice.teacher_session WHERE token_hash=$1 AND expires_at>now()',[hash(cookie)])).rows[0];
-  if(!identity)throw new ListeningError('TEACHER_LOGIN_REQUIRED','Giảng viên cần đăng nhập Google.',401);
-  res.set('Cache-Control','no-store');res.json(await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject}));
+  const identity=await teacherSessions.read(req);
+  const id=z.uuid().parse(req.params.submissionId),result=await service.teacherResult({submissionId:id,email:identity.email,subject:identity.google_subject});
+  await teacherSessions.refresh(req,res,identity);res.json(withReview(result,`teacher/review-audio/${id}`));
+ }));
+ app.get('/api/teacher/review-audio/:submissionId',wrap(async(req,res)=>{
+  const identity=await teacherSessions.read(req);
+  const result=await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject});
+  await teacherSessions.refresh(req,res,identity);sendReviewAudio(result,res);
  }));
  app.use('/api/admin',(req,res,next)=>{
   const value=req.headers['x-listening-admin'];
@@ -71,6 +94,13 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');next();
  });
  app.get('/api/admin/status',wrap(async(req,res)=>res.json(await service.operationsStatus())));
+ app.post('/api/admin/register-cta',wrap(async(req,res)=>{
+  if(!registerCta)throw new ListeningError('CTA_UNAVAILABLE','Chưa cấu hình đăng ký CTA.',503);
+  const input=z.object({schema_version:z.enum(['course67_cta_registration_v1','course67_cta_registration_v2']),course:z.literal(67),
+   doc_id:z.string().regex(/^[\w-]{20,150}$/),submission_id:z.string().min(1).max(200),
+   classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80)}).parse(req.body);
+  res.json(await registerCta(input));
+ }));
  app.post('/api/admin/assignment',wrap(async(req,res)=>res.json(await service.configureAssignment(z.object({assignmentId:z.uuid(),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/retry-docs',wrap(async(req,res)=>res.json(await service.retryDocJob(z.object({jobId:z.uuid()}).strict().parse(req.body)))));
  app.post('/api/admin/register',wrap(async(req,res)=>{
