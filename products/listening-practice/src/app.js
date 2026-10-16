@@ -8,7 +8,7 @@ import {createTeacherSessions} from './teacher-session.js';
 import {matchingReview} from './review.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,audioFile,audioHash,review=null,teacherCookiePath='/listening-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,teacherCookiePath='/listening-practice-api/api'}){
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
@@ -94,6 +94,13 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');next();
  });
  app.get('/api/admin/status',wrap(async(req,res)=>res.json(await service.operationsStatus())));
+ app.post('/api/admin/register-cta',wrap(async(req,res)=>{
+  if(!registerCta)throw new ListeningError('CTA_UNAVAILABLE','Chưa cấu hình đăng ký CTA.',503);
+  const input=z.object({schema_version:z.enum(['course67_cta_registration_v1','course67_cta_registration_v2']),course:z.literal(67),
+   doc_id:z.string().regex(/^[\w-]{20,150}$/),submission_id:z.string().min(1).max(200),
+   classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80)}).parse(req.body);
+  res.json(await registerCta(input));
+ }));
  app.post('/api/admin/assignment',wrap(async(req,res)=>res.json(await service.configureAssignment(z.object({assignmentId:z.uuid(),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/retry-docs',wrap(async(req,res)=>res.json(await service.retryDocJob(z.object({jobId:z.uuid()}).strict().parse(req.body)))));
  app.post('/api/admin/register',wrap(async(req,res)=>{

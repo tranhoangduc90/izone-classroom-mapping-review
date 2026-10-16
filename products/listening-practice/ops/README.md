@@ -1,5 +1,15 @@
 # Phát hành và vận hành Listening buổi 8
 
+## Tự gắn CTA Classroom — 16/10/2026
+
+`POST /api/admin/register-cta` dùng credential riêng `X-Listening-Admin`, nhận một event `course67_cta_registration_v1/v2` có Doc, submission, course, coursework, Google user và tên lớp. API tự đọc Docs, nhận đúng CTA/mã ngay dưới trong cùng tab; tài liệu không có Listening trả `not_applicable`. Thiếu/trùng/sai mã dừng trước ghi. Không nhận một batch nhiều học viên trong một request.
+
+Nguồn quyền Listening có tuyến chỉ đọc `/v1/owner-by-classroom`, tra cặp course/Google user qua view đã cấp sẵn; không cấp thêm quyền mapping_db hoặc đổi view. Sau đó API vẫn kiểm roster UUID đã duyệt và verifier Classroom hiện có. Link mới được sinh ổn định; khi chạy lại hoặc đổi khóa vận hành, dùng lại token trong job CTA đã lưu, không tạo binding/job/link mới. Ghi qua hàng Docs hiện có, chỉ trả `verified` sau đọc lại hyperlink; chờ quá hạn trả `CTA_PENDING` để thử lại cùng identity. Có thể phục hồi link bị xóa bằng cùng job, giữ bài làm và link cũ.
+
+Workflow `f9JNQ9Vui36U8Tz5` giữ nguyên các node Reading/Listening chấm cũ. Sau đường xử lý cũ hoặc bỏ qua event trùng, nó kiểm thêm CTA Listening; sự kiện chạy bù có `listening_only=true` đi riêng để không chạm Reading/Speaking. Trigger nội bộ nhận đúng một Doc, caller dùng một execution cho từng học viên. Không chỉ dùng status parent để nghiệm thu; đối chiếu `documentId/status`, binding/job và Docs đích.
+
+Để mở bài, chờ mọi binding CTA verified rồi dùng tuyến admin/assignment hiện có; không tự đổi lớp/source của bài đã đăng ký. Chạy bù IC2304 Lesson 8 giới hạn course 826336470852, coursework 874003464332 và 15 Doc từ Classroom. Trước/sau giữ snapshot nội dung và link Reading/Speaking; chạy lại phải giữ nguyên revision, URL, binding/job ID và không có work mới.
+
 ## Ghi nhớ đăng nhập giảng viên
 
 Cookie riêng listening_teacher phải có Path=/listening-practice-api/api, HttpOnly/Secure/SameSite=None/Partitioned trên HTTPS. Ghi nhớ mặc định: gia hạn 90 ngày sau khi kiểm quyền lớp thành công, trần 365 ngày từ đăng nhập; bỏ ghi nhớ dùng phiên cookie một giờ. Giữ Bearer còn hạn để chuyển tab cũ sang cookie. Cả kết quả và audio xem lại dùng cùng bộ kiểm phiên.
