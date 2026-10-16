@@ -127,9 +127,9 @@ test('Chưa chuẩn bị Reading trước không được tạo lượt Listenin
 
 // Phiên Listening cũ không được âm thầm đổi lựa chọn Reading trước hoặc thu bài trắng.
 // Kiểm qua HTTP và đọc lại nguyên snapshot; dữ liệu và điểm đều là giả.
-for(const phase of ['prepared','started','expired'])test(`Reading trước gặp phiên Listening ${phase}: báo xung đột, giữ nguyên phiên`,async()=>{
+for(const slug of ['term-test-1','term-test-2'])for(const phase of ['prepared','started','expired'])test(`${slug}: Reading trước gặp phiên Listening ${phase}: báo xung đột, giữ nguyên phiên`,async()=>{
   await clean();
-  const prepared=await post('/api/term-tests/term-test-1/session/prepare',{
+  const prepared=await post(`/api/term-tests/${slug}/session/prepare`,{
     classCode:'IC2304',studentRef:ref,examMode:'lis_first',examDelivery:'cbt'});
   assert.equal(prepared.status,201,JSON.stringify(prepared.body));
   if(phase!=='prepared')await fixture.db.query(`UPDATE assessment.term_test_exam_session
@@ -138,7 +138,7 @@ for(const phase of ['prepared','started','expired'])test(`Reading trước gặp
     [prepared.body.examSessionToken,phase==='expired'?'-4 hours':'20 minutes',JSON.stringify(phase==='started'?{11:'A'}:{})]);
   const before=(await fixture.db.query('SELECT * FROM assessment.term_test_exam_session')).rows;
   for(const route of ['session/prepare','order/open']){
-    const response=await post(`/api/term-tests/term-test-1/${route}`,{
+    const response=await post(`/api/term-tests/${slug}/${route}`,{
       classCode:'IC2304',studentRef:ref,examMode:'read_first',examDelivery:'cbt'});
     assert.equal(response.status,409,JSON.stringify(response.body));
     assert.equal(response.body.error,'EXAM_ORDER_CONFLICT');
@@ -147,17 +147,17 @@ for(const phase of ['prepared','started','expired'])test(`Reading trước gặp
   assert.deepEqual((await fixture.db.query('SELECT * FROM assessment.term_test_exam_session')).rows,before);
   assert.equal((await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows.length,0);
   assert.equal(synced.length,0);
-  const resumed=await post('/api/term-tests/term-test-1/session/prepare',{
+  const resumed=await post(`/api/term-tests/${slug}/session/prepare`,{
     classCode:'IC2304',studentRef:ref,examMode:'lis_first',examSessionToken:prepared.body.examSessionToken});
   assert.equal(resumed.status,201);assert.equal(resumed.body.examSessionToken,prepared.body.examSessionToken);
 });
-test('Reading trước gặp lượt đã nộp Listening: không trả token của thứ tự khác',async()=>{
+for(const slug of ['term-test-1','term-test-2'])test(`${slug}: Reading trước gặp lượt đã nộp Listening: không trả token của thứ tự khác`,async()=>{
   await clean();
-  const submitted=await post('/api/term-tests/term-test-1/listening',{
+  const submitted=await post(`/api/term-tests/${slug}/listening`,{
     classCode:'IC2304',studentRef:ref,examMode:'lis_first',answers:{11:'A'},clientSubmissionId:randomUUID()});
   assert.equal(submitted.status,201,JSON.stringify(submitted.body));
   const before=(await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows;
-  const response=await post('/api/term-tests/term-test-1/session/prepare',{
+  const response=await post(`/api/term-tests/${slug}/session/prepare`,{
     classCode:'IC2304',studentRef:ref,examMode:'read_first',examDelivery:'cbt'});
   assert.equal(response.status,409,JSON.stringify(response.body));
   assert.equal(response.body.error,'EXAM_ORDER_CONFLICT');
