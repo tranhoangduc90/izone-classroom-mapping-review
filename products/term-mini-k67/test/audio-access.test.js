@@ -39,8 +39,8 @@ async function prepare(slug='term-test-1',mode='lis_first'){
   return{base,token};
 }
 const begin=(base,token)=>post(base,'start',{...token,audioProtocolVersion:1,audioEventId:randomUUID()});
-for(const slug of ['term-test-1','mini-test-lesson-5'])test(`${slug}: client MP3 nhận bản 128 từ Pages, ghim qua start/reload, không mở giờ trong phòng chờ`,async()=>{
-  const{base,token}=await prepare(slug);
+for(const slug of slugs)for(const mode of ['lis_first','read_first'])test(`${slug}/${mode}: client MP3 nhận đúng bản Pages, ghim qua start/reload, không mở giờ trong phòng chờ`,async()=>{
+  const{base,token}=await prepare(slug,mode);
   const lobby=await post(base,'audio-access',{...token,publicAudioVersion:1});
   assert.equal(lobby.status,200,JSON.stringify(lobby.body));
   assert.deepEqual(lobby.body.audioManifest,publicAudioCatalog[slug]);

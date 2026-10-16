@@ -189,5 +189,104 @@ export const publicAudioCatalog = {
         "sha256": "9be92f63d3ed86c75245259c5f68e5d155570fa26fff0f31bf1ebba481390c4f"
       }
     ]
+  },
+  "term-test-2": {
+    "assetVersion": "sha256-656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e",
+    "sha256": "656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e",
+    "byteLength": 22119070,
+    "encryptedByteLength": 22119070,
+    "envelopeVersion": "MP3",
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-2-96kbps-656921dc9888dcfe.mp3",
+    "chunkSize": 1048576,
+    "chunks": [
+      {
+        "byteLength": 1048576,
+        "sha256": "45c659624b4c7419f2c23e963b5e40513eb31e7134f04381c5c6c56b690ec4ba"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "5482aa0178da37e8174484b2179b72bdb7032b51ab63ba677ac7a67294552f6c"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "8775f8c7001bf8fc432bb859d286d1b603cb1bff55fdc3dcdfc3e7ff6267d0fa"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "aeef913a00d106a2f29370ec122c992669563aa4197b8036e6b21f8eed433715"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "3f0dd838acc96186503882c572a27dbc01edd3188b6c41eda5201afb62affd24"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "3f8debe0d181d789401196fa2c9f0eebf4c4f022284942e5ea8c7df96fccb503"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "dc54e222076650f36e6a3b710d3d9f968417bcbaae7fb7e667d102d32d4e29d0"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "55f9e7e02146a6433e8e0d778b6c16a88ff87f5303d27dd9b844a2feba4dddf5"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "fadedc28184974a81599f27d099d3f8e59b9cb738046b921c838088506f91365"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "bed6f8fb74a0d59fbce35a65d46ada776e47a26493af59945d24ffc8e2a0d70c"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "88636dced058560459b977842a1a028455dab9678d7286ab6f2fd1e696b79c93"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "82b01f051c8645574da2dcff417ca118476c73c9806cbe70131e405c1da0e583"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "ff0f43b94a92c9a9eb2f9bb27e9aa1ba7384bf63e6bd7c64634690767d2dbaac"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "425b214142cf151385b58069eb289234e0fe3934158cba6d91af652e6b64cc15"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "fc3ce19530b2c8a5a8c2fcd509405b42a70c4baf1a6ec4a69005cdb34048306d"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "472177522b06c60873b51adfa5310dea3b5790872b2304863f47ba640b2bf499"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "1e7879873cd3265b4b0625cf7e8feaca32eeaae2dddd8c975d81233835201805"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "364ea60a0b37a1b1ef03af2a534b4df80ce336f6778ed3e28cf36a90664bcd2f"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "7f36c856ea20cc0583e4512b0535b8240ab4915b8a0dc6984a4bdf5e06c18cbd"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "42173ef30a0c66c686459052a845d22747d5752bb9b162793f97600b8994ca5a"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "d23162dd86b3f04a5c52500f5396f2c24c5ee144c8d38dc07148b2303d28a9f0"
+      },
+      {
+        "byteLength": 98974,
+        "sha256": "d715d8daac61f42809a4546ebf8c72b20534091c2843069520ae1aed8e444b36"
+      }
+    ]
   }
 };
