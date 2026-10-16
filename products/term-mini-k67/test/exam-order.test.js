@@ -124,6 +124,45 @@ test('Chưa chuẩn bị Reading trước không được tạo lượt Listenin
   assert.equal(denied.status,409);assert.equal(denied.body.error,'EXAM_SESSION_REQUIRED');
   assert.equal((await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows.length,0);
 });
+
+// Phiên Listening cũ không được âm thầm đổi lựa chọn Reading trước hoặc thu bài trắng.
+// Kiểm qua HTTP và đọc lại nguyên snapshot; dữ liệu và điểm đều là giả.
+for(const phase of ['prepared','started','expired'])test(`Reading trước gặp phiên Listening ${phase}: báo xung đột, giữ nguyên phiên`,async()=>{
+  await clean();
+  const prepared=await post('/api/term-tests/term-test-1/session/prepare',{
+    classCode:'IC2304',studentRef:ref,examMode:'lis_first',examDelivery:'cbt'});
+  assert.equal(prepared.status,201,JSON.stringify(prepared.body));
+  if(phase!=='prepared')await fixture.db.query(`UPDATE assessment.term_test_exam_session
+    SET listening_started_at=now()-interval '5 hours',listening_deadline_at=now()+$2::interval,
+      listening_draft=$3::jsonb,listening_draft_revision=2 WHERE id=$1`,
+    [prepared.body.examSessionToken,phase==='expired'?'-4 hours':'20 minutes',JSON.stringify(phase==='started'?{11:'A'}:{})]);
+  const before=(await fixture.db.query('SELECT * FROM assessment.term_test_exam_session')).rows;
+  for(const route of ['session/prepare','order/open']){
+    const response=await post(`/api/term-tests/term-test-1/${route}`,{
+      classCode:'IC2304',studentRef:ref,examMode:'read_first',examDelivery:'cbt'});
+    assert.equal(response.status,409,JSON.stringify(response.body));
+    assert.equal(response.body.error,'EXAM_ORDER_CONFLICT');
+    assert.equal(response.body.attemptToken,undefined);
+  }
+  assert.deepEqual((await fixture.db.query('SELECT * FROM assessment.term_test_exam_session')).rows,before);
+  assert.equal((await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows.length,0);
+  assert.equal(synced.length,0);
+  const resumed=await post('/api/term-tests/term-test-1/session/prepare',{
+    classCode:'IC2304',studentRef:ref,examMode:'lis_first',examSessionToken:prepared.body.examSessionToken});
+  assert.equal(resumed.status,201);assert.equal(resumed.body.examSessionToken,prepared.body.examSessionToken);
+});
+test('Reading trước gặp lượt đã nộp Listening: không trả token của thứ tự khác',async()=>{
+  await clean();
+  const submitted=await post('/api/term-tests/term-test-1/listening',{
+    classCode:'IC2304',studentRef:ref,examMode:'lis_first',answers:{11:'A'},clientSubmissionId:randomUUID()});
+  assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  const before=(await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows;
+  const response=await post('/api/term-tests/term-test-1/session/prepare',{
+    classCode:'IC2304',studentRef:ref,examMode:'read_first',examDelivery:'cbt'});
+  assert.equal(response.status,409,JSON.stringify(response.body));
+  assert.equal(response.body.error,'EXAM_ORDER_CONFLICT');
+  assert.deepEqual((await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows,before);
+});
 test('Migration không đổi token, điểm, nháp, thế hệ hay thời gian bài cũ',async()=>{
   const old=await createMiniFixture();
   try {
@@ -229,7 +268,7 @@ test('Token Listening LF/RF tiếp tục lưu/nộp khi bộ đệm lớp tạm 
   }
   await fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now()');
 });
-test('Listening trước chỉ tính một lượt vào bộ đếm giới hạn giống baseline',async()=>{
+test('Listening trước tính một lượt giới hạn; xung đột Reading trước cũng tính một lượt và không nối nhầm',async()=>{
   await clean();
   const config={allowedOrigins:new Set(),trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'};
   const baseline=request(createApp({pool:fixture.pool,termTestAssetService:assets,config}));
@@ -238,7 +277,8 @@ test('Listening trước chỉ tính một lượt vào bộ đếm giới hạn
   const a=await baseline.post(path).send(body),b=await candidate.post(path).send(body);
   assert.equal(b.status,a.status);assert.equal(b.headers.ratelimit,a.headers.ratelimit);assert.ok(a.headers.ratelimit);
   const boundA=await baseline.post(path).send({...body,examMode:'read_first'}),boundB=await candidate.post(path).send({...body,examMode:'read_first'});
-  assert.equal(boundB.status,boundA.status);assert.equal(boundB.headers.ratelimit,boundA.headers.ratelimit);
+  assert.equal(boundB.status,409);assert.equal(boundB.body.error,'EXAM_ORDER_CONFLICT');
+  assert.equal(boundB.headers.ratelimit,boundA.headers.ratelimit);
 });
 test('Mini giấy: đổi từ người Reading trước sang người có Listening trước trả thứ tự thật',async()=>{
   await clean();const base='/api/term-tests/mini-test-lesson-5/answer-sheet',other='44444444-4444-4444-8444-444444444444';

@@ -1069,18 +1069,18 @@ SELECT
         'result', attempt.combined_result,
         'writing', jsonb_build_object(
           'status', CASE
-            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            WHEN writing_attempt.writing_submitted_at IS NULL THEN 'not_submitted'
             WHEN grading.final_status = 'ready' THEN 'ready'
             WHEN grading.task_1_status IN ('review_required', 'failed')
               OR grading.task_2_status IN ('review_required', 'failed') THEN 'review_required'
             ELSE 'processing'
           END,
           'task1State', CASE
-            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            WHEN writing_attempt.writing_submitted_at IS NULL THEN 'not_submitted'
             ELSE coalesce(grading.task_1_status, 'queued')
           END,
           'task2State', CASE
-            WHEN attempt.writing_submitted_at IS NULL THEN 'not_submitted'
+            WHEN writing_attempt.writing_submitted_at IS NULL THEN 'not_submitted'
             ELSE coalesce(grading.task_2_status, 'queued')
           END,
           'task1Score', grading.task_1_score,
@@ -1132,33 +1132,47 @@ SELECT
       ORDER BY candidate.completed_at DESC NULLS LAST, candidate.created_at DESC
       LIMIT 1
     ) AS attempt ON true
+    -- Lượt nhập L/R dự phòng không thay thế bài Writing đã nộp.
+    -- Chọn theo đúng lớp, học viên, đề và phiên bản; cùng quy tắc với trang chi tiết.
+    LEFT JOIN LATERAL (
+      SELECT stored.id, stored.writing_submitted_at
+      FROM assessment.term_test_attempt AS stored
+      WHERE stored.test_slug = definition.slug
+        AND stored.definition_version = definition.version
+        AND stored.erp_course_class_id = student.erp_course_class_id
+        AND stored.erp_student_contact_id = student.erp_student_contact_id
+        AND stored.writing_submitted_at IS NOT NULL
+        AND stored.superseded_at IS NULL
+      ORDER BY stored.writing_submitted_at DESC, stored.created_at DESC, stored.id DESC
+      LIMIT 1
+    ) AS writing_attempt ON true
     LEFT JOIN LATERAL (
       SELECT
         (SELECT final.status
          FROM assessment.term_test_writing_grading_final AS final
-         WHERE final.attempt_id = attempt.id) AS final_status,
+         WHERE final.attempt_id = writing_attempt.id) AS final_status,
         (SELECT final.task_1_score
          FROM assessment.term_test_writing_grading_final AS final
-         WHERE final.attempt_id = attempt.id) AS task_1_score,
+         WHERE final.attempt_id = writing_attempt.id) AS task_1_score,
         (SELECT final.task_2_score
          FROM assessment.term_test_writing_grading_final AS final
-         WHERE final.attempt_id = attempt.id) AS task_2_score,
+         WHERE final.attempt_id = writing_attempt.id) AS task_2_score,
         (SELECT final.writing_score
          FROM assessment.term_test_writing_grading_final AS final
-         WHERE final.attempt_id = attempt.id) AS writing_score,
+         WHERE final.attempt_id = writing_attempt.id) AS writing_score,
         (SELECT run.status
          FROM assessment.term_test_writing_grading_run AS run
-         WHERE run.attempt_id = attempt.id AND run.task_number = 1
+         WHERE run.attempt_id = writing_attempt.id AND run.task_number = 1
          ORDER BY run.grading_version DESC
          LIMIT 1) AS task_1_status,
         (SELECT run.status
          FROM assessment.term_test_writing_grading_run AS run
-         WHERE run.attempt_id = attempt.id AND run.task_number = 2
+         WHERE run.attempt_id = writing_attempt.id AND run.task_number = 2
          ORDER BY run.grading_version DESC
          LIMIT 1) AS task_2_status,
         (SELECT max(run.updated_at)
          FROM assessment.term_test_writing_grading_run AS run
-         WHERE run.attempt_id = attempt.id) AS updated_at
+         WHERE run.attempt_id = writing_attempt.id) AS updated_at
     ) AS grading ON true
   ), '[]'::jsonb) AS students
 FROM definition;`;
@@ -1185,6 +1199,9 @@ latest_attempt AS (
   JOIN authorized_classes AS target
     ON target.erp_course_class_id = attempt.erp_course_class_id
   WHERE attempt.test_slug = $2
+    AND attempt.definition_version = (SELECT version FROM definition)
+    AND attempt.writing_submitted_at IS NOT NULL
+    AND attempt.superseded_at IS NULL
     AND (
       EXISTS (
         SELECT 1
@@ -1212,7 +1229,7 @@ latest_attempt AS (
           AND temporary.active = true
       )
     )
-  ORDER BY attempt.completed_at DESC NULLS LAST, attempt.created_at DESC
+  ORDER BY attempt.writing_submitted_at DESC, attempt.created_at DESC, attempt.id DESC
   LIMIT 1
 ),
 detail AS (
@@ -1238,6 +1255,8 @@ detail AS (
    AND final.status = 'ready'
   JOIN assessment.term_test_writing_grading_run AS run
     ON run.id = CASE WHEN $6::smallint = 1 THEN final.task_1_run_id ELSE final.task_2_run_id END
+   AND run.attempt_id = attempt.id
+   AND run.grading_version = final.grading_version
    AND run.task_number = $6::smallint
    AND run.status = 'complete'
   WHERE attempt.writing_submitted_at IS NOT NULL

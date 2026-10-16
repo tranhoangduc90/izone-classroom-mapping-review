@@ -110,7 +110,15 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
         ORDER BY (completed_at IS NULL) DESC,created_at DESC LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
       if(previous) {
-        if(previous.exam_mode!=='read_first')return null;
+        // Yêu cầu Reading trước không được nối âm thầm vào lượt Listening trước.
+        // Giữ nguyên bài/điểm đã có và báo giảng viên xử lý đúng lượt.
+        if(previous.exam_mode!=='read_first') {
+          if(!paper&&data.examMode==='read_first') {
+            if(!await admit(req,res,writeLimiter))return null;
+            throw error('EXAM_ORDER_CONFLICT','Bạn đã có lượt Listening trước. Không thể tự chuyển sang Reading trước. Hãy nhờ giảng viên kiểm tra lượt bài; bài đã lưu vẫn được giữ.');
+          }
+          return null;
+        }
         if(!await admit(req,res,writeLimiter))return null;
         const bound=await reload(db,previous.id);
         if(!bound)throw error('STALE_ATTEMPT','Lượt bài đã được mở lại. Hãy xác nhận lại tên.');
@@ -119,9 +127,15 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
         if(previous.exam_delivery!==(paper?'answer_sheet':data.examDelivery))throw error('MODE_CONFLICT','Lượt này đã gắn với cách làm bài khác. Hãy dùng link ban đầu.');
         return bound;
       }
-      const oldSession=(await db.query(`SELECT id FROM assessment.term_test_exam_session WHERE test_slug=$1 AND definition_version=$2
+      const oldSession=(await db.query(`SELECT id,exam_mode FROM assessment.term_test_exam_session WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
         AND (prepared_at>=now()-interval '8 hours' OR attempt_mode='answer_sheet') LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
+      // Phiên còn trong cửa sổ nối lại không có nghĩa Listening còn giờ làm bài.
+      // Chặn trước tuyến cũ để không tự thu một bài trắng của phiên đã hết hạn.
+      if(!paper&&oldSession&&data.examMode==='read_first'&&oldSession.exam_mode!=='read_first') {
+        if(!await admit(req,res,writeLimiter))return null;
+        throw error('EXAM_ORDER_CONFLICT','Bạn đã có phiên Listening trước. Không thể tự chuyển sang Reading trước. Hãy nhờ giảng viên kiểm tra phiên cũ; hệ thống chưa thu bài và giữ nguyên bản nháp.');
+      }
       if(oldSession||data.examMode!=='read_first')return null;
       if(!await admit(req,res,writeLimiter))return null;
       if(!config.readFirstNewEnabled)throw error('READ_FIRST_NOT_ENABLED','Phiên bản Reading trước chưa được mở cho lượt mới.');
