@@ -74,6 +74,7 @@ export function mountReadiness(app,{pool,config,requireContext,audioSource}) {
     packVersion:r.pack_version,sameComputer:r.same_computer,sameHeadphones:r.same_headphones,answers:r.answers,
     revision:Number(r.draft_revision),heardSeconds:Number(r.heard_seconds),heardConfirmed:r.heard_confirmed,
     cacheState:r.cache_state,submittedAt:r.submitted_at,expiresAt:r.expires_at,serverNow:new Date().toISOString(),
+    checkReport:r.check_report,checkRevision:Number(r.check_revision||0),checkUpdatedAt:r.check_updated_at,
     practice:Object.fromEntries(['reading','writing'].map(skill=>[skill,{data:r[skill+'_draft'],
       revision:Number(r[skill+'_revision']),submittedAt:r[skill+'_submitted_at']}]))});
   const read=async hash=>(await pool.query(`SELECT r.*,c.erp_class_name_snapshot AS class_code,s.erp_student_name_snapshot AS student_name
@@ -182,6 +183,31 @@ export function mountReadiness(app,{pool,config,requireContext,audioSource}) {
       WHERE token_hash=$1 AND ${skill}_submitted_at IS NULL AND ${skill}_revision=$2`,[r.token_hash,p.revision]);
     const final=await read(r.token_hash);
     if(!final[skill+'_submitted_at'])return fail(res,409,'READINESS_DRAFT_CHANGED','Bản nháp chưa khớp. Hãy tải lại để xem bản mới nhất.');
+    res.json({ok:true,session:publicRow(final)});
+  }));
+  // Chỉ nhận mã kết quả tối thiểu; không nhận tên app/extension, thiết bị, raw UA hoặc khóa.
+  // Báo cáo do client tự khai, không dùng làm quyền mở đề hoặc thay xác nhận nghe.
+  const checkCodes={
+    environment:['AVAILABLE','CORE_MISSING','UNTESTED_BROWSER','OWNER_CONFLICT'],
+    session:['RESPONDED','SLOW','UNREACHABLE','OFFLINE_HINT'],
+    localDraft:['READBACK_OK','UNAVAILABLE'],audio:['VERIFIED','FAILED'],cache:['READBACK_OK','UNAVAILABLE'],
+    format:['MPEG_HINT','MPEG_UNKNOWN','MPEG_DECODED','MPEG_FAILED'],playback:['PROGRESS','BLOCKED','ERROR','MUTED','NO_PROGRESS','INTERRUPTED'],
+    draftSync:['READBACK_OK','FAILED'],hearing:['CONFIRMED','UNCLEAR','RECONFIRM'],page:['VISIBLE','HIDDEN','RESUMED'],
+    load:['OBSERVING','BUSY','UNAVAILABLE'],output:['LIMITED','CHANGED','UNAVAILABLE'],wake:['HELD','UNAVAILABLE','RELEASED']
+  };
+  const check=z.object({id:z.enum(Object.keys(checkCodes)),state:z.enum(['pass','warn','fail','pending','unknown']),
+    code:z.string().max(32),at:z.iso.datetime()}).strict().refine(c=>c.state==='pending'?c.code==='PENDING':checkCodes[c.id].includes(c.code));
+  const report=z.object({version:z.literal('web-check-v1'),runId:z.string().uuid(),startedAt:z.iso.datetime(),
+    checks:z.array(check).min(1).max(13)}).strict().refine(r=>new Set(r.checks.map(c=>c.id)).size===r.checks.length);
+  router.post('/checks',wrap(authorize),wrap(async(req,res)=>{
+    const p=parse(base.extend({revision:z.number().int().min(1).max(1e9),report}),req,res);if(!p)return;
+    const r=req.readiness;
+    await pool.query(`UPDATE assessment.k67_readiness_session SET check_report=$2,check_revision=$3,check_updated_at=clock_timestamp()
+      WHERE token_hash=$1 AND check_revision<$3`,[r.token_hash,JSON.stringify(p.report),p.revision]);
+    const final=await read(r.token_hash);
+    const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,value])=>[k,canonical(value)])):v;
+    if(Number(final.check_revision)===p.revision&&JSON.stringify(canonical(final.check_report))!==JSON.stringify(canonical(p.report)))
+      return fail(res,409,'READINESS_CHECK_CONFLICT','Kết quả kiểm đã đổi ở tab khác. Hãy tải lại trước khi kiểm tiếp.');
     res.json({ok:true,session:publicRow(final)});
   }));
   router.use((_req,res)=>fail(res,404,'READINESS_ROUTE_NOT_FOUND','Đường làm quen không hợp lệ.'));
