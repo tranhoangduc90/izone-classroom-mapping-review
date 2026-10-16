@@ -2,6 +2,8 @@
 // Dữ liệu lỗi/bài đã nộp không được cập nhật. Không in token hoặc đáp án vào lỗi/log.
 const interrupted = new Set(['pause', 'waiting', 'stalled', 'pagehide']);
 const recovery = new Set(['recovered', 'resume']);
+import {listeningAudioSnapshot} from './audio-incidents.js';
+import {assertAudioOwner} from './audio-owner.js';
 export class AudioRecoveryError extends Error {
   constructor(code,message){super(message);this.status=409;this.code=code;}
 }
@@ -28,6 +30,17 @@ export async function recordListeningAudio(db, {examSessionToken, slug, heardSec
     ||(row.bound_generation!==null&&row.bound_generation!==undefined&&Number(row.bound_generation)!==Number(row.generation))
     ||(row.exam_mode==='read_first'&&(!row.bound_mode||!row.reading_submitted_at))) {
     throw fail('AUDIO_PROGRESS_LOCKED','Phiên Listening đã kết thúc hoặc không còn hợp lệ.');
+  }
+  // Phiên bảo vệ mới chỉ được bù qua sự cố tường minh; playing/recovered cũ không đóng hold.
+  assertAudioOwner(row);
+  if(Number(row.listening_audio_protocol_version)===1){
+    if(!row.listening_audio_incident_id&&state==='playing'){
+      const now=new Date(row.server_now).getTime(),maximum=Math.max(0,(now-new Date(row.listening_started_at).getTime())/1000-Number(row.listening_recovery_seconds||0)+3);
+      const accepted=Math.max(Number(row.listening_audio_checkpoint_seconds)||0,Math.min(heardSeconds,maximum,durationSeconds||7200));
+      await db.query(`UPDATE assessment.term_test_exam_session SET listening_audio_checkpoint_seconds=$2,
+        listening_audio_checkpoint_at=clock_timestamp(),listening_audio_state='playing' WHERE id=$1`,[row.id,accepted]);
+    }
+    return{ok:true,...await listeningAudioSnapshot(db,row.id)};
   }
   const journal=Boolean(eventId&&state!=='playing');
   if(journal) {

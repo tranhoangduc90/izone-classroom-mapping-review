@@ -4,13 +4,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {EventEmitter} from 'node:events';
 import { createTermTestAssetService } from '../src/term-test-assets.js';
 
 function makeResponse() {
   const chunks = [];
   let resolveEnd;
   const ended = new Promise(resolve => { resolveEnd = resolve; });
-  return {
+  return Object.assign(new EventEmitter(), {
     chunks,
     headers: {},
     statusCode: 0,
@@ -19,7 +20,7 @@ function makeResponse() {
     write(chunk) { chunks.push(Buffer.from(chunk)); return true; },
     end(chunk) { if (chunk) chunks.push(Buffer.from(chunk)); resolveEnd(); },
     ended
-  };
+  });
 }
 
 test('audio phòng chờ được mã hóa riêng theo phiên và chỉ khóa đúng phiên mới giải được', async () => {
@@ -60,4 +61,22 @@ test('audio phòng chờ được mã hóa riêng theo phiên và chỉ khóa đ
   assert.deepEqual(await service.getPreview('term-test-2'), Buffer.from('preview-only'));
   assert.equal((await service.getContent('term-test-2')).baseTestSlug, 'term-test-2');
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test('Client đã đóng lúc kiểm hash: không mở luồng mã hóa chờ drain hoặc giữ request', async () => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'izone-term-abort-'));
+  await fs.mkdir(path.join(root,'term-test-1'));
+  await fs.writeFile(path.join(root,'term-test-1/listening-audio.mp3'),Buffer.alloc(1024*1024,7));
+  const service=createTermTestAssetService({assetDir:root,sessionSecret:'fixture-only-stream-secret-at-least-32'});
+  const manifest=await service.getAudioManifest('term-test-1');
+  const response=makeResponse();response.destroyed=true;response.writableFinished=false;
+  let writes=0;response.write=()=>{writes++;return false;};
+  let timer;
+  try{
+    const result=await Promise.race([
+      service.streamEncryptedAudio('term-test-1','00000000-0000-4000-8000-000000000001',response,manifest).then(()=>'done'),
+      new Promise(resolve=>{timer=setTimeout(()=>resolve('hung'),1000);})
+    ]);
+    assert.equal(result,'done','Client đã rời không được làm treo source chờ drain');assert.equal(writes,0);
+  }finally{clearTimeout(timer);response.emit('close');await fs.rm(root,{recursive:true,force:true});}
 });

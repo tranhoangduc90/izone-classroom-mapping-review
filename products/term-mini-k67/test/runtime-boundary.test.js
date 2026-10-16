@@ -31,6 +31,7 @@ test('K67 nhận cấu hình riêng và bỏ qua giá trị cấu hình backend 
   assert.equal(config.teacherSessionCookieName, 'izone_k67_teacher_session');
   assert.equal(config.teacherSessionCookiePath, '/term-mini-k67-api');
   assert.equal(config.learningEnabled, undefined);
+  assert.equal(config.audioCacheEnabled, false);
 });
 test('K67 từ chối DB chung, DB K56 và role khác trước khởi động', () => {
   for (const url of ['postgresql://k67_app@localhost/mapping_db', 'postgresql://k67_app@localhost/assessment_k56', 'postgresql://mapping_app@localhost/term_mini_k67', 'postgresql://k67_app@localhost/term_mini_k67?user=postgres', 'postgresql://k67_app@localhost/term_mini_k67#other']) {

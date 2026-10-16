@@ -65,10 +65,11 @@ after(async () => {
     }
   } finally { await Promise.all([appPool.end(), ownerPool.end(), contextPool.end()]); }
 });
-test('PostgreSQL thật có 13 bảng thi và một sổ khôi phục audio K67, không có bảng sản phẩm khác', async () => {
+test('PostgreSQL thật có 13 bảng thi và hai sổ khôi phục/sự cố audio K67, không có bảng sản phẩm khác', async () => {
   const tables = (await appPool.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='assessment' AND table_type='BASE TABLE'`)).rows;
-  assert.equal(tables.length, 14);
+  assert.equal(tables.length, 15);
   assert.equal(tables.filter(row=>row.table_name==='term_test_audio_recovery_event').length,1);
+  assert.equal(tables.filter(row=>row.table_name==='term_test_audio_incident').length,1);
   assert.equal(tables.some(row => row.table_name.startsWith('writing_test_')), false);
   const identity = (await appPool.query('SELECT current_database() AS db,current_user AS role')).rows[0];
   assert.deepEqual(identity, { db: 'term_mini_k67_test_database', role: 'k67_app' });

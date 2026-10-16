@@ -68,6 +68,7 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     throw new Error('Tài nguyên Term Test cần thư mục riêng và bí mật phiên tối thiểu 32 ký tự.');
   }
   const contentCache = new Map();
+  const manifestWork = new Map();
 
   async function getContent(testSlug) {
     if (contentCache.has(testSlug)) return contentCache.get(testSlug);
@@ -104,10 +105,36 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     return deriveSessionAudioKey(sessionSecret, sessionToken);
   }
 
-  async function streamEncryptedAudio(testSlug, sessionToken, response) {
+  async function getAudioManifest(testSlug) {
+    // Chỉ chia sẻ công việc đang chạy cùng file; lần sau vẫn hash mới để phát hiện file đổi.
+    // Không giữ cache hash dài hạn hoặc giữ connection DB trong khi đọc audio.
+    if(manifestWork.has(testSlug))return manifestWork.get(testSlug);
+    const work=(async()=>{
+      const hash=crypto.createHash('sha256');let byteLength=0;
+      for await(const chunk of fs.createReadStream(resolveAsset(assetDir,getDefinition(testSlug).audio))){hash.update(chunk);byteLength+=chunk.length;}
+      const sha256=hash.digest('hex');
+      return {assetVersion:`sha256-${sha256}`,sha256,byteLength,
+        encryptedByteLength:byteLength+33,envelopeVersion:'IZTT1'};
+    })();
+    manifestWork.set(testSlug,work);
+    try{return await work;}finally{manifestWork.delete(testSlug);}
+  }
+
+  async function streamEncryptedAudio(testSlug, sessionToken, response, expectedManifest=null) {
+    if(response.destroyed||response.writableEnded)return;
     const definition = getDefinition(testSlug);
     const sourcePath = resolveAsset(assetDir, definition.audio);
+    // Hash và mã hóa theo luồng để không giữ thêm cả file cho mỗi học viên đang tải.
+    // Nếu file đổi đúng giữa hai bước, hash plaintext bắt buộc ở client vẫn chặn phát sai.
+    if(expectedManifest){
+      const current=await getAudioManifest(testSlug);
+      if(response.destroyed||response.writableEnded)return;
+      if(current.byteLength!==expectedManifest.byteLength||current.sha256!==expectedManifest.sha256){
+        response.status(409).set('Cache-Control','no-store, private').json({ok:false,error:'AUDIO_ASSET_CHANGED',message:'Audio trên máy chủ đã đổi. Giữ bài và nhờ giáo viên hỗ trợ.'});return;
+      }
+    }
     const stat = await fs.promises.stat(sourcePath);
+    if(response.destroyed||response.writableEnded)return;
     const key = deriveSessionAudioKey(sessionSecret, sessionToken);
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -125,14 +152,26 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
 
     await new Promise((resolve, reject) => {
       const source = fs.createReadStream(sourcePath);
-      const fail = error => reject(error);
+      let settled=false;
+      const finish = error => {
+        if(settled)return;settled=true;
+        response.removeListener('close',closed);response.removeListener('error',fail);
+        source.destroy();cipher.destroy();
+        if(error&&!response.headersSent)reject(error);
+        else{if(error)response.destroy();resolve();}
+      };
+      const fail = error => finish(error);
+      const closed = () => {if(!response.writableFinished)finish();};
       source.once('error', fail);
       cipher.once('error', fail);
-      cipher.on('data', chunk => response.write(chunk));
+      cipher.on('data', chunk => { if(!response.write(chunk)){cipher.pause();response.once('drain',()=>cipher.resume());} });
+      response.once('close',closed);response.once('error',fail);
       cipher.once('end', () => {
+        if(settled)return;
         response.end(cipher.getAuthTag());
-        resolve();
+        finish();
       });
+      if(response.destroyed||response.writableEnded){finish();return;}
       source.pipe(cipher);
     });
   }
@@ -162,7 +201,7 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     });
   }
 
-  return { supports, getContent, getPreview, getTiming, getSessionAudioKey, streamEncryptedAudio, streamDemoAudio };
+  return { supports, getContent, getPreview, getTiming, getAudioManifest, getSessionAudioKey, streamEncryptedAudio, streamDemoAudio };
 }
 
 export const termTestAudioEnvelope = Object.freeze({

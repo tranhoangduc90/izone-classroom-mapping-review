@@ -11,6 +11,10 @@ function createApp(dependencies) {
   const pool = Object.create(originalPool);
   pool.query = (sql, ...args) => sql.includes('FROM mapping.k67_context_state')
     ? Promise.resolve({ rows: [{ captured_at: new Date() }], rowCount: 1 })
+    // Tra quota không được tiêu thụ chuỗi response nghiệp vụ của mock cũ.
+    // Định danh/quota thật được kiểm HTTP + PostgreSQL trong audio-network-fairness.test.js.
+    : /^SELECT id FROM assessment\.term_test_(?:exam_session|attempt)\b/.test(sql.trim())
+      ? Promise.resolve({rows:[],rowCount:0})
     : originalPool.query(sql, ...args);
   return createK67App({ ...dependencies, pool });
 }
