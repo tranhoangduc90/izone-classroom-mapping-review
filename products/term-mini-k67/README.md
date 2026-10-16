@@ -2,6 +2,8 @@
 
 Gói này phục vụ thi, chấm và xem kết quả K67. Mã nghiệp vụ được ghim từ snapshot backend đang chạy; ứng dụng không khởi động Speaking, Progress Log hoặc Writing ngoài Term.
 
+**Bản kết quả 17/10/2026:** đọc [Writing có nội dung, hai Term và hai thứ tự](WRITING_RESULT_RELEASE_20261017.md) trước các snapshot phát hành cũ. Giữ bản audio Pages hiện hành; lượt Writing rỗng mới không che bài thật đã nộp. Chỉ module SQL thay trên exact image live, không suy toàn main tương đương runtime.
+
 ## Cách dựng và chạy
 
 Dùng Node 24.15.0 và dependency trong package-lock. `npm ci --ignore-scripts` dựng dependency riêng; `npm start` mở backend sau khi kiểm cấu hình và danh tính DB. `npm test` chứa cả ca cần database/HTTP fixture: phải chuẩn bị biến môi trường và dữ liệu giả theo TEST_PLAN.md trước khi chạy, không trỏ bộ test vào bài thật.
