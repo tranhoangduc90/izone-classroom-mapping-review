@@ -20,4 +20,4 @@ Các helper chuẩn bị/migration là công cụ cho lần chuyển này, khôn
 
 ## Audio MP3 Pages — 17/10/2026
 
-`K67_PUBLIC_AUDIO_ENABLED=true` cho client hỗ trợ MP3 nhận catalog 128 kbps của Term 1/Mini. VPS vẫn giữ quyền, phiên bản ghim và toàn bộ giờ thi/phục hồi. Client cũ, Term 2 và phiên đã ghim mã hóa tiếp tục dùng nguồn cũ. Không thay file gốc trên VPS. Tắt cờ để ngừng cấp MP3 cho phiên mới; giữ URL và frontend tương thích cho phiên đã ghim. Không khôi phục database để quay lui runtime.
+`K67_PUBLIC_AUDIO_ENABLED=true` cho client hỗ trợ MP3 nhận catalog Pages: Term 1/Mini 128 kbps, Term 2 giữ gốc 96 kbps theo lựa chọn của Đức. Cả Listening trước và Reading trước dùng cùng bộ tải/kiểm file/phục hồi. VPS vẫn giữ quyền, phiên bản ghim và toàn bộ giờ thi/phục hồi. Client cũ và phiên đã ghim mã hóa tiếp tục dùng nguồn cũ. Không thay file gốc trên VPS. Tắt cờ để ngừng cấp MP3 cho phiên mới; giữ URL và frontend tương thích cho phiên đã ghim. Không khôi phục database để quay lui runtime.
