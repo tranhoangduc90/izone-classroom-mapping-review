@@ -7,6 +7,7 @@ import path from 'node:path';
 import {createHash,createDecipheriv,randomUUID} from 'node:crypto';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
+import {publicAudioCatalog} from '../src/public-audio-catalog.js';
 
 // Kiểm API/quyền/SQL/mã hóa thật; byte đề giả. Không mock pin phiên hoặc phép kiểm hash.
 let f,api,dir,assets;
@@ -17,7 +18,7 @@ before(async()=>{
   for(const slug of slugs){await mkdir(path.join(dir,slug));await writeFile(path.join(dir,slug,'listening-audio.mp3'),original);
     await writeFile(path.join(dir,slug,'content.json'),JSON.stringify({baseTestSlug:slug}));}
   assets=createTermTestAssetService({assetDir:dir,sessionSecret:'fixture-only-secret-audio-cache-32-characters'});
-  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true});api=request(f.app);
+  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true,publicAudio:true});api=request(f.app);
   for(const slug of slugs.slice(0,2))await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,created_at,updated_at,is_active)
     SELECT $1,title,version,listening_definition,reading_definition,created_at,updated_at,is_active
     FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`,[slug]);
@@ -38,6 +39,29 @@ async function prepare(slug='term-test-1',mode='lis_first'){
   return{base,token};
 }
 const begin=(base,token)=>post(base,'start',{...token,audioProtocolVersion:1,audioEventId:randomUUID()});
+for(const slug of ['term-test-1','mini-test-lesson-5'])test(`${slug}: client MP3 nhận bản 128 từ Pages, ghim qua start/reload, không mở giờ trong phòng chờ`,async()=>{
+  const{base,token}=await prepare(slug);
+  const lobby=await post(base,'audio-access',{...token,publicAudioVersion:1});
+  assert.equal(lobby.status,200,JSON.stringify(lobby.body));
+  assert.deepEqual(lobby.body.audioManifest,publicAudioCatalog[slug]);
+  assert.equal(lobby.body.listeningStartedAt,null);
+  assert.equal(lobby.body.audioKey,undefined);
+  const started=await begin(base,token);assert.equal(started.status,200,JSON.stringify(started.body));
+  assert.deepEqual(started.body.audioManifest,lobby.body.audioManifest);
+  const again=await post(base,'audio-access',{...token,publicAudioVersion:1});
+  assert.deepEqual(again.body.audioManifest,lobby.body.audioManifest);
+  assert.equal(again.body.listeningDeadlineAt,new Date(started.body.listeningDeadlineAt).toISOString());
+});
+test('Bản ghim mã hóa cũ và phiên đã bắt đầu không bị đổi sang MP3 khi client mới tải lại',async()=>{
+  let{base,token}=await prepare();
+  const old=await post(base,'audio-access',token);
+  assert.equal(old.body.audioManifest.envelopeVersion,'IZTT1');
+  assert.deepEqual((await post(base,'audio-access',{...token,publicAudioVersion:1})).body.audioManifest,old.body.audioManifest);
+  ({base,token}=await prepare());await begin(base,token);
+  await f.db.query('UPDATE assessment.term_test_exam_session SET listening_audio_manifest=NULL WHERE id=$1',[token.examSessionToken]);
+  const resumed=await post(base,'audio-access',{...token,publicAudioVersion:1});
+  assert.equal(resumed.body.audioManifest.envelopeVersion,'IZTT1');
+});
 for(const slug of slugs)for(const mode of ['lis_first','read_first'])test(`${slug}/${mode}: metadata không cấp khóa trước start; reauth trả cùng bản ghim/khóa và không đổi mốc hoặc deadline`,async()=>{
   const{base,token}=await prepare(slug,mode);
   const lobby=await post(base,'audio-access',token);assert.equal(lobby.status,200,JSON.stringify(lobby.body));

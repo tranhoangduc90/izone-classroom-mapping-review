@@ -5,11 +5,11 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   if(process.env.K67_ORDER_NATIVE_URL) {
     const {db,pool}=await createNativeOrderFixture({examOrder});
     return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
-      config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
+      config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
   const schema=await readFile(new URL('../../db/003-assessment.sql',import.meta.url),'utf8');
@@ -45,5 +45,5 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
   return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
-    config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
+    config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
 }
