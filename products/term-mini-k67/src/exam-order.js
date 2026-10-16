@@ -30,7 +30,7 @@ export function orderState(row) {
     attemptToken:row.id,examSessionToken:row.exam_session_id,generation:Number(row.generation)||0,
     studentName:row.student_name_snapshot,className:row.class_name_snapshot,
     listeningSubmitted,readingSubmitted,completed:Boolean(row.completed_at),completedAt:row.completed_at,
-    nextSection:!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'?'result':'writing',
+    nextSection:!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'||row.writing_scope==='lr_only'?'result':'writing',
     listeningStartedAt:row.session_started_at||null,listeningDeadlineAt:row.session_deadline_at||null,
     listeningResumeAtSeconds:Number(row.session_checkpoint_seconds)||0,listeningRecoverySeconds:Number(row.session_recovery_seconds)||0,
     readingStartedAt:row.reading_started_at,readingDeadlineAt:row.reading_deadline_at,
@@ -154,8 +154,13 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
         VALUES($1,$2,$3,$4,$5,$6,$7,'read_first') RETURNING *`,[slug,student.definition_version,student.class_id,student.class_name,student.student_id,student.student_name,mode])).rows[0];
       const attempt=(await db.query(`INSERT INTO assessment.term_test_attempt
         (client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,
-         student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'read_first',$10) RETURNING id`,
+         student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,writing_scope,writing_source_attempt_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'read_first',$10,
+          CASE WHEN $10='answer_sheet' THEN 'lr_only' ELSE 'exam' END,
+          (SELECT previous.id FROM assessment.term_test_attempt previous WHERE previous.test_slug=$2
+            AND previous.definition_version=$3 AND previous.erp_course_class_id=$4 AND previous.erp_student_contact_id=$6
+            AND previous.writing_scope='exam' AND previous.superseded_at IS NULL
+            ORDER BY previous.created_at DESC,previous.id DESC LIMIT 1)) RETURNING id`,
         [randomUUID(),slug,student.definition_version,student.class_id,student.class_name,student.student_id,student.student_name,session.id,mode,paper?'answer_sheet':data.examDelivery])).rows[0];
       await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[session.id,attempt.id]);
       return reload(db,attempt.id);

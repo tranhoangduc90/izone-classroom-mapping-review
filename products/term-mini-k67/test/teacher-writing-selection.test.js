@@ -28,20 +28,20 @@ async function clean(){
     DELETE FROM assessment.term_test_writing_grading_run;DELETE FROM assessment.term_test_attempt;`);
   syncCalls=0;
 }
-async function seedAttempt({testSlug,examMode,student=900001,hours=3,writing=false,essay='Bài Writing gốc',score=6,ready=true,superseded=false}={}){
+async function seedAttempt({testSlug,examMode,student=900001,hours=3,writing=false,essay='Bài Writing gốc',score=6,ready=true,superseded=false,scope='exam'}={}){
   const id=randomUUID();
   await fixture.db.query(`INSERT INTO assessment.term_test_attempt
     (id,client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,
     student_name_snapshot,listening_answers,listening_result,listening_submitted_at,reading_answers,reading_result,
     reading_submitted_at,completed_at,combined_result,created_at,writing_task_2,writing_submitted_at,superseded_at,
-    writing_started_at,writing_updated_at,exam_mode,exam_delivery)
+    writing_started_at,writing_updated_at,exam_mode,exam_delivery,writing_scope)
     VALUES($1,$2,$9,1,1293,'IC2304',$3,'Tên học viên trùng nhau','{}','{}',now()-make_interval(hours=>$4),
     '{}','{}',now()-make_interval(hours=>$4),now()-make_interval(hours=>$4),$5,now()-make_interval(hours=>$4),$6,
     CASE WHEN $7 THEN now()-make_interval(hours=>$4)+interval '10 minutes' ELSE NULL END,
     CASE WHEN $8 THEN now() ELSE NULL END,
     CASE WHEN $7 THEN now()-make_interval(hours=>$4)+interval '1 minute' ELSE NULL END,
-    CASE WHEN $7 THEN now()-make_interval(hours=>$4)+interval '10 minutes' ELSE NULL END,$10,'cbt')`,
-    [id,randomUUID(),student,hours,JSON.stringify({listening:{band:hours===1?6.5:1},reading:{band:6}}),writing?essay:'',writing,superseded,testSlug,examMode]);
+    CASE WHEN $7 THEN now()-make_interval(hours=>$4)+interval '10 minutes' ELSE NULL END,$10,'cbt',$11)`,
+    [id,randomUUID(),student,hours,JSON.stringify({listening:{band:hours===1?6.5:1},reading:{band:6}}),writing?essay:'',writing,superseded,testSlug,examMode,scope]);
   if(writing&&ready){
     const run=randomUUID();
     await fixture.db.query(`INSERT INTO assessment.term_test_writing_grading_run
@@ -99,7 +99,7 @@ check('Bài chưa nộp và lượt đã thay thế không che Writing hợp l�
 });
 check('Writing rỗng nộp sau từ phiếu dự phòng không che bài có nội dung và bài chấm gốc',async()=>{
   await clean();await attempt({writing:true});
-  await attempt({hours:1,writing:true,essay:' \n\t\r ',score:4});
+  await attempt({hours:1,writing:true,essay:' \n\t\r ',score:4,scope:'lr_only'});
   const before=(await fixture.db.query('SELECT * FROM assessment.term_test_attempt ORDER BY id')).rows;
   assert.equal((await overview()).writing.writingScore,6);
   const response=await details();assert.equal(response.body.writing.essay,'Bài Writing gốc');
@@ -118,10 +118,15 @@ check('Nội dung Task 1 cũng được giữ khi lượt Writing trắng đến
   await fixture.db.query('UPDATE assessment.term_test_writing_grading_run SET task_number=1 WHERE attempt_id=$1',[id]);
   await fixture.db.query(`UPDATE assessment.term_test_writing_grading_final SET task_1_run_id=task_2_run_id,
     task_1_score=task_2_score,task_2_run_id=NULL,task_2_score=NULL WHERE attempt_id=$1`,[id]);
-  await attempt({hours:1,writing:true,essay:'',score:4});
+  await attempt({hours:1,writing:true,essay:'',score:4,scope:'lr_only'});
   assert.equal((await overview()).writing.writingScore,6);
   const response=await get(`writing-detail?class=IC2304&test=${testSlug}&student=${ref}&task=1`).expect(200);
   assert.equal(response.body.writing.essay,'Nội dung Task 1 gốc');
   assert.equal(response.body.writing.report,'Nhận xét nguyên gốc: Nội dung Task 1 gốc');
+});
+check('Bài chính thức nộp trắng 0 mới hơn phải thắng bài 6 cũ',async()=>{
+  await clean();await attempt({writing:true});await attempt({hours:1,writing:true,essay:'',score:0});
+  assert.equal((await overview()).writing.writingScore,0);
+  const response=await details();assert.equal(response.body.writing.taskScore,0);assert.equal(response.body.writing.essay,'');
 });
 }

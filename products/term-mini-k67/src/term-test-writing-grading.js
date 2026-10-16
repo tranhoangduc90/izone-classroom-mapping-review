@@ -311,7 +311,8 @@ async function refreshFinal(client, attemptId) {
 export function createTermTestWritingGradingService({ pool, syncErpGrades = null }) {
   async function ensureSubmission({ attemptToken, testSlug, task1, task2, taskDefinitions }) {
     return inTransaction(pool, async client => {
-      const attemptResult = await client.query(`SELECT id::text, test_slug
+      const attemptResult = await client.query(`SELECT id::text, test_slug, writing_scope,
+        writing_task_1, writing_task_2, writing_submitted_at
       FROM assessment.term_test_attempt
       WHERE id = $1::uuid
         AND test_slug = $2
@@ -326,7 +327,12 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         );
       }
 
-      const essays = { 1: cleanText(task1, 120_000), 2: cleanText(task2, 180_000) };
+      const attempt = attemptResult.rows[0];
+      if (attempt.writing_scope === 'lr_only') return {
+        status:'not_applicable',ready:false,taskStates:{},task1Score:null,task2Score:null,writingScore:null,tasks:[]
+      };
+      // Quyết định bài trắng từ nội dung canonical đã nộp, không tin payload gọi lại.
+      const essays = { 1: cleanText(attempt.writing_task_1, 120_000), 2: cleanText(attempt.writing_task_2, 180_000) };
       const taskNumbers = Array.from(taskDefinitions || [])
         .map(task => Number(String(task?.id || '').replace(/\D/g, '')))
         .filter(taskNumber => [1, 2].includes(taskNumber));
@@ -340,10 +346,17 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       for (const taskNumber of taskNumbers) {
         const source = taskSource(taskDefinitions, taskNumber);
         const runKey = buildRunKey(testSlug, attemptToken, taskNumber);
+        const blank = countWords(essays[taskNumber]) === 0;
+        const ruleResult = blank ? {
+          taskNumber,taskScore:0,criteria:[],gradingMethod:'blank_rule',ruleVersion:'blank-writing-v1',
+          reasonCode:'BLANK_SUBMISSION',source:{attemptId:attemptToken,taskNumber,submittedAt:attempt.writing_submitted_at},
+          report:'## Điểm theo quy tắc bài trắng\n\nKhông có nội dung bài làm. Task bắt buộc đã được máy chủ xác nhận nộp nhận Band 0. Không gọi AI và không tạo nhận xét từ vựng hoặc ngữ pháp.'
+        } : null;
         await client.query(`INSERT INTO assessment.term_test_writing_grading_run (
           attempt_id, task_number, grading_version, run_key,
-          prompt_text, prompt_image_url, essay_text, word_count, status
-        ) VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, 'queued')
+          prompt_text, prompt_image_url, essay_text, word_count, status,task_score,result_json,completed_at
+        ) VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9,$10,$11::jsonb,
+          CASE WHEN $9='complete' THEN now() ELSE NULL END)
         ON CONFLICT (attempt_id, task_number, grading_version) DO NOTHING;`, [
           attemptToken,
           taskNumber,
@@ -352,16 +365,16 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           source.prompt,
           source.imageUrl,
           essays[taskNumber],
-          countWords(essays[taskNumber])
+          countWords(essays[taskNumber]),blank?'complete':'queued',blank?0:null,ruleResult?JSON.stringify(ruleResult):null
         ]);
-        const runResult = await client.query(`SELECT id::text
+        const runResult = await client.query(`SELECT id::text,status
         FROM assessment.term_test_writing_grading_run
         WHERE attempt_id = $1::uuid AND task_number = $2 AND grading_version = $3;`, [
           attemptToken,
           taskNumber,
           GRADING_VERSION
         ]);
-        await client.query(`INSERT INTO assessment.term_test_writing_grading_job (
+        if (runResult.rows[0].status !== 'complete') await client.query(`INSERT INTO assessment.term_test_writing_grading_job (
           run_id, job_type, idempotency_key, status, max_attempts, next_attempt_at
         ) VALUES ($1::uuid, 'dispatch', $2, 'queued', 8, now())
         ON CONFLICT (idempotency_key) DO NOTHING;`, [
@@ -369,10 +382,18 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           `${runKey}:dispatch`
         ]);
       }
-      await client.query(`INSERT INTO assessment.term_test_writing_grading_final (
-        attempt_id, grading_version, status
-      ) VALUES ($1::uuid, $2, 'waiting')
-      ON CONFLICT (attempt_id) DO NOTHING;`, [attemptToken, GRADING_VERSION]);
+      if (!(await readStatus(client,attemptToken)).ready) await refreshFinal(client, attemptToken);
+      // Dùng hàng việc hiện có để gửi điểm 0 bền vững, không chuyển bài trắng sang AI.
+      // Việc collect có nhãn blank_rule được claimJobs xử lý nội bộ trước khi trả việc cho n8n.
+      const localRuns = await client.query(`SELECT id::text,run_key FROM assessment.term_test_writing_grading_run
+        WHERE attempt_id=$1 AND grading_version=$2 ORDER BY task_number DESC`,[attemptToken,GRADING_VERSION]);
+      const status = await readStatus(client,attemptToken);
+      if (status.ready && status.tasks.length && status.tasks.every(t=>t.gradingMethod==='blank_rule')) {
+        await client.query(`INSERT INTO assessment.term_test_writing_grading_job
+          (run_id,job_type,idempotency_key,status,max_attempts,next_attempt_at)
+          VALUES($1,'collect',$2,'queued',120,now()) ON CONFLICT(idempotency_key) DO NOTHING`,
+          [localRuns.rows[0].id,`${testSlug}:${attemptToken}:v${GRADING_VERSION}:blank-portal`]);
+      }
       return readStatus(client, attemptToken);
     });
   }
@@ -383,14 +404,16 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     if (!/^[A-Za-z0-9_.:-]{3,100}$/.test(safeWorkerId)) {
       throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_WORKER', 'Mã tiến trình không hợp lệ.', 400);
     }
-    return inTransaction(pool, async client => {
+    const jobs = await inTransaction(pool, async client => {
       // Khóa chỉ tồn tại trong transaction cấp việc để mọi webhook cùng giữ một giới hạn toàn hệ thống.
       // Dữ liệu vào là số việc đang giữ lease; kết quả là tối đa bốn job processing trên toàn bộ lớp.
       // Khi đã đủ bốn suất, worker nhận mảng rỗng và bài vẫn nằm nguyên trong hàng chờ.
       await client.query('SELECT pg_advisory_xact_lock(67092026);');
       const capacity = await client.query(`SELECT count(*)::int AS active
-        FROM assessment.term_test_writing_grading_job
-        WHERE status='processing' AND lease_until>now();`);
+        FROM assessment.term_test_writing_grading_job job
+        JOIN assessment.term_test_writing_grading_run run ON run.id=job.run_id
+        JOIN assessment.term_test_attempt attempt ON attempt.id=run.attempt_id
+        WHERE job.status='processing' AND job.lease_until>now() AND attempt.writing_scope='exam';`);
       const available = Math.max(0, 4 - Number(capacity.rows[0].active));
       if (available === 0) return [];
       const claimed = await client.query(`WITH candidates AS (
@@ -403,11 +426,13 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           END AS lease_duration
         FROM assessment.term_test_writing_grading_job AS job
         JOIN assessment.term_test_writing_grading_run AS grading_run ON grading_run.id = job.run_id
+        JOIN assessment.term_test_attempt AS attempt ON attempt.id=grading_run.attempt_id
         WHERE (
           job.status IN ('queued', 'retry_wait')
           OR (job.status = 'processing' AND job.lease_until < now())
         )
           AND job.next_attempt_at <= now()
+          AND attempt.writing_scope='exam'
         ORDER BY CASE WHEN job.job_type='collect' THEN 0 ELSE 1 END, job.next_attempt_at, job.created_at
         FOR UPDATE OF job SKIP LOCKED
         LIMIT $2
@@ -434,11 +459,39 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         run.prompt_image_url,
         run.essay_text,
         run.word_count,
-        run.lark_record_id
+        run.lark_record_id,run.attempt_id::text AS attempt_id,
+        run.result_json->>'gradingMethod' AS grading_method
       FROM updated
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = updated.run_id
       ORDER BY updated.created_at;`, [safeWorkerId, Math.min(safeLimit, available)]);
-      return claimed.rows.map(row => ({
+      return claimed.rows;
+    });
+    const aiJobs=[];
+    for (const row of jobs) {
+      if (row.grading_method === 'blank_rule') {
+        try {
+          const grading=await readStatus(pool,row.attempt_id);
+          if (!grading.ready) throw new Error('BLANK_FINAL_NOT_READY');
+          const found=await pool.query(`SELECT id::text AS attempt_token,test_slug,
+            erp_course_class_id::text AS class_id,erp_student_contact_id::text AS student_id,
+            class_name_snapshot AS class_name,combined_result FROM assessment.term_test_attempt
+            WHERE id=$1 AND writing_scope='exam' AND writing_submitted_at IS NOT NULL`,[row.attempt_id]);
+          if (found.rows.length!==1) throw new Error('BLANK_IDENTITY_NOT_FOUND');
+          const attempt=found.rows[0];
+          if (typeof syncErpGrades==='function' && attempt.class_name!=='CODEXDEMO806') {
+            const synced=await syncErpGrades(buildErpGradePayload(attempt,attempt.combined_result,{writing:grading.writingScore}));
+            if (synced?.status!=='synced') throw new Error('BLANK_PORTAL_ACK_INVALID');
+          }
+          const completed=await pool.query(`UPDATE assessment.term_test_writing_grading_job SET status='complete',
+            completed_at=now(),lease_until=NULL,last_error_code=NULL,updated_at=now()
+            WHERE id=$1 AND worker_id=$2 AND status='processing'`,[row.job_id,safeWorkerId]);
+          if (completed.rowCount!==1) throw new Error('BLANK_PORTAL_LEASE_CHANGED');
+        } catch {
+          await failJob({jobId:row.job_id,workerId:safeWorkerId,errorCode:'WRITING_BLANK_PORTAL_SYNC_FAILED'});
+        }
+        continue;
+      }
+      aiJobs.push({
         jobId: row.job_id,
         jobType: row.job_type,
         attemptCount: Number(row.attempt_count),
@@ -450,8 +503,9 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         essay: row.job_type === 'dispatch' ? row.essay_text : '',
         wordCount: Number(row.word_count || 0),
         sourceRecordId: row.lark_record_id || null
-      }));
-    });
+      });
+    }
+    return aiJobs;
   }
 
   async function completeDispatch({ jobId, workerId, sourceRecordId = null }) {
@@ -495,9 +549,11 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     const stored = await inTransaction(pool, async client => {
       const jobResult = await client.query(`SELECT
         job.id::text, job.status, job.job_type, job.worker_id,
-        run.id::text AS run_id, run.run_key, run.task_number, run.attempt_id::text AS attempt_id
+        run.id::text AS run_id, run.run_key, run.task_number, run.attempt_id::text AS attempt_id,
+        attempt.writing_scope,run.result_json->>'gradingMethod' AS grading_method
       FROM assessment.term_test_writing_grading_job AS job
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+      JOIN assessment.term_test_attempt AS attempt ON attempt.id=run.attempt_id
       WHERE job.id = $1::uuid
       FOR UPDATE;`, [jobId]);
       if (jobResult.rows.length !== 1) {
@@ -512,6 +568,9 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       }
       if (job.status !== 'processing' || job.worker_id !== workerId) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc thu kết quả không thuộc tiến trình này.', 409);
+      }
+      if (job.writing_scope==='lr_only' || job.grading_method==='blank_rule') {
+        return {status:'duplicate',grading:await readStatus(client,job.attempt_id),portalSyncRequired:false};
       }
       const normalized = normalizeTaskResult(Number(job.task_number), result);
 
