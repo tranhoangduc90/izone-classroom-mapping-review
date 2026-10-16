@@ -1,5 +1,17 @@
 # Trạng thái tách Term Test/Mini Test K67
 
+## Cập nhật 16/10/2026 — audio và làm quen đã phát hành
+
+Đã phát hành backend `audio-readiness-20261016`, image `sha256:f0308bf514e09bf55faf0010dc900d8e5f6d91df0abea240d46b46d554dfece7`, migrations 010–015. Bốn cờ incident/cache/owner/readiness bật; tập lớp làm quen giữ đúng tập lớp K67 được mirror cấp quyền. Runtime đọc cấu hình tại `/opt/term-mini-k67-audio-readiness-20261016/release.env`; khóa phiên/asset giữ nguyên.
+
+Source backend [PR 53](https://github.com/tranhoangduc90/izone-classroom-mapping-review/pull/53); Pages [PR 108](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/108) và [PR 109](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/109). Giao diện Reading xám sáng–đỏ, điều khiển audio một dòng; công cụ đầu ra/chuyển thiết bị chỉ hiện khi giữ bài. Phòng chờ Listening thật giữ nguyên. Bài làm quen dùng nội dung tự soạn.
+
+Backend 286 phép kiểm, coverage regression Chrome 172 ca (ghép ca kiểm revision đã cập nhật), audio Edge 66 ca, hành trình Listening/Reading/Writing và cảnh báo web trên cả hai trình duyệt đã đạt local. Production đã đọc lại image/cờ/ready và tài nguyên, kiểm trình duyệt ở mức chỉ đọc. Luồng ghi/nộp trên production chưa kiểm bằng danh tính mô phỏng vì roster lớp CODEXDEMO806 không còn học viên hợp lệ; không chọn học viên thật để tạo bài giả. Không suy kết quả local thành nghiệm thu tai nghe, mạng lớp hoặc hàng trăm người production.
+
+Backup production đã phục hồi local; diễn tập migrations giữ hash lịch sử 15 bảng assessment. Container trước chuyển được giữ tại `term-mini-k67-api-before-audio-20261016`. Khi còn phiên protocol mới chưa đóng, giữ runtime/cờ tương thích; không trả dump cũ đè dữ liệu mới. Xem [runbook phát hành/quay lui](AUDIO_READINESS_RELEASE_20261016.md) và biên nhận riêng tư `E:/Codex-Data/k67-production-audio-20261016/`.
+
+Các mục dưới đây là mốc tách backend ngày 06/10/2026.
+
 Ngày 06/10/2026. **Đã chuyển K67 và kiểm hành trình bằng dữ liệu mô phỏng trên
 hệ thống thật.** K56 tiếp tục dùng runtime/tuyến hiện có; không dựng lại
 backend chung, không xóa bài/điểm thật hoặc chấm lại lịch sử.
