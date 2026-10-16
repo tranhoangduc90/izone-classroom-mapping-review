@@ -901,7 +901,7 @@ export function createApp({
   const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
     keyGenerator:examRateKey,message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
-  mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled});
+  mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled,publicEnabled:config.publicAudioEnabled});
   mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);

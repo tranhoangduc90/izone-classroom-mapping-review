@@ -17,3 +17,7 @@ Ba hành trình Nghe–Đọc–Viết mô phỏng trên production đã đạt.
 Snapshot nguồn và hash từng file nằm trong evidence riêng của task. Source chuẩn ở worktree này, không chép sang thư mục Lớp 67. Xem DISCOVERY.md và TEST_PLAN.md để theo dõi toàn bộ phạm vi chuyển.
 
 Các helper chuẩn bị/migration là công cụ cho lần chuyển này, không phải lệnh triển khai định kỳ. Không chạy lại restore vào kho đang có bài. Các helper `verify-production-readiness.py`, `verify-historical-preservation.py` và pha `observe` của `verify-production-journeys.py` chỉ đọc lại trạng thái; chúng không chấm lại bài.
+
+## Audio MP3 Pages — 17/10/2026
+
+`K67_PUBLIC_AUDIO_ENABLED=true` cho client hỗ trợ MP3 nhận catalog 128 kbps của Term 1/Mini. VPS vẫn giữ quyền, phiên bản ghim và toàn bộ giờ thi/phục hồi. Client cũ, Term 2 và phiên đã ghim mã hóa tiếp tục dùng nguồn cũ. Không thay file gốc trên VPS. Tắt cờ để ngừng cấp MP3 cho phiên mới; giữ URL và frontend tương thích cho phiên đã ghim. Không khôi phục database để quay lui runtime.
