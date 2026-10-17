@@ -21,7 +21,7 @@ export function createOwnerVerifier({url,key,auth,docs,fetcher=fetch,clock=Date.
   if(submission.id!==input.submissionId||submission.courseId!==input.courseId||submission.courseWorkId!==input.courseWorkId||submission.userId!==source.googleUserId||files.length!==1)
    fail('DOCUMENT_OWNER_MISMATCH','Bản Docs không thuộc bài Classroom của đúng học viên.',403);
   const document=await docs.read(input.documentId);
-  planDocWrite(document,{document_id:input.documentId,tab_id:input.tabId,last_doc_text:''},{kind:'cta',payload:{url:'https://example.invalid/reading-owner-check'}});
-  return{sourceRevision,courseId:input.courseId,courseWorkId:input.courseWorkId,submissionId:input.submissionId,googleUserId:source.googleUserId,documentId:input.documentId,tabId:input.tabId,code:CODE,verifiedAt:new Date(clock()).toISOString()};
+  planDocWrite(document,{document_id:input.documentId,tab_id:input.tabId,last_doc_text:'',code:input.code||CODE},{kind:'cta',payload:{url:'https://example.invalid/reading-owner-check'}});
+  return{sourceRevision,courseId:input.courseId,courseWorkId:input.courseWorkId,submissionId:input.submissionId,googleUserId:source.googleUserId,documentId:input.documentId,tabId:input.tabId,code:input.code||CODE,verifiedAt:new Date(clock()).toISOString()};
  };
 }

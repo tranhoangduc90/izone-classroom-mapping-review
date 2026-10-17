@@ -1,4 +1,5 @@
 import {CODE,fail,uuid} from './domain.js';
+import {lessonFor} from './lessons.js';
 import {transaction} from './service.js';
 
 export const STATUS_HEADING='TÌNH TRẠNG NỘP BÀI THỰC CHIẾN';
@@ -12,7 +13,8 @@ function checkedTab(document,binding){
  if(document.documentId!==binding.document_id||!document.revisionId)fail('DOC_IDENTITY_MISMATCH','Docs không đúng bản đã gắn.');
  const tab=tabs(document.tabs).find(t=>t.tabProperties?.tabId===binding.tab_id);
  if(!tab)fail('DOC_TAB_NOT_FOUND','Không còn tab bài tập đã đăng ký.');
- let codeCount=0;walk(tab.documentTab?.body?.content,e=>{codeCount+=runs([e]).map(r=>r.text).join('').split(CODE).length-1;});
+ const code=lessonFor(binding.code||CODE).code;
+ let codeCount=0;walk(tab.documentTab?.body?.content,e=>{codeCount+=runs([e]).map(r=>r.text).join('').split(code).length-1;});
  if(codeCount!==1)fail('DOC_CODE_MISMATCH','Không tìm thấy đúng một mã bài trong tab.');
  return tab;
 }
@@ -84,7 +86,7 @@ export function createDocsWorker({pool,docs}){
   });
   if(!job)return false;
   try{
-   const b=(await pool.query('SELECT * FROM reading_practice.binding WHERE id=$1',[job.binding_id])).rows[0];
+   const b=(await pool.query('SELECT b.*,c.code FROM reading_practice.binding b JOIN reading_practice.assignment a ON a.id=b.assignment_id JOIN reading_practice.content c ON c.id=a.content_id WHERE b.id=$1',[job.binding_id])).rows[0];
    let plan=planDocWrite(await docs.read(b.document_id),b,job);
    if(!plan.verified){await docs.write(b.document_id,plan);plan=planDocWrite(await docs.read(b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
    if(!plan.verified)fail('DOC_READBACK_FAILED','Google Docs chưa khớp chữ và link.');

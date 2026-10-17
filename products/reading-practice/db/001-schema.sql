@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS reading_practice.student_session (
 );
 CREATE TABLE IF NOT EXISTS reading_practice.teacher_session (
  token_hash text PRIMARY KEY, email text NOT NULL, google_subject text NOT NULL,
- expires_at timestamptz NOT NULL
+ expires_at timestamptz NOT NULL, absolute_expires_at timestamptz NOT NULL DEFAULT (now()+interval '1 hour'),
+ remembered boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS reading_practice.work (
  binding_id uuid PRIMARY KEY REFERENCES reading_practice.binding(id), state jsonb NOT NULL,
