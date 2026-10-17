@@ -22,10 +22,20 @@ Bản xây cục bộ không tự đăng ký Homework, mở lớp hoặc thay pr
 
 ## Cách vận hành
 
+### Link chung chọn lớp và tên — 17/10/2026
+
+`reading-practice/?lesson=9` lấy tất cả lớp có học viên active/approved từ nguồn K67 hiện hành; bài không có danh sách lớp cho phép riêng. `GET /api/library/9` trả metadata/lớp, `GET /api/library/9/classes/:id` chỉ trả UUID/tên của lớp chọn; không trả passage/key/lời giải. `POST /api/shared-login` kiểm lại lớp và UUID, tạo một binding cho lớp/content/học viên; chỉ Bắt đầu mới tạo lượt. Chọn lớp/tên là cách nhận diện được chọn cho link chung. Không cần Homework Docs hoặc Google của học viên.
+
+Chạy `db/004-shared-entry.sql` bằng role owner trước image mới. Migration thêm `shared_lesson`, cho phép binding không Docs chỉ khi có marker `owner_proof.mode=shared`, cấp quyền bảng mới cho role ứng dụng hiện hữu. Admin mở chung bằng `POST /api/admin/shared-lesson` với `{code,contentVersion,status:"open"}`; phiên bản được ghim bất biến. Đóng bài chặn đăng nhập mới/bắt đầu/reset, vẫn cho phiên hiện hữu đọc và tiếp tục. Không restore dump cũ đè lịch sử; image quay lui phải hiểu binding không Docs.
+
+Đối chiếu runtime trước phát hành thấy image `izone-load100-reading:20261017-1` giữ thêm tối ưu gộp các lượt đọc context đang chờ. Bản này bảo toàn thay đổi đó (source context quan sát SHA-256 `ea3f827e9de086bf594fdaf0fe98ef0f036768e1deb9ebe734c2d5550d7989f1`), thêm catalog và kiểm 100 lời gọi cùng lúc chỉ đọc nguồn một lần. Các runtime source còn lại khớp bản buổi 9 trước đó.
+
+Lượt shared lưu kết quả trong Reading, không xếp hàng Google Docs; giảng viên xem link kết quả với quyền Google/lớp hiện có. Link Homework cũ vẫn kiểm owner/CTA và ghi Docs theo luồng cũ. Không sửa Classroom, nguồn context hoặc các sản phẩm khác. Preview thêm tham số cuối `shared` để kiểm hai lớp/người giả bằng cùng API/SQL.
+
 Backend sở hữu danh tính theo bản Docs, lượt làm, giờ đã dùng, nháp, bài nộp và công việc ghi Docs. API ngữ cảnh K67 `/v1/snapshot` được dùng chỉ đọc theo hợp đồng v1; không truy cập bảng hoặc khởi động consumer của Term/Speaking. Các lớp có bài Reading được đăng ký riêng.
 
 Chủ Docs được đối chiếu UUID → Google user/course qua cầu nguồn chỉ đọc v1, rồi so với đúng student submission và attachment Google Classroom. Đọc lại mã bài/tab trong Docs trước tạo binding. Nguồn mới chỉ có role/view riêng; chưa chạy migration hoặc thay runtime hiện hành trên VPS. Classroom có thể chưa sinh bản `STUDENT_COPY` khi submission còn `NEW`; phải chờ bản sao thật, không thay bằng template.
 
 `npm ci`, `npm test`; `npm start` cần cấu hình riêng và database đã chuẩn bị. Công cụ preview chạy PGlite trên máy, không dùng kho production. Xem `DESIGN.md` và `ops/` trước phát hành; chưa có quyền production thì chỉ xây/kiểm cục bộ.
 
-Chọn lớp/tên chỉ mở phiên đúng chủ bản Docs. Người có link kết quả vẫn phải đăng nhập Google và có quyền lớp. Điểm và lời giải do máy chủ trả sau nộp; reset không xóa kết quả cũ.
+Ở chế độ Homework, chọn lớp/tên chỉ mở phiên đúng chủ bản Docs. Người có link kết quả vẫn phải đăng nhập Google và có quyền lớp. Điểm và lời giải do máy chủ trả sau nộp; reset không xóa kết quả cũ.

@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
 import {ReadingError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
+import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
 export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,teacherCookiePath='/reading-practice-api/api'}){
@@ -35,6 +36,17 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  };
  app.get('/api/health',wrap(async(req,res)=>{await pool.query('SELECT 1');res.json({product:'PRODUCT-READING-PRACTICE-K67',ready:true});}));
  app.get('/api/config',(req,res)=>res.json({googleClientId}));
+ const libraryCode=value=>lessonFor(value==='9'?ROBOTS_CODE:value==='7'?LEGACY_CODE:value).code;
+ app.get('/api/library/:lessonId',wrap(async(req,res)=>{
+  res.set('Cache-Control','no-store');res.json(await service.lessonCatalog({code:libraryCode(req.params.lessonId)}));
+ }));
+ app.get('/api/library/:lessonId/classes/:classId',wrap(async(req,res)=>{
+  res.set('Cache-Control','no-store');res.json(await service.lessonRoster({code:libraryCode(req.params.lessonId),classId:z.string().regex(/^-?\d{1,19}$/).parse(req.params.classId)}));
+ }));
+ app.post('/api/shared-login',wrap(async(req,res)=>{
+  const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
+  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:libraryCode(input.code)}));
+ }));
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
   res.json(await service[action]({...input,token:token(req)}));
@@ -70,6 +82,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');next();
  });
  app.get('/api/admin/status',wrap(async(req,res)=>res.json(await service.operationsStatus())));
+ app.post('/api/admin/shared-lesson',wrap(async(req,res)=>res.json(await service.configureSharedLesson(z.object({code:z.string().min(1).max(100),contentVersion:z.string().min(1).max(80),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/assignment',wrap(async(req,res)=>res.json(await service.configureAssignment(z.object({assignmentId:z.uuid(),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/retry-docs',wrap(async(req,res)=>res.json(await service.retryDocJob(z.object({jobId:z.uuid()}).strict().parse(req.body)))));
  app.post('/api/admin/register',wrap(async(req,res)=>{

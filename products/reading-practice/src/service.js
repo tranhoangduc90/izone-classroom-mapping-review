@@ -27,9 +27,9 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
  }
  async function view(db,b,state,{lease,definition=false}={}){
   const jobs=(await db.query('SELECT sequence,status,error_code FROM reading_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[b.id])).rows;
-  const events=state.events.map(e=>({...e,docs:jobs.find(j=>j.sequence===e.sequence)?.status||'pending'}));
+  const events=state.events.map(e=>({...e,docs:b.document_id?jobs.find(j=>j.sequence===e.sequence)?.status||'pending':'not_applicable'}));
   return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
-   bindingId:b.id,documentId:b.document_id,documentUrl:`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`},
+   bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id,documentUrl:b.document_id?`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`:null},
    lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
    ...(lease?{lease}:{}),...(definition?{definition:b.definition}:{})};
  }
@@ -41,7 +41,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
  async function enqueue(db,b,state,a){
   const sequence=++state.sequence,message=statusMessage(a,state.firstCompleted);
   state.events.push({type:a.status==='submitted'?'completed':'started',attempt:a.no,message,at:new Date(clock()).toISOString(),sequence});
-  await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,$3,'status',$4)`,
+  if(b.document_id)await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,$3,'status',$4)`,
    [uuid(),b.id,sequence,{text:message,link:a.submissionId?teacherUrl(a.submissionId):'',attemptId:a.id,attemptNo:a.no}]);
  }
  async function operation(input,kind,fn){
@@ -133,6 +133,56 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
   const b=await binding(pool,{token});const state=(await pool.query('SELECT state FROM reading_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state||initialState();
   return view(pool,b,state);
  }
+ // Link chung chọn từ catalog phía server; không dùng Docs giả hoặc tin tên lớp do client tự gửi.
+ async function sharedContent(db,code,{lock=false,allowClosed=false}={}){
+  const row=(await db.query(`SELECT c.*,s.status AS shared_status FROM reading_practice.shared_lesson s
+   JOIN reading_practice.content c ON c.id=s.content_id WHERE s.code=$1${lock?' FOR SHARE OF s':''}`,[code])).rows[0];
+  if(!row||row.code!==code||!allowClosed&&row.shared_status!=='open')fail('LESSON_NOT_OPEN','Bài này chưa mở để luyện tập.',404);
+  return row;
+ }
+ async function configureSharedLesson({code,contentVersion,status}){
+  lessonFor(code);
+  return transaction(pool,async db=>{
+   const content=(await db.query('SELECT id FROM reading_practice.content WHERE code=$1 AND version=$2',[code,contentVersion])).rows[0];
+   if(!content)fail('CONTENT_NOT_FOUND','Chưa nạp nội dung của bài.',404);
+   const old=(await db.query('SELECT content_id FROM reading_practice.shared_lesson WHERE code=$1 FOR UPDATE',[code])).rows[0];
+   if(old&&old.content_id!==content.id)fail('CONTENT_VERSION_CONFLICT','Link chung đã ghim phiên bản; không đổi nội dung các lượt đang lưu.');
+   const configured=(await db.query(`INSERT INTO reading_practice.shared_lesson(code,content_id,status) VALUES($1,$2,$3)
+    ON CONFLICT(code) DO UPDATE SET status=EXCLUDED.status WHERE reading_practice.shared_lesson.content_id=EXCLUDED.content_id RETURNING code`,[code,content.id,status])).rows[0];
+   if(!configured)fail('CONTENT_VERSION_CONFLICT','Link chung đã ghim phiên bản nội dung khác.');
+   await db.query("UPDATE reading_practice.assignment a SET status=$2 WHERE a.content_id=$1 AND a.source_course_id IS NULL AND EXISTS(SELECT 1 FROM reading_practice.binding b WHERE b.assignment_id=a.id AND b.document_id IS NULL)",[content.id,status]);
+   const url=new URL(pageBase);url.searchParams.set('lesson',String(lessonFor(code).lesson));
+   return{code,version:contentVersion,status,url:url.href};
+  });
+ }
+ async function lessonCatalog({code}){
+  const content=await sharedContent(pool,code);
+  return{lesson:lessonFor(code),version:content.version,classes:await context.classes()};
+ }
+ async function lessonRoster({code,classId}){
+  await sharedContent(pool,code);
+  const selected=(await context.classes()).find(c=>c.id===classId);
+  if(!selected)fail('CLASS_NOT_ELIGIBLE','Lớp chưa có danh sách học viên hợp lệ.',403);
+  return{...selected,students:(await context.roster(classId)).map(s=>({id:s.studentRef,name:s.name}))};
+ }
+ async function sharedLogin({code,classId,studentRef}){
+  const selected=(await context.classes()).find(c=>c.id===classId);
+  if(!selected||!await context.student(classId,studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc danh sách hợp lệ của lớp đã chọn.',403);
+  return transaction(pool,async db=>{
+   const content=await sharedContent(db,code,{lock:true});
+   const assignment=(await db.query(`INSERT INTO reading_practice.assignment(id,class_id,class_code,content_id,status)
+    VALUES($1,$2,$3,$4,'open') ON CONFLICT(class_id,content_id) DO UPDATE SET class_code=EXCLUDED.class_code
+    WHERE reading_practice.assignment.source_course_id IS NULL AND reading_practice.assignment.status='open' RETURNING id`,[uuid(),classId,selected.classCode,content.id])).rows[0];
+   if(!assignment)fail('ASSIGNMENT_CONFLICT','Bài của lớp đang dùng đường Homework riêng hoặc đã đóng.');
+   const bound=(await db.query(`INSERT INTO reading_practice.binding(id,assignment_id,student_ref,document_id,tab_id,entry_hash,owner_proof)
+    VALUES($1,$2,$3,NULL,NULL,$4,$5) ON CONFLICT(assignment_id,student_ref) DO UPDATE SET student_ref=EXCLUDED.student_ref
+    WHERE reading_practice.binding.document_id IS NULL AND reading_practice.binding.owner_proof->>'mode'='shared' RETURNING id`,[uuid(),assignment.id,studentRef,hash(secret()),{mode:'shared'}])).rows[0];
+   if(!bound)fail('DOCUMENT_BINDING_CONFLICT','Hồ sơ này đã gắn với Homework cá nhân.');
+   const token=secret();await db.query('INSERT INTO reading_practice.student_session(token_hash,binding_id,expires_at) VALUES($1,$2,$3)',[hash(token),bound.id,new Date(clock()+30*86400000).toISOString()]);
+   const b=await binding(db,{bindingId:bound.id}),state=(await db.query('SELECT state FROM reading_practice.work WHERE binding_id=$1',[bound.id])).rows[0]?.state||initialState();
+   return{token,...await view(db,b,state)};
+  });
+ }
  const begin=input=>operation(input,'begin',async(db,b,state)=>{
   if(b.assignment_status!=='open')fail('ASSIGNMENT_CLOSED','Bài chưa mở hoặc đã đóng.');
   if(state.attempts.length)fail('ATTEMPT_EXISTS','Bạn đã có lần làm bài. Dùng Tiếp tục hoặc Reset.');
@@ -213,5 +263,5 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
   const row=(await pool.query("UPDATE reading_practice.doc_job SET status='pending',available_at=now(),attempts=0,lease_id=null,lease_until=null,error_code=null WHERE id=$1 AND status='blocked' RETURNING id",[jobId])).rows[0];
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);return{jobId,status:'pending'};
  }
- return{seedContent,register,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob};
+ return{seedContent,register,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin};
 }

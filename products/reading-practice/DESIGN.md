@@ -1,5 +1,15 @@
 # Thiết kế Reading thực chiến khóa 67
 
+## Link chung buổi 9 — 17/10/2026
+
+Đức chọn link chung cho các lớp 6–7: lớp/tên từ nguồn đã duyệt, không phải tạo Homework riêng. Phạm vi hiện hành của nguồn K67 quyết định lớp xuất hiện; không thêm allowlist theo bài và không mở rộng nguồn context trong thay đổi này. Các đoạn mô tả đăng ký Docs bên dưới chỉ áp dụng chế độ Homework.
+
+`shared_lesson` ghim một code/content/version với trạng thái mở/đóng. Login kiểm lớp/UUID, transaction khóa cấu hình mở, unique class/content và assignment/student để retry/concurrency không tạo trùng. Binding shared có document/tab null và marker mode được CHECK tại DB; không giả lập Docs. Đăng nhập chưa tạo attempt hoặc job. Bắt đầu/nộp vẫn dùng operation, lease, thời gian, draft và grader hiện có, nhưng bỏ enqueue Docs cho binding shared. Kết quả/lời giải và quyền giảng viên không đổi.
+
+Danh sách lớp/roster không trả đề/key; nguồn lỗi hoặc cũ chặn tạo phiên. Frontend bỏ phản hồi roster của lớp đã đổi. Session theo lesson, nháp theo binding/attempt. Đóng link ngăn login/bắt đầu/reset; phiên hiện hữu vẫn đọc/resume, giữ bài và lịch sử. Không đổi content của link đã ghim. Kiểm hai lớp/người, 14/14, đổi danh tính, reload/mất mạng, retry/race và không sinh job Docs; kiểm lại Homework 7.
+
+Migration 004 chỉ thêm bảng và nới hai cột Docs kèm CHECK, giữ nguyên bản ghi cũ. Phát hành chỉ image Reading, giữ owner-source/DB/env. Nếu đã có binding shared, quay lui bằng đóng link/sửa tiến hoặc image tương thích; không restore dump đè bài mới. Không có Classroom/Docs/n8n/consumer khác trong thay đổi này.
+
 ## Bổ sung buổi 9 — 17/10/2026
 
 Thêm bài trong cùng sản phẩm Reading, không tạo service mới. Hai mã bài có descriptor được kiểm riêng: buổi 7 câu 14–26, buổi 9 câu 27–40. Binding gắn một content/version bất biến; schema nháp, draft ban đầu, grader và Docs đều lấy code của binding. Không nới toàn bộ sản phẩm thành một phạm vi 14–40. Gói buổi 9 phải có đủ key/lời giải theo ID, nhóm 7/3/4, lựa chọn A–C/A–D, dẫn chứng có vị trí hợp lệ và đủ hai phần cho câu ghép vế.
