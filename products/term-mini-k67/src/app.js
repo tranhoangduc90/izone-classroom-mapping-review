@@ -19,6 +19,7 @@ import {examRateIdentity,examRateKey} from './exam-rate-limit.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { mountAnswerExplanations } from './answer-explanations.js';
+import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
@@ -1321,6 +1322,10 @@ export function createApp({
 
   const auth = createAuthService({ config, pool, verifyGoogleToken });
   const authenticate = auth.authenticate;
+  mountTeacherAnswerExplanations(app, {
+    pool, config, limiter: testReadLimiter, authenticate, requireContext,
+    readAuthorization: auth.readAuthorization, querySchema: teacherAttemptReviewQuerySchema
+  });
   mountDesignDemo(app, { pool, requireContext, limiter: testReadLimiter, assets: termTestAssetService });
   const authLoginLimiter = rateLimit({
     windowMs: 10 * 60_000,
