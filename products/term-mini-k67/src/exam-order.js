@@ -56,7 +56,7 @@ const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listen
 // Nhận yêu cầu Reading trước, khóa cùng học viên/lớp rồi lưu vào SQL thật.
 // Bài Listening trước đi tiếp qua tuyến hiện hành; cờ chỉ khóa việc tạo Reading trước mới.
 // Lỗi giữ nguyên snapshot đã ghi và trả mã rõ để trình duyệt thử lại hoặc tải bản mới.
-export function mountExamOrder(app,{pool,config,assets,requireContext,readLimiter,writeLimiter,draftLimiter,syncComplete,logEvent=()=>{}}) {
+export function mountExamOrder(app,{pool,config,assets,requireContext,readStudent=(req,classCode,slug,ref)=>pool.query(findStudentForTermTestSql,[classCode,slug,ref]),readLimiter,writeLimiter,draftLimiter,syncComplete,logEvent=()=>{}}) {
   if (config.readFirstNewEnabled === undefined) return;
   const route=fn=>async(req,res,next)=>{try{await fn(req,res,next);}catch(e){if(e.status)res.status(e.status).json({ok:false,error:e.code,message:e.message});else next(e);}};
   // Chỉ tính giới hạn ở handler thực sự nhận lượt RF; tuyến LF giữ bộ đếm cũ.
@@ -101,7 +101,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readLimite
       return next();
     }
     const data=p.data;
-    const found=await pool.query(findStudentForTermTestSql,[data.classCode,slug,data.studentRef]);
+    const found=await readStudent(req,data.classCode,slug,data.studentRef);
     if(found.rowCount!==1)return next();
     const student=found.rows[0];
     const out=await tx(async db=>{
