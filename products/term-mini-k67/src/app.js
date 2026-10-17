@@ -373,9 +373,8 @@ export function createApp({
   const requireContext = createContextGuard({ pool });
   const readRosterOnce=createPendingReads();
   const readForRequest=createRequestReads();
-  const readPreparedStudent=(req,classCode,slug,studentRef)=>slug==='term-test-1'
-    ?readForRequest(req,JSON.stringify(['student',classCode,slug,studentRef]),()=>pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]))
-    :pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]);
+  const readPreparedStudent=(req,classCode,slug,studentRef)=>
+    readForRequest(req,JSON.stringify(['student',classCode,slug,studentRef]),()=>pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]));
   mountDesignTrial(app, { pool });
 
   async function ensureTermTestWritingGrading(row) {
@@ -492,10 +491,8 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Tên lớp hoặc mã bài test không hợp lệ.' });
     }
     const read=()=>pool.query(listTermTestRosterSql, [parsed.data.class, parsed.data.test]);
-    // Thử riêng Term 1: cùng lớp/bài dùng chung lượt đọc đang chờ, không giữ quyền cũ.
-    const result = parsed.data.test==='term-test-1'
-      ? await readRosterOnce(JSON.stringify([parsed.data.class,parsed.data.test]),read)
-      : await read();
+    // Cùng lớp/bài chỉ dùng chung lượt đọc đang chờ; yêu cầu sau luôn đọc quyền mới.
+    const result = await readRosterOnce(JSON.stringify([parsed.data.class,parsed.data.test]),read);
     const row = result.rows[0];
     if (!row) return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Bài test chưa được mở.' });
     if (Number(row.class_count) !== 1 || !row.class_id) {

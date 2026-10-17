@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createPendingRoster } from './pending-roster.js';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
@@ -451,6 +452,7 @@ export function createApp({
     }));
   }
   app.get('/health', (_req, res) => res.json({ ok: true, build }));
+  const readRosterOnce = createPendingRoster();
 
   async function ensureTermTestWritingGrading(row) {
     if (!termTestWritingGradingService || !row?.writing_submitted_at) return null;
@@ -555,7 +557,8 @@ export function createApp({
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Tên lớp hoặc mã bài test không hợp lệ.' });
     }
-    const result = await pool.query(listTermTestRosterSql, [parsed.data.class, parsed.data.test]);
+    const result = await readRosterOnce(JSON.stringify([parsed.data.class, parsed.data.test]),
+      () => pool.query(listTermTestRosterSql, [parsed.data.class, parsed.data.test]));
     const row = result.rows[0];
     if (!row) return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Bài test chưa được mở.' });
     if (Number(row.class_count) !== 1 || !row.class_id) {

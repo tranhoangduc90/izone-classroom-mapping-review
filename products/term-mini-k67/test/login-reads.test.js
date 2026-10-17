@@ -12,7 +12,8 @@ import {listTermTestRosterSql} from '../src/sql.js';
 // Gửi người/lớp giả; đo số lần đọc thật của adapter, kiểm lỗi và độ mới sau mỗi lượt.
 // Không có kết nối tới VPS, audio, Portal hoặc dữ liệu học viên thật.
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-test('100 người cùng lớp dùng chung lượt đọc roster, lượt sau đọc lại nguồn', async () => {
+for (const slug of ['term-test-1','term-test-2','mini-test-lesson-5'])
+test(`100 người ${slug} dùng chung lượt đọc roster, lượt sau đọc lại nguồn`, async () => {
   let rosterReads=0, fail=false;
   const app=createApp({config:{trustProxyHops:1,allowedOrigins:new Set(),authMode:'legacy',legacyReviewToken:'fixture'},
     pool:{query:async (sql,values)=>{
@@ -23,7 +24,7 @@ test('100 người cùng lớp dùng chung lượt đọc roster, lượt sau đ
       return {rows:[{test_slug:values[1],test_title:'Đề giả',definition_version:1,class_count:1,
         class_id:values[0],class_name:values[0],students:[{ref:values[0],name:'Người giả'}]}]};
     }},logger:{error(){},info(){}}});
-  const url='/api/term-tests/roster?class=IC9900&test=term-test-1';
+  const url='/api/term-tests/roster?class=IC9900&test='+slug;
   const batch=await Promise.all(Array.from({length:100},(_,i)=>request(app).get(url).set('X-Forwarded-For',`198.18.0.${1+Math.floor(i/30)}`)));
   assert.ok(batch.every(r=>r.status===200));assert.equal(rosterReads,1);
   const next=await request(app).get(url);assert.equal(next.status,200);assert.equal(rosterReads,2);
