@@ -3,9 +3,15 @@ import {parseContextSnapshot} from './context-contract.js';
 
 // Đọc bản chụp đã phiên bản hóa; không ghi hay truy vấn kho dữ liệu của sản phẩm khác.
 export function createContext({url,key,fetcher=fetch,clock=Date.now}){
- let cache;
+ let cache,pending;
  async function snapshot(){
   if(cache&&clock()-cache.loadedAt<30000&&clock()-Date.parse(cache.value.capturedAt)<120000)return cache.value;
+  // Giữ tối ưu đang chạy trên máy chủ: các lượt cùng chờ chỉ đọc nguồn một lần, không giữ lỗi.
+  if(pending)return pending;
+  pending=loadSnapshot();
+  try{return await pending;}finally{pending=undefined;}
+ }
+ async function loadSnapshot(){
   let response;
   try{response=await fetcher(`${url.replace(/\/$/,'')}/v1/snapshot`,{headers:{'x-k67-context-key':key},signal:AbortSignal.timeout(5000)});}
   catch{fail('CONTEXT_UNAVAILABLE','Chưa kiểm được quyền lớp. Hãy thử lại sau.',503);}
