@@ -1,6 +1,6 @@
 # Lời giải giảng viên và sửa bảng kết quả K67
 
-Trạng thái: đã xây và kiểm local; chưa phát hành phần bổ sung này.
+Trạng thái: đã được Đức duyệt và phát hành ngày 17/10/2026. Đăng nhập Google thật trên trình duyệt chưa kiểm trực tiếp; các kiểm chứng có phạm vi cụ thể bên dưới.
 
 ## Thay đổi
 
@@ -22,6 +22,15 @@ Chứng cứ riêng: `E:/Codex-Data/k67-teacher-explanations-20261017/`. Chỉ �
 
 ## Phát hành và quay lại
 
-Backend cần thêm `teacher-answer-explanations.js` và hai dòng nối route trong `app.js`, dựa trên image K67 đã có lời giải học viên `sha256:3a38f916280bf3babea68e714dca9c361b8400b89dbd6565367cce38a0d81bcb`. Không đổi SQL hiện hành, cấu hình, database, audio, n8n hoặc các gói nguồn đáp án. Sao lưu, kiểm không có lượt thi đang chạy, canary chỉ đọc và đọc lại sau chuyển.
+Backend đã thêm `teacher-answer-explanations.js` và hai dòng nối route trong `app.js`, dựa trên image K67 đã có lời giải học viên `sha256:3a38f916280bf3babea68e714dca9c361b8400b89dbd6565367cce38a0d81bcb`. Không đổi SQL hiện hành, cấu hình, database, audio, n8n hoặc các gói nguồn đáp án. Sao lưu, kiểm không có lượt thi đang chạy, canary chỉ đọc và đọc lại sau chuyển.
 
 Pages thay module/CSS lời giải dùng chung, bảng giảng viên và mã phiên bản tải của bốn trang học viên. Hai repo có branch/worktree riêng. Giữ image/container và revision Pages trước đó để quay lại trên cùng database; không restore bài/điểm.
+
+## Đọc lại sau phát hành
+
+- Backend PR #63 đã tích hợp tại `fb200e43ebefc3d4e23c942ac3a5e26e2c6334e9`; image `sha256:5091292cfa65e080edbea8908f9c58031a5655dfe1316df26f3b1de4e98c1d69`, giữ nguyên mọi source khác ngoài hai module nêu trên.
+- Canary chỉ đọc trên image ứng viên và container thật đều đạt: đủ 80 câu Term 1 và 33 câu Mini, có đối chiếu gói nguồn. Đây là kiểm SQL/loader, không giả mạo cookie Google để gọi API production.
+- 16 bảng bài thi có hash/count trước–sau giống nhau; chỉ đổi nhãn phiên bản/build, các runtime được bảo vệ không đổi. Bản trước ở container `term-mini-k67-api-before-k67-teacher-explanations-20261017`.
+- API công khai `/ready` và roster IC2238 trả 200; route lời giải giảng viên thiếu đăng nhập trả 401; CORS đúng Pages.
+- Pages PR #120 đã tích hợp tại `b74ae68000f295b2f850216a97b085bde8f1f860`, build thành công; cả tám file công khai khớp nội dung sau chuẩn hóa CRLF/LF của Git.
+- Kiểm trên Pages công khai sau build: cả hai bản học viên đạt hình học ô/nút xanh/desktop/mobile; bản giảng viên mở đủ 113 câu, đổi học viên và đăng xuất an toàn. API/phiên trong browser là mô phỏng, không có thao tác ghi dữ liệu thật.
