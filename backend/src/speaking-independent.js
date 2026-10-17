@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { withTransaction } from './db.js';
 import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
+import { createPendingRoster } from './pending-roster.js';
 
 const hash = s => createHash('sha256').update(s).digest('hex');
 const fail = (code,message,status=409) => { throw new SpeakingHomeworkError(code,message,status); };
@@ -14,6 +15,12 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
   if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
   const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function context(input) { return source.context(input); }
+  // Chỉ gộp dữ liệu chọn lớp/tên còn đang đọc. Mở bài và thao tác với bài làm
+  // tiếp tục gọi context trực tiếp để kiểm nguồn mới; không giữ quyền sang lượt sau.
+  const readPendingLogin = createPendingRoster();
+  const loginContext = input => readPendingLogin(
+    JSON.stringify([input.assignmentCode,input.classCode||'',input.studentRef||'']),
+    () => context(input));
   async function unitContext(u) {
     // Tên tự chọn chỉ thuộc hồ sơ Docs; chưa nhập lịch sử của hồ sơ đã duyệt.
     const selected=u.profile_kind==='document' && !u.course_id && u.student_ref;
@@ -23,29 +30,31 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       fail('STUDENT_NOT_ACTIVE','Học viên không còn trong danh sách đang học của lớp.',403);
     return c;
   }
-  async function classes({assignmentCode}) {
-    const c=await context({assignmentCode});
+  async function loginClasses({assignmentCode},includeStudents=false) {
+    const c=await loginContext({assignmentCode});
     return Promise.all(c.classes.map(async s=>{
-      const status=c.template.lesson<6 ? (await context({assignmentCode,classCode:s.class_code})).template.assignmentStatus||'open':'open';
-      return {classCode:s.class_code,classRef:String(s.class_id),ready:status==='open',assignmentStatus:status};
+      const scoped=c.template.lesson<6||includeStudents
+        ?await loginContext({assignmentCode,classCode:s.class_code}):null;
+      const status=c.template.lesson<6 ? scoped.template.assignmentStatus||'open':'open';
+      return {value:{classCode:s.class_code,classRef:String(s.class_id),ready:status==='open',assignmentStatus:status},
+        students:scoped?.students||[]};
     }));
   }
+  async function classes(input) { return (await loginClasses(input)).map(item=>item.value); }
   async function roster(input) {
     if(input.documentId) {
       const old=await source.legacyOpen?.(input);if(old)return old;
       if(documents)return documents.open(input);
       fail('DOCUMENT_INTAKE_PENDING','Chưa đọc được bản Docs; bạn có thể mở link web trực tiếp.');
     }
-    const c=await context(input);
+    const c=await loginContext(input);
     return {...c.template,classCode:c.scope.class_code,students:c.students.map(s=>({student_ref:s.student_ref,name:s.name})),assignmentStatus:c.template.assignmentStatus||'open'};
   }
   async function resolveIdentity({assignmentCode,studentRef}) {
-    const list=await classes({assignmentCode});
-    const matches=[];
-    for (const c of list) {
-      const r=await roster({assignmentCode,classCode:c.classCode});
-      if (r.students.some(s=>s.student_ref===studentRef)) matches.push(c.classCode);
-    }
+    // Đọc các lớp độc lập song song và dùng ngay danh sách đã đọc để kiểm UUID.
+    // Vẫn kiểm hết các lớp: nhiều nơi cùng khớp phải trả ambiguous, không chọn bản đầu.
+    const list=await loginClasses({assignmentCode},true);
+    const matches=list.filter(c=>c.students.some(s=>s.student_ref===studentRef)).map(c=>c.value.classCode);
     return matches.length===1 ? {status:'unique',classCode:matches[0]} : {status:matches.length?'ambiguous':'missing'};
   }
   async function startSelected(input) {
