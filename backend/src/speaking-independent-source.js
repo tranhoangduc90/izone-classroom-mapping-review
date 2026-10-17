@@ -22,8 +22,7 @@ export function createIndependentSource({ pool, independentBase='', workerSecret
       requiredPracticeCount:t.required_practice_count, doctorEnabled:Boolean(t.doctor_course_key), lesson };
     return { ...value, digest:createHash('sha256').update(JSON.stringify(value)).digest('hex') };
   }
-  async function classes(code) {
-    await template(code);
+  async function classes() {
     const { rows } = await pool.query(`SELECT s.class_id,s.class_code,c.classroom_course_id AS course_id
       FROM speaking_homework.class_scope s JOIN mapping.classroom_course_mapping c
       ON c.erp_course_class_id=s.class_id AND c.status='approved'
@@ -33,7 +32,8 @@ export function createIndependentSource({ pool, independentBase='', workerSecret
   }
   async function context({ assignmentCode, classCode, studentRef }) {
     let t = await template(assignmentCode);
-    const all = await classes(assignmentCode);
+    // Mẫu đã được kiểm ở trên; dùng lại trong yêu cầu này, không giữ quyền sang yêu cầu sau.
+    const all = await classes();
     const { rows:exercises } = await pool.query(`SELECT id,title,exercise_url
       FROM speaking_homework.doctor_exercise WHERE active AND course_key='67' ORDER BY id`);
     if (!classCode) return { template:t, classes:all, exercises };
