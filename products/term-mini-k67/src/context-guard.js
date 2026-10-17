@@ -1,12 +1,15 @@
 import { CONTEXT_TTL_MS } from './context-contract.js';
+import {createPendingReads,createRequestReads} from './pending-reads.js';
 
 // Chỉ chặn quyền giáo viên và nhận diện/mở lượt mới khi nguồn quá cũ.
 // Route lưu/nộp/resume/result/callback đang có token không phụ thuộc nguồn này.
 export function createContextGuard({ pool, now = () => Date.now() }) {
+  const readOnce=createPendingReads({maxEntries:1});
+  const readForRequest=createRequestReads();
   return async function requireFreshContext(_req, res, next) {
     try {
-      const row = (await pool.query(`SELECT captured_at FROM mapping.k67_context_state
-        WHERE singleton=true AND api_version=1 AND product_id='PRODUCT-TERM-MINI-K67'`)).rows[0];
+      const row = (await readForRequest(_req,'context',()=>readOnce('context',()=>pool.query(`SELECT captured_at FROM mapping.k67_context_state
+        WHERE singleton=true AND api_version=1 AND product_id='PRODUCT-TERM-MINI-K67'`)))).rows[0];
       const captured = row ? new Date(row.captured_at).getTime() : NaN;
       if (Number.isFinite(captured) && captured <= now() + 5000 && now() - captured <= CONTEXT_TTL_MS) return next();
     } catch { /* Không mở quyền nếu DB/ngữ cảnh không xác nhận được. */ }

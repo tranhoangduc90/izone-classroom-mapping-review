@@ -68,16 +68,23 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     throw new Error('Tài nguyên Term Test cần thư mục riêng và bí mật phiên tối thiểu 32 ký tự.');
   }
   const contentCache = new Map();
+  const contentWork = new Map();
   const manifestWork = new Map();
 
   async function getContent(testSlug) {
     if (contentCache.has(testSlug)) return contentCache.get(testSlug);
-    const definition = getDefinition(testSlug);
-    const file = resolveAsset(assetDir, definition.content);
-    const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8'));
-    if (parsed?.baseTestSlug !== testSlug) throw new Error('Nội dung đề không khớp mã bài test.');
-    contentCache.set(testSlug, parsed);
-    return parsed;
+    if (contentWork.has(testSlug)) return contentWork.get(testSlug);
+    // Chỉ đọc một lần khi nhiều người cùng mở đề đầu tiên; lỗi không nằm lại trong cache.
+    const work=(async()=>{
+      const definition = getDefinition(testSlug);
+      const file = resolveAsset(assetDir, definition.content);
+      const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      if (parsed?.baseTestSlug !== testSlug) throw new Error('Nội dung đề không khớp mã bài test.');
+      contentCache.set(testSlug, parsed);
+      return parsed;
+    })().finally(()=>contentWork.delete(testSlug));
+    contentWork.set(testSlug,work);
+    return work;
   }
 
   async function getPreview(testSlug) {

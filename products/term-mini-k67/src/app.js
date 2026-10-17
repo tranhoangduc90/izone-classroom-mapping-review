@@ -9,6 +9,7 @@ import helmet from "helmet";
 import { z } from "zod";
 import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
+import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
@@ -370,6 +371,11 @@ export function createApp({
   }
   app.get('/health', (_req, res) => res.json({ ok: true, build }));
   const requireContext = createContextGuard({ pool });
+  const readRosterOnce=createPendingReads();
+  const readForRequest=createRequestReads();
+  const readPreparedStudent=(req,classCode,slug,studentRef)=>slug==='term-test-1'
+    ?readForRequest(req,JSON.stringify(['student',classCode,slug,studentRef]),()=>pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]))
+    :pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]);
   mountDesignTrial(app, { pool });
 
   async function ensureTermTestWritingGrading(row) {
@@ -474,7 +480,7 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
-  mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readLimiter:testReadLimiter,
+  mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,logEvent:logTermTestEvent,
     syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
   mountMiniAnswerSheet(app, { pool, requireContext, readLimiter:testReadLimiter,
@@ -485,7 +491,11 @@ export function createApp({
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_QUERY', message: 'Tên lớp hoặc mã bài test không hợp lệ.' });
     }
-    const result = await pool.query(listTermTestRosterSql, [parsed.data.class, parsed.data.test]);
+    const read=()=>pool.query(listTermTestRosterSql, [parsed.data.class, parsed.data.test]);
+    // Thử riêng Term 1: cùng lớp/bài dùng chung lượt đọc đang chờ, không giữ quyền cũ.
+    const result = parsed.data.test==='term-test-1'
+      ? await readRosterOnce(JSON.stringify([parsed.data.class,parsed.data.test]),read)
+      : await read();
     const row = result.rows[0];
     if (!row) return res.status(404).json({ ok: false, error: 'TEST_NOT_FOUND', message: 'Bài test chưa được mở.' });
     if (Number(row.class_count) !== 1 || !row.class_id) {
@@ -667,11 +677,7 @@ export function createApp({
     if (!slug.success || !parsed.success || !supportsProtectedTest(slug.data)) {
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu chuẩn bị bài thi không hợp lệ.' });
     }
-    const studentResult = await pool.query(findStudentForTermTestSql, [
-      parsed.data.classCode,
-      slug.data,
-      parsed.data.studentRef
-    ]);
+    const studentResult = await readPreparedStudent(req,parsed.data.classCode,slug.data,parsed.data.studentRef);
     if (studentResult.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'STUDENT_NOT_FOUND', message: 'Không tìm thấy học viên trong lớp này.' });
     }
