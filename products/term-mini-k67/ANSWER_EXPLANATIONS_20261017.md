@@ -1,6 +1,6 @@
 # Giải thích đáp án Term 1 và Mini Test khóa 67
 
-Trạng thái: đã xây và kiểm local; chưa phát hành backend/Pages.
+Trạng thái: đã được Đức duyệt và phát hành backend/Pages ngày 17/10/2026; đã đọc lại route công khai và tám file Pages.
 
 ## Phạm vi
 
@@ -45,8 +45,14 @@ Chứng cứ và gói nội dung riêng: `E:/Codex-Data/term-mini67-explanations
 
 ## Phát hành và quay lại
 
-Chưa có chấp thuận thay production cho gói này. Chuẩn bị dựa trên image live `sha256:488751a1015c4e84d9ff925875784e7b8846f23feff9f37db632a1f479e323aa`; `src/app.js` live khớp base sau chuẩn hóa xuống dòng, SHA byte live `fbbea427ac1723d3285ffc802cc48083b25cd5a6ab18cd2299af553a4937313e`.
+Đức đã chọn “Phát hành bản đã kiểm”, gồm tích hợp/push hai repo và triển khai backend K67 cùng Pages. Bản phát hành dựa trên image `sha256:488751a1015c4e84d9ff925875784e7b8846f23feff9f37db632a1f479e323aa`; `src/app.js` live khớp base sau chuẩn hóa xuống dòng, SHA byte live `fbbea427ac1723d3285ffc802cc48083b25cd5a6ab18cd2299af553a4937313e`.
 
-Sau khi được phép: kiểm lại runtime/active exams, sao lưu runtime và file đích riêng; tạo image trên đúng image live với chỉ `app.js` và module mới; thêm hai gói vào asset riêng; kiểm route local/candidate trước khi chuyển. Không migration, không đổi DB/Redis/n8n/API chung/K56. Giữ nguyên cấu hình audio, Writing và tài nguyên container. Pages phát hành gói giao diện sau khi route backend sẵn sàng. Đọc lại đủ câu và quan sát màn kết quả qua Pages.
+Đã sao lưu cấu hình riêng bằng DPAPI và dump; không có lượt đang thi khi chuyển. Image mới `sha256:3a38f916280bf3babea68e714dca9c361b8400b89dbd6565367cce38a0d81bcb`; revision gói `a453be6d1a8b29f3dcd3564e37f312d67bb3e5a000c095532a2ac9ca7defa4b3`. Chỉ hai module thay; các module khác giữ byte. Container quay lại `term-mini-k67-api-before-k67-answer-explanations-20261017`. Chỉ đổi hai nhãn phiên bản env, giữ cấu hình audio/Writing và giới hạn tài nguyên.
+
+Canary HTTP chỉ đọc trên image ứng viên và runtime mới đều đạt hai đề. Đường HTTPS công khai trả 40+40 và 20+13 mục, cache riêng và CORS đúng Pages; roster hai đề trả 200. Hash 16 bảng assessment trước/sau chuyển giống nhau. Không migration hoặc chấm/ghi lại điểm.
+
+Pages PR [#117](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/117) đã merge tại `eee460443d9c01607eaa16bf156bfb8e103c7110`; Pages build `built`, tám file công khai khớp gói đã kiểm sau chuẩn hóa CRLF/LF.
+
+Lượt kiểm toàn runtime ban đầu báo partial vì `mapping-review-api` được thay container/image bên ngoài các lệnh của gói này trong khoảng sao lưu–đối chiếu. Đọc lại thấy dịch vụ healthy, nguồn lớp/quyền K67 vẫn mới và roster trả 200. K56/n8n/Redis/context-sync giữ container/image/thời điểm chạy. Healthcheck context-sync có chuỗi lỗi cũ trỏ localhost:8796, trong khi dữ liệu thực tế vẫn cập nhật; không sửa dịch vụ đó trong task này. Không tuyên bố toàn hạ tầng giữ nguyên hoặc đã audit toàn bộ.
 
 Quay lại image/container trước đó trên cùng DB và revision Pages trước gói này. Không restore database, không chấm hoặc gửi lại điểm. Chỉ kết luận production hoàn tất sau readback.
