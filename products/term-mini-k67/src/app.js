@@ -18,6 +18,7 @@ import {audioOwnerPool,audioOwnerContext,mountAudioOwner} from './audio-owner.js
 import {examRateIdentity,examRateKey} from './exam-rate-limit.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
+import { mountAnswerExplanations } from './answer-explanations.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
@@ -1259,6 +1260,7 @@ export function createApp({
   }));
 
   registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
+  mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter });
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = resultRequestSchema.safeParse(req.body);
