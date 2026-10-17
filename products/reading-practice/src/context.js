@@ -31,5 +31,10 @@ export function createContext({url,key,fetcher=fetch,clock=Date.now}){
   return Boolean(a&&(!a.google_subject||a.google_subject===subject)&&(a.role==='admin'||a.can_access_all_classes
    ||s.access.some(x=>x.reviewer_email===a.email&&x.erp_course_class_id===String(classId))));
  }
- return{snapshot,roster,student,teacher};
+ async function classes(){
+  const s=await snapshot(),result=[];
+  for(const row of s.classes){if((await roster(row.erp_course_class_id)).length)result.push({id:row.erp_course_class_id,classCode:row.erp_class_name_snapshot});}
+  return result.sort((a,b)=>a.classCode.localeCompare(b.classCode,'vi'));
+ }
+ return{snapshot,roster,student,teacher,classes};
 }
