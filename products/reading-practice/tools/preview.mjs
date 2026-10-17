@@ -15,11 +15,11 @@ const member={studentRef:fixture.studentRef,name:'Học viên chạy thử'},con
  student:async(c,id)=>c==='1124'&&id===member.studentRef?member:undefined,roster:async()=>[member],
  teacher:async(c,email,subject)=>c==='1124'&&email==='teacher@example.test'&&subject==='local-google'};
 const port=Number(portInput),base=`http://127.0.0.1:${port}/`;
-const service=createReadingService({pool,context,pageBase:base,verifyBinding:async input=>({fixtureOnly:true,documentId:input.documentId,studentRef:input.studentRef})});
+const service=createReadingService({pool,context,pageBase:path.basename(staticRoot)==='reading-practice'?base:base+'reading-practice/',verifyBinding:async input=>({fixtureOnly:true,documentId:input.documentId,studentRef:input.studentRef})});
 const bundle=JSON.parse(await readFile(contentPath,'utf8'));await service.seedContent(bundle);
-const registered=await service.register({classId:'1124',classCode:'CHẠY THỬ 67',studentRef:member.studentRef,documentId:'local_reading_document_1234567890',tabId:'t.0',contentVersion:bundle.version,entryToken:fixture.entryToken});
+const registered=await service.register({classId:'1124',classCode:'CHẠY THỬ 67',studentRef:member.studentRef,documentId:'local_reading_document_1234567890',tabId:'t.0',code:bundle.code,contentVersion:bundle.version,entryToken:fixture.entryToken});
 await pool.query("UPDATE reading_practice.assignment SET status='open'");await pool.query('UPDATE reading_practice.binding SET cta_verified_at=now()');
-const app=createApp({pool,service,origins:[new URL(base).origin],googleClientId:'',adminKey:fixture.adminKey,staticRoot,
+const app=createApp({pool,service,origins:[new URL(base).origin],googleClientId:'',adminKey:fixture.adminKey,staticRoot,teacherCookiePath:'/api',
  verifyGoogle:async credential=>credential==='LOCAL_TEST_CREDENTIAL'?{email:'teacher@example.test',sub:'local-google',email_verified:true}:null});
 const server=app.listen(port,'127.0.0.1');
 await writeFile(path.join(dataPath,'open.json'),JSON.stringify({entryUrl:registered.entryUrl,studentRef:member.studentRef,apiBase:base+'api'}),'utf8');

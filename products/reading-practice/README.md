@@ -2,6 +2,16 @@
 
 Sản phẩm riêng cho bài luyện Reading. Buổi 7 giữ giao diện demo đã duyệt ngày 12/10/2026: 13 câu, 20 phút đang làm, Headings/MCQ/Summary, highlight/note, một phần Đáp án và giải thích với nút mở ngay dưới mỗi hàng.
 
+## Thêm bài buổi 9 — 17/10/2026
+
+Hỗ trợ thêm `67-practice-reading_matching_names_sentence_endings_mcq`: câu 27–40, Names/Endings/MCQ theo nhóm 7/3/4, vẫn 20 phút đang làm. `src/lessons.js` chỉ chứa nhãn và cấu trúc; gói đề, key, lời giải có màu và vị trí dẫn chứng được nạp riêng tư, theo version bất biến. Không đặt nội dung Cambridge hoặc key thật trong Git.
+
+Đăng ký bản sao gửi thêm `code`; bỏ trường này vẫn chọn mã buổi 7 để tương thích công cụ cũ. Binding quyết định phạm vi nháp, cách chấm và mã cần thấy trong Docs; không tin mã bài từ giao diện. Metadata được cấp trước bắt đầu, không cấp passage/key/lời giải. Câu 40 và các tab mới chỉ hợp lệ với bài buổi 9.
+
+Đã giữ phần đăng nhập giảng viên từ commit `930dc7bbce208bc04d0574be3d4dc84fd745c50f`, đối chiếu runtime Reading 15/10. Cookie ghi nhớ 90 ngày, trần 365 ngày; đăng xuất thu hồi phiên. `db/003-teacher-session.sql` là migration đã có của tính năng này, không phải yêu cầu đổi schema do bài buổi 9. Khi phát hành phải giữ cấu hình, dữ liệu và phiên hiện hành; không dựng lại từ bản source thiếu tính năng này.
+
+Bản xây cục bộ không tự đăng ký Homework, mở lớp hoặc thay production. Preview nhận thư mục Pages gốc hoặc thư mục `reading-practice`; Google/roster/owner trong preview là fixture, API và SQL bài làm là code thật.
+
 ## Phạm vi và nguồn
 
 - Plan nghiệp vụ: `E:/Codex-Data/artifacts/reading-practice-buoi7-20261011/KE-HOACH.md`.

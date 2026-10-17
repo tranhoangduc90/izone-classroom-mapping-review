@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import {lessonFor,ROBOTS_CODE} from './lessons.js';
 
 export const CODE='67-practice-reading_matching_heading_mcq';
 export const PRODUCT='PRODUCT-READING-PRACTICE-K67';
@@ -15,37 +16,58 @@ export class ReadingError extends Error {
 export const fail=(code,message,status)=>{throw new ReadingError(code,message,status);};
 export const questionIds=Array.from({length:13},(_,i)=>String(i+14));
 const answer=z.string().max(80);
-export const snapshotSchema=z.object({
- answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>questionIds.includes(n))),
- flags:z.array(z.number().int().min(14).max(26)).max(13),notes:z.string().max(10000),
+function schemaFor(code=CODE){
+ const lesson=lessonFor(code),ids=lesson.questionIds;
+ return z.object({
+ answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>ids.includes(n))),
+ flags:z.array(z.number().int().refine(n=>ids.includes(String(n)))).max(ids.length),notes:z.string().max(10000),
  annotations:z.array(z.object({id:z.string().max(80),kind:z.enum(['highlight','note']),
  rootKey:z.string().max(80),skill:z.literal('reading'),start:z.number().int().nonnegative(),end:z.number().int().positive(),
  quote:z.string().max(10000),questionRef:z.string().max(100),note:z.string().max(10000).optional()}).strict()).max(100),
  scroll:z.object({passage:z.number().nonnegative(),questions:z.record(z.string(),z.number().nonnegative())}),
- activeQuestion:z.number().int().min(14).max(26),tab:z.enum(['headings','mcq','summary']),
+ activeQuestion:z.number().int().refine(n=>ids.includes(String(n))),tab:z.enum(lesson.groups.map(g=>g.kind)),
  mobilePane:z.enum(['passage','questions']).optional(),notesOpen:z.boolean().optional(),
- highlighted:z.array(z.enum(['A','B','C','D','E','F','G'])).max(7),
+ highlighted:z.array(z.enum(lesson.paragraphs)).max(lesson.paragraphs.length),
  sequence:z.number().int().nonnegative(),activeMs:z.number().int().nonnegative()
-}).strict();
-export const emptyDraft=()=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
- activeQuestion:14,tab:'headings',mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
-export function validateSnapshot(input){const parsed=snapshotSchema.safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
+ }).strict();
+}
+export const snapshotSchema=schemaFor();
+export const emptyDraft=(code=CODE)=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
+ activeQuestion:+lessonFor(code).questionIds[0],tab:lessonFor(code).groups[0].kind,mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
+export function validateSnapshot(input,code=CODE){const parsed=schemaFor(code).safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
 export function validateContent(bundle){
- if(bundle?.code!==CODE||bundle.totalMs!==TOTAL_MS||!bundle.version||!bundle.definition||!bundle.key||!bundle.explanations?.entries)
+ if(!bundle||typeof bundle!=='object')fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
+ const lesson=lessonFor(bundle?.code),ids=lesson.questionIds;
+ if(bundle.totalMs!==TOTAL_MS||!bundle.version||!bundle.definition||!bundle.key||!bundle.explanations?.entries)
   fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
- if(Object.keys(bundle.key).join(',')!==questionIds.join(',')||Object.keys(bundle.explanations.entries).join(',')!==questionIds.join(','))
-  fail('CONTENT_INVALID','Đề và lời giải phải có đủ câu 14–26.',400);
- for(const n of questionIds)if(!Array.isArray(bundle.key[n])||!bundle.key[n].length||bundle.key[n].some(v=>typeof v!=='string'||!v.trim()))fail('CONTENT_INVALID','Khóa chấm không hợp lệ.',400);
- if(Object.keys(bundle.definition.passage||{}).join('')!=='ABCDEFG'||bundle.definition.headings?.length!==8||bundle.definition.mcq?.length!==3||bundle.definition.summary?.filter(s=>s.question).length!==3)
+ if(Object.keys(bundle.key).join(',')!==ids.join(',')||Object.keys(bundle.explanations.entries).join(',')!==ids.join(','))
+  fail('CONTENT_INVALID','Đề và lời giải phải có đủ số câu của bài.',400);
+ for(const n of ids)if(!Array.isArray(bundle.key[n])||!bundle.key[n].length||bundle.key[n].some(v=>typeof v!=='string'||!v.trim()))fail('CONTENT_INVALID','Khóa chấm không hợp lệ.',400);
+ const d=bundle.definition;
+ if(bundle.code===ROBOTS_CODE){
+  const numbered=(items,start,end)=>Array.isArray(items)&&items.map(q=>q.n).join(',')===Array.from({length:end-start+1},(_,i)=>i+start).join(',')&&items.every(q=>typeof q.text==='string'&&q.text.trim());
+  if(Object.keys(d.passage||{}).join(',')!==lesson.paragraphs.join(',')||Object.values(d.passage).some(p=>typeof p!=='string'||!p.trim())
+   ||!numbered(d.names,27,33)||!numbered(d.endings,34,36)||!numbered(d.mcq,37,40)||d.mcq.some(q=>q.options?.length!==4)
+   ||d.experts?.map(x=>x[0]).join('')!=='ABC'||d.endingOptions?.map(x=>x[0]).join('')!=='ABCD')fail('CONTENT_INVALID','Cấu trúc bài phải khớp Names/Endings/MCQ 7/3/4.',400);
+  for(const n of ids){
+   const kind=lesson.groups.find(g=>+n>=g.start&&+n<=g.end).kind,e=bundle.explanations.entries[n],options=kind==='names'?'ABC':'ABCD';
+   if(bundle.key[n].length!==1||!options.split('').includes(bundle.key[n][0])||!e||e.number!==+n||e.kind!==kind||e.answer?.join()!==bundle.key[n].join())fail('CONTENT_INVALID','Khóa chấm và lời giải không khớp câu hỏi.',400);
+   const paragraph=p=>p&&Array.isArray(p.runs)&&p.runs.length>0&&p.runs.every(r=>typeof r.text==='string');
+   const paragraphs=ps=>Array.isArray(ps)&&ps.length>0&&ps.every(paragraph);
+   const evidence=gs=>Array.isArray(gs)&&gs.length>0&&gs.every(g=>lesson.paragraphs.includes(g.paragraph)&&typeof g.speaker==='string'&&paragraphs(g.paragraphs)&&Array.isArray(g.marks)&&g.marks.every(m=>Number.isInteger(m.start)&&Number.isInteger(m.end)&&m.start>=0&&m.end>m.start&&m.end<=d.passage[g.paragraph].length));
+   if(!paragraph(e.prompt)||!evidence(e.evidenceGroups)||(kind==='endings'&&(!paragraph(e.completion)||e.evidenceGroups.length<2))
+    ||(kind!=='mcq'&&!paragraphs(e.reason))||(kind==='mcq'&&(!Array.isArray(e.options)||e.options.map(o=>o.letter).join('')!=='ABCD'||e.options.filter(o=>o.correct).length!==1||e.options.find(o=>o.correct).letter!==bundle.key[n][0]||e.options.some(o=>!paragraph(o.label)||!paragraphs(o.reason)||!evidence(o.evidenceGroups)))))fail('CONTENT_INVALID','Lời giải hoặc vị trí dẫn chứng chưa đầy đủ.',400);
+  }
+ }else if(Object.keys(d.passage||{}).join('')!=='ABCDEFG'||d.headings?.length!==8||d.mcq?.length!==3||d.summary?.filter(s=>s.question).length!==3)
   fail('CONTENT_INVALID','Cấu trúc passage không khớp 7/3/3.',400);
  return bundle;
 }
 export const normalize=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
-export function grade(answers,key){
- const rows=questionIds.map(n=>{
+export function grade(answers,key,code=CODE){
+ const lesson=lessonFor(code),rows=lesson.questionIds.map(n=>{
   const value=normalize(answers[n]);
   // Summary chỉ nhận một từ và/hoặc một số, không nới khóa theo chuỗi con.
-  const withinLimit=+n<24||/^(?:[a-z]+(?:[-’'][a-z]+)*|\d+(?:[.,]\d+)?)(?:\s+(?:[a-z]+(?:[-’'][a-z]+)*|\d+(?:[.,]\d+)?))?$/.test(value)
+  const withinLimit=lesson.groups.find(g=>+n>=g.start&&+n<=g.end).kind!=='summary'||/^(?:[a-z]+(?:[-’'][a-z]+)*|\d+(?:[.,]\d+)?)(?:\s+(?:[a-z]+(?:[-’'][a-z]+)*|\d+(?:[.,]\d+)?))?$/.test(value)
     &&value.split(' ').filter(t=>/[a-z]/.test(t)).length<=1&&value.split(' ').filter(t=>/\d/.test(t)).length<=1;
   return{number:+n,answer:answers[n]||'',expected:key[n],state:!value?'blank':withinLimit&&key[n].map(normalize).includes(value)?'correct':'incorrect'};
  });
@@ -66,8 +88,8 @@ export function issueLease(a,owner,clock){
 export function checkLease(a,lease){
  if(!a.lease||a.lease.id!==lease?.id||a.lease.tokenHash!==hash(lease?.token||''))fail('LEASE_LOST','Bài đã chuyển sang phiên khác. Nhấn Tiếp tục để mở tại đây.');
 }
-export function checkpoint(a,input,lease,clock,{recovery=false}={}){
- checkLease(a,lease);const draft=validateSnapshot(input);
+export function checkpoint(a,input,lease,clock,{recovery=false,code=CODE}={}){
+ checkLease(a,lease);const draft=validateSnapshot(input,code);
  if(draft.sequence<a.draft.sequence)fail('STALE_DRAFT','Nháp này cũ hơn bản đã lưu. Hãy tải lại bài.');
  const old={...a.draft,activeMs:0},next={...draft,activeMs:0};
  if(draft.sequence===a.draft.sequence&&canonical(old)!==canonical(next))fail('STALE_DRAFT','Nháp cùng phiên bản có nội dung khác nhau.');

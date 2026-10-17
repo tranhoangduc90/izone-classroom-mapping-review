@@ -1,4 +1,14 @@
-# Thiết kế triển khai Reading buổi 7
+# Thiết kế Reading thực chiến khóa 67
+
+## Bổ sung buổi 9 — 17/10/2026
+
+Thêm bài trong cùng sản phẩm Reading, không tạo service mới. Hai mã bài có descriptor được kiểm riêng: buổi 7 câu 14–26, buổi 9 câu 27–40. Binding gắn một content/version bất biến; schema nháp, draft ban đầu, grader và Docs đều lấy code của binding. Không nới toàn bộ sản phẩm thành một phạm vi 14–40. Gói buổi 9 phải có đủ key/lời giải theo ID, nhóm 7/3/4, lựa chọn A–C/A–D, dẫn chứng có vị trí hợp lệ và đủ hai phần cho câu ghép vế.
+
+API mở/đăng nhập/state trả metadata không có đề hoặc key; begin/resume trả definition; result chỉ cấp key/lời giải cho lượt đã nộp của đúng chủ. Content mới không đổi nội dung assignment cũ. Timer, lease, operation và hàng Docs giữ cơ chế bên dưới. Không có AI, Portal hoặc n8n mới.
+
+Giữ phần phiên giảng viên đã phát hành từ `930dc7b`; source trên main trước lượt này còn thiếu phần đó. Kiểm cookie dài hạn, giới hạn tuyệt đối, thu hồi phiên và quyền lớp cùng suite trước phát hành. Không phát hành nguyên main cũ đè runtime mới.
+
+Quay lui trước mở lớp: giữ assignment mới chưa mở, khôi phục image/frontend trước đổi, giữ DB. Khi đã có lượt buổi 9, chỉ quay về bản vẫn đọc được cả hai bài hoặc tạm đóng việc tạo lượt mới rồi sửa tiến; không restore dump cũ đè bài đã phát sinh. Bước mở Homework cần lớp, template/tab và bản sao Classroom thật do Đức chỉ định; không tự suy IC2304.
 
 ## Điều đã chốt và phạm vi nghiệm thu
 

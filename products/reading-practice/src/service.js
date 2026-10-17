@@ -1,5 +1,6 @@
 import {CODE,TOTAL_MS,ReadingError,fail,hash,secret,uuid,emptyDraft,validateContent,grade,statusMessage,
  issueLease,checkpoint,publicAttempt,checkLease,canonical} from './domain.js';
+import {lessonFor} from './lessons.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
 export async function transaction(pool,fn){
@@ -29,7 +30,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
   const events=state.events.map(e=>({...e,docs:jobs.find(j=>j.sequence===e.sequence)?.status||'pending'}));
   return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
    bindingId:b.id,documentId:b.document_id,documentUrl:`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`},
-   attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
+   lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
    ...(lease?{lease}:{}),...(definition?{definition:b.definition}:{})};
  }
  async function work(db,b){
@@ -69,13 +70,13 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
  function submitted(a,b,state,method){
   a.status='submitted';a.method=method;a.completedAt=new Date(clock()).toISOString();a.submissionId=uuid();
   if(method==='timeout')a.usedMs=TOTAL_MS;
-  a.result=grade(a.draft.answers,b.answer_key);a.finalScore=a.result.score;
+  a.result=grade(a.draft.answers,b.answer_key,b.code);a.finalScore=a.result.score;
   state.firstCompleted??=a.no;
   // Giữ proof cuối để gửi lại đúng snapshot đã khóa; không nhận sửa bài sau nộp.
   a.finalDraftHash=hash(JSON.stringify(a.draft));
  }
- function createAttempt(state,owner){
-  const a={id:uuid(),no:state.attempts.length+1,status:'running',usedMs:0,draft:emptyDraft(),startedAt:new Date(clock()).toISOString()};
+ function createAttempt(state,owner,code){
+  const a={id:uuid(),no:state.attempts.length+1,status:'running',usedMs:0,draft:emptyDraft(code),startedAt:new Date(clock()).toISOString()};
   state.attempts.push(a);const lease=issueLease(a,owner,clock());return{a,lease};
  }
  async function seedContent(bundle){
@@ -84,14 +85,15 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
   const row=(await pool.query(`INSERT INTO reading_practice.content(id,code,version,digest,definition,answer_key,explanations,total_ms)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(code,version) DO UPDATE SET digest=EXCLUDED.digest
    WHERE reading_practice.content.digest=EXCLUDED.digest RETURNING id`,
-   [id,CODE,bundle.version,digest,bundle.definition,bundle.key,bundle.explanations,TOTAL_MS])).rows[0];
+   [id,bundle.code,bundle.version,digest,bundle.definition,bundle.key,bundle.explanations,TOTAL_MS])).rows[0];
   if(!row)fail('CONTENT_VERSION_CONFLICT','Nội dung đổi phải dùng version mới.');return{id:row.id,digest};
  }
  async function register(input){
+  const code=lessonFor(input.code||CODE).code;input={...input,code};
   if(!await context.student(input.classId,input.studentRef))fail('STUDENT_NOT_ELIGIBLE','UUID không thuộc hồ sơ đang học của lớp.',403);
   const proof=await verifyBinding(input);
   return transaction(pool,async db=>{
-   const content=(await db.query('SELECT id FROM reading_practice.content WHERE code=$1 AND version=$2',[CODE,input.contentVersion])).rows[0];
+   const content=(await db.query('SELECT id FROM reading_practice.content WHERE code=$1 AND version=$2',[code,input.contentVersion])).rows[0];
    if(!content)fail('CONTENT_NOT_FOUND','Chưa nạp nội dung của bài.',404);
    const assignment=(await db.query(`INSERT INTO reading_practice.assignment(id,class_id,class_code,content_id,status,source_course_id,source_work_id)
     VALUES($1,$2,$3,$4,'draft',$5,$6) ON CONFLICT(class_id,content_id) DO UPDATE SET class_code=EXCLUDED.class_code
@@ -107,7 +109,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
     AND reading_practice.binding.tab_id=EXCLUDED.tab_id AND reading_practice.binding.entry_hash=EXCLUDED.entry_hash RETURNING id`,
     [uuid(),assignment.id,input.studentRef,input.documentId,input.tabId,hash(token),proof])).rows[0];
    if(!b)fail('DOCUMENT_BINDING_CONFLICT','Docs đã gắn với học viên/bài khác hoặc mã link khác.');
-   const url=new URL(pageBase);url.searchParams.set('assignmentCode',CODE);url.searchParams.set('documentId',input.documentId);
+   const url=new URL(pageBase);url.searchParams.set('assignmentCode',code);url.searchParams.set('documentId',input.documentId);
    url.hash=`login?entry=${encodeURIComponent(token)}`;
    await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),b.id,{url:url.href}]);
    return{bindingId:b.id,assignmentId:assignment.id,entryUrl:url.href};
@@ -116,7 +118,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
  async function open({entryToken}){
   const b=await binding(pool,{entryToken});
   const students=await context.roster(b.class_id);
-  return{assignmentCode:CODE,classCode:b.class_code,bindingId:b.id,documentId:b.document_id,selectedStudentRef:b.student_ref,status:b.assignment_status,
+  return{assignmentCode:b.code,lesson:lessonFor(b.code),classCode:b.class_code,bindingId:b.id,documentId:b.document_id,selectedStudentRef:b.student_ref,status:b.assignment_status,
    students:students.map(s=>({id:s.studentRef,name:s.name})),ready:Boolean(b.cta_verified_at)};
  }
  async function login({entryToken,studentRef,classCode}){
@@ -134,11 +136,11 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
  const begin=input=>operation(input,'begin',async(db,b,state)=>{
   if(b.assignment_status!=='open')fail('ASSIGNMENT_CLOSED','Bài chưa mở hoặc đã đóng.');
   if(state.attempts.length)fail('ATTEMPT_EXISTS','Bạn đã có lần làm bài. Dùng Tiếp tục hoặc Reset.');
-  const{a,lease}=createAttempt(state,input.owner);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
  });
  const resume=input=>operation(input,'resume',async(db,b,state)=>{
   const a=active(state,input.attemptId);
-  if(input.recovery){checkpoint(a,input.recovery.snapshot,input.recovery.lease,clock(),{recovery:true});}
+  if(input.recovery){checkpoint(a,input.recovery.snapshot,input.recovery.lease,clock(),{recovery:true,code:b.code});}
   if(a.usedMs>=TOTAL_MS){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);return view(db,b,state);}
   const lease=issueLease(a,input.owner,clock());return view(db,b,state,{lease,definition:true});
  });
@@ -155,7 +157,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
    const b=await binding(db,{token:input.token}),state=await work(db,b),a=active(state,input.attemptId);
    checkLease(a,input.lease);
    if(a.status==='paused'&&!pause)fail('ATTEMPT_PAUSED','Lần làm bài đang tạm dừng.');
-   checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause});
+   checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause,code:b.code});
    if(a.usedMs>=TOTAL_MS){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
    await save(db,b,state);return view(db,b,state);
@@ -166,13 +168,13 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,verif
   const old=state.attempts.at(-1);if(!old||old.id!==input.attemptId)fail('ATTEMPT_CHANGED','Lần làm bài đã đổi.');
   if(old.status==='submitted'&&input.lease)fail('ATTEMPT_CLOSED','Lần này vừa được nộp. Xem kết quả trước khi reset.');
   if(['running','paused'].includes(old.status)){
-   checkLease(old,input.lease);if(input.snapshot)checkpoint(old,input.snapshot,input.lease,clock(),{recovery:true});
+   checkLease(old,input.lease);if(input.snapshot)checkpoint(old,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
    old.status='reset';old.endedAt=new Date(clock()).toISOString();
   }
-  const{a,lease}=createAttempt(state,input.owner);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
  });
  const submit=input=>operation(input,'submit',async(db,b,state)=>{
-  const a=active(state,input.attemptId);checkpoint(a,input.snapshot,input.lease,clock(),{recovery:true});
+  const a=active(state,input.attemptId);checkpoint(a,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
   if(input.method==='timeout'&&a.usedMs<TOTAL_MS)fail('TIME_NOT_EXHAUSTED','Máy chủ chưa xác nhận dùng hết giờ.');
   submitted(a,b,state,a.usedMs>=TOTAL_MS?'timeout':'manual');await enqueue(db,b,state,a);return view(db,b,state);
  });
