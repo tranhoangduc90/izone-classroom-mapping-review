@@ -56,7 +56,7 @@ const membershipSnapshot = z.object({ sourceCourseId: z.literal(5), snapshotComp
 });
 const part = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
 const checkRequest = identity.extend({ part, url: z.string().trim().url().max(500) }).strict();
-const finishRequest = identity.extend({ voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
+const finishRequest = identity.extend({ manualSubmit: z.literal(true).optional(), voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
 const checkResult = z.object({
   checkJobId: z.string().uuid(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
