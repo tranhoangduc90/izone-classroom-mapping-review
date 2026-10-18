@@ -10,6 +10,7 @@ import { runSpeakingCheckJob } from '../src/speaking-check-worker.js';
 import { runPracticeCheckJob,runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
 import { createIndependentDocuments,validateIndependentDocument } from '../src/speaking-independent-documents.js';
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
+import { COMPLETION_POLICY } from '../src/speaking-completion-policy.js';
 
 const ref='60000000-0000-4000-8000-000000000006';
 const code='67-speaking-ly_do_hanh_vi';
@@ -123,6 +124,28 @@ test('Kết quả quá lease và kết quả của revision cũ không ghi đè 
     await f.pool.query("UPDATE speaking_independent.job SET lease_until=now()-interval '1 second' WHERE id=$1",[fresh.job_id]);
     await assert.rejects(f.service.workerService(fresh).completeCheck({fingerprint:fingerprint(2),questionCount:2,qualityPassed:true}),e=>e.code==='STALE_JOB');
     assert.equal((await f.service.open(f.identity)).links[0].check_status,'pending');
+  }finally{await f.db.close();}
+});
+
+test('nhận theo chatbot khi số câu bằng 0, giữ bằng chứng và chặn trùng hội thoại',async()=>{
+  const f=await fixture();try{
+    const evidence={policyVersion:COMPLETION_POLICY,acceptanceBasis:'chatbot_completion',countVerified:false,
+      completionEvidence:{policyVersion:COMPLETION_POLICY,scope:'whole_practice',matched:true,
+        message:4,quote:'Bạn đã hoàn thành buổi luyện.',confidence:0.99}};
+    await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(71)});
+    const j=await f.service.claimJob();
+    const lease=(await f.pool.query('SELECT extract(epoch from lease_until-now())::int AS seconds FROM speaking_independent.job WHERE id=$1',[j.job_id])).rows[0];
+    assert.ok(lease.seconds>220 && lease.seconds<=240);
+    assert.equal((await f.service.workerService(j).completeCheck({fingerprint:fingerprint(7),questionCount:0,
+      qualityPassed:true,evidence})).status,'accepted');
+    const saved=(await f.service.open(f.identity)).links[0];
+    assert.equal(saved.question_count,0);assert.deepEqual(saved.evidence,evidence);
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);
+    await f.service.requestCheck({...f.identity,part:'freestyle',rawUrl:url(72)});
+    const repeated=await f.service.claimJob();
+    assert.equal((await f.service.workerService(repeated).completeCheck({fingerprint:fingerprint(7),questionCount:0,
+      qualityPassed:true,evidence})).status,'rejected');
+    assert.equal((await f.service.open(f.identity)).links.find(l=>l.part==='freestyle').check_code,'REUSED_CONVERSATION');
   }finally{await f.db.close();}
 });
 

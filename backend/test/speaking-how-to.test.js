@@ -43,13 +43,15 @@ test('bốn câu ở một phần không thay được phần còn thiếu', asy
 test('thiếu một câu tự do phải bị từ chối dù có nhiều tin nhắn', async () => {
   assert.equal((await checkSubmission(input, deps(completed.slice(0, 3)))).kind, 'blocked');
 });
-test('lặp câu, lặp lượt làm và dẫn chứng sai không tăng số câu', async () => {
+test('lặp câu không tăng số; dẫn chứng sai giữ chưa xác minh thay vì báo thiếu', async () => {
   const bad = [completed[0], completed[0], completed[1], completed[2],
     { ...completed[3], questionText: 'Invented question' },
     { ...completed[3], answerMessage: 7 },
     { ...completed[3], stageEvidenceMessage: 8 }];
   const r = await checkSubmission(input, deps(bad));
-  assert.equal(r.kind, 'blocked'); assert.equal(r.count, 3);
+  assert.equal(r.kind, 'error');
+  const deduped = await checkSubmission(input, deps([completed[0], completed[0], completed[1], completed[2]]));
+  assert.equal(deduped.kind, 'blocked'); assert.equal(deduped.count, 3);
 });
 test('link riêng tư bị chặn trước đọc hội thoại hoặc AI', async () => {
   let calls = 0;

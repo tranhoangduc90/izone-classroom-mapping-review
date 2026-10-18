@@ -12,6 +12,7 @@ import { createSpeakingClassroomCopies, planSpeakingCopyCta,
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
 import { validInsertionStages, checkSubmission } from '../src/speaking-checker.js';
 import { runPracticeCheckJob, runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
+import { COMPLETION_POLICY } from '../src/speaking-completion-policy.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
 const secondStudentRef = '60000000-0000-4000-8000-000000000002';
@@ -81,6 +82,7 @@ async function fixture() {
   await db.exec(doctorMigration);
   const lesson4Migration = await readFile(new URL('../ops/migrations/202609290003_speaking_lesson4_practice.sql', import.meta.url), 'utf8');
   await db.exec(lesson4Migration);
+  await db.exec(await readFile(new URL('../ops/migrations/202610180001_speaking_completion_evidence.sql', import.meta.url), 'utf8'));
   const directMigration = await readFile(new URL('../ops/migrations/202609300001_speaking_direct_homework.sql', import.meta.url), 'utf8');
   await db.exec(directMigration);
   assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
@@ -728,6 +730,31 @@ test('hai ô luyện bổ trợ nhận riêng, nhận diện đúng bài và tă
       matchedExerciseId: exerciseId });
     rec = (await pool.query('SELECT practice_count FROM speaking_homework.doctor_recommendation')).rows[0];
     assert.equal(rec.practice_count, 2);
+  } finally { await db.close(); }
+});
+
+test('kho cũ công nhận theo chatbot cho bài chính và bổ trợ, giữ số 0 cùng bằng chứng', async () => {
+  const { db, pool, service } = await fixture();
+  try {
+    const evidence = { policyVersion: COMPLETION_POLICY, acceptanceBasis: 'chatbot_completion', countVerified: false,
+      completionEvidence: { policyVersion: COMPLETION_POLICY, scope: 'whole_practice', matched: true,
+        message: 4, quote: 'Bạn đã hoàn thành buổi luyện.', confidence: 0.99 } };
+    await service.requestCheck({ accessToken: secondToken, studentRef: secondStudentRef, part: 'clarify_1', rawUrl: share('t') });
+    const job = await service.claimCheckJob();
+    assert.equal((await service.completeCheck({ checkJobId: job.job_id, fingerprint: fingerprint('a'),
+      questionCount: 0, qualityPassed: true, evidence })).status, 'accepted');
+    const row = (await service.open({ accessToken: secondToken, studentRef: secondStudentRef })).links[0];
+    assert.equal(row.question_count, 0); assert.deepEqual(row.evidence, evidence);
+    const { rows: [exercise] } = await pool.query(`INSERT INTO speaking_homework.doctor_exercise
+      (course_key,source_record_id,title,exercise_url) VALUES ('67','completion-fixture','Linking verbs','https://example.test/fixture') RETURNING id`);
+    await service.recordDoctorEvent({sourceKey:'completion-fixture-recommendation',kind:'recommendation',classId:'2304',studentRef,
+      exerciseId:exercise.id,occurredAt:'2026-10-18T00:00:00Z'});
+    await service.requestPracticeCheck({ accessToken, studentRef, slot: 1, exerciseId: exercise.id, rawUrl: share('b') });
+    const practiceJob = await service.claimPracticeCheckJob();
+    assert.equal((await service.completePracticeCheck({ checkJobId: practiceJob.job_id, fingerprint: fingerprint('b'),
+      questionCount: 0, qualityPassed: true, matchedExerciseId: exercise.id, evidence })).status, 'accepted');
+    const practice = (await service.open({ accessToken, studentRef })).practiceLinks[0];
+    assert.equal(practice.question_count, 0); assert.deepEqual(practice.evidence, evidence);
   } finally { await db.close(); }
 });
 

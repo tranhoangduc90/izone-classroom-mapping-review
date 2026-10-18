@@ -45,7 +45,7 @@ async function fixture() {
     ADD PRIMARY KEY (erp_course_class_id,erp_student_contact_id);`);
   for (const file of ['202609270001_speaking_homework_candidate.sql',
     '202609290001_speaking_doctor_lesson3.sql','202609290003_speaking_lesson4_practice.sql',
-    '202609300001_speaking_direct_homework.sql']) {
+    '202609300001_speaking_direct_homework.sql', '202610180001_speaking_completion_evidence.sql']) {
     await db.exec(await readFile(new URL(`../ops/migrations/${file}`, import.meta.url), 'utf8'));
   }
   await db.exec(`ALTER TABLE speaking_homework.assignment_document ADD COLUMN classroom_submission_id text,

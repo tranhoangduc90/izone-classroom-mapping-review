@@ -1,5 +1,6 @@
 import { checkSubmission } from './speaking-checker.js';
 import { createSpeakingHomeworkService } from './speaking-homework.js';
+import { COMPLETION_POLICY, hasChatbotCompletion } from './speaking-completion-policy.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -10,7 +11,7 @@ export async function runSpeakingCheckJob(service, job, check = checkSubmission)
   try {
     const result = await check({ section: job.part, url: job.share_url, minimum: Number(job.min_questions) });
     if (result.kind === 'error') {
-      await service.failCheckJob({ checkJobId: job.job_id, errorCode: 'CONTENT_CHECK_UNAVAILABLE' });
+      await service.failCheckJob({ checkJobId: job.job_id, errorCode: result.errorCode || 'CONTENT_CHECK_UNAVAILABLE' });
       return 'retry';
     }
     if (result.kind === 'blocked' && !result.fingerprint) {
@@ -25,15 +26,18 @@ export async function runSpeakingCheckJob(service, job, check = checkSubmission)
     const typingWarning = result.kind === 'warning'
       ? { summary: result.message.slice(0, 500), evidence: (result.typingEvidence || []).slice(0, 5) }
       : null;
+    const evidence = { source: result.source || 'chatgpt_share',
+      policyVersion: COMPLETION_POLICY, acceptanceBasis: result.acceptanceBasis || 'standard',
+      completionEvidence: result.completionEvidence || null, countVerified: result.countVerified !== false,
+      coveredCategories: result.coveredCategories || [], completedTurns: result.completedTurns || [],
+      stageCounts: result.stageCounts || null, checkMessage: result.message || '' };
     const response = await service.completeCheck({
       checkJobId: job.job_id, fingerprint: result.fingerprint,
       questionCount: result.count,
       qualityPassed: ['pass', 'warning'].includes(result.kind)
-        && result.count >= Number(job.min_questions),
+        && (hasChatbotCompletion(evidence) || result.count >= Number(job.min_questions)),
       typingWarning,
-      evidence: { source: result.source || 'chatgpt_share',
-        coveredCategories: result.coveredCategories || [],
-        completedTurns: result.completedTurns || [] }
+      evidence
     });
     return response.status;
   } catch (error) {

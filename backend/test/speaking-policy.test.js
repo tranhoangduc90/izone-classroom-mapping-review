@@ -43,7 +43,8 @@ test('prompt bài bổ trợ không yêu cầu AI xác định nói hay gõ', as
   const c=conversation(1);
   const result=await analyzePracticeConversation(c.messages,'Luyện câu trả lời', async (_url,options) => {
     prompt=JSON.parse(options.body).prompt;
-    return {ok:true,json:async()=>({text:JSON.stringify({confidence:.95,matched:true,...c.completed[0]})})};
+    return {ok:true,json:async()=>({text:JSON.stringify({confidence:.95,matched:true,completed:true,...c.completed[0],
+      questionText:c.messages[0].text,answerQuote:c.messages[1].text,repeatQuote:c.messages[3].text})})};
   });
   assert.equal(result.completed,true);
   assert.doesNotMatch(prompt,/typingEvidence|lỗi gõ|dấu hiệu gõ/i);

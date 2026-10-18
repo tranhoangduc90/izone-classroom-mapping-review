@@ -68,6 +68,9 @@ export async function checkHowToSubmission(input, dependencies = {}) {
     return { kind: 'error', title: 'Chưa xác định chắc chắn', message: 'Hệ thống chưa đọc chắc hai phần luyện. Hãy thử lại hoặc báo giảng viên.' };
   }
   const completed = validHowToEvidence(messages, analysis.completed);
+  if (analysis.completed.some(item => validHowToEvidence(messages, [item]).length === 0)) {
+    return { kind: 'error', title: 'Chưa xác minh được dẫn chứng', message: 'Dẫn chứng bộ kiểm chưa khớp hội thoại. Đây không phải kết luận bạn làm thiếu.' };
+  }
   const counts = { guided: 0, free: 0 };
   for (const item of completed) counts[item.stage] += 1;
   const pass = counts.guided >= 2 && counts.free >= 2;
