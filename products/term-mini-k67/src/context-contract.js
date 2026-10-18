@@ -6,7 +6,8 @@ import { z } from 'zod';
 export const CONTEXT_PRODUCT = 'PRODUCT-TERM-MINI-K67';
 export const CONTEXT_MAX_BYTES = 1048576;
 export const CONTEXT_TTL_MS = 120000;
-export const CONTEXT_CLASS_IDS = Object.freeze(['-8062028', '1124', '1131', '1135', '1157', '1166', '1187', '1199', '1226', '1250', '1293']);
+// 990018067 là lớp thử nhận diện riêng; không mở rộng quyền cho bất kỳ lớp khác.
+export const CONTEXT_CLASS_IDS = Object.freeze(['-8062028', '1124', '1131', '1135', '1157', '1166', '1187', '1199', '1226', '1250', '1293', '990018067']);
 const id = z.string().regex(/^-?[1-9][0-9]{0,18}$/).refine(value => {
   const n = BigInt(value);
   return n >= -9223372036854775808n && n <= 9223372036854775807n;
