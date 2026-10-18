@@ -174,6 +174,9 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       const u=await grant(identity,db,true);
       if (u.status==='submitted') return (await db.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id])).rows[0];
       const all=await links(u.id,db);
+      if (all.some(l=>l.evidence?.recoveryId) && identity.manualSubmit!==true) {
+        fail('MANUAL_SUBMIT_REQUIRED','Các phần đã được công nhận lại. Hãy tải lại trang rồi bấm Nộp bài để nhận biên nhận.');
+      }
       const main=u.template.parts.map(p=>all.find(l=>l.kind==='main'&&l.part===p.part_key));
       if (main.some(l=>!l||l.status!=='accepted')) fail('ALL_LINKS_REQUIRED','Cần xác nhận đủ các phần Speaking trước khi nộp.');
       const required=Array.from({length:u.template.requiredPracticeCount},(_,i)=>all.find(l=>l.kind==='practice'&&l.slot===i+1));

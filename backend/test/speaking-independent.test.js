@@ -129,7 +129,7 @@ test('Kết quả quá lease và kết quả của revision cũ không ghi đè 
 
 test('nhận theo chatbot khi số câu bằng 0, giữ bằng chứng và chặn trùng hội thoại',async()=>{
   const f=await fixture();try{
-    const evidence={policyVersion:COMPLETION_POLICY,acceptanceBasis:'chatbot_completion',countVerified:false,
+    const evidence={policyVersion:COMPLETION_POLICY,acceptanceBasis:'chatbot_completion',countVerified:false,recoveryId:'fixture-recovery',
       completionEvidence:{policyVersion:COMPLETION_POLICY,scope:'whole_practice',matched:true,
         message:4,quote:'Bạn đã hoàn thành buổi luyện.',confidence:0.99}};
     await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(71)});
@@ -141,6 +141,10 @@ test('nhận theo chatbot khi số câu bằng 0, giữ bằng chứng và chặ
     const saved=(await f.service.open(f.identity)).links[0];
     assert.equal(saved.question_count,0);assert.deepEqual(saved.evidence,evidence);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);
+    await assert.rejects(f.service.finish(f.identity),e=>e.code==='MANUAL_SUBMIT_REQUIRED');
+    const api=createIndependentApp({service:f.service});
+    const manual=await request(api).post('/api/speaking-homework-independent/finish').send({...f.identity,manualSubmit:true});
+    assert.equal(manual.status,409);assert.equal(manual.body.error,'ALL_LINKS_REQUIRED');
     await f.service.requestCheck({...f.identity,part:'freestyle',rawUrl:url(72)});
     const repeated=await f.service.claimJob();
     assert.equal((await f.service.workerService(repeated).completeCheck({fingerprint:fingerprint(7),questionCount:0,
