@@ -1,5 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import crypto from "node:crypto";
+import { mountTermStudentIdentity } from './student-identity.js';
 import { mountDesignDemo } from "./design-demo.js";
 import { mountDesignTrial } from './design-trial.js';
 import express from "express";
@@ -484,6 +485,8 @@ export function createApp({
     syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
   mountMiniAnswerSheet(app, { pool, requireContext, readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
+
+  mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
   app.get('/api/term-tests/roster', testReadLimiter, requireContext, asyncRoute(async (req, res) => {
     const parsed = z.object({ class: classCodeSchema, test: testSlugSchema }).safeParse(req.query);
