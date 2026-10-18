@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { mountMappingStudentIdentity } from './student-identity.js';
 import { createPendingRoster } from './pending-roster.js';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -551,6 +552,9 @@ export function createApp({
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
+
+  // Chỉ quy đổi mã người học; phiên, quyền vào bài và điểm danh vẫn do sản phẩm kiểm riêng.
+  mountMappingStudentIdentity(app, { pool, middleware: [testReadLimiter] });
 
   app.get('/api/term-tests/roster', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = z.object({ class: classCodeSchema, test: testSlugSchema }).safeParse(req.query);
