@@ -3,9 +3,15 @@ import {parseContextSnapshot} from './context-contract.js';
 
 // Đọc bản chụp đã phiên bản hóa; không ghi hay truy vấn kho dữ liệu của sản phẩm khác.
 export function createContext({url,key,fetcher=fetch,clock=Date.now}){
- let cache;
+ let cache,pending;
  async function snapshot(){
   if(cache&&clock()-cache.loadedAt<30000&&clock()-Date.parse(cache.value.capturedAt)<120000)return cache.value;
+  // Giữ cơ chế đang chạy: gộp lượt đọc nguồn đang chờ và không giữ lỗi.
+  if(pending)return pending;
+  pending=loadSnapshot();
+  try{return await pending;}finally{pending=undefined;}
+ }
+ async function loadSnapshot(){
   let response;
   try{response=await fetcher(`${url.replace(/\/$/,'')}/v1/snapshot`,{headers:{'x-k67-context-key':key},signal:AbortSignal.timeout(5000)});}
   catch{fail('CONTEXT_UNAVAILABLE','Chưa kiểm được quyền lớp. Hãy thử lại sau.',503);}
@@ -31,5 +37,11 @@ export function createContext({url,key,fetcher=fetch,clock=Date.now}){
   return Boolean(a&&(!a.google_subject||a.google_subject===subject)&&(a.role==='admin'||a.can_access_all_classes
    ||s.access.some(x=>x.reviewer_email===a.email&&x.erp_course_class_id===String(classId))));
  }
- return{snapshot,roster,student,teacher};
+ // Liệt kê từ cùng snapshot/roster đã kiểm; quyền Google/lớp vẫn kiểm riêng khi đọc.
+ async function classes(){
+  const s=await snapshot(),result=[];
+  for(const row of s.classes){if((await roster(row.erp_course_class_id)).length)result.push({id:row.erp_course_class_id,classCode:row.erp_class_name_snapshot});}
+  return result.sort((a,b)=>a.classCode.localeCompare(b.classCode,'vi'));
+ }
+ return{snapshot,roster,student,teacher,classes};
 }
