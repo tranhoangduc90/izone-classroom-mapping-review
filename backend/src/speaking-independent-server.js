@@ -1,7 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import pg from 'pg';
-import { rateLimit } from 'express-rate-limit';
+import { rateLimit,ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { pathToFileURL } from 'node:url';
 import { createIndependentSpeaking } from './speaking-independent.js';
@@ -9,13 +9,14 @@ import { SpeakingHomeworkError } from './speaking-homework.js';
 import { runSpeakingCheckJob } from './speaking-check-worker.js';
 import { runPracticeCheckJob,runPracticeAnalysisJob } from './speaking-practice-worker.js';
 import { runSpeakingDoctorJob } from './speaking-doctor-worker.js';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual,createHash } from 'node:crypto';
 import { createIndependentDocuments,createDocsGateway,writeIndependentDocument } from './speaking-independent-documents.js';
+import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
 // Không khởi động các worker Writing, Progress Log hoặc Speaking bài cũ.
-export function createIndependentApp({service,documents,workerSecret='',origin='https://tranhoangduc90.github.io'}) {
+export function createIndependentApp({service,teacher,documents,workerSecret='',origin='https://tranhoangduc90.github.io'}) {
   const app=express();
   app.set('trust proxy',1);
   app.use(helmet());app.use(express.json({limit:'2mb'}));
@@ -31,7 +32,19 @@ export function createIndependentApp({service,documents,workerSecret='',origin='
   });
   app.get('/health',async(_req,res,next)=>{try{await service.pool.query('SELECT 1');res.json({ok:true,system:'speaking-independent',build:process.env.BUILD_SHA||'unknown'});}catch(e){next(e);}});
   const router=express.Router();
-  router.use(rateLimit({windowMs:60000,limit:180,standardHeaders:'draft-8',legacyHeaders:false}));
+  const quotaMessage={ok:false,error:'RATE_LIMITED',message:'Bạn đã gửi quá nhiều yêu cầu. Hãy chờ một phút rồi thử lại.'};
+  // Giữ ngân sách thử sai theo mạng; token tự bịa không tạo đường né giới hạn này.
+  router.use(rateLimit({windowMs:60000,limit:180,skipSuccessfulRequests:true,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage}));
+  // Tối đa 30 người chung mạng: mỗi người có ngân sách riêng, kèm trần tổng của mạng.
+  router.use(rateLimit({windowMs:60000,limit:180*30,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage}));
+  router.use(rateLimit({windowMs:60000,limit:180,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage,
+    keyGenerator:req=>{
+      const {accessToken,studentRef}=req.body||{};
+      if(typeof accessToken==='string'&&/^[A-Za-z0-9_-]{43}$/.test(accessToken)&&typeof studentRef==='string'&&/^[0-9a-f-]{36}$/i.test(studentRef))
+        return 'student:'+createHash('sha256').update(accessToken+':'+studentRef).digest('hex');
+      return 'guest:'+ipKeyGenerator(req.ip);
+    }}));
+  if(teacher) mountSpeakingTeacherProgress(router,{teacher,z});
   const code=z.string().trim().min(3).max(100);
   const selected=z.object({assignmentCode:code,classCode:z.string().regex(/^[A-Za-z0-9_-]{2,32}$/),documentId:z.string().regex(/^[A-Za-z0-9_-]{5,120}$/).optional()}).strict();
   const identity=z.object({accessToken:z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),studentRef:z.string().uuid()}).strict();
@@ -52,7 +65,7 @@ export function createIndependentApp({service,documents,workerSecret='',origin='
   route('post','/checks/request',identity.extend({part:z.string().regex(/^[a-z][a-z0-9_]{1,31}$/),url:z.url().max(500)}).strict(),i=>service.requestCheck({...i,rawUrl:i.url}),'check',202);
   route('post','/doctor/practice/request',identity.extend({slot:z.number().int().min(1).max(2),exerciseId:z.string().uuid(),url:z.url().max(500)}).strict(),i=>service.requestPracticeCheck({...i,rawUrl:i.url}),'check',202);
   route('post','/doctor/practice/extra/request',identity.extend({exerciseId:z.string().uuid(),url:z.url().max(500)}).strict(),i=>service.requestPracticeCheck({...i,slot:null,rawUrl:i.url}),'check',202);
-  route('post','/finish',identity.extend({voiceConfirmedParts:z.array(z.string()).max(2).default([])}).strict(),service.finish,'receipt');
+  route('post','/finish',identity.extend({manualSubmit:z.literal(true).optional(),voiceConfirmedParts:z.array(z.string()).max(2).default([])}).strict(),service.finish,'receipt');
   router.get('/teacher/receipts/:id',async(req,res,next)=>{try{
     const id=z.string().uuid().parse(req.params.id);
     res.json({ok:true,receipt:await service.teacherReceipt(id,{cookie:req.get('cookie')||'',authorization:req.get('authorization')||'',origin:req.get('origin')||''})});
@@ -97,10 +110,22 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
     return data;
   }
   const legacyCodes=new Set(['67-speaking-paraphrase','67-speaking-lam_ro','67-speaking-diem_giua','67-speaking-on_tap_lam_ro_diem_giua']);
+  const pendingContexts=new Map();
+  async function context(input){
+    const body={assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{})};
+    // Chỉ gộp lượt đọc đang chờ của đúng bài/lớp/học viên; không giữ quyền sau phản hồi.
+    const key=JSON.stringify(body);
+    if(pendingContexts.has(key))return pendingContexts.get(key);
+    const pending=request('/internal/independent/context',body);
+    pendingContexts.set(key,pending);
+    try{return await pending;}finally{pendingContexts.delete(key);}
+  }
   return {legacyOpen:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-open',input)).assignment:null,
     legacySession:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-session',input)).session:null,
-    context:input=>request('/internal/independent/context',{
-    assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{})}),
+    context,
+    legacyProgress:async(method,input,headers)=>['students','entry'].includes(method)
+      ?request('/internal/independent/teacher-progress/'+method+'?'+new URLSearchParams(input),null,headers)
+      :request('/internal/independent/teacher-progress/units/'+encodeURIComponent(input.id),null,headers),
     teacher:async(classId,headers)=>(await request(`/internal/independent/teacher-access/${classId||'unlinked'}`,null,headers)).allowed===true};
 }
 
@@ -138,6 +163,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const documents=gateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
   const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,gateway):null}});
-  const server=createIndependentApp({service,documents,workerSecret:env.SPEAKING_SOURCE_SECRET}).listen(Number(env.PORT||4338));
+  const teacher=createSpeakingTeacherProgress({pool,source});
+  const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET}).listen(Number(env.PORT||4338));
   for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await pool.end();});
 }

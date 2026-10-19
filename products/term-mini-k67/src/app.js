@@ -22,6 +22,8 @@ import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
+import {mountTeacherSavedProgress} from './teacher-saved-progress.js';
+import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
@@ -338,6 +340,9 @@ export function createApp({
   app.use(helmet());
   app.use(addCors(config));
   app.use(express.json({ limit: '768kb', strict: true }));
+  // Đăng ký lối đọc GV trước catch-all của bài làm quen; thêm handler sau khi có auth.
+  const readinessTeacherRoutes=express.Router();
+  app.use(readinessTeacherRoutes);
   // Tuyến làm quen có limiter/phiên riêng, không tiêu hạn mức bài thi của cả lớp cùng IP.
   mountReadiness(app,{pool,config,requireContext:createContextGuard({pool}),audioSource:readinessAudioSource});
   app.use(rateIdentity);
@@ -1353,6 +1358,8 @@ export function createApp({
   });
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
+  mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
+  mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});
   app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, requireContext, asyncRoute(async (req, res) => {
     const result = await pool.query(listTermTestTeacherOptionsSql, [
       req.reviewer.email,

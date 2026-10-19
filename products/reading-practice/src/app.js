@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
 import {ReadingError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
+import {mountTeacherProgress} from './teacher-progress.js';
 import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
@@ -54,6 +55,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
+ mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
   const {credential,remember}=z.object({credential:z.string().min(10).max(10000),remember:z.boolean().default(true)}).strict().parse(req.body);
   let identity;

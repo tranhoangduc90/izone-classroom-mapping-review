@@ -8,8 +8,8 @@ export function fixtureContent(){
  return{code:CODE,version:'fixture-v1',totalMs:1200000,key,explanations:{entries:Object.fromEntries(Object.keys(key).map(n=>[n,{number:+n}]))},
   definition:{passage:Object.fromEntries('ABCDEFG'.split('').map(n=>[n,`Paragraph ${n} test text.`])),headings:Array.from({length:8},(_,i)=>[String(i),'Fixture heading']),mcq:[21,22,23].map(n=>({n,text:'Fixture question',options:['A','B','C','D']})),summary:[{question:24},{question:25},{question:26}]}};
 }
-export async function fixture(content=fixtureContent()){
- const pool=await localPool();let now=Date.now(),eligible=true,teacherAllowed=true;
+export async function fixture(content=fixtureContent(),{poolFactory=localPool}={}){
+ const pool=await poolFactory();let now=Date.now(),eligible=true,teacherAllowed=true;
  const studentRef=uuid(),entryToken=secret(),documentId='fixture_document_1234567890';
  const member={studentRef,name:'Học viên kiểm thử'},context={student:async(c,id)=>eligible&&c==='1124'&&id===studentRef?member:undefined,roster:async()=>eligible?[member]:[],teacher:async(c,email,subject)=>teacherAllowed&&c==='1124'&&email==='teacher@example.test'&&subject==='google-fixture'};
  const service=createReadingService({pool,context,clock:()=>now,pageBase:'https://example.test/reading-practice/',verifyBinding:async input=>({fixtureOnly:true,documentId:input.documentId,studentRef:input.studentRef})});

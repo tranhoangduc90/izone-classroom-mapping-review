@@ -1,5 +1,6 @@
 import {CODE,TOTAL_MS,ListeningError,fail,hash,secret,uuid,emptyDraft,validateContent,grade,statusMessage,
  issueLease,checkpoint,publicAttempt,checkLease,canonical} from './domain.js';
+import {createTeacherProgress} from './teacher-progress.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
 export async function transaction(pool,fn){
@@ -216,5 +217,6 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   const row=(await pool.query("UPDATE listening_practice.doc_job SET status='pending',available_at=now(),attempts=0,lease_id=null,lease_until=null,error_code=null WHERE id=$1 AND status='blocked' RETURNING id",[jobId])).rows[0];
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);return{jobId,status:'pending'};
  }
- return{audioAccess,seedContent,register,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob};
+ return{audioAccess,seedContent,register,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,
+  teacherProgress:createTeacherProgress({pool,context})};
 }
