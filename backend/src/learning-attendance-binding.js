@@ -16,10 +16,7 @@ export function createAttendanceBindingStore(pool) {
     },
     async reserve(job, payload, resolved) {
       return withTransaction(pool, async db => {
-        const owned = await db.query(`SELECT id FROM learning.outbox_job WHERE id = $1::uuid
-          AND worker_id = $2 AND attempt_count = $3 AND status = 'processing'
-          AND lease_until > clock_timestamp() FOR UPDATE`, [job.id, job.workerId, job.attemptCount]);
-        if (owned.rowCount !== 1) throw new LearningJobIdentityError('Job đã mất quyền giữ lượt xử lý.');
+        // Cùng thứ tự với nộp bài/điều chỉnh GV: khóa phiếu trước job để tránh deadlock.
         const target = await db.query(`SELECT assignment.id FROM learning.form_assignment AS assignment
           JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id
           WHERE assignment.id = $1::uuid AND assignment.erp_course_class_id = $2::bigint
@@ -27,6 +24,15 @@ export function createAttendanceBindingStore(pool) {
             AND roster.erp_student_contact_id = $5::bigint FOR UPDATE OF assignment`,
         [payload.assignmentId, payload.classId, payload.sessionNumber, payload.studentRef, payload.studentId]);
         if (target.rowCount !== 1) throw new LearningJobIdentityError('Đích điểm danh không thuộc học viên/phiếu của lớp.');
+        const owned = await db.query(`SELECT id FROM learning.outbox_job WHERE id = $1::uuid
+          AND worker_id = $2 AND attempt_count = $3 AND status = 'processing'
+          AND lease_until > clock_timestamp() FOR UPDATE`, [job.id, job.workerId, job.attemptCount]);
+        if (owned.rowCount !== 1) throw new LearningJobIdentityError('Job đã mất quyền giữ lượt xử lý.');
+        const attendance = await db.query(`SELECT status FROM learning.attendance_record
+          WHERE assignment_id=$1::uuid AND student_ref=$2::uuid`, [payload.assignmentId,payload.studentRef]);
+        if (!['self_confirmed','teacher_confirmed'].includes(attendance.rows[0]?.status)) {
+          return {reviewRequired:true,targetSessionId:null,bindingRevision:null,reason:'teacher_decision'};
+        }
         const found = await db.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id = $1::uuid FOR UPDATE', [payload.assignmentId]);
         let binding = found.rows[0];
         const priorOperation = await db.query('SELECT status FROM learning.portal_attendance_operation WHERE operation_key = $1', [job.operationKey]);
@@ -77,6 +83,23 @@ export function createAttendanceBindingStore(pool) {
         }
         return { ...normalize(binding), scheduleFingerprint: resolved.scheduleFingerprint, writeStarted: true };
       });
+    },
+    async assertDispatchAllowed(job, payload, binding) {
+      // Kiểm lại ngay trước HTTP: quyền xử lý có thể bị GV hủy sau lúc lưu ý định.
+      // Không giữ khóa database qua mạng. Lệnh đã gửi vẫn cần đối soát nếu GV đổi sau đó.
+      const allowed = await pool.query(`SELECT job.id FROM learning.outbox_job AS job
+        JOIN learning.attendance_record AS attendance
+          ON attendance.assignment_id=$4::uuid AND attendance.student_ref=$5::uuid
+        JOIN learning.portal_attendance_operation AS operation
+          ON operation.operation_key=job.operation_key AND operation.assignment_id=attendance.assignment_id
+          AND operation.student_ref=attendance.student_ref
+        WHERE job.id=$1::uuid AND job.worker_id=$2 AND job.attempt_count=$3
+          AND job.status='processing' AND job.lease_until>clock_timestamp()
+          AND attendance.status IN ('self_confirmed','teacher_confirmed')
+          AND operation.target_session_id=$6::bigint AND operation.binding_revision=$7`,
+      [job.id,job.workerId,job.attemptCount,payload.assignmentId,payload.studentRef,
+        binding.targetSessionId,binding.bindingRevision]);
+      if (allowed.rowCount !== 1) throw new LearningJobIdentityError('Job đã mất quyền gửi lệnh điểm danh.');
     },
     async record(job, payload, binding, output) {
       return withTransaction(pool, async db => {

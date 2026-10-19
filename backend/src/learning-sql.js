@@ -240,11 +240,15 @@ export const fetchLearningAttemptContextSql = `SELECT
   assignment.closes_at,
   roster.student_name_snapshot AS student_name,
   roster.erp_student_contact_id::text AS student_id,
+  attendance.status AS attendance_status,
+  attendance.decided_by_email AS attendance_decided_by_email,
   version.public_definition,
   grading.grader_version,
   grading.private_definition
 FROM learning.attempt AS attempt
 JOIN learning.form_assignment AS assignment ON assignment.id = attempt.assignment_id
+LEFT JOIN learning.attendance_record AS attendance
+  ON attendance.assignment_id = attempt.assignment_id AND attendance.student_ref = attempt.student_ref
 JOIN learning.form_assignment_roster AS roster
   ON roster.assignment_id = attempt.assignment_id
   AND roster.student_ref = attempt.student_ref
@@ -346,7 +350,7 @@ export const insertLearningGradingResultItemSql = `INSERT INTO learning.grading_
   max_score
 ) VALUES ($1::uuid, $2::uuid, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9);`;
 
-export const fetchAttendanceForUpdateSql = `SELECT status
+export const fetchAttendanceForUpdateSql = `SELECT status, decided_by_email
 FROM learning.attendance_record
 WHERE assignment_id = $1::uuid
   AND student_ref = $2::uuid
@@ -526,6 +530,8 @@ saved_attendance AS (
     decided_by_email = NULL,
     decided_at = now(),
     updated_at = now()
+  WHERE learning.attendance_record.status = 'pending_teacher'
+    AND learning.attendance_record.decided_by_email IS NULL
   RETURNING assignment_id, student_ref
 ),
 saved_attendance_event AS (
@@ -576,7 +582,7 @@ saved_attendance_job AS (
     job_type, entity_key, unit_key, operation_key, idempotency_key, payload
   )
   SELECT 'sync_portal_attendance', $25, $41, $42, $43, $44::jsonb
-  FROM saved_evidence
+  FROM saved_evidence CROSS JOIN saved_attendance_event
   WHERE $18 = 'self_confirmed'
     AND NOT (COALESCE($30, '') IN ('DEMO-56', 'DEMO-67') AND $31::bigint = 990000567)
   ON CONFLICT (idempotency_key) DO NOTHING
@@ -1382,13 +1388,14 @@ export const fetchLearningTeacherDashboardSql = `SELECT
       'attendanceStatus', status.attendance_status,
       'attendanceReason', status.attendance_reason,
       'decidedBy', status.decided_by_email,
-      'portalSync', CASE WHEN status.attendance_status IN ('self_confirmed', 'teacher_confirmed') THEN (
+      'portalSync', (
         SELECT jsonb_build_object(
           'status', job.status,
           'updatedAt', job.updated_at,
           'lastErrorCode', job.last_error_code,
           'targetSessionId', operation.target_session_id::text,
-          'portalStatus', COALESCE(operation.status, job.result_json->>'portalStatus'),
+          'portalStatus', CASE WHEN job.result_json->>'reviewReason' LIKE 'teacher_decision%'
+            THEN job.result_json->>'portalStatus' ELSE COALESCE(operation.status, job.result_json->>'portalStatus') END,
           'reviewReason', job.result_json->>'reviewReason',
           'readbackAt', operation.readback_at,
           'bindingRevision', operation.binding_revision,
@@ -1402,7 +1409,7 @@ export const fetchLearningTeacherDashboardSql = `SELECT
           AND job.unit_key = 'portal-attendance:' || assignment.id::text || ':session:' || assignment.session_number::text
         ORDER BY job.created_at DESC, job.id DESC
         LIMIT 1
-      ) ELSE NULL END,
+      ),
       'checkpoints', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           'blockId', checkpoint.block_id::text,
@@ -1604,6 +1611,22 @@ event AS (
   FROM updated
   ON CONFLICT (operation_key) DO NOTHING
   RETURNING id, assignment_id, student_ref
+),
+cancelled_jobs AS (
+  -- Quyết định mới vô hiệu hóa cả yêu cầu đang chờ và lease đang xử lý; không tự hoàn nguyên Portal.
+  UPDATE learning.outbox_job AS job
+  SET status='review_required', worker_id=NULL, lease_until=NULL,
+    last_error_code='TEACHER_ATTENDANCE_CHANGED', updated_at=now(),
+    result_json=jsonb_build_object(
+      'portalStatus',CASE WHEN job.status='processing' THEN 'write_outcome_unknown' ELSE 'cancelled_by_teacher' END,
+      'reviewReason',CASE WHEN job.status='processing' THEN 'teacher_decision_during_processing' ELSE 'teacher_decision' END)
+  FROM updated JOIN target ON target.id=updated.assignment_id AND target.student_ref=updated.student_ref
+  WHERE updated.status NOT IN ('self_confirmed','teacher_confirmed')
+    AND job.job_type='sync_portal_attendance'
+    AND job.entity_key='student:' || updated.student_ref::text
+    AND job.unit_key='portal-attendance:' || updated.assignment_id::text || ':session:' || target.session_number::text
+    AND job.status IN ('queued','retry_wait','processing')
+  RETURNING job.id
 ),
 portal_job AS (
   INSERT INTO learning.outbox_job (

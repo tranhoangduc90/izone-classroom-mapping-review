@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readCheckpointAttendance, recordCheckpointAttendance } from './learning-checkpoint-attendance.js';
 import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule } from './learning-schedule-plan.js';
 import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
@@ -242,6 +243,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   testResultReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
+  const pendingPublicAssignments=new Map();
   async function attachComments(view,classId,studentRef=null) {
     if(!comments) return view;
     view={...view,journeyCommentsEnabled:true};
@@ -342,13 +344,19 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   return {
     ...(comments||{}),
     async getPublicAssignment(publicToken) {
-      const result = await pool.query(fetchPublicLearningAssignmentSql, [publicToken]);
-      const assignment = publicAssignment(assertSingleRow(
-        result,
-        'ASSIGNMENT_NOT_AVAILABLE',
-        'Phiếu chưa được mở, đã đóng hoặc không còn tồn tại.'
-      ));
-      return { ...assignment, submissionWindow: await readSubmissionWindow(pool, assignment.assignmentId) };
+      // Kế thừa cơ chế đang chạy: chỉ gộp lượt đọc cùng phiếu đang chờ, không lưu quyền lâu hơn.
+      if(pendingPublicAssignments.has(publicToken))return pendingPublicAssignments.get(publicToken);
+      const pending=(async()=>{
+        const result = await pool.query(fetchPublicLearningAssignmentSql, [publicToken]);
+        const assignment = publicAssignment(assertSingleRow(
+          result,
+          'ASSIGNMENT_NOT_AVAILABLE',
+          'Phiếu chưa được mở, đã đóng hoặc không còn tồn tại.'
+        ));
+        return { ...assignment, submissionWindow: await readSubmissionWindow(pool, assignment.assignmentId) };
+      })();
+      pendingPublicAssignments.set(publicToken,pending);
+      try{return await pending;}finally{pendingPublicAssignments.delete(publicToken);}
     },
 
     async startAttempt({ publicToken, studentRef, clientIdempotencyKey, identityConfirmed }) {
@@ -390,6 +398,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           definitionHash: attempt.definition_hash,
           draft: asObject(attempt.draft),
           draftRevision: Number(attempt.draft_revision),
+          attendance: await readCheckpointAttendance(client, student.assignment_id, student.student_ref),
           checkpointSubmissions: checkpointResult.rows.map(row => ({
             checkpointSubmissionId: row.checkpoint_submission_id,
             blockId: row.block_id,
@@ -483,6 +492,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
             missingItemVersionIds: asArray(existing.missing_item_version_ids),
             result: gradeCheckpoint(definition, gradingKey, block, existing.response_payload),
             submittedAt: existing.submitted_at,
+            attendance: await readCheckpointAttendance(client, context.assignment_id, context.student_ref),
             replayed: true
           };
         }
@@ -499,6 +509,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         }
         const submissionWindow = await requireSubmissionWindow(client, context.assignment_id);
         const submittedAt = submissionWindow.serverNow;
+        if (!['DEMO-56', 'DEMO-67'].includes(context.course_code)) {
+          await guardAssignmentSchedule(client, context.assignment_id, true);
+        }
         const inserted = await client.query(insertLearningCheckpointSubmissionSql, [
           checkpointSubmissionId, context.attempt_id, context.assignment_id, context.form_version_id,
           context.student_ref, blockId, checkpoint, 1, json(blockResponses), responseHash,
@@ -506,6 +519,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           `checkpoint:${checkpointSubmissionId}:v1`, idempotencyKey, submittedAt
         ]);
         const row = assertSingleRow(inserted, 'CHECKPOINT_NOT_SAVED', 'Không lưu được phần vừa hoàn thành.', 500);
+        const attendance = await recordCheckpointAttendance(client, context, row.checkpoint_submission_id, submittedAt);
         return {
           checkpointSubmissionId: row.checkpoint_submission_id,
           blockId,
@@ -514,6 +528,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           missingItemVersionIds: completeness.missingItemVersionIds,
           result: gradeCheckpoint(definition, gradingKey, block, blockResponses),
           submittedAt: row.submitted_at,
+          attendance,
           replayed: false
         };
       });
@@ -559,10 +574,15 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         const completeness = evaluateCompleteness(definition, responses);
         const quizResult = gradeLearningSubmission({ definition, gradingKey, responses });
         const admission = await requireSubmissionWindow(client, context.assignment_id);
-        if (completeness.complete && context.course_code !== 'DEMO-56' && context.course_code !== 'DEMO-67')
+        if (context.course_code !== 'DEMO-56' && context.course_code !== 'DEMO-67')
           await guardAssignmentSchedule(client, context.assignment_id, true);
         const receivedAt = admission.serverNow;
-        const receipt = buildSubmissionReceipt({ submissionId, receivedAt, completeness, quizResult });
+        // Nộp cuối giữ quyết định đã có từ checkpoint/giảng viên, kể cả phiếu còn câu trống.
+        const priorAttendance = context.attendance_status
+          ? { status: context.attendance_status, decided_by_email: context.attendance_decided_by_email } : null;
+        const attendanceChanged = !priorAttendance || (priorAttendance.status === 'pending_teacher' && !priorAttendance.decided_by_email);
+        const attendanceStatus = attendanceChanged ? 'self_confirmed' : priorAttendance.status;
+        const receipt = buildSubmissionReceipt({ submissionId, receivedAt, completeness, quizResult, attendanceStatus });
         const evidence = buildEvidenceEnvelope({
           evidenceId: crypto.randomUUID(),
           submissionId,
@@ -612,8 +632,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         }
 
         const operationKey = `grade:${submissionId}:v${quizResult.graderVersion}`;
-        const attendanceStatus = completeness.complete ? 'self_confirmed' : 'pending_teacher';
-        const attendanceReason = completeness.complete ? 'Nộp đủ mục bắt buộc.' : 'Phiếu còn thiếu mục bắt buộc.';
+        const attendanceReason = 'Đã nộp phiếu; câu trống không cản trở điểm danh.';
         const portalAttendanceUnitKey = `portal-attendance:${context.assignment_id}:session:${context.session_number}`;
         const portalAttendanceOperationKey = `portal-attendance:${submissionId}:v1`;
         const portalAttendanceIdempotencyKey = `portal-attendance:${submissionId}:enqueue:v1`;
@@ -686,10 +705,10 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           && String(context.class_id) === '990000567';
         if (Number(finalizedRow.response_item_count) !== responseItems.length
           || Number(finalizedRow.grading_item_count) !== gradingItems.length
-          || !finalizedRow.attendance_event_saved
+          || Boolean(finalizedRow.attendance_event_saved) !== attendanceChanged
           || !finalizedRow.evidence_saved
           || !finalizedRow.outbox_saved
-          || Boolean(finalizedRow.attendance_outbox_saved) !== (completeness.complete && !isDemoAssignment)) {
+          || Boolean(finalizedRow.attendance_outbox_saved) !== (attendanceChanged && attendanceStatus === 'self_confirmed' && !isDemoAssignment)) {
           throw new LearningError('SUBMISSION_WRITE_INCOMPLETE', 'Bài nộp chưa được ghi đủ dữ liệu liên quan.', 500);
         }
         await refreshSubmissionDeadline(client, context.assignment_id);
@@ -767,13 +786,14 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const journey = await this.getStudentCourseJourney(input);
       const session = journey.sessions.find(item => item.sessionNumber === input.sessionNumber);
       if (!session) throw new LearningError('JOURNEY_SESSION_NOT_FOUND', 'Không tìm thấy buổi học trong hành trình.', 404);
-      if (session.completeness !== 'complete' && session.sessionComment) return {
+      const hasSubmission = ['complete','incomplete'].includes(session.completeness);
+      if (!hasSubmission && session.sessionComment) return {
         classId:journey.class.classId,student:journey.student,sessionNumber:input.sessionNumber,
         sessionDate:session.sessionDate,status:session.assignmentId?'not_submitted':'no_assignment',
         definition:null,responses:{},gradingItems:[],sessionComment:session.sessionComment,
         testResult:session.testResult||null};
-      if (session.completeness !== 'complete') throw new LearningError('JOURNEY_SUBMISSION_NOT_READY',
-        'Buổi này chưa có phiếu hoàn tất; hãy mở Progress Log theo lịch học.', 409);
+      if (!hasSubmission) throw new LearningError('JOURNEY_SUBMISSION_NOT_READY',
+        'Buổi này chưa có bài nộp cuối; hãy mở Progress Log theo lịch học.', 409);
       const result = await pool.query(fetchCourseSessionDetailSql,
         [journey.class.classId, input.sessionNumber, journey.student.studentRef]);
       if (result.rowCount > 1) throw new LearningError('JOURNEY_SESSION_CONFLICT',
@@ -783,7 +803,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         || !row.submission_id) throw new LearningError('JOURNEY_DETAIL_MISMATCH',
         'Dữ liệu buổi học đã thay đổi; hãy tải lại hành trình.', 409);
       return {classId:journey.class.classId, student:journey.student, sessionNumber:input.sessionNumber,
-        sessionDate:session.sessionDate, status:'complete', definition:parseFormDefinition(asObject(row.public_definition)),
+        sessionDate:session.sessionDate, status:session.completeness, definition:parseFormDefinition(asObject(row.public_definition)),
         submissionId:row.submission_id, responses:asObject(row.responses), gradingItems:asArray(row.grading_items),
         teacherSessionFeedback:session.teacherSessionFeedback || null,sessionComment:session.sessionComment||null,
         attendanceStatus:session.attendanceStatus, portalSync:session.portalSync};

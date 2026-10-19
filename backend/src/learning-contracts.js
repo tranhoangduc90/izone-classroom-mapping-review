@@ -299,7 +299,7 @@ export const submissionReceiptV1Schema = z.object({
   submissionId: uuidSchema,
   receivedAt: z.iso.datetime(),
   completeness: z.enum(['complete', 'incomplete']),
-  attendanceStatus: z.enum(['self_confirmed', 'pending_teacher', 'not_eligible']),
+  attendanceStatus: z.enum(['self_confirmed', 'teacher_confirmed', 'pending_teacher', 'not_eligible']),
   gradingStatus: z.enum(['complete', 'pending', 'manual_review']),
   message: z.string().max(500),
   nextAction: z.string().max(500)
