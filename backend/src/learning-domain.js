@@ -235,7 +235,8 @@ export function gradeLearningSubmission({ definition: inputDefinition, gradingKe
     throw error;
   }
   assertResponseIdentity(definition, responses);
-  const items = definition.blocks.flatMap(block => block.items).sort((a, b) => a.position - b.position);
+  const items = definition.blocks.flatMap(block => block.items)
+    .filter(item => isConditionallyVisible(item, responses)).sort((a, b) => a.position - b.position);
   const resultsById = new Map();
   const grouped = new Map();
   for (const item of items) {
@@ -327,13 +328,12 @@ export function buildStudentQuizResult(internalResult, definitionInput, now = ne
   };
 }
 
-export function buildSubmissionReceipt({ submissionId, receivedAt, completeness, quizResult }) {
-  const attendanceStatus = completeness.complete ? 'self_confirmed' : 'pending_teacher';
+export function buildSubmissionReceipt({ submissionId, receivedAt, completeness, quizResult, attendanceStatus = 'self_confirmed' }) {
   const score = quizResult.summary;
   const hasScore = score.maxScore > 0;
   const message = completeness.complete
-    ? 'Hệ thống đã nhận đủ phiếu và tự ghi nhận điểm danh của bạn.'
-    : `Hệ thống đã nhận phiếu nhưng còn thiếu ${completeness.missingItemVersionIds.length} mục bắt buộc.`;
+    ? 'Hệ thống đã nhận phiếu của bạn.'
+    : `Hệ thống đã nhận phiếu; còn ${completeness.missingItemVersionIds.length} mục chưa trả lời đủ.`;
   const nextAction = hasScore
     ? `Bạn đã đạt ${score.scoreEarned}/${score.maxScore} điểm. Hãy xem lại dạng bài có tỷ lệ đúng thấp nhất.`
     : 'Hãy giữ lại một việc cụ thể bạn sẽ làm sau buổi học này.';

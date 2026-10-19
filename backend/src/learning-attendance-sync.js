@@ -23,7 +23,11 @@ const overridePayloadSchema = z.object({
   sessionNumber: z.number().int().min(1).max(100),
   attendanceStatus: z.literal('PRESENT')
 }).strict();
-const payloadSchema = z.union([submissionPayloadSchema, overridePayloadSchema]);
+const checkpointPayloadSchema = submissionPayloadSchema.omit({ submissionId: true }).extend({
+  schemaVersion: z.literal('LearningPortalAttendanceCheckpointJobV1'),
+  checkpointSubmissionId: uuid
+}).strict();
+const payloadSchema = z.union([submissionPayloadSchema, overridePayloadSchema, checkpointPayloadSchema]);
 
 const responseSchema = z.object({
   ok: z.literal(true),
@@ -44,6 +48,14 @@ const responseSchema = z.object({
 }).strict();
 
 function identityFor(payload) {
+  if (payload.schemaVersion === 'LearningPortalAttendanceCheckpointJobV1') {
+    return {
+      entityKey: `student:${payload.studentRef}`,
+      unitKey: `portal-attendance:${payload.assignmentId}:session:${payload.sessionNumber}`,
+      operationKey: `portal-attendance-checkpoint:${payload.checkpointSubmissionId}:v1`,
+      idempotencyKey: `portal-attendance-checkpoint:${payload.checkpointSubmissionId}:enqueue:v1`
+    };
+  }
   if (payload.schemaVersion === 'LearningPortalAttendanceOverrideJobV1') {
     return {
       entityKey: `student:${payload.studentRef}`,
@@ -154,6 +166,7 @@ export function createLearningAttendanceSync({ config, pool, bindingStore, fetch
         targetSessionId: binding.targetSessionId, bindingRevision: binding.bindingRevision,
         reviewReason: binding.reason || 'schedule_changed' };
     }
+    if (resolved.status === 'resolved') await store.assertDispatchAllowed(job, payload, binding);
     const output = resolved.status === 'resolved' ? await callPortal(binding, true) : resolved;
     await store.record(job, payload, binding, output);
     return {

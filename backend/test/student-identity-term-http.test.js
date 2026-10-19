@@ -62,5 +62,6 @@ test('Mã bài và input sai không truy vấn nguồn; lỗi nguồn không gi�
 test('Module được đóng cùng K67 khớp chính xác bản chuẩn, không lệ thuộc runtime Mapping', async () => {
   const [source, bundled] = await Promise.all([readFile(new URL('../src/student-identity.js', import.meta.url), 'utf8'),
     readFile(new URL('../../products/term-mini-k67/src/student-identity.js', import.meta.url), 'utf8')]);
-  assert.equal(bundled, source);
+  // Git trên Windows có thể checkout hai bản bằng CRLF/LF; chỉ khác xuống dòng không đổi module.
+  assert.equal(bundled.replaceAll('\r\n','\n'), source.replaceAll('\r\n','\n'));
 });

@@ -155,6 +155,7 @@ async function setupDatabase() {
   await database.exec(journeyPlanMigration);
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610090001_journey_schedule_changes.sql', import.meta.url), 'utf8'));
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202610190001_checkpoint_attendance_source.sql', import.meta.url), 'utf8'));
   await database.exec('CREATE TABLE IF NOT EXISTS learning.form_draft_class_lock(erp_course_class_id bigint PRIMARY KEY)');
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
@@ -1220,7 +1221,7 @@ test('quiz 40 câu vẫn ghi đủ dữ liệu với số lượt trao đổi da
   await database.close();
 });
 
-test('GV mở từng phần và checkpoint được lưu thật, idempotent, không tự điểm danh', async () => {
+test('GV mở từng phần và checkpoint được lưu thật, idempotent, điểm danh từ phần đầu', async () => {
   const { database, service } = await setupDatabase();
   const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };
   const published = await service.publishReflectionForm({
@@ -1309,7 +1310,7 @@ test('GV mở từng phần và checkpoint được lưu thật, idempotent, kh�
     (SELECT count(*)::int FROM learning.attendance_record) AS attendance,
     (SELECT count(*)::int FROM learning.assignment_block_release_event) AS release_events;
   `);
-  assert.deepEqual(counts.rows[0], { checkpoints: 1, attendance: 0, release_events: 2 });
+  assert.deepEqual(counts.rows[0], { checkpoints: 1, attendance: 1, release_events: 2 });
   const final = await service.submit({
     attemptToken: attempt.attemptToken,
     submissionId: crypto.randomUUID(),
@@ -1404,7 +1405,7 @@ test('Listening IC2304 chấm khi nộp phần, khôi phục được và hiện
     reviewer: { email: 'outsider@example.test', canAccessAllClasses: false } }).catch(error => error);
   assert.equal(denied.code, 'ASSIGNMENT_ACCESS_DENIED');
   const attendance = await database.query('SELECT count(*)::int AS total FROM learning.attendance_record;');
-  assert.equal(attendance.rows[0].total, 0);
+  assert.equal(attendance.rows[0].total, 1);
   await database.close();
 });
 
@@ -1495,7 +1496,8 @@ test('IC2305 hiện đáp án sau checkpoint và cả demo 56/67 đều không g
   const final = await service.submit(finalInput);
   assert.equal(final.result.answerRelease, 'released');
   assert.equal(final.result.items.filter(item => item.maxScore > 0).length, 4);
-  assert.equal(final.result.items.filter(item => item.verdict === 'ungraded').length, 4);
+  // Câu điều kiện không hiện không phải câu học viên bỏ trống và không được đưa vào kết quả.
+  assert.equal(final.result.items.filter(item => item.verdict === 'ungraded').length, 3);
   assert.equal(final.result.items.find(item => item.itemVersionId === items[5].itemVersionId).expectedAnswer, null);
   assert.equal((await service.submit(finalInput)).result.answerRelease, 'released');
   assert.equal((await service.getResult({ attemptToken: attempt.attemptToken })).result.answerRelease, 'released');
@@ -1745,7 +1747,7 @@ test('outbox tự nhận lại job processing khi lease đã hết sau khi worke
   await database.close();
 });
 
-test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal lỗi rồi hồi phục không làm mất biên nhận', async () => {
+test('bài nộp còn câu trống tự điểm danh; Portal lỗi rồi hồi phục không làm mất biên nhận', async () => {
   const { database, service } = await setupDatabase();
   const reviewer = { email: 'teacher@example.test', canAccessAllClasses: false };
   const published = await service.publishReflectionForm({
@@ -1768,9 +1770,9 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
     attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
     definitionHash: published.definitionHash, draftRevision: 0, responses
   });
-  assert.equal(submission.receipt.attendanceStatus, 'pending_teacher');
+  assert.equal(submission.receipt.attendanceStatus, 'self_confirmed');
   const before = await database.query(`SELECT job_type FROM learning.outbox_job ORDER BY job_type;`);
-  assert.deepEqual(before.rows.map(row => row.job_type), ['analyze_submission']);
+  assert.deepEqual(before.rows.map(row => row.job_type), ['analyze_submission', 'sync_portal_attendance']);
   const replay = await service.submit({
     attemptToken: attempt.attemptToken, submissionId: crypto.randomUUID(),
     definitionHash: published.definitionHash, draftRevision: 0, responses
@@ -1783,12 +1785,6 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
     responses: { [firstItem]: 'Nội dung bị đổi sau nộp.' }
   }), error => error instanceof LearningError && error.code === 'SUBMISSION_ALREADY_FINAL');
 
-  const override = await service.overrideAttendance({
-    assignmentId: published.assignmentId, studentRef: student.studentRef,
-    status: 'teacher_confirmed', reason: 'Giảng viên thấy học viên có mặt.',
-    reviewer, operationKey: `attendance-override:${crypto.randomUUID()}`
-  });
-  assert.equal(override.portalSyncQueued, true);
   const pool = poolFrom(database);
   const [job] = await claimLearningJobs({
     pool, workerId: 'portal-test-1', limit: 10,
@@ -1839,7 +1835,7 @@ test('bài nộp thiếu không tự điểm danh; GV xác nhận thì Portal l�
   assert.equal(sent.commit, true);
   const dashboard = await service.getTeacherDashboard({ assignmentId: published.assignmentId, reviewer });
   const target = dashboard.students.find(row => row.studentRef === student.studentRef);
-  assert.equal(target.attendanceStatus, 'teacher_confirmed');
+  assert.equal(target.attendanceStatus, 'self_confirmed');
   assert.equal(target.portalSync.status, 'complete');
   assert.equal(target.submissionId, submission.receipt.submissionId);
   const counts = await database.query(`SELECT

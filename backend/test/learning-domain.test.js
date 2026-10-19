@@ -199,6 +199,33 @@ test('choose TWO không cho một lựa chọn trùng ăn hai điểm', () => {
   assert.equal(pair.reduce((sum, value) => sum + value.scoreEarned, 0), 1);
 });
 
+// Câu trống vẫn nằm trong mẫu số; nội dung không có điểm không được tự chấm hoặc gọi AI.
+test('E09: bỏ trống text, choice, cặp TWO và Writing không được điểm hoặc tạo lượt chấm AI', () => {
+  const result = gradeLearningSubmission({definition:makeDefinition(),gradingKey:makeGradingKey(),responses:{}});
+  assert.equal(result.summary.scoreEarned,0);
+  assert.equal(result.summary.maxScore,13);
+  assert.equal(result.summary.answered,0);
+  assert.equal(result.gradingStatus,'complete');
+  for (const id of [ids.completion,ids.choice,ids.pair1,ids.pair2]) {
+    const row=result.items.find(value=>value.itemVersionId===id);
+    assert.equal(row.verdict,'incorrect');assert.equal(row.answerState,'blank');
+  }
+  assert.equal(result.items.find(value=>value.itemVersionId===ids.reflection).verdict,'ungraded');
+  assert.equal(result.items.find(value=>value.itemVersionId===ids.writing).verdict,'ungraded');
+});
+
+test('E10: làm đúng 3 và bỏ trống 7 câu nhận 3/10, không thu mẫu số theo số câu đã làm', () => {
+  const definition=makeDefinition(),key=makeGradingKey();
+  definition.blocks[0].items=Array.from({length:10},(_,index)=>item({position:index+1,
+    pedagogicalTypeCode:'short_answer',graderType:'accepted_text',maxScore:1}));
+  key.items=Object.fromEntries(definition.blocks[0].items.map(row=>[row.itemVersionId,key.items[ids.completion]]));
+  key.groups={};
+  const responses=Object.fromEntries(definition.blocks[0].items.slice(0,3).map(row=>[row.itemVersionId,'colour']));
+  const result=gradeLearningSubmission({definition,gradingKey:key,responses});
+  assert.equal(result.summary.scoreEarned,3);assert.equal(result.summary.maxScore,10);
+  assert.equal(result.items.filter(row=>row.verdict==='incorrect'&&row.answerState==='blank').length,7);
+});
+
 test('completeness phụ thuộc trường bắt buộc, không phụ thuộc điểm hoặc AI', () => {
   const complete = evaluateCompleteness(makeDefinition(), completeResponses);
   const incomplete = evaluateCompleteness(makeDefinition(), { ...completeResponses, [ids.reflection]: '' });

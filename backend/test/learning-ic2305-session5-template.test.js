@@ -53,12 +53,15 @@ test('Câu tự luận không chấm; chỉ bốn câu kiến thức nhận đi�
   const grade = gradeLearningSubmission({ definition, gradingKey: key, responses: responses() });
   assert.equal(grade.summary.maxScore, 4);
   assert.equal(grade.summary.scoreEarned, 4);
-  for (const number of [1, 6, 7, 8]) {
+  for (const number of [1, 6, 7]) {
     assert.equal(items[number - 1].graderType, 'none');
     assert.equal(items[number - 1].maxScore, 0);
-    assert.equal(grade.items[number - 1].verdict, 'ungraded');
+    assert.equal(grade.items.find(row=>row.itemVersionId===id(number)).verdict, 'ungraded');
     assert.equal(Object.hasOwn(key.items, id(number)), false);
   }
+  assert.equal(grade.items.some(row=>row.itemVersionId===id(8)),false,'Câu điều kiện không áp dụng không tham gia chấm');
+  assert.equal(items[7].graderType,'none');
+  assert.equal(Object.hasOwn(key.items,id(8)),false);
   const student = buildStudentQuizResult(grade, definition);
   assert.equal(student.answerRelease, 'hidden');
   assert.equal(student.items.some(item => Object.hasOwn(item, 'expectedAnswer')), false);

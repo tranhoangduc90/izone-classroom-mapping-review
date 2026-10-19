@@ -31,6 +31,7 @@ function createLearningAttendanceSync(options) {
   return createActualSync({ bindingStore: {
     async read() { return null; },
     async reserve() { return binding; },
+    async assertDispatchAllowed() {},
     async record() {}
   }, ...options });
 }
