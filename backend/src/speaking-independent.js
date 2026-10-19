@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { withTransaction } from './db.js';
 import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
 import { createPendingRoster } from './pending-roster.js';
+import { hasChatbotCompletion } from './speaking-completion-policy.js';
 
 const hash = s => createHash('sha256').update(s).digest('hex');
 const fail = (code,message,status=409) => { throw new SpeakingHomeworkError(code,message,status); };
@@ -173,6 +174,8 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       const u=await grant(identity,db,true);
       if (u.status==='submitted') return (await db.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id])).rows[0];
       const all=await links(u.id,db);
+      // Phần đã công nhận lại được tự nộp như các phần đạt khác.
+      // Khóa work_unit và receipt duy nhất vẫn chống nộp lặp từ nhiều tab/retry.
       const main=u.template.parts.map(p=>all.find(l=>l.kind==='main'&&l.part===p.part_key));
       if (main.some(l=>!l||l.status!=='accepted')) fail('ALL_LINKS_REQUIRED','Cần xác nhận đủ các phần Speaking trước khi nộp.');
       const required=Array.from({length:u.template.requiredPracticeCount},(_,i)=>all.find(l=>l.kind==='practice'&&l.slot===i+1));
@@ -207,7 +210,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
   }
   async function claimJob() {
     return withTransaction(pool,async db=>{
-      // Lease luôn ngắn hơn thời gian chờ hữu hạn; quá năm lượt sẽ hiển thị cần kiểm lại.
+      // Giữ job bốn phút, dài hơn ngân sách đọc/AI tối đa 165 giây; quá năm lượt chuyển kiểm lại.
       await db.query(`UPDATE speaking_independent.job SET status='review',last_error=coalesce(last_error,'RETRY_EXHAUSTED')
         WHERE attempts>=5 AND (status='failed' OR (status='processing' AND lease_until<now()))`);
       const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE attempts<5 AND available_at<=now()
@@ -215,7 +218,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`);
       if (!j) return null;
       const owner=randomUUID();
-      await db.query(`UPDATE speaking_independent.job SET status='processing',owner=$2,lease_until=now()+interval '2 minutes',
+      await db.query(`UPDATE speaking_independent.job SET status='processing',owner=$2,lease_until=now()+interval '4 minutes',
         attempts=attempts+1,updated_at=now() WHERE id=$1`,[j.id,owner]);
       const {rows:[u]}=await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id FROM speaking_independent.work_unit u
         JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[j.work_unit_id]);
@@ -250,9 +253,11 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
         return {status:'superseded'};
       }
       const valid=result.qualityPassed===true && Number.isInteger(result.questionCount)
-        && result.questionCount>=Number(job.min_questions||1) && /^[0-9a-f]{64}$/.test(result.fingerprint||'')
+        && result.questionCount>=0 && (hasChatbotCompletion(result.evidence) || result.questionCount>=Number(job.min_questions??1))
+        && /^[0-9a-f]{64}$/.test(result.fingerprint||'')
         && (j.kind!=='check_practice'||result.matchedExerciseId===job.exercise_id);
-      let code=valid?null:(result.checkCode||'PRACTICE_INCOMPLETE');
+      let code=valid?null:(result.checkCode || (j.kind==='check_practice' && result.matchedExerciseId!==job.exercise_id
+        ? 'EXERCISE_MISMATCH' : 'PRACTICE_INCOMPLETE'));
       const all=await links(j.work_unit_id,db);
       if (valid && all.some(l=>l.id!==j.link_id&&l.fingerprint===result.fingerprint)) code='REUSED_CONVERSATION';
       let status=valid&&!code?'accepted':'rejected';
@@ -326,7 +331,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
     return {receipt_id:u.receipt_id,created_at:u.receipt_created,submitted_at:u.submitted_at,title:u.template.title,
       class_id:u.class_id,class_code:u.class_code,student_name:u.student_name,document_id:u.document_id,course_id:u.course_id,
       links:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,{url:l.share_url,questionCount:l.question_count,evidence:l.evidence,checkedAt:l.checked_at}])),
-      practice_links:all.filter(l=>l.kind==='practice').map(l=>({slot:l.slot,exerciseTitle:l.exercise_title,url:l.share_url,status:l.status})),
+      practice_links:all.filter(l=>l.kind==='practice').map(l=>({slot:l.slot,exerciseTitle:l.exercise_title,url:l.share_url,status:l.status,evidence:l.evidence})),
       processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
       grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
   }
