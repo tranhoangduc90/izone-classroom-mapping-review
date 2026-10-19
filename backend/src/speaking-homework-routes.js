@@ -9,6 +9,7 @@ import { createSpeakingClassroomCopies } from './speaking-classroom-copies.js';
 import { createSpeakingCatalog } from './speaking-catalog.js';
 import { createSpeakingLegacyBridge } from './speaking-legacy-bridge.js';
 import { createIndependentSource } from './speaking-independent-source.js';
+import { createLegacySpeakingTeacherProgress } from './speaking-legacy-teacher-progress.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -56,7 +57,7 @@ const membershipSnapshot = z.object({ sourceCourseId: z.literal(5), snapshotComp
 });
 const part = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
 const checkRequest = identity.extend({ part, url: z.string().trim().url().max(500) }).strict();
-const finishRequest = identity.extend({ voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
+const finishRequest = identity.extend({ manualSubmit: z.literal(true).optional(), voiceConfirmedParts: z.array(part).max(2).default([]) }).strict();
 const checkResult = z.object({
   checkJobId: z.string().uuid(),
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
@@ -257,6 +258,20 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   router.use('/internal', workerAuth(workerSecret));
   const independentSource = createIndependentSource({ pool,workerSecret,
     independentBase:process.env.SPEAKING_INDEPENDENT_API_URL||'http://speaking67-independent-api:4338/api/speaking-homework-independent' });
+  const legacyTeacher=createLegacySpeakingTeacherProgress({pool,source:independentSource});
+  router.get('/internal/independent/teacher-progress/entry',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(assignmentOpen.omit({classCode:true}),req.query,res);if(!input)return;
+    res.set('Cache-Control','private, no-store');res.json({ok:true,...await legacyTeacher.entry(input,req.reviewer)});
+  }));
+  router.get('/internal/independent/teacher-progress/students',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(directOpen,req.query,res);if(!input)return;
+    res.set('Cache-Control','private, no-store');res.json({ok:true,...await legacyTeacher.students(input,req.reviewer)});
+  }));
+  router.get('/internal/independent/teacher-progress/units/:id',authenticate,asyncRoute(async(req,res)=>{
+    const parsed=z.string().uuid().safeParse(req.params.id);
+    if(!parsed.success)return res.status(400).json({ok:false,error:'INVALID_INPUT'});
+    res.set('Cache-Control','private, no-store');res.json({ok:true,...await legacyTeacher.detail({id:parsed.data},req.reviewer)});
+  }));
   router.post('/internal/independent/context', asyncRoute(async (req, res) => {
     const input = parseOrReply(directOpen.partial({ classCode:true }).extend({
       studentRef:z.string().uuid().optional() }).strict(),req.body,res);

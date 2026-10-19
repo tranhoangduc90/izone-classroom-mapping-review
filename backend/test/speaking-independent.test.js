@@ -10,6 +10,8 @@ import { runSpeakingCheckJob } from '../src/speaking-check-worker.js';
 import { runPracticeCheckJob,runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
 import { createIndependentDocuments,validateIndependentDocument } from '../src/speaking-independent-documents.js';
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
+import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
+import { performance } from 'node:perf_hooks';
 
 const ref='60000000-0000-4000-8000-000000000006';
 const code='67-speaking-ly_do_hanh_vi';
@@ -18,6 +20,51 @@ const url=n=>`https://chatgpt.com/share/${String(n).padStart(32,'0')}`;
 const fingerprint=n=>String(n).repeat(64).slice(0,64);
 const template={assignmentCode:code,title:'Lesson 6',lesson:6,requiredPracticeCount:2,doctorEnabled:true,digest:'a'.repeat(64),
   parts:[{part_key:'benefit_harm',min_questions:0},{part_key:'reason_action',min_questions:2},{part_key:'freestyle',min_questions:1}]};
+
+test('100 HV gửi link trước nộp và 10 cửa sổ GV trên PostgreSQL native, không gọi AI',
+ {skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:60000},async t=>{
+ const f=await fixture({start:false});t.after(()=>f.db.close());
+ const members=Array.from({length:100},(_,i)=>({student_ref:exercise(100+i),name:'Học viên tải giả '+i}));
+ const original=f.source.context;
+ f.source.context=async input=>{
+  const data=await original({...input,studentRef:undefined});
+  const member=input.studentRef?members.find(row=>row.student_ref===input.studentRef):null;
+  assert.ok(!input.studentRef||member);
+  return {...data,students:members,selectionStudents:members,member};
+ };
+ f.source.legacyProgress=async()=>({students:[]});
+ const teacher=createSpeakingTeacherProgress({pool:f.pool,source:f.source}),app=createIndependentApp({service:f.service,teacher});
+ const prefix='/api/speaking-homework-independent',timing={student:[],teacher:[]};
+ const post=async(index,path,input)=>{const start=performance.now();const response=await request(app).post(prefix+path)
+  .set('X-Forwarded-For','192.0.2.'+(1+Math.floor(index/25))).send(input);timing.student.push(performance.now()-start);
+  assert.ok([200,202].includes(response.status),path+': '+response.body.error);return response.body;};
+ const get=async path=>{const start=performance.now();const response=await request(app).get(prefix+path).set('Cookie','teacher=allowed')
+  .set('X-Forwarded-For','192.0.2.10');timing.teacher.push(performance.now()-start);assert.equal(response.status,200,response.body.error);return response.body;};
+ const work=members.map(async(member,index)=>{
+  const response=await post(index,'/session/start-selected',{assignmentCode:code,classCode:'IC2304',studentRef:member.student_ref,identityConfirmed:true});
+  const identity={accessToken:response.session.accessToken,studentRef:member.student_ref};
+  await post(index,'/checks/request',{...identity,part:'benefit_harm',url:url(1000+index)});
+  await post(index,'/open',identity);
+ });
+ const readers=Array.from({length:10},async()=>{for(let i=0;i<3;i++){
+  const list=await get('/teacher/progress/students?'+new URLSearchParams({assignmentCode:code,classCode:'IC2304'}));
+  assert.equal(list.students.length,100);const unit=list.students.flatMap(student=>student.units)[0];
+  if(unit)await get('/teacher/progress/units/'+unit.id);
+ }});
+ const settled=await Promise.allSettled([...work,...readers]);assert.deepEqual(settled.filter(row=>row.status==='rejected').map(row=>String(row.reason)),[]);
+ const final=await get('/teacher/progress/students?'+new URLSearchParams({assignmentCode:code,classCode:'IC2304'}));
+ assert.equal(final.students.filter(row=>row.units.some(unit=>unit.sentLinks===1)).length,100);
+ for(const [index,member]of members.entries()){
+  const unit=final.students.find(row=>row.studentRef===member.student_ref).units[0];
+  const detail=await teacher.detail({id:unit.id},{cookie:'teacher=allowed'});
+  assert.equal(detail.links[0].url,url(1000+index));
+ }
+ assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+ assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.job')).rows[0].n,0);
+ const stat=rows=>{const sorted=[...rows].sort((a,b)=>a-b);return{requests:rows.length,p95ms:Math.round(sorted[Math.ceil(sorted.length*.95)-1]),maxMs:Math.round(sorted.at(-1))};};
+ t.diagnostic(JSON.stringify({environment:'local-HTTP-native-PostgreSQL-pool8',students:100,teacherReaders:10,
+  simulatedNetworks:4,studentsPerNetwork:25,student:stat(timing.student),teacher:stat(timing.teacher),externalCalls:0,audioDownloads:0}));
+});
 
 async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   let db,nativePool;
