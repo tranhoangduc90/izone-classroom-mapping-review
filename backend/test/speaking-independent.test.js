@@ -148,6 +148,8 @@ test('Luồng năm link, 0/2/1, biên nhận retry, quyền giáo viên và bài
       assert.equal(j.kind,'check_practice');
       await f.service.workerService(j).completePracticeCheck({fingerprint:fingerprint(slot+3),questionCount:1,qualityPassed:true,matchedExerciseId:exercise(slot)});
     }
+    // Các phần đã công nhận lại cũng tự nộp được, không giả thao tác bấm thủ công.
+    await f.pool.query("UPDATE speaking_independent.link SET evidence=coalesce(evidence,'{}'::jsonb)||'{\"recoveryId\":\"fixture-auto-submit\"}'::jsonb WHERE work_unit_id=$1",[f.session.workUnitId]);
     const r=await f.service.finish(f.identity);assert.ok(r.id);
     assert.equal((await f.service.finish(f.identity)).id,r.id);
     const restored=await f.service.open(f.identity);assert.equal(restored.status,'submitted');assert.equal(restored.receipt.id,r.id);
@@ -307,9 +309,17 @@ if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) test('PostgreSQL nhiều conne
       let j=await f.service.claimJob();if(j.kind==='analyze_practice'){await f.service.failJob(j,'FIXTURE_ANALYSIS');j=await f.service.claimJob();}
       await f.service.workerService(j).completePracticeCheck({qualityPassed:true,fingerprint:fingerprint(slot+3),questionCount:1,matchedExerciseId:exercise(slot)});
     }
-    const receipts=await Promise.all(Array.from({length:12},()=>f.service.finish(f.identity)));
+    // Mười hai HTTP request thật cùng phiên, gồm bài đã công nhận lại và đích Docs giả.
+    await f.pool.query("UPDATE speaking_independent.link SET evidence='{\"recoveryId\":\"fixture-native\"}'::jsonb WHERE work_unit_id=$1",[f.session.workUnitId]);
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id='fixture-only-doc',tab_id='t.0' WHERE id=$1",[f.session.workUnitId]);
+    const app=createIndependentApp({service:f.service});
+    const responses=await Promise.all(Array.from({length:12},()=>request(app).post('/api/speaking-homework-independent/finish').send(f.identity)));
+    for (const response of responses) assert.equal(response.status,200,JSON.stringify(response.body));
+    const receipts=responses.map(response=>response.body.receipt);
     assert.equal(new Set(receipts.map(r=>r.id)).size,1);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,1);
+    const jobs=await f.pool.query("SELECT kind,count(*)::int AS n FROM speaking_independent.job WHERE kind IN ('analyze_homework','write_doc') GROUP BY kind ORDER BY kind");
+    assert.deepEqual(jobs.rows,[{kind:'analyze_homework',n:1},{kind:'write_doc',n:1}]);
   }finally{await f.db.close();}
 });
 
