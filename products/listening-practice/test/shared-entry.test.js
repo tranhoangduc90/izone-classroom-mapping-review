@@ -58,3 +58,30 @@ test('Lượt chung Listening: lưu/nộp/retry, hai người và link Homework 
  await f.service.configureSharedLesson({code,contentVersion:f.bundle.version,status:'closed'});await assert.rejects(f.service.sharedLogin({code,classId:'1124',studentRef:f.studentRef}),e=>e.code==='LESSON_NOT_OPEN');
  assert.equal((await f.service.read({token:a.token})).attempts[0].finalScore,2);
 });
+
+test('Homework giao sau: chờ quá tám lần rồi tự ghi đúng Docs, không vượt thứ tự hoặc tạo lại lượt',async t=>{
+ const f=await setup(t),login=await f.service.sharedLogin({code,classId:'1124',studentRef:f.studentRef});
+ await f.service.begin({token:login.token,owner:'waiting-homework',operationId:uuid()});
+ await f.pool.query('DELETE FROM listening_practice.doc_job WHERE binding_id<>$1',[login.identity.bindingId]);
+ const documentId='future_homework_listening_fixture_1234';
+ const hw=homeworkDocsFixture({code,documentId,tabId:'t.0',cta:CTA,entryUrl:'https://page.test/?lesson='+code,prefix:'Listening thực chiến (tự động): ',heading:STATUS_HEADING});
+ let available=false,writes=0;
+ const worker=createDocsWorker({pool:f.pool,docs:{read:hw.docs.read,write:async(...args)=>{writes++;return hw.docs.write(...args);}},resolveSharedHomework:async binding=>{
+  if(!available){const error=new Error('Chưa giao Homework');error.code='HOMEWORK_NOT_FOUND';throw error;}
+  return{classId:binding.class_id,studentRef:binding.student_ref,code,documentId,tabId:'t.0'};
+ }});
+ for(let i=0;i<10;i++){
+  await f.pool.query("UPDATE listening_practice.doc_job SET available_at=now() WHERE binding_id=$1",[login.identity.bindingId]);
+  assert.equal(await worker.once(),true);
+  const job=(await f.pool.query('SELECT * FROM listening_practice.doc_job WHERE binding_id=$1',[login.identity.bindingId])).rows[0];
+  assert.equal(job.status,'pending');assert.equal(job.error_code,'HOMEWORK_NOT_FOUND');
+  if(i>=8)assert.ok(new Date(job.available_at)-Date.now()>240000);assert.equal(writes,0);
+ }
+ available=true;
+ await f.pool.query("UPDATE listening_practice.doc_job SET available_at=now() WHERE binding_id=$1",[login.identity.bindingId]);
+ assert.equal(await worker.once(),true);assert.equal(await worker.once(),false);
+ const job=(await f.pool.query('SELECT * FROM listening_practice.doc_job WHERE binding_id=$1',[login.identity.bindingId])).rows[0];
+ assert.equal(job.status,'verified');assert.equal(job.attempts,11);assert.equal(writes,1);
+ const state=await f.service.read({token:login.token});assert.equal(state.attempts.length,1);assert.equal(state.identity.documentId,documentId);
+ assert.ok(hw.value.startsWith(hw.manual+'\nListening thực chiến (tự động): '));
+});

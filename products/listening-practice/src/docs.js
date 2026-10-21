@@ -131,8 +131,12 @@ export function createDocsWorker({pool,docs,resolveSharedHomework}){
     else await db.query('UPDATE listening_practice.binding SET last_doc_sequence=$2,last_doc_text=$3,last_doc_link=$4 WHERE id=$1 AND last_doc_sequence<$2',[b.id,job.sequence,job.payload.text,job.payload.link]);
    });
   }catch(error){
-   const code=error.code||'DOC_RETRY',blocked=/^DOC_(IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_)/.test(code)||job.attempts>=8;
-   await pool.query("UPDATE listening_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing'",[job.id,job.leaseId,blocked?'blocked':'pending',code,Math.min(300,2**job.attempts)]);
+   // Homework có thể được giao sau ngày mở bài: chờ năm phút rồi đối chiếu lại đúng người/mã.
+   // Việc chưa có đích không phải lỗi ghi; giữ thứ tự và bài làm, không hết lượt thử sau tám lần.
+   const code=error.code||'DOC_RETRY',waitingForHomework=code==='HOMEWORK_NOT_FOUND';
+   const blocked=!waitingForHomework&&(/^DOC_(IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_)/.test(code)||job.attempts>=8);
+   const delay=waitingForHomework?300:Math.min(300,2**Math.min(job.attempts,9));
+   await pool.query("UPDATE listening_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing'",[job.id,job.leaseId,blocked?'blocked':'pending',code,delay]);
   }
   return true;
  }

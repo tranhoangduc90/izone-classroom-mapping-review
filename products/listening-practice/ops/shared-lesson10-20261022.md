@@ -12,6 +12,8 @@ Bắt đầu/reset/nộp lưu bài và job Docs cùng giao dịch. Worker Listen
 
 Chỉ quản lý dòng “Listening thực chiến (tự động): …”; giữ chữ/link tay. Link GV lấy đúng submission của lượt đã nộp. Worker đọc lại sau ghi; job pending không phải Docs đã cập nhật hoặc Classroom đã nộp.
 
+Khi chưa giao Homework đúng mã, job giữ pending và đối chiếu lại mỗi 5 phút, kể cả sau tám lần. Khi bản sao cá nhân xuất hiện, worker ghi tuần tự các sự kiện đã lưu mà không tạo lại lượt hoặc đổi điểm. Đích trùng/sai/người khác vẫn dừng để kiểm. Ca hồi quy đã tái hiện blocked ở lần thứ tám trước sửa; sau sửa chờ mười lần rồi ghi và đọc lại đúng Docs ở lần thứ mười một.
+
 ## Đưa gói lên hệ thống thật khi đã có quyền
 
 1. Đọc runtime/container đang chạy, backup image/cấu hình/DB Listening và hash audio Buổi 8. Giữ overlay đăng nhập/giảng viên/cache hiện hành.
