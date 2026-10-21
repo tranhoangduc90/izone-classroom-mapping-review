@@ -1,6 +1,6 @@
 # Listening Buổi 10 — link chung và Homework riêng
 
-Trạng thái gói: đã kiểm cục bộ; chưa tích hợp Git, phát hành VPS hoặc ghi Google Docs thật.
+Trạng thái gói: đã kiểm cục bộ, danh tính Mapping thật và hai Google Docs demo thật với hồ sơ IC2304; chưa tích hợp Git hoặc phát hành VPS/Pages. Chưa ghi Homework đang giao hoặc tạo bài Classroom.
 
 Bài mới là Inclusive design, Cambridge 20 Test 3 Part 4, Q31–40. Mã riêng `67-practice-listening_c20_t3_p4_inclusive_design`; phiên bản nội dung `c20-t3-p4-inclusive-design-20261022-v2`. Đề, key, transcript, audio và review giữ trong gói riêng tư ngoài Git.
 
@@ -26,5 +26,15 @@ Chỉ quản lý dòng “Listening thực chiến (tự động): …”; giữ
 Đóng link chung mới trước khi quay lại frontend/image đã backup; giữ schema bổ sung, bài làm và hàng Docs. Không restore dump đè bài phát sinh. Bài Buổi 8 giữ file/hash/binding/version cũ.
 
 Backend dùng SQL/PGlite cục bộ và fixture Google/roster để kiểm, không phải kết quả Google thật. Bản ứng viên không import runtime/DB Reading; các đoạn mã link chung được kế thừa từ nguồn Reading ghim `67ecdf99c034746f0261535388392c2a91473652`, rồi chuyển sang namespace Listening và kiểm lại.
+
+## Kiểm thêm bằng nguồn thật ngày 22/10
+
+Theo lựa chọn của Đức, chưa giao Homework mới; chỉ tạo hai Docs demo riêng và giữ nguyên Homework đang dùng. Đã đối chiếu Mapping thật cho 15 hồ sơ hợp lệ của IC2304; hồ sơ còn lại ở trạng thái bảo lưu nên nguồn nhận diện trả missing và nguồn chủ Homework trả 403. Không tự sửa trạng thái học viên. Đã đọc đúng bốn Docs Homework Lesson 8/9 của hai hồ sơ theo Google user/submission/bản sao.
+
+Browser cô lập chạy mã Buổi 10 với Mapping thật, API/SQL trên máy và adapter đích demo được chỉ định rõ. Đã kiểm tự nhớ/tự vào/Đổi người/hai tab; worker ghi và đọc lại 6 sự kiện trên hai Google Docs demo. Chữ/link nhập tay giữ nguyên, link GV đúng submission trong SQL local, retry nền không nhân dòng. Adapter demo không chứng minh tự tìm Homework Lesson 10 từ Classroom; đích đó vẫn chưa tồn tại.
+
+Đã chạy trọn audio 486,322 giây ở 1× và hai phút rà rồi tự thu trên shared v2. Mười clip của v2 đã thực phát và tự dừng; đã kiểm đổi câu/đóng popup dừng đoạn cũ. Môi trường headless không chuyển trang sang hidden khi đổi tab, nên nhánh visibility thực tế vẫn chưa kiểm chứng. Không gọi đó là lỗi đã xác minh hoặc là đã đạt. Phiên GV dùng fixture để xem nháp/kết quả; chưa đăng nhập Google GV thật.
+
+Kho bằng chứng riêng: `E:/Codex-Data/artifacts/listening-inclusive-design-20261022/real-students/`. Chỉ mục `REAL-CHECK.md`; không đưa danh tính, UUID, Doc ID, token, ảnh hoặc đề/key vào Git. Frontend đã sửa thông báo để phân biệt hồ sơ không đối chiếu được với trình duyệt chặn lưu; có regression RED/GREEN, 32 ca nhận diện và 35 unit liên quan đạt.
 
 Audio 486,322 giây đã chạy trọn 1×, hai phút rà và tự thu; mười clip đã phát và tự dừng bằng player thật. Đây là kiểm kỹ thuật; chưa nghe duyệt trực tiếp bằng tai. Hai điểm nguồn Q32 được chỉnh trong bản web: giữ “problems” sau ô trống, key một từ “cognitive” và xác định đúng là tính từ. Docs nguồn không bị sửa.
