@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import {authoredLesson,validateAuthoredContent,gradeAuthored} from './authored-content.js';
 
 export const CODE='67-practice-listening_mcq_flowchart';
 export const PRODUCT='PRODUCT-LISTENING-PRACTICE-K67';
@@ -15,6 +16,7 @@ export class ListeningError extends Error {
 export const fail=(code,message,status)=>{throw new ListeningError(code,message,status);};
 export const questionIds=Array.from({length:10},(_,i)=>String(i+21));
 const answer=z.string().max(80);
+export const timingFor=(code=CODE)=>authoredLesson(code)||{code,audioMs:AUDIO_MS,reviewMs:REVIEW_MS,totalMs:TOTAL_MS,questionIds};
 export const snapshotSchema=z.object({
  answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>questionIds.includes(n))),
  flags:z.array(z.number().int().min(21).max(30)).max(10),notes:z.string().max(10000),
@@ -28,10 +30,14 @@ export const snapshotSchema=z.object({
  phase:z.enum(['listening','review']),audioPosition:z.number().min(0).max(AUDIO_MS/1000),
  sequence:z.number().int().nonnegative(),activeMs:z.number().int().nonnegative()
 }).strict();
-export const emptyDraft=()=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
- phase:'listening',audioPosition:0,activeQuestion:21,tab:'mcq',mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
-export function validateSnapshot(input){const parsed=snapshotSchema.safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
+export const emptyDraft=(code=CODE)=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
+ phase:'listening',audioPosition:0,activeQuestion:+timingFor(code).questionIds[0],tab:authoredLesson(code)?.groups[0].kind||'mcq',mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
+export function validateSnapshot(input,code=CODE){
+ const l=authoredLesson(code),ids=l?.questionIds;
+ const schema=l?snapshotSchema.extend({answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>ids.includes(n))),flags:z.array(z.number().int().refine(n=>ids.includes(String(n)))).max(ids.length),activeQuestion:z.number().int().refine(n=>ids.includes(String(n))),tab:z.enum([...new Set(l.groups.map(g=>g.kind))]),highlighted:z.array(z.enum(l.paragraphs)).max(l.paragraphs.length),audioPosition:z.number().min(0).max(l.audioMs/1000)}):snapshotSchema;
+ const parsed=schema.safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
 export function validateContent(bundle){
+ if(bundle?.definition?.authored){try{return validateAuthoredContent(bundle);}catch(e){fail('CONTENT_INVALID',e.message,400);}}
  if(bundle?.code!==CODE||bundle.totalMs!==TOTAL_MS||!bundle.version||!bundle.definition||!bundle.key||!bundle.explanations?.entries)
   fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
  if(Object.keys(bundle.key).join(',')!==questionIds.join(',')||Object.keys(bundle.explanations.entries).join(',')!==questionIds.join(','))
@@ -41,7 +47,8 @@ export function validateContent(bundle){
  return bundle;
 }
 export const normalize=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
-export function grade(answers,key){
+export function grade(answers,key,code=CODE,definition){
+ if(authoredLesson(code))return gradeAuthored(answers,key,definition);
  const rows=questionIds.map(n=>{
   const value=normalize(answers[n]);
   return{number:+n,answer:answers[n]||'',expected:key[n],state:!value?'blank':key[n].map(normalize).includes(value)?'correct':'incorrect'};
@@ -64,7 +71,7 @@ export function checkLease(a,lease){
  if(!a.lease||a.lease.id!==lease?.id||a.lease.tokenHash!==hash(lease?.token||''))fail('LEASE_LOST','Bài đã chuyển sang phiên khác. Nhấn Tiếp tục để mở tại đây.');
 }
 export function checkpoint(a,input,lease,clock,{recovery=false}={}){
- checkLease(a,lease);const draft=validateSnapshot(input);
+ checkLease(a,lease);const timing=timingFor(a.code),draft=validateSnapshot(input,a.code);
  if(draft.sequence<a.draft.sequence)fail('STALE_DRAFT','Nháp này cũ hơn bản đã lưu. Hãy tải lại bài.');
  const old={...a.draft,activeMs:0},next={...draft,activeMs:0};
  if(draft.sequence===a.draft.sequence&&canonical(old)!==canonical(next))fail('STALE_DRAFT','Nháp cùng phiên bản có nội dung khác nhau.');
@@ -76,22 +83,23 @@ export function checkpoint(a,input,lease,clock,{recovery=false}={}){
  if(increase>0)a.lease.awaitingPlayback=false;
  // Thời gian máy chủ giới hạn tiến độ audio; không nhận tua hoặc chuyển rà bài sớm.
  const used=a.usedMs+increase;
- if(draft.audioPosition>(Math.min(used,AUDIO_MS)+1000)/1000)fail('AUDIO_POSITION_INVALID','Vị trí nghe vượt thời gian đã xác nhận.',400);
+ if(draft.audioPosition>(Math.min(used,timing.audioMs)+1000)/1000)fail('AUDIO_POSITION_INVALID','Vị trí nghe vượt thời gian đã xác nhận.',400);
  if(draft.audioPosition+0.3<(a.draft.audioPosition||0))fail('AUDIO_REWIND_DENIED','Không tua lại trong lượt đang làm.',400);
  if(a.phase!=='review'&&draft.phase==='review'){
-  if(used<AUDIO_MS-1000||draft.audioPosition<AUDIO_MS/1000-0.3)fail('AUDIO_NOT_FINISHED','Audio chưa kết thúc.',400);
-  a.phase='review';a.usedMs=AUDIO_MS;
+  if(used<timing.audioMs-1000||draft.audioPosition<timing.audioMs/1000-0.3)fail('AUDIO_NOT_FINISHED','Audio chưa kết thúc.',400);
+  a.phase='review';a.usedMs=timing.audioMs;
  }else{
   if(a.phase==='review'&&draft.phase!=='review')fail('AUDIO_REPLAY_DENIED','Lượt này đã chuyển sang rà bài.',400);
-  a.usedMs=Math.min(a.phase==='review'?TOTAL_MS:AUDIO_MS-1,used);
+  a.usedMs=Math.min(a.phase==='review'?timing.totalMs:timing.audioMs-1,used);
  }
- draft.audioPosition=Math.min(AUDIO_MS/1000,draft.audioPosition);
- if(a.phase==='review')draft.audioPosition=AUDIO_MS/1000;
+ draft.audioPosition=Math.min(timing.audioMs/1000,draft.audioPosition);
+ if(a.phase==='review')draft.audioPosition=timing.audioMs/1000;
  a.lease.acceptedActiveMs=a.usedMs-a.lease.baselineMs;
  a.lease.lastSeen=clock;a.draft=draft;
  return a;
 }
 export function publicAttempt(a){
+ const timing=timingFor(a.code);
  const copy=structuredClone(a);delete copy.lease;
- return{...copy,...copy.draft,leaseId:a.lease?.id,phase:a.phase||'listening',reviewRemainingMs:a.phase==='review'?Math.max(0,TOTAL_MS-a.usedMs):REVIEW_MS,remainingMs:Math.max(0,TOTAL_MS-a.usedMs)};
+ return{...copy,...copy.draft,leaseId:a.lease?.id,phase:a.phase||'listening',reviewRemainingMs:a.phase==='review'?Math.max(0,timing.totalMs-a.usedMs):timing.reviewMs,remainingMs:Math.max(0,timing.totalMs-a.usedMs)};
 }

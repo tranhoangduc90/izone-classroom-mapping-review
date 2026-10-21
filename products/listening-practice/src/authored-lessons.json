@@ -1,0 +1,47 @@
+[
+  {
+    "lesson": 10,
+    "title": "Inclusive design",
+    "book": 20,
+    "test": 3,
+    "part": 4,
+    "sourceLabel": "Cambridge 20 · Test 3 · Part 4",
+    "subtitle": "Questions 31–40 · Note Completion",
+    "preparationSteps": [
+      "Đọc lướt các chỗ trống cần điền đáp án. Khoanh tròn giới hạn từ cần điền.",
+      "Đoán nhanh loại từ cần điền: danh từ, động từ, tính từ hay trạng từ; xác định dạng từ như tên quốc gia, tên người, con số.",
+      "Xác định những từ khóa trong câu chứa chỗ trống cần điền.",
+      "Nghe và lựa chọn đáp án."
+    ],
+    "code": "67-practice-listening_c20_t3_p4_inclusive_design",
+    "groups": [
+      {
+        "id": "definition",
+        "kind": "completion",
+        "label": "Definition",
+        "start": 31,
+        "end": 32
+      },
+      {
+        "id": "examples",
+        "kind": "completion",
+        "label": "Examples of inclusive design",
+        "start": 33,
+        "end": 36
+      },
+      {
+        "id": "impact",
+        "kind": "completion",
+        "label": "Impact of non-inclusive designs",
+        "start": 37,
+        "end": 40
+      }
+    ],
+    "paragraphs": [
+      "A"
+    ],
+    "audioMs": 486322,
+    "reviewMs": 120000,
+    "totalMs": 606322
+  }
+]

@@ -11,6 +11,8 @@ import {createDocsAdapter,createDocsWorker} from './docs.js';
 import {createOwnerVerifier,createOwnerResolver} from './owner.js';
 import {createCtaRegistrar} from './cta-registration.js';
 import {loadReview} from './review.js';
+import {loadMediaCatalog} from './media-catalog.js';
+import {createSharedHomeworkResolver} from './shared-homework.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -32,9 +34,11 @@ const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.LISTE
 const verifier=new OAuth2Client(c.LISTENING_GOOGLE_CLIENT_ID);
 const audioHash=crypto.createHash('sha256').update(await readFile(c.LISTENING_AUDIO_FILE)).digest('hex');
 const review=await loadReview(c.LISTENING_REVIEW_FILE,audioHash);
-const app=createApp({pool,service,registerCta,review,audioFile:c.LISTENING_AUDIO_FILE,audioHash,origins:c.origins,googleClientId:c.LISTENING_GOOGLE_CLIENT_ID,adminKey:c.LISTENING_ADMIN_KEY,
+const mediaCatalog=await loadMediaCatalog(c.LISTENING_MEDIA_CATALOG);
+const app=createApp({pool,service,registerCta,review,mediaCatalog,audioFile:c.LISTENING_AUDIO_FILE,audioHash,origins:c.origins,googleClientId:c.LISTENING_GOOGLE_CLIENT_ID,adminKey:c.LISTENING_ADMIN_KEY,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.LISTENING_GOOGLE_CLIENT_ID})).getPayload()});
-const worker=createDocsWorker({pool,docs});
+const resolveSharedHomework=createSharedHomeworkResolver({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY,auth,docs});
+const worker=createDocsWorker({pool,docs,resolveSharedHomework});
 let stopping=false;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
 const workerDone=workerLoop();

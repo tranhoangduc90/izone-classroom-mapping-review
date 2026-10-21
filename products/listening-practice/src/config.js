@@ -12,6 +12,7 @@ export function readConfig(env=process.env){
   LISTENING_DOCS_CLIENT_ID:z.string().optional(),LISTENING_DOCS_REFRESH_TOKEN:z.string().optional(),LISTENING_DOCS_CLIENT_SECRET:z.string().optional(),
   LISTENING_AUDIO_FILE:z.string().min(1),
   LISTENING_REVIEW_FILE:z.string().min(1).optional(),
+  LISTENING_MEDIA_CATALOG:z.string().min(1).optional(),
   GOOGLE_APPLICATION_CREDENTIALS:z.string().optional()
  });
  const c=schema.parse(env);c.origins=c.LISTENING_ALLOWED_ORIGINS.split(',').map(v=>new URL(v.trim()).origin);

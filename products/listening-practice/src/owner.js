@@ -36,7 +36,20 @@ export function createOwnerVerifier({url,key,auth,docs,fetcher=fetch,clock=Date.
   if(submission.id!==input.submissionId||submission.courseId!==input.courseId||submission.courseWorkId!==input.courseWorkId||submission.userId!==source.googleUserId||files.length!==1)
    fail('DOCUMENT_OWNER_MISMATCH','Bản Docs không thuộc bài Classroom của đúng học viên.',403);
   const document=await docs.read(input.documentId);
-  planDocWrite(document,{document_id:input.documentId,tab_id:input.tabId,last_doc_text:''},{kind:'cta',payload:{url:'https://example.invalid/listening-owner-check'}});
-  return{sourceRevision,courseId:input.courseId,courseWorkId:input.courseWorkId,submissionId:input.submissionId,googleUserId:source.googleUserId,documentId:input.documentId,tabId:input.tabId,code:CODE,verifiedAt:new Date(clock()).toISOString()};
+  planDocWrite(document,{document_id:input.documentId,tab_id:input.tabId,code:input.code||CODE,last_doc_text:''},{kind:'cta',payload:{url:'https://example.invalid/listening-owner-check'}});
+  return{sourceRevision,courseId:input.courseId,courseWorkId:input.courseWorkId,submissionId:input.submissionId,googleUserId:source.googleUserId,documentId:input.documentId,tabId:input.tabId,code:input.code||CODE,verifiedAt:new Date(clock()).toISOString()};
  };
+}
+
+// Đọc mapping đã duyệt bằng UUID và lớp; dùng chung cho link cá nhân và tìm Homework từ link chung.
+export async function readOwnerSource({url,key,fetcher=fetch,clock=Date.now},input){
+ const schema=z.object({apiVersion:z.literal(1),classId:z.string(),studentRef:z.uuid(),courseId:z.string().min(1),googleUserId:z.string().min(1),capturedAt:z.iso.datetime(),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+ let response;
+ try{response=await fetcher(`${url.replace(/\/$/,'')}/v1/owner?classId=${encodeURIComponent(input.classId)}&studentRef=${encodeURIComponent(input.studentRef)}`,{headers:{'x-listening-owner-key':key},signal:AbortSignal.timeout(5000)});}catch{fail('OWNER_SOURCE_UNAVAILABLE','Chưa đối chiếu được chủ bài.',503);}
+ if(!response.ok)fail('OWNER_SOURCE_UNAVAILABLE','Mapping chủ bài chưa hợp lệ hoặc nguồn chưa sẵn sàng.',503);
+ const parsed=schema.safeParse(await response.json());if(!parsed.success)fail('OWNER_SOURCE_INVALID','Nguồn mapping trả sai cấu trúc.',503);
+ const source=parsed.data,{capturedAt,sourceRevision,...payload}=source,age=clock()-Date.parse(capturedAt);
+ if(age < -5000||age>120000||hash(JSON.stringify(payload))!==sourceRevision||source.classId!==input.classId||source.studentRef!==input.studentRef)
+  fail('OWNER_MISMATCH','Lớp, UUID và nguồn Classroom không khớp.',403);
+ return source;
 }
