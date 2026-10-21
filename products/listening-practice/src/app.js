@@ -7,9 +7,10 @@ import {ListeningError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
 import {matchingReview} from './review.js';
+import {lessonFor} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,teacherCookiePath='/listening-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api'}){
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
@@ -25,10 +26,12 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
  // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
- const withReview=(result,path)=>matchingReview(review,result)?{...result,review,reviewAudioUrl:path}:result;
+ const mediaFor=hash=>mediaCatalog[hash]||(hash===audioHash?{audioFile,review}:null);
+ const withReview=(result,path)=>{const review=mediaFor(result.definition?.audio?.sha256)?.review;return matchingReview(review,result)?{...result,review,reviewAudioUrl:path}:result;};
  const sendReviewAudio=(result,res)=>{
-  if(!matchingReview(review,result)||!audioFile||review.audioSha256!==audioHash)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
-  res.set('Cache-Control','private, no-store');res.type('audio/mpeg');res.sendFile(audioFile);
+  const media=mediaFor(result.definition?.audio?.sha256),review=media?.review,audioFile=media?.audioFile;
+  if(!matchingReview(review,result)||!audioFile)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
+  res.set('Cache-Control','private, no-store');res.sendFile(audioFile);
  };
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
  const session=z.object({attemptId:z.uuid()});
@@ -44,10 +47,21 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.get('/api/health',wrap(async(req,res)=>{await pool.query('SELECT 1');res.json({product:'PRODUCT-LISTENING-PRACTICE-K67',ready:true});}));
  app.get('/api/audio/:attemptId',wrap(async(req,res)=>{
   const access=await service.audioAccess({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
-  if(!audioFile||access.sha256!==audioHash)throw new ListeningError('AUDIO_UNAVAILABLE','Audio chưa sẵn sàng.',503);
-  res.set('Cache-Control','private, no-store');res.type('audio/mpeg');res.sendFile(audioFile);
+  const file=mediaFor(access.sha256)?.audioFile;
+  if(!file)throw new ListeningError('AUDIO_UNAVAILABLE','Audio chưa sẵn sàng.',503);
+  res.set('Cache-Control','private, no-store');res.sendFile(file);
  }));
  app.get('/api/config',(req,res)=>res.json({googleClientId}));
+ app.get('/api/library/:lessonId',wrap(async(req,res)=>{
+  res.set('Cache-Control','no-store');res.json(await service.lessonCatalog({code:lessonFor(req.params.lessonId).code}));
+ }));
+ app.get('/api/library/:lessonId/classes/:classId',wrap(async(req,res)=>{
+  res.set('Cache-Control','no-store');res.json(await service.lessonRoster({code:lessonFor(req.params.lessonId).code,classId:z.string().regex(/^-?\d{1,19}$/).parse(req.params.classId)}));
+ }));
+ app.post('/api/shared-login',wrap(async(req,res)=>{
+  const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
+  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:lessonFor(input.code).code}));
+ }));
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
   res.json(await service[action]({...input,token:token(req)}));
@@ -103,10 +117,11 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
    classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80)}).parse(req.body);
   res.json(await registerCta(input));
  }));
+ app.post('/api/admin/shared-lesson',wrap(async(req,res)=>res.json(await service.configureSharedLesson(z.object({code:z.string().min(1).max(100),contentVersion:z.string().min(1).max(80),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/assignment',wrap(async(req,res)=>res.json(await service.configureAssignment(z.object({assignmentId:z.uuid(),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/retry-docs',wrap(async(req,res)=>res.json(await service.retryDocJob(z.object({jobId:z.uuid()}).strict().parse(req.body)))));
  app.post('/api/admin/register',wrap(async(req,res)=>{
-  const input=z.object({classId:z.string().min(1).max(30),classCode:z.string().min(1).max(80),studentRef:z.uuid(),documentId:z.string().regex(/^[\w-]{20,150}$/),tabId:z.string().regex(/^[\w.-]{1,100}$/),contentVersion:z.string().min(1).max(80),entryToken:z.string().regex(/^[\w-]{43}$/),courseId:z.string().min(1),courseWorkId:z.string().min(1),submissionId:z.string().min(1)}).strict().parse(req.body);
+  const input=z.object({code:z.string().min(1).max(100).optional(),classId:z.string().min(1).max(30),classCode:z.string().min(1).max(80),studentRef:z.uuid(),documentId:z.string().regex(/^[\w-]{20,150}$/),tabId:z.string().regex(/^[\w.-]{1,100}$/),contentVersion:z.string().min(1).max(80),entryToken:z.string().regex(/^[\w-]{43}$/),courseId:z.string().min(1),courseWorkId:z.string().min(1),submissionId:z.string().min(1)}).strict().parse(req.body);
   res.json(await service.register(input));
  }));
  if(staticRoot)app.use(express.static(staticRoot,{index:'index.html',dotfiles:'deny'}));

@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 // File hỏng làm dừng khởi động; nội dung bài làm và các quyền vẫn do dịch vụ gốc quyết định.
 export function validateReview(value,audioHash){
  const fail=()=>{throw new Error('Invalid Listening review data or audio version');};
- if(!value||value.audioSha256!==audioHash||!value.contentVersion||value.audioDurationMs!==459207)fail();
+ if(!value||value.audioSha256!==audioHash||!value.contentVersion||!Number.isInteger(value.audioDurationMs)||value.audioDurationMs<=0)fail();
  if(!Array.isArray(value.words)||!value.words.length||!Array.isArray(value.segments)||!value.segments.length)fail();
  const range=(start,end)=>Number.isInteger(start)&&Number.isInteger(end)&&start>=0&&end>start&&end<=value.words.length;
  for(const word of value.words){
@@ -20,7 +20,9 @@ export function validateReview(value,audioHash){
    if(!Array.isArray(part.paragraphs)||part.paragraphs.some(p=>!Array.isArray(p.runs)||p.runs.some(r=>typeof r.text!=='string')))fail();
   }
  };
- for(let n=21;n<=30;n++){
+ const ids=value.questionIds||Array.from({length:10},(_,i)=>String(i+21));
+ if(!Array.isArray(ids)||!ids.length||new Set(ids.map(String)).size!==ids.length)fail();
+ for(const n of ids){
   const question=value.questions?.[n];
   if(!question?.replay?.length||!question.optionReplay||typeof question.optionReplay!=='object')fail();
   validateReplay(question.replay);
