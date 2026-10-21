@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export const explanationSlugs = new Set(['term-test-1', 'mini-test-lesson-5']);
+export const explanationSlugs = new Set(['term-test-1', 'term-test-2', 'mini-test-lesson-5']);
 export const explanationAttemptSql = `SELECT
   attempt.test_slug, attempt.definition_version, attempt.combined_result,
   attempt.listening_answers, attempt.reading_answers,

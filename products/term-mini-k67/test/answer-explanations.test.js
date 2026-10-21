@@ -61,6 +61,14 @@ test('lời giải chỉ mở sau đủ kỹ năng, đúng lượt, đúng ngu�
   assert.equal((await get(tokens['mini-test-lesson-5:lr'])).status, 200);
   assert.equal((await get(tokens['term-test-1:lr_only'])).status, 200);
   assert.equal((await get(tokens['mini-test-lesson-5:started'])).status, 404);
+  assert.equal((await get(tokens['term-test-2:complete'])).status, 200);
+  assert.equal((await get(tokens['term-test-2:lr_only'])).status, 200);
+  for (const state of ['started', 'lr']) assert.equal((await get(tokens[`term-test-2:${state}`])).status, 404);
+  const term2file = path.join(root, 'term-test-2', 'explanations.json');
+  const term2 = JSON.parse(await fs.readFile(term2file, 'utf8'));
+  await fs.writeFile(term2file, JSON.stringify({ ...term2, definitionVersion: 2 }));
+  assert.equal((await get(tokens['term-test-2:complete'])).status, 409);
+  await fs.unlink(term2file);
   assert.equal((await get(tokens['term-test-2:complete'])).status, 404);
   const file = path.join(root, 'term-test-1', 'explanations.json');
   const original = JSON.parse(await fs.readFile(file, 'utf8'));
