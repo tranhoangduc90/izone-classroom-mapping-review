@@ -1,6 +1,8 @@
 # Listening Buổi 10 — link chung và Homework riêng
 
-Trạng thái gói: đã kiểm cục bộ, danh tính Mapping thật và hai Google Docs demo thật với hồ sơ IC2304; chưa tích hợp Git hoặc phát hành VPS/Pages. Chưa ghi Homework đang giao hoặc tạo bài Classroom.
+Trạng thái ngày 22/10/2026: đã phát hành VPS Listening và GitHub Pages theo quyền Đức cấp, mở link chung cho các lớp có trong nguồn quyền hiện hành. Không tạo/giao bài Classroom hoặc ghi Homework đang dùng. Kiểm chính thức với hai hồ sơ thật IC2304 đạt 15/15 ca đăng nhập/ghi nhớ/hai tab; không bắt đầu lượt làm của học viên.
+
+URL chính thức: https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/?lesson=67-practice-listening_c20_t3_p4_inclusive_design
 
 Bài mới là Inclusive design, Cambridge 20 Test 3 Part 4, Q31–40. Mã riêng `67-practice-listening_c20_t3_p4_inclusive_design`; phiên bản nội dung `c20-t3-p4-inclusive-design-20261022-v2`. Đề, key, transcript, audio và review giữ trong gói riêng tư ngoài Git.
 
@@ -24,6 +26,12 @@ Khi chưa giao Homework đúng mã, job giữ pending và đối chiếu lại m
 6. Đối chiếu Homework thật trước nối CTA hoặc chạy bù. Khi kiểm ngày 22/10/2026, IC2304 chưa có Homework Lesson 10; không tạo Classroom hoặc ghi Buổi 9 để thay thế. Workflow CTA legacy chỉ hỗ trợ mã đã phát hành: không coi catalog app là bằng chứng workflow đã hỗ trợ mã mới.
 
 ## Quay lại và giới hạn
+
+Bản phát hành: backend runtime commit `6c09c1aa7e0c1ed473251fa02330daf77ca61c7b` (PR #80); Pages merge `38139c372f2b5b56f8f54f3a56f689228dba6e21` (PR #180). Image `izone-listening-practice67:inclusive-6c09c1aa7e0c`, digest `sha256:46efba09b550da0952bff799f56b3c451e0f9d51688a2358b8a48b5067604f02`. Snapshot riêng `/opt/listening-practice67/backup/inclusive-20261022-6c09c1aa7e0c`; có dump DB, cấu hình và image cũ.
+
+Đường công khai Nginx dùng cổng host `18818` → container `8818`. Compose lưu trước phát hành từng lệch cổng; đã sửa Compose theo runtime thật và giữ mount catalog riêng. Không reload Nginx. Không chép đè compose sau khi giải nén source. Khi quay lại, dùng `runtime-rollback.compose.yml` trong backup cùng `.env` trước phát hành, không dùng Compose cũ có cổng `8818` ở host. Giữ schema/bài làm mới. Container nguồn quyền, Reading, Term và Mapping không đổi.
+
+Kiểm backend 45/45; canary PostgreSQL riêng đạt cho cả bài cũ và mới, không gọi Google. Readback thật: hash audio cũ/mới và bundle khớp; hai binding đăng nhập mới, không có work/job Buổi 10; 49 job cũ vẫn verified, số work/job toàn kho giữ nguyên. Docs demo là bằng chứng ghi thật trước phát hành; Homework Buổi 10 chưa tồn tại nên chưa có readback Docs Buổi 10 trên Classroom.
 
 Đóng link chung mới trước khi quay lại frontend/image đã backup; giữ schema bổ sung, bài làm và hàng Docs. Không restore dump đè bài phát sinh. Bài Buổi 8 giữ file/hash/binding/version cũ.
 
