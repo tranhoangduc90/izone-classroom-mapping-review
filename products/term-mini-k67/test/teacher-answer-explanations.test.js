@@ -17,11 +17,11 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const studentRef = '11111111-1111-4111-8111-111111111111';
 const otherRef = '22222222-2222-4222-8222-222222222222';
 const completedAt = '2026-08-25T14:22:10.284374+00:00';
-test('giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn kết quả, không lộ token hoặc ghi điểm', async t => {
+for (const slug of ['mini-test-lesson-5', 'term-test-2']) test(`${slug}: giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn kết quả, không lộ token hoặc ghi điểm`, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'k67-teacher-explanations-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const definitions = { listening: { questions: [{ number: 11, accepted: ['A'] }] }, reading: { questions: [{ number: 14, accepted: ['v'] }] } };
-  const definition = { test_slug: 'mini-test-lesson-5', definition_version: 1,
+  const definition = { test_slug: slug, definition_version: 1,
     listening_definition: definitions.listening, reading_definition: definitions.reading };
   const grade = answer => ({ listening: { details: [{ number: 11, studentAnswer: answer, correctAnswer: 'A', result: 'incorrect' }] },
     reading: { details: [{ number: 14, studentAnswer: 'v', correctAnswer: 'v', result: 'correct' }] } });
@@ -48,7 +48,7 @@ test('giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn 
   const app = createApp({ pool, syncErpGrades: async () => { syncCalls++; throw Error('Không ghi điểm'); },
     config: { nodeEnv: 'test', authMode: 'legacy', legacyReviewToken: 'teacher-fixture-only',
       allowedOrigins: new Set(['https://tranhoangduc90.github.io']), trustProxyHops: 0, termTestAssetDir: root } });
-  const url = (ref = studentRef, extra = '') => `/api/term-tests/teacher/explanations?class=ic2238&test=mini-test-lesson-5&student=${ref}${extra}`;
+  const url = (ref = studentRef, extra = '') => `/api/term-tests/teacher/explanations?class=ic2238&test=${slug}&student=${ref}${extra}`;
   const get = (link = url()) => request(app).get(link).set('x-review-token', 'teacher-fixture-only');
   assert.equal((await request(app).get(url())).status, 401); assert.equal(calls.length, 0);
   for (const link of [url('invalid'), url(studentRef, '&completedAt=bad'), url().replace('ic2238', '%3Cscript%3E')]) {
@@ -75,7 +75,7 @@ test('giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn 
   await fs.writeFile(source, JSON.stringify({ ...bundle, definitionVersion: 2 }));
   assert.equal((await get()).status, 409);
   await fs.unlink(source); assert.equal((await get()).status, 404);
-  assert.equal((await get(url().replace('mini-test-lesson-5', 'term-test-2'))).status, 404);
+  assert.equal((await get(url().replace(slug, 'substitute-test-1'))).status, 400);
   row = null; assert.equal((await get()).status, 404);
   assert.equal(syncCalls, 0);
 });
