@@ -36,7 +36,11 @@ Kho bằng chứng riêng máy Đức: `E:/Codex-Data/lop-demo-cac-khoa-20261020
 
 ## Tiếp tục vận hành và giới hạn
 
-Frontend đã nhập main/phát hành. Gói module backend này nằm ở branch task để giữ source và bằng chứng; trạng thái commit/push của backend phải đọc lại, không suy từ production thành đã nhập main. Giữ checkout main đang bẩn; không reset/stash để đồng bộ.
+Frontend đã nhập main/phát hành qua Pages PR [151](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/151), [152](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/152), [153](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/153), [154](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/154), [155](https://github.com/tranhoangduc90/izone-ai-team-pages/pull/155). Bố cục cuối theo yêu cầu Đức: **khối demo ở cuối dashboard K56, sau Xem kết quả**; mã demo vẫn là lựa chọn đầu bộ chọn lớp khi đăng nhập. Mốc Pages cuối của task là `1d8e86154b542a160142b9513626d0b3a6732182`, run `39406008636` thành công; các PR mới hơn của task khác không thuộc gói này.
+
+Lượt lưu Git ngày 21/10 chỉ tích hợp module đã phát hành và hồ sơ này; không gọi deploy, sửa workflow hoặc tạo/xóa bài. Source gói nằm ở thư mục `ops/releases` để giữ chính xác bản overlay đang dùng trên image demo; không suy toàn backend main tương đương image production. Giữ checkout main đang bẩn; không reset/stash để đồng bộ.
+
+Các nhóm Pages lịch sử trong phạm vi: 55 ca ở bản phục hồi; 67 ca khi thêm lối vào dashboard; 17 ca liên quan ở bản đổi vị trí khối demo. Không cộng các nhóm chạy trùng thành tổng mới. Bản Mini giấy đã được sửa nhận lớp demo từ link và reset cổng demo xóa đúng nháp cục bộ cùng người/bài. Kiểm public 12 đường vào đủ 10 tên, 25 asset khớp trước sửa dashboard; sau đổi vị trí đã mở lại đúng URL IC2370 trên desktop/mobile, lớp thật giữ nguyên và khối demo cuối trang. Bằng chứng riêng có `native-final-v3.tap`, `dashboard-final.tap`, `dashboard-bottom.tap`, `dashboard-priority-readback.json` và ảnh `dashboard56-bottom-*.png`.
 
 Chưa kiểm tài khoản Google giảng viên thật, không nghe hết audio bằng tai hoặc đợi hết toàn thời lượng thi. Hai canary AI là Term 1; không dùng chúng để tuyên bố đã chấm lại toàn bộ Term 2/Mini hoặc đã kiểm mọi rubric. Đề, thời lượng và bộ chấm hiện hành được giữ.
 

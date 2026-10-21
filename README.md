@@ -20,6 +20,13 @@ Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom 
 
 ## Trạng thái triển khai
 
+**Lớp demo Term/Mini 56 và 67 (20/10/2026, lưu Git 21/10):** đọc
+[hồ sơ phục hồi, module demo và đường lui](backend/ops/releases/demo-k56-20261020/README.md).
+Mỗi khóa có 10 học viên giả, reset riêng từng người; lưu/chấm AI thật nhưng không gửi
+điểm sang Portal. Demo K56 xem Writing ngay sau khi AI chấm; lớp thật giữ thời gian
+công bố hiện hành. Khối demo ở cuối dashboard K56. Gói Git này lưu bản vá đã phát hành,
+không dựng lại API hoặc tự triển khai production khi nhập main.
+
 - PostgreSQL `mapping_db` lưu mapping, snapshot thành viên lớp và lịch sử thay đổi từ ERP/Classroom/Lark.
 - Workflow đồng bộ đọc toàn bộ lớp trong view Lark đã chọn, quét mỗi ngày lúc 04:30 và vẫn có nút chạy thủ công.
 - API độc lập hoạt động tại `/mapping-api/`, dùng Google Sign-In và phân quyền theo lớp trong PostgreSQL.
