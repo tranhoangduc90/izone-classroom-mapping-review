@@ -8,6 +8,7 @@ import express from 'express';
 import request from 'supertest';
 import { PGlite } from '@electric-sql/pglite';
 import { mountAnswerExplanations } from '../src/answer-explanations.js';
+import { publicAudioCatalog } from '../src/public-audio-catalog.js';
 
 // DB và file đề đều là dữ liệu giả trên máy local. Kiểm HTTP thật cùng điều kiện SQL,
 // gồm lượt chưa nộp đủ, đổi phiên bản và lỗi file; không gửi điểm hoặc gọi AI/Portal.
@@ -66,6 +67,22 @@ test('lời giải chỉ mở sau đủ kỹ năng, đúng lượt, đúng ngu�
   for (const state of ['started', 'lr']) assert.equal((await get(tokens[`term-test-2:${state}`])).status, 404);
   const term2file = path.join(root, 'term-test-2', 'explanations.json');
   const term2 = JSON.parse(await fs.readFile(term2file, 'utf8'));
+  const audio = structuredClone(term2);
+  audio.reviewAudio = { sha256: publicAudioCatalog['term-test-2'].sha256,
+    asset: 'term-test-2-96kbps-656921dc9888dcfe.mp3', durationMs: 1843200 };
+  audio.skills.listening.entries[11].replay = [{ id: 'q11-correct', startMs: 800000, endMs: 820000 }];
+  await fs.writeFile(term2file, JSON.stringify(audio));
+  assert.equal((await get(tokens['term-test-2:complete'])).status, 200);
+  for (const mutate of [b => { b.reviewAudio.sha256 = 'changed'; }, b => { b.reviewAudio.asset = '../other.mp3'; },
+    b => { b.reviewAudio.durationMs = -1; }, b => { delete b.reviewAudio; },
+    b => { b.skills.listening.entries[11].replay[0].startMs = -1; },
+    b => { b.skills.listening.entries[11].replay[0].endMs = 1843201; },
+    b => { b.skills.listening.entries[11].replay[0].endMs = 1; },
+    b => { b.skills.listening.entries[11].replay = []; }, b => { b.skills.listening.entries[11].replay = [null]; }]) {
+    const bad = structuredClone(audio); mutate(bad); await fs.writeFile(term2file, JSON.stringify(bad));
+    const response = await get(tokens['term-test-2:complete']);
+    assert.equal(response.status, 409); assert.equal(response.body.error, 'EXPLANATION_AUDIO_MISMATCH');
+  }
   await fs.writeFile(term2file, JSON.stringify({ ...term2, definitionVersion: 2 }));
   assert.equal((await get(tokens['term-test-2:complete'])).status, 409);
   await fs.unlink(term2file);

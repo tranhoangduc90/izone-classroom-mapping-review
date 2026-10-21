@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { publicAudioCatalog } from './public-audio-catalog.js';
 
 export const explanationSlugs = new Set(['term-test-1', 'term-test-2', 'mini-test-lesson-5']);
 export const explanationAttemptSql = `SELECT
@@ -49,6 +50,19 @@ export async function loadAnswerExplanations(assetDir, row) {
             || !entry?.evidence?.length || !entry?.blocks?.length;
         })) {
       throw new Error('EXPLANATION_CONTENT_INCOMPLETE');
+    }
+  }
+  // Mốc nghe chỉ dùng đúng MP3 đã phát hành; không nhận URL/file hoặc khoảng thời gian lạ.
+  const listening = Object.values(bundle.skills.listening.entries);
+  if (bundle.reviewAudio || listening.some(e => e.replay?.length)) {
+    const audio = bundle.reviewAudio, catalog = publicAudioCatalog[row.test_slug];
+    const validClip = c => c && typeof c.id === 'string' && Number.isInteger(c.startMs) && Number.isInteger(c.endMs)
+      && c.startMs >= 0 && c.endMs > c.startMs && c.endMs <= audio.durationMs;
+    if (!audio || !catalog || audio.sha256 !== catalog.sha256
+      || audio.asset !== path.basename(new URL(catalog.url).pathname)
+      || !Number.isInteger(audio.durationMs) || audio.durationMs <= 0 || audio.durationMs > 7200000
+      || listening.some(e => !e.replay?.length || [...e.replay, ...e.blocks.flatMap(b => b.replay || [])].some(c => !validClip(c)))) {
+      throw new Error('EXPLANATION_AUDIO_MISMATCH');
     }
   }
   return { bundle, content: parsedContent, result: row.combined_result,

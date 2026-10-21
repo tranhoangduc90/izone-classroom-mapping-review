@@ -4,9 +4,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
-const [documentFile, definitionFile, contentFile, outputDir] = process.argv.slice(2);
+const [documentFile, definitionFile, contentFile, outputDir, replayFile] = process.argv.slice(2);
 if (!outputDir) throw Error('Cần Docs JSON, định nghĩa JSON, content JSON và thư mục xuất riêng tư.');
-const document = JSON.parse(await fs.readFile(documentFile, 'utf8'));
+const documentRaw = await fs.readFile(documentFile, 'utf8');
+const document = JSON.parse(documentRaw);
 const definitions = JSON.parse(await fs.readFile(definitionFile, 'utf8'));
 const definition = definitions.find(d => d.slug === 'term-test-2');
 assert.ok(definition, 'Không có định nghĩa Term 2');
@@ -97,6 +98,23 @@ for (const [skill, title] of [['listening', 'Giải thích'], ['reading', 'Giả
     audit.push({ skill, number: q.number, answers, declared, sourceRow: source.row, evidenceParagraphs: primary.length });
   }
   bundle.skills[skill] = { entries };
+}
+// Mốc đã rà là đầu vào riêng, ghim vào đúng Docs/đề/key để không gắn mốc sang bản khác.
+if (replayFile) {
+  const review = JSON.parse(await fs.readFile(replayFile, 'utf8'));
+  assert.equal(review.schemaVersion, 1);
+  assert.equal(review.sourceDocumentSha256, hash(documentRaw));
+  assert.equal(review.contentSha256, bundle.contentSha256);
+  assert.equal(review.definitionSha256, bundle.definitionSha256);
+  assert.equal(Object.keys(review.questions).length, 40);
+  bundle.reviewAudio = review.audio;
+  for (const [n, entry] of Object.entries(bundle.skills.listening.entries)) {
+    const source = review.questions[n];
+    assert.ok(source?.replay?.length, 'Thiếu mốc nghe câu ' + n);
+    assert.equal(source.blocks.length, entry.blocks.length);
+    entry.replay = source.replay;
+    entry.blocks.forEach((block, i) => { block.replay = source.blocks[i]; });
+  }
 }
 await fs.mkdir(outputDir, { recursive: true });
 await fs.writeFile(path.join(outputDir, 'explanations.json'), JSON.stringify(bundle, null, 2) + '\n');
