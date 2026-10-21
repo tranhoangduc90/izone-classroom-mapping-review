@@ -167,6 +167,36 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   if(!selected)fail('CLASS_NOT_ELIGIBLE','Lớp chưa có danh sách học viên hợp lệ.',403);
   return{...selected,students:(await context.roster(classId)).map(s=>({id:s.studentRef,name:s.name}))};
  }
+ // Giữ cùng binding của link chung dù học viên đã làm trước khi giao Homework.
+ // Chỉ gắn đích Classroom đã đối chiếu; không đổi document_id sang chế độ link cá nhân.
+ async function registerSharedHomework(input){
+  const selected=(await context.classes()).find(c=>c.id===input.classId&&c.classCode===input.classCode);
+  if(!selected||!await context.student(input.classId,input.studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc lớp đã đối chiếu.',403);
+  const proof=await verifyBinding(input);
+  return transaction(pool,async db=>{
+   const content=await sharedContent(db,input.code,{lock:true});
+   const assignment=(await db.query(`INSERT INTO listening_practice.assignment(id,class_id,class_code,content_id,status)
+    VALUES($1,$2,$3,$4,'open') ON CONFLICT(class_id,content_id) DO UPDATE SET class_code=EXCLUDED.class_code
+    WHERE listening_practice.assignment.source_course_id IS NULL AND listening_practice.assignment.status='open' RETURNING id`,[uuid(),input.classId,input.classCode,content.id])).rows[0];
+   if(!assignment)fail('ASSIGNMENT_CONFLICT','Bài đang dùng đường Homework riêng hoặc đã đóng.');
+   const bound=(await db.query(`INSERT INTO listening_practice.binding(id,assignment_id,student_ref,document_id,tab_id,entry_hash,owner_proof)
+    VALUES($1,$2,$3,NULL,NULL,$4,$5) ON CONFLICT(assignment_id,student_ref) DO UPDATE SET student_ref=EXCLUDED.student_ref
+    WHERE listening_practice.binding.document_id IS NULL AND listening_practice.binding.owner_proof->>'mode'='shared' RETURNING *`,[uuid(),assignment.id,input.studentRef,hash(secret()),{mode:'shared'}])).rows[0];
+   if(!bound)fail('DOCUMENT_BINDING_CONFLICT','Hồ sơ đã dùng link Homework cá nhân.');
+   const target={...proof,classId:input.classId,studentRef:input.studentRef,code:input.code,documentId:input.documentId,tabId:input.tabId,
+    courseId:input.courseId,courseWorkId:input.courseWorkId,submissionId:input.submissionId};
+   const old=bound.owner_proof.homework,keys=['classId','studentRef','code','documentId','tabId','courseId','courseWorkId','submissionId'];
+   if(old&&keys.some(k=>old[k]!==target[k]))fail('DOC_IDENTITY_MISMATCH','Hồ sơ đã gắn một Homework khác; giữ nguyên bài và đích cũ.');
+   const conflict=(await db.query("SELECT id FROM listening_practice.binding WHERE id<>$1 AND (document_id=$2 OR owner_proof->'homework'->>'documentId'=$2) LIMIT 1",[bound.id,input.documentId])).rows[0];
+   if(conflict)fail('DOC_IDENTITY_MISMATCH','Docs đã được gắn với hồ sơ khác.');
+   await db.query("UPDATE listening_practice.binding SET owner_proof=jsonb_set(owner_proof,'{homework}',$2::jsonb) WHERE id=$1",[bound.id,JSON.stringify(target)]);
+   const url=new URL(pageBase);url.searchParams.set('lesson',input.code);
+   await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),bound.id,{url:url.href}]);
+   const stored=(await db.query("SELECT payload FROM listening_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id])).rows[0];
+   if(stored?.payload.url!==url.href)fail('CTA_STORED_LINK_INVALID','Link chung đã lưu không khớp bài.');
+   return{bindingId:bound.id,assignmentId:assignment.id,entryUrl:url.href};
+  });
+ }
  async function sharedLogin({code,classId,studentRef}){
   const selected=(await context.classes()).find(c=>c.id===classId);
   if(!selected||!await context.student(classId,studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc danh sách hợp lệ của lớp đã chọn.',403);
@@ -270,6 +300,6 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   const row=(await pool.query("UPDATE listening_practice.doc_job SET status='pending',available_at=now(),attempts=0,lease_id=null,lease_until=null,error_code=null WHERE id=$1 AND status='blocked' RETURNING id",[jobId])).rows[0];
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);return{jobId,status:'pending'};
  }
- return{audioAccess,seedContent,register,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
+ return{audioAccess,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
   teacherProgress:createTeacherProgress({pool,context})};
 }
