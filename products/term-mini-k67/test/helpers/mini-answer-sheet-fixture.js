@@ -19,7 +19,10 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
     if(!['test_definition','term_test_attempt','term_test_exam_session','term_test_roster','term_test_temporary_student'].includes(name))await db.exec(sql);
   }
   // pg_dump khai khóa planning bằng ALTER sau CREATE; fixture cần cùng khóa để API ON CONFLICT chạy thật.
-  if(completeSchema)await db.exec('ALTER TABLE assessment.term_test_writing_planning ADD PRIMARY KEY(attempt_id,task_number);');
+  if(completeSchema) {
+    // Bản dump đặt khóa sau CREATE TABLE; giữ đúng khóa thật cho fixture chấm/Portal.
+    for (const [sql] of schema.matchAll(/ALTER TABLE ONLY assessment\.(term_test_writing_\w+|term_test_portal_sync_job)\n\s+ADD CONSTRAINT \w+ (?:PRIMARY KEY|UNIQUE) [\s\S]*?;/g)) await db.exec(sql);
+  }
   for(const [sql] of schema.matchAll(/^CREATE UNIQUE INDEX .*;$/gm))
     if(/ON assessment\.term_test_(attempt|exam_session) /.test(sql))await db.exec(sql);
   await db.exec(`CREATE TABLE mapping.classroom_course_mapping(erp_course_class_id bigint,erp_class_name_snapshot text);
