@@ -5,7 +5,9 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
   const items = definition.blocks.flatMap(block => block.items);
   const summaries = items.map(item => {
     const textSlots=item.graderType==='accepted_text_sequence'&&item.layoutType==='numbered_short_texts';
-    const objective = item.maxScore > 0 && (textSlots || item.graderType === 'exact_option'
+    // Câu điền từ có đáp án dùng kết quả máy chủ; câu chỉ đối chiếu vẫn không tính sai.
+    const scoredText=item.graderType==='accepted_text'&&item.interactionType==='short_text';
+    const objective = item.maxScore > 0 && (textSlots || scoredText || item.graderType === 'exact_option'
       && item.interactionType === 'single_choice');
     const counts = { roster: students.length, submitted:0, visible:0, hidden:0,
       unanswered:0, answered:0, graded:0, correct:0, incorrect:0, pending:0, manual:0, ungraded:0 };
