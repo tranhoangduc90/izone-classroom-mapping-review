@@ -7,6 +7,7 @@ import {authorizeLearningClassSql,authorizeLearningJourneyPlanAssignmentSql} fro
 import {validateAuthoringPayload,copyAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {previewFormImport} from './learning-form-import.js';
 import {createLearningFormPublishingService} from './learning-form-publishing.js';
+import {previewAiImport} from './learning-ai-import.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
@@ -127,6 +128,15 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
       }
       const copied=copyAuthoringPayload({definition:source.rows[0].public_definition,gradingKey:source.rows[0].private_definition});
       return create({classId,sessionNumber,definition:copied.definition,gradingKey:copied.gradingKey,operationId,sourceAssignmentId:assignmentId,reviewer});
+    },
+    async previewAiImport({id,text,expectedRevision,reviewer}) {
+      const row=await owned(pool,id,reviewer);
+      if(Number(row.revision)!==expectedRevision)throw error('DRAFT_STALE','Nháp đã đổi; đối chiếu trước khi nhập AI.');
+      if(row.status==='published')throw error('DRAFT_ALREADY_PUBLISHED','Tạo bản sao trước khi nhập thêm câu.');
+      const preview=await previewAiImport({text,definition:row.public_definition,gradingKey:row.private_definition});
+      const after=await owned(pool,id,reviewer);
+      if(after.revision!==row.revision||after.content_hash!==row.content_hash)throw error('DRAFT_STALE','Nháp đổi trong khi AI xử lý; chưa thêm câu, hãy xem trước lại.');
+      return {...preview,baseRevision:Number(row.revision)};
     },
     async previewImport({id,text,expectedRevision,reviewer}) {
       const row=await owned(pool,id,reviewer);

@@ -20,7 +20,7 @@ export async function refreshSubmissionDeadline(database, assignmentId) {
 }
 
 export async function readSubmissionWindow(database, assignmentId) {
-  const result = await database.query(`SELECT status, opens_at, closes_at,
+  const result = await database.query(`SELECT status, opens_at, closes_at, extension_closes_at, management_revision,
       auto_submission_threshold_at, auto_submission_closes_at, clock_timestamp() AS server_now,
       (SELECT count(DISTINCT student_ref) FROM learning.submission
         WHERE assignment_id = assignment.id AND completeness = 'complete') AS complete_students
@@ -38,15 +38,17 @@ export function submissionWindowFromRow(row) {
     const manualClosesAt = iso(row.closes_at);
     const autoClosesAt = iso(row.auto_submission_closes_at);
     const thresholdAt = iso(row.auto_submission_threshold_at);
+    const extensionClosesAt = iso(row.extension_closes_at);
     const candidates = [manualClosesAt, autoClosesAt].filter(Boolean).sort();
-    const effectiveClosesAt = candidates[0] || null;
+    const effectiveClosesAt = extensionClosesAt || candidates[0] || null;
     const reason = row.status !== 'published' ? 'assignment_closed'
       : row.opens_at && Date.parse(row.opens_at) > Date.parse(serverNow) ? 'not_open'
       : effectiveClosesAt && Date.parse(serverNow) >= Date.parse(effectiveClosesAt)
-        ? (effectiveClosesAt === autoClosesAt ? 'three_students_cutoff' : 'manual_cutoff') : null;
+        ? (extensionClosesAt ? 'extension_cutoff' : effectiveClosesAt === autoClosesAt ? 'three_students_cutoff' : 'manual_cutoff') : null;
     if (!serverNow || Boolean(thresholdAt) !== Boolean(autoClosesAt)) throw new Error('Mốc khóa không hợp lệ.');
     return { serverNow, completeStudents: Number(row.complete_students), thresholdAt,
-      autoClosesAt, manualClosesAt, effectiveClosesAt, canSubmit: reason === null, reason };
+      autoClosesAt, manualClosesAt, extensionClosesAt, managementRevision:Number(row.management_revision)||0,
+      effectiveClosesAt, canSubmit: reason === null, reason };
   } catch {
     return { canSubmit: false, reason: 'deadline_invalid' };
   }

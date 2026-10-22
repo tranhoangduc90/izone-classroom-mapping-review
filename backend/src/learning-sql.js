@@ -257,6 +257,7 @@ JOIN learning.form_version AS version
   AND version.definition_hash = attempt.definition_hash
 JOIN learning.form_grading_key AS grading ON grading.form_version_id = version.id
 WHERE attempt.attempt_token = $1::uuid
+  AND assignment.status IN ('published','closed')
 FOR UPDATE OF attempt;`;
 
 export const saveLearningDraftSql = `UPDATE learning.attempt
@@ -294,7 +295,7 @@ JOIN learning.attempt AS attempt ON attempt.id = submission.attempt_id
 JOIN learning.form_assignment AS assignment ON assignment.id = attempt.assignment_id
 JOIN learning.form_version AS version ON version.id = submission.form_version_id
 LEFT JOIN learning.grading_run AS run ON run.submission_id = submission.id
-WHERE attempt.attempt_token = $1::uuid;`;
+WHERE attempt.attempt_token = $1::uuid AND assignment.status IN ('published','closed');`;
 
 export const insertLearningSubmissionSql = `INSERT INTO learning.submission (
   id,

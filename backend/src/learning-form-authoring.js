@@ -1,12 +1,16 @@
-// Nhận definition/key của nháp: chỉ giữ các nhóm đã có trong sáu phiếu hiện hành.
+// Nhận definition/key của nháp; giữ nhóm hiện hành và Gạch chân từ khóa được Đức yêu cầu 22/10.
 // Copy tạo ID mới và giữ điều kiện/bố cục; validation báo vị trí cần sửa, không tự thêm loại bài/chấm AI.
 import crypto from 'node:crypto';
 import {parseFormDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {sha256,stableStringify} from './learning-domain.js';
 
 export const AUTHORING_TYPES=Object.freeze([
+  {code:'keyword_selection',label:'Gạch chân từ khóa'},
   {code:'reflection',label:'Câu trả lời mở / nhìn lại bài học'},
   {code:'mcq',label:'Chọn một phương án'},
+  {code:'multi',label:'Chọn nhiều đáp án'},
+  {code:'matching',label:'Nối cặp'},
+  {code:'short_answer',label:'Điền từ — đáp án chấp nhận'},
   {code:'dropdown',label:'Dropdown Matching Headings'},
   {code:'gapfill',label:'Điền từ trong câu / chuỗi lập luận'},
   {code:'numbered_short_texts',label:'Nhóm ô ngắn đánh số'},
@@ -26,6 +30,9 @@ const legacySentenceLines={
 
 export function authoringType(item) {
   const pair=item.interactionType+':'+item.layoutType;
+  if(pair==='multi_choice_group:multiple_choice_cards')return 'multi';
+  if(pair==='multi_choice_group:matching_pairs')return 'matching';
+  if(pair==='short_text:plain_prompt')return 'short_answer';
   if(pair==='long_text:plain_prompt') return 'reflection';
   if(pair==='single_choice:choice_cards') return 'mcq';
   if(pair==='single_choice:matching_heading_dropdown') return 'dropdown';
@@ -33,6 +40,7 @@ export function authoringType(item) {
   if(pair==='short_text:numbered_short_texts') return item.interactionConfig?.sentenceLines||legacySentenceLines[item.itemVersionId]
     ?'gapfill':'numbered_short_texts';
   if(pair==='multi_choice_group:speaking_issue_checklist') return 'speaking_checklist';
+  if(pair==='multi_choice_group:keyword_selection') return 'keyword_selection';
   if(['short_text:conditional_other_text','long_text:inline_option_text'].includes(pair)) return 'conditional_explanation';
   if(pair==='number_score:score_fraction') return 'self_reported_score';
   return null;
@@ -52,21 +60,34 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   const missing=[];
   for(const item of items) {
     const type=authoringType(item);
-    if(!type||!['none','exact_option'].includes(item.graderType)
-      ||(item.graderType==='exact_option'&&!['mcq','dropdown'].includes(type))) {
+    const allowed={none:AUTHORING_TYPES.map(t=>t.code),exact_option:['mcq','dropdown'],
+      exact_option_set:['multi'],exact_sequence:['matching'],accepted_text:['short_answer']};
+    if(!type||!allowed[item.graderType]?.includes(type)) {
       throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Câu '+item.position+' nằm ngoài các dạng Progress Log đang dùng.');
     }
     const key=gradingKey.items[item.itemVersionId];
-    if(item.graderType==='exact_option') {
+    if(type==='keyword_selection'&&(item.options.some(option=>/\s/u.test(option.label))
+      ||item.interactionConfig.maxSelections>Math.min(10,item.options.length))) {
+      throw new FormAuthoringError('DRAFT_KEYWORDS_INVALID','Câu '+item.position+': mỗi lựa chọn cần là một từ; số từ được chọn tối đa không vượt số từ của câu hoặc 10.');
+    }
+    if(item.graderType!=='none') {
       if(item.maxScore<=0) throw new FormAuthoringError('DRAFT_SCORE_INVALID','Câu chấm khách quan phải có điểm tối đa lớn hơn 0.');
       if(!key) missing.push(item.itemVersionId);
-      else if(key.graderType!=='exact_option'||!item.options.some(option=>option.id===key.expectedOptionId)) {
+      else if(key.graderType!==item.graderType
+        ||(item.graderType==='exact_option'&&!item.options.some(option=>option.id===key.expectedOptionId))
+        ||(['exact_option_set','exact_sequence'].includes(item.graderType)
+          &&(new Set(key.expectedOptionIds).size!==key.expectedOptionIds.length
+            ||key.expectedOptionIds.some(id=>!item.options.some(o=>o.id===id))
+            ||(item.graderType==='exact_option_set'&&key.expectedOptionIds.length>(item.interactionConfig.maxSelections||10))
+            ||(item.graderType==='exact_sequence'&&key.expectedOptionIds.length!==item.interactionConfig.matchingPrompts.length)))
+        ||(item.graderType==='accepted_text'&&key.accepted.some(value=>!value.trim()))) {
         throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Đáp án câu '+item.position+' không khớp phương án.');
       }
     } else if(key) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Câu không chấm không được có khóa chấm.');
   }
   for(const id of Object.keys(gradingKey.items)) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có đáp án tham chiếu câu không tồn tại.');
   for(const id of Object.keys(gradingKey.referenceAnswers||{})) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có đáp án tham khảo của câu không tồn tại.');
+  for(const id of Object.keys(gradingKey.explanations||{})) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có lời giải của câu không tồn tại.');
   if(requireAnswers&&missing.length) throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Còn '+missing.length+' câu cần chọn đáp án trước khi duyệt.');
   return {definition,gradingKey,missingAnswers:missing,contentHash:sha256(stableStringify({definition,gradingKey}))};
 }
@@ -90,5 +111,6 @@ export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) 
   }
   gradingKey.items=Object.fromEntries(Object.entries(gradingKey.items).map(([id,key])=>[ids.get(id),key]));
   if(gradingKey.referenceAnswers) gradingKey.referenceAnswers=Object.fromEntries(Object.entries(gradingKey.referenceAnswers).map(([id,value])=>[ids.get(id),value]));
+  if(gradingKey.explanations) gradingKey.explanations=Object.fromEntries(Object.entries(gradingKey.explanations).map(([id,value])=>[ids.get(id),value]));
   return validateAuthoringPayload({definition,gradingKey});
 }

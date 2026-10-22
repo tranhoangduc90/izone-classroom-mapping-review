@@ -121,6 +121,7 @@ function teacherLiveStudent(value) {
       items: asArray(gradingResult.items).map(item => {
         const safe = { ...item };
         delete safe.expectedAnswer;
+        delete safe.explanation;
         return safe;
       })
     } : null
@@ -240,10 +241,18 @@ function buildStudentCourseJourney(row) {
 }
 
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
-  testResultReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
+  testResultReader = null, portalTestReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
   const pendingPublicAssignments=new Map();
+  async function attachPortalTests(view,classId,studentRef=null){
+    if(!portalTestReader)return view;
+    try{const response=await portalTestReader({classId,studentRefs:studentRef?[studentRef]:view.students.map(s=>s.studentRef)});
+      const byStudent=new Map();for(const row of response.results){const list=byStudent.get(row.studentRef)||[];list.push(row.result);byStudent.set(row.studentRef,list);}
+      return studentRef?{...view,externalTests:byStudent.get(studentRef)||[],coverage:{...view.coverage,portalTests:response.coverage}}
+        :{...view,portalTestCoverage:response.coverage,students:view.students.map(s=>({...s,externalTests:byStudent.get(s.studentRef)||[]}))};
+    }catch{return studentRef?{...view,coverage:{...view.coverage,portalTests:'temporarily_unavailable'}}:{...view,portalTestCoverage:'temporarily_unavailable'};}
+  }
   async function attachComments(view,classId,studentRef=null) {
     if(!comments) return view;
     view={...view,journeyCommentsEnabled:true};
@@ -777,7 +786,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           }
         }
       }
-      return attachComments(await attachCurrentSchedule(journey,row.class_id),row.class_id,row.student_ref);
+      return attachComments(await attachPortalTests(await attachCurrentSchedule(journey,row.class_id),row.class_id,row.student_ref),row.class_id,row.student_ref);
     },
 
     // Link/tên được kiểm bằng cùng nguồn Journey; chỉ trả bài nộp của đúng lớp/người/buổi.
@@ -1291,13 +1300,13 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
             const results=await testResultReader.readClass({classId,studentRefs:overview.students.map(s=>s.studentRef),
               testSlugs:mapped.map(source=>source.testSlug)});
             const bySlug=new Map(mapped.map(source=>[source.testSlug,source.sessionNumber]));
-            return attachComments(await attachCurrentSchedule(buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
+            return attachComments(await attachPortalTests(await attachCurrentSchedule(buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
               currentRoster:roster.rows,rows:status.rows,testCoverage:'connected',
-              testResults:results.map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))}),classId),target.class_id);
+              testResults:results.map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))}),classId),classId),target.class_id);
           } catch { /* Nguồn Test lỗi không chặn xem dữ liệu Progress Log của lớp. */ }
         }
       }
-      return attachComments(await attachCurrentSchedule(overview,classId),target.class_id);
+      return attachComments(await attachPortalTests(await attachCurrentSchedule(overview,classId),classId),target.class_id);
     },
 
     async getCourseSessionDetail({classId,sessionNumber,studentRef,reviewer}) {

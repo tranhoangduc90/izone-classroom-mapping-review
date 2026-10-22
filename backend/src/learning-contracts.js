@@ -12,8 +12,10 @@ const interactionConfigSchema = z.object({
   max: z.number().int().min(1).max(10_000).optional(),
   step: z.number().positive().max(1_000).optional(),
   unit: z.string().trim().min(1).max(40).optional(),
-  responseCount: z.number().int().min(2).max(10).optional(),
-  responseLabels: z.array(z.string().trim().min(1).max(100)).min(2).max(10).optional(),
+  responseCount: z.number().int().min(1).max(10).optional(),
+  responseLabels: z.array(z.string().trim().min(1).max(100)).min(1).max(10).optional(),
+  hintText: z.string().trim().max(2000).optional(),
+  matchingPrompts: z.array(z.string().trim().min(1).max(300)).min(2).max(10).optional(),
   sentenceLines: z.array(z.object({
     title: z.string().trim().max(100).optional(),
     parts: z.array(z.string().max(500)).min(1).max(10)
@@ -39,6 +41,8 @@ export const graderTypeSchema = z.enum([
   'none',
   'accepted_text',
   'exact_option',
+  'exact_option_set',
+  'exact_sequence',
   'unordered_group_slot',
   'rubric_async'
 ]);
@@ -64,6 +68,17 @@ export const formItemSchema = z.object({
     .default('student_self_report'),
   releasePolicy: z.enum(['inherit', 'hidden', 'immediate', 'teacher_release']).default('inherit')
 }).strict().superRefine((item, context) => {
+  if (item.layoutType === 'matching_pairs' && (item.interactionType !== 'multi_choice_group'
+    || !item.interactionConfig.matchingPrompts || item.options.length !== item.interactionConfig.matchingPrompts.length)) {
+    context.addIssue({code:'custom',path:['interactionConfig'],message:'Nối cặp cần cùng số vế trái và phương án phải (2–10 cặp).'});
+  }
+  if (item.interactionConfig.matchingPrompts && item.layoutType !== 'matching_pairs') {
+    context.addIssue({code:'custom',path:['interactionConfig'],message:'Vế trái chỉ dùng cho Nối cặp.'});
+  }
+  if ((item.graderType === 'exact_option_set' && (item.interactionType !== 'multi_choice_group' || item.layoutType !== 'multiple_choice_cards'))
+    || (item.graderType === 'exact_sequence' && item.layoutType !== 'matching_pairs')) {
+    context.addIssue({code:'custom',path:['graderType'],message:'Khóa chấm không khớp dạng câu.'});
+  }
   const optionIds = item.options.map(option => option.id);
   if (new Set(optionIds).size !== optionIds.length) {
     context.addIssue({ code: 'custom', path: ['options'], message: 'Mã lựa chọn trong một câu không được trùng.' });
@@ -243,6 +258,8 @@ const normalizationSchema = z.object({
 }).strict();
 
 const privateItemKeySchema = z.discriminatedUnion('graderType', [
+  z.object({graderType:z.literal('exact_option_set'),expectedOptionIds:z.array(z.string().trim().min(1).max(80)).min(1).max(10)}).strict(),
+  z.object({graderType:z.literal('exact_sequence'),expectedOptionIds:z.array(z.string().trim().min(1).max(80)).min(2).max(10)}).strict(),
   z.object({
     graderType: z.literal('accepted_text'),
     accepted: z.array(z.string().max(300)).min(1).max(40),
@@ -270,6 +287,7 @@ export const formGradingKeyV1Schema = z.object({
   graderVersion: z.number().int().positive(),
   items: z.record(uuidSchema, privateItemKeySchema).default({}),
   groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({}),
+  explanations: z.record(uuidSchema,z.string().trim().min(1).max(2000)).optional(),
   referenceAnswers: z.record(uuidSchema, z.array(z.string().trim().min(1).max(300)).min(1).max(10)).optional()
 }).strict();
 
@@ -318,6 +336,7 @@ const resultItemSchema = z.object({
   scoreEarned: z.number().min(0),
   maxScore: z.number().min(0),
   expectedAnswer: responseValueSchema.nullable().optional()
+  ,explanation:z.string().max(2000).optional()
 }).strict();
 
 export const quizResultV1Schema = z.object({
