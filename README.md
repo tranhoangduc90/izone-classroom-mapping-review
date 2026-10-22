@@ -20,6 +20,8 @@ Trong view `Đã duyệt`, giảng viên có thể sửa tài khoản Classroom 
 
 ## Trạng thái triển khai
 
+**Term/Mini K56–K67 — nộp/phục hồi 23/10/2026:** đọc [runbook và chuẩn cho mọi lần sửa/tạo bài](backend/ops/releases/term-mini-submit-20261023/README.md). Sáu bài đã có đường đọc biên nhận riêng; giữ dữ liệu cũ, guard đúng kỹ năng và bản overlay K56. Git đã lưu gói phát hành; merge tài liệu không triển khai API lần nữa.
+
 **Lớp demo Term/Mini 56 và 67 (20/10/2026, lưu Git 21/10):** đọc
 [hồ sơ phục hồi, module demo và đường lui](backend/ops/releases/demo-k56-20261020/README.md).
 Mỗi khóa có 10 học viên giả, reset riêng từng người; lưu/chấm AI thật nhưng không gửi
