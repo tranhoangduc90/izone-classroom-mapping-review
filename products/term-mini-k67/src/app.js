@@ -1,4 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
+import { mountSubmissionStatus } from './submission-status.mjs';
+import { assertAudioOwner as assertSubmissionOwner } from './audio-owner.js';
 import crypto from "node:crypto";
 import { mountTermStudentIdentity } from './student-identity.js';
 import { mountDesignDemo } from "./design-demo.js";
@@ -492,6 +494,8 @@ export function createApp({
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
+
+  mountSubmissionStatus(app, { pool, limiter: testReadLimiter, assertOwner: assertSubmissionOwner });
 
   app.get('/api/term-tests/roster', testReadLimiter, requireContext, asyncRoute(async (req, res) => {
     const parsed = z.object({ class: classCodeSchema, test: testSlugSchema }).safeParse(req.query);

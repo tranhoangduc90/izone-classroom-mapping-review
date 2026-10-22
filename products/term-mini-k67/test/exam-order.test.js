@@ -301,7 +301,9 @@ test('Native: thời điểm bắt đầu ở sau khi lấy được khóa, họ
     await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['term-test-1:1293:900001']);
     const pending=post(`${base}/${skill==='reading'?'reading/start':'session/start'}`,{attemptToken:state.attemptToken}).then(r=>r);
     await new Promise(resolve=>setTimeout(resolve,500));
-    const unlocked=Date.now();await blocker.query('ROLLBACK');blocker.release();
+    // So cùng đồng hồ PostgreSQL; runner và DB có thể ở hai máy có độ lệch nhỏ.
+    const unlocked=Number((await blocker.query('SELECT extract(epoch FROM clock_timestamp())*1000 AS unlocked')).rows[0].unlocked);
+    await blocker.query('ROLLBACK');blocker.release();
     const r=await pending;assert.equal(r.status,200,JSON.stringify(r.body));
     assert.ok(Date.parse(r.body[skill+'StartedAt'])>=unlocked-5);
     assert.equal(Date.parse(r.body[skill+'DeadlineAt'])-Date.parse(r.body[skill+'StartedAt']),skill==='reading'?3600000:1855000);

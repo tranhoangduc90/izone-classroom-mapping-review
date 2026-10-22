@@ -13,25 +13,32 @@ import {listTermTestRosterSql} from '../src/sql.js';
 // Không có kết nối tới VPS, audio, Portal hoặc dữ liệu học viên thật.
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 for (const slug of ['term-test-1','term-test-2','mini-test-lesson-5'])
-test(`100 người ${slug} dùng chung lượt đọc roster, lượt sau đọc lại nguồn`, async () => {
+test(`100 người ${slug} dùng chung lượt đọc roster, lượt sau đọc lại nguồn`, {timeout:15000}, async t => {
   let rosterReads=0, fail=false;
+  let releaseBatch;let batchGate=new Promise(resolve=>releaseBatch=resolve);
   const app=createApp({config:{trustProxyHops:1,allowedOrigins:new Set(),authMode:'legacy',legacyReviewToken:'fixture'},
     pool:{query:async (sql,values)=>{
       if(sql.includes('SELECT captured_at'))return {rows:[{captured_at:new Date()}]};
       assert.equal(sql,listTermTestRosterSql);rosterReads++;
-      await pause(100);
+      if(batchGate)await batchGate;else await pause(100);
       if(fail)throw new Error('Lỗi nguồn giả');
       return {rows:[{test_slug:values[1],test_title:'Đề giả',definition_version:1,class_count:1,
         class_id:values[0],class_name:values[0],students:[{ref:values[0],name:'Người giả'}]}]};
     }},logger:{error(){},info(){}}});
+  // Một API đang nghe như production; không tạo 100 server tạm có thời điểm mở khác nhau.
+  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));const api=request(server);
   const url='/api/term-tests/roster?class=IC9900&test='+slug;
-  const batch=await Promise.all(Array.from({length:100},(_,i)=>request(app).get(url).set('X-Forwarded-For',`198.18.0.${1+Math.floor(i/30)}`)));
+  // Giữ truy vấn đầu tới khi đủ request đã vào server; không giả định Windows nhận đủ trong 100 ms.
+  let arrivals=0;server.on('request',req=>{if(req.url===url&&++arrivals===100)setImmediate(releaseBatch);});
+  const batch=await Promise.all(Array.from({length:100},(_,i)=>api.get(url).set('X-Forwarded-For',`198.18.0.${1+Math.floor(i/30)}`)));
+  batchGate=null;
   assert.ok(batch.every(r=>r.status===200));assert.equal(rosterReads,1);
-  const next=await request(app).get(url);assert.equal(next.status,200);assert.equal(rosterReads,2);
-  const [a,b]=await Promise.all(['IC9900','IC9901'].map(c=>request(app).get(url.replace('IC9900',c))));
+  const next=await api.get(url);assert.equal(next.status,200);assert.equal(rosterReads,2);
+  const [a,b]=await Promise.all(['IC9900','IC9901'].map(c=>api.get(url.replace('IC9900',c))));
   assert.equal(a.body.class.name,'IC9900');assert.equal(b.body.class.name,'IC9901');assert.equal(rosterReads,4);
-  fail=true;assert.equal((await request(app).get(url)).status,500);
-  fail=false;assert.equal((await request(app).get(url)).status,200);assert.equal(rosterReads,6);
+  fail=true;assert.equal((await api.get(url)).status,500);
+  fail=false;assert.equal((await api.get(url)).status,200);assert.equal(rosterReads,6);
 });
 test('Gộp kiểm nguồn đang chờ nhưng luôn kiểm tuổi, nguồn lỗi không mở quyền', async () => {
   let reads=0, now=Date.now(), captured=now, broken=false;
