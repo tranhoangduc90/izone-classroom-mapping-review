@@ -6,7 +6,7 @@ import {previewFormImport} from './learning-form-import.js';
 import {FormAuthoringError} from './learning-form-authoring.js';
 const fail=(code,message,status=400)=>new FormAuthoringError(code,message,[],status);
 const schema=z.object({requestId:z.string().uuid(),sourceHash:z.string(),questions:z.array(z.object({
- sourceQuote:z.string().min(1),type:z.enum(['reflection','mcq','dropdown','gapfill','speaking_checklist','keyword_selection','self_reported_score']),
+ sourceQuote:z.string().min(1),type:z.enum(['reflection','mcq','dropdown','gapfill','speaking_checklist','self_reported_score']),
  prompt:z.string().min(1),options:z.array(z.object({id:z.string().min(1).max(20),label:z.string().min(1)}).strict()).max(40).default([]),
  answer:z.string().default(''),answerQuote:z.string().default(''),skill:z.enum(['','listening','reading','speaking','writing']).default(''),
  before:z.string().default(''),after:z.string().default(''),total:z.preprocess(value=>value===''?undefined:value,z.number().int().min(1).max(10000).optional())
@@ -38,9 +38,6 @@ export function validateAiImportResult(raw,{text,requestId,sourceHash,definition
    if((q.before&&!q.sourceQuote.includes(q.before))||(q.after&&!q.sourceQuote.includes(q.after)))throw fail('AI_IMPORT_UNGROUNDED','Phần quanh ô trống không khớp nguồn.',502);
    config={responseCount:1,sentenceLines:[{parts:[q.before,q.after]}]};
   }
-  if(q.type==='keyword_selection'){
-   options=q.prompt.trim().split(/\s+/u).map((label,i)=>({id:'word-'+(i+1),label}));config={maxSelections:Math.min(2,options.length)};
-  }
   if(q.type==='speaking_checklist')config={maxSelections:Math.min(2,options.length)};
   if(q.type==='self_reported_score'){
    if(!q.total||!new RegExp('(?:/|trên\\s+)'+q.total+'(?:\\D|$)','iu').test(q.sourceQuote))throw fail('AI_IMPORT_TOTAL_UNVERIFIED','Mẫu số câu tự báo chưa có trong nguồn.',502);
@@ -66,10 +63,10 @@ export async function previewAiImport({text,definition,gradingKey,fetchImpl=fetc
   'Trả một JSON object không markdown: {requestId,sourceHash,questions:[{sourceQuote,type,prompt,options:[{id,label}],answer,answerQuote,skill,before,after,total}]}.',
   'requestId='+requestId+'; sourceHash='+sourceHash+'. Phải chép đúng hai mã này.',
   'Mỗi sourceQuote là nguyên đoạn duy nhất trong nguồn bao gồm đầy đủ câu và các phương án/key của riêng câu đó; các đoạn không chồng lặp. prompt và mọi option.label phải là đoạn nguyên văn nằm trong sourceQuote.',
-  'type chỉ một trong reflection,mcq,dropdown,gapfill,speaking_checklist,keyword_selection,self_reported_score. Không thể hiện được dạng bài thì để nguyên đoạn đó ngoài questions, không chuyển sai ý.',
+  'type chỉ một trong reflection,mcq,dropdown,gapfill,speaking_checklist,self_reported_score. Dạng gạch chân từ khóa đã bị gỡ; giữ nguyên đoạn đó ngoài questions. Không thể hiện được dạng bài thì để nguyên đoạn đó ngoài questions, không chuyển sai ý.',
   'mcq/dropdown chỉ lấy answer khi có dòng key tường minh như "Đáp án: B", "Answer: B" hoặc "Key: B"; answerQuote chép đúng dòng đó, answer đúng id lựa chọn. Không có key thì answer và answerQuote là chuỗi rỗng. Tuyệt đối không suy luận đáp án.',
   'gapfill chỉ hỗ trợ một ô mỗi câu trong lượt nhập này: before/after là nguyên văn hai phía ô trống, không chứa key. sourceQuote vẫn giữ nguyên. Không tự tách câu nhiều ô làm mất ngữ cảnh; để đoạn đó ngoài questions nếu chưa biểu diễn được.',
-  'keyword_selection: prompt là nguyên câu để chọn từ. self_reported_score: total chỉ lấy mẫu số được ghi rõ, không đoán. Bỏ hẳn trường total ở các dạng khác. skill không chắc thì chuỗi rỗng. Các trường chuỗi không dùng là chuỗi rỗng; options không dùng là []. Không thêm trường khác.',
+  'self_reported_score: total chỉ lấy mẫu số được ghi rõ, không đoán. Bỏ hẳn trường total ở các dạng khác. skill không chắc thì chuỗi rỗng. Các trường chuỗi không dùng là chuỗi rỗng; options không dùng là []. Không thêm trường khác.',
   'DỮ LIỆU NGUỒN:\n'+text
  ].join('\n\n');
  inFlight++;
