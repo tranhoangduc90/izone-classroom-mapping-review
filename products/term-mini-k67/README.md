@@ -1,5 +1,7 @@
 # Backend Term Test/Mini Test K67 riêng
 
+**Nộp/phục hồi 23/10/2026:** đọc [module canonical, parity và quy tắc giữ cho bài sau](../../backend/ops/releases/term-mini-submit-20261023/README.md) trước sửa API hoặc thêm test. `submission-status` chỉ đọc; Reading dùng token lượt, guard chủ audio chỉ áp Listening. Giữ bài/điểm/generation và Writing hiện hành; hồ sơ 17/10 dưới đây là mốc của chính phần đó.
+
 Gói này phục vụ thi, chấm và xem kết quả K67. Mã nghiệp vụ được ghim từ snapshot backend đang chạy; ứng dụng không khởi động Speaking, Progress Log hoặc Writing ngoài Term.
 
 **Bản hiện hành 17/10/2026:** đọc [Quy tắc bài trắng và phiếu dự phòng](BLANK_WRITING_RELEASE_20261017.md). Áp dụng Term 1/2, Listening trước và Reading trước: bài chính thức nộp trắng nhận 0 không gọi AI; phiếu L/R không tạo Writing. Bản này thay luật ưu tiên bài có nội dung của [đợt khôi phục trước](WRITING_RESULT_RELEASE_20261017.md). Giữ ảnh audio làm nền; không suy toàn main tương đương runtime.
