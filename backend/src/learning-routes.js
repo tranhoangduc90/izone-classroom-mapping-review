@@ -9,6 +9,9 @@ import { createLearningDemoGrant,createLearningDraftDemoGrant,verifyLearningDemo
 import {createLearningFormDraftService} from './learning-form-drafts.js';
 import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 import {createProgressLinkCipher} from './learning-journey-comments.js';
+import {createLearningAssignmentManagement} from './learning-assignment-management.js';
+import {createLearningFormLibrary} from './learning-form-library.js';
+import {createLearningPortalTestReader} from './learning-portal-tests.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -212,7 +215,7 @@ function attemptRateKey(req) {
 }
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
-  testSourceReader = null, testResultReader = null, demoSourceSecret = '', logger = null,
+  testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1' }) {
   const router = express.Router();
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
@@ -233,9 +236,12 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     classIds: String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ?? (process.env.NODE_ENV==='production'?'1294':'')).split(',')
   });
   const service = createLearningService({ pool, erpScheduleReader: monitoredReader, testSourceReader, testResultReader,
+    portalTestReader:portalTestReader||createLearningPortalTestReader({pool}),
     journeyCommentsEnabled,progressLinkCipher:journeyCommentsEnabled?
       createProgressLinkCipher({keys:progressLinkKeys,activeVersion:progressLinkKeyVersion}):null });
   const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader});
+  const management=createLearningAssignmentManagement({pool});
+  const formLibrary=createLearningFormLibrary({pool,drafts});
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
     limit: 12_000,
@@ -509,6 +515,38 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     return res.json({ ok: true, plan });
   }));
 
+  router.get('/teacher/classes/:classId/withdrawn-assignments',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.params,res,'INVALID_CLASS');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,assignments:await management.history({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/assignments/:assignmentId/management',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,management:await management.get({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/assignments/:assignmentId/management',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
+    const input=parseOrReply(z.object({action:z.enum(['extend','withdraw']),reason:z.string().trim().min(1).max(1000),
+      closesAt:z.string().datetime({offset:true}).optional(),expectedRevision:z.number().int().nonnegative(),operationId:uuidSchema}).strict(),req.body,res,'INVALID_MANAGEMENT');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,management:await management.change({...path,...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({scope:z.enum(['personal','izone']).default('personal'),skill:z.enum(['','listening','reading','speaking','writing']).default('')}).strict(),req.query,res,'INVALID_LIBRARY_QUERY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,entries:await formLibrary.list({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/form-library/:id',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,entry:await formLibrary.get({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({draftId:uuidSchema,expectedRevision:z.number().int().positive(),expectedHash:z.string().regex(/^[0-9a-f]{64}$/u),
+      scope:z.enum(['personal','izone']),operationId:uuidSchema}).strict(),req.body,res,'INVALID_LIBRARY_ENTRY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,entry:await formLibrary.store({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-library/:id/copy',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!path)return;
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_LIBRARY_COPY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft:await formLibrary.copy({...path,...input,reviewer:req.reviewer})});
+  }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
   router.get('/teacher/form-drafts/review-queue',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');if(!input)return;
@@ -559,6 +597,13 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input=parseOrReply(z.object({assignmentId:uuidSchema,classId:z.string().regex(/^\d{1,18}$/u),
       sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_COPY');if(!input) return;
     const draft=await drafts.copyAssignment({...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
+  }));
+  const aiImportLimiter=rateLimit({windowMs:60000,limit:3,standardHeaders:'draft-8',legacyHeaders:false,
+    keyGenerator:req=>req.reviewer.email,message:{ok:false,error:'AI_IMPORT_RATE_LIMIT',message:'Tối đa ba lượt nhập AI mỗi phút; hãy chờ rồi thử lại.'}});
+  router.post('/teacher/form-drafts/:id/ai-import-preview',authenticate,aiImportLimiter,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({text:z.string().min(1).max(20000),expectedRevision:z.number().int().positive()}).strict(),req.body,res,'INVALID_AI_IMPORT');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,preview:await drafts.previewAiImport({...path,...input,reviewer:req.reviewer})});
   }));
   router.post('/teacher/form-drafts/:id/import-preview',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path) return;

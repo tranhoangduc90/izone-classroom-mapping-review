@@ -97,6 +97,9 @@ export function previewFormImport(raw,{definition:baseDefinition,gradingKey:base
       } else if(type==='speaking_checklist') {
         item.interactionType='multi_choice_group';item.layoutType='speaking_issue_checklist';item.pedagogicalTypeCode='speaking_reflection';
         config.maxSelections??=Math.min(2,options.length);
+      } else if(type==='keyword_selection') {
+        item.interactionType='multi_choice_group';item.layoutType='keyword_selection';item.pedagogicalTypeCode='keyword_identification';
+        config.maxSelections??=Math.min(2,options.length);
       } else if(type==='self_reported_score') {
         item.interactionType='number_score';item.layoutType='score_fraction';item.pedagogicalTypeCode='score_self_report';
       } else if(type==='conditional_explanation') {

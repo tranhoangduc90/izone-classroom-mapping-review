@@ -49,8 +49,8 @@ function isAnswered(value) {
 }
 
 function isCompleteAnswer(item, value) {
-  if (item.layoutType === 'numbered_short_texts') {
-    const expected = item.interactionConfig.responseCount;
+  if (['numbered_short_texts','matching_pairs'].includes(item.layoutType)) {
+    const expected = item.interactionConfig.responseCount || item.interactionConfig.matchingPrompts?.length;
     return Array.isArray(value)
       && value.length === expected
       && value.every(entry => Boolean(String(entry).trim()));
@@ -85,6 +85,11 @@ function assertResponseIdentity(definition, responses) {
       throw error;
     }
     const value = responses[itemVersionId];
+    if(item.layoutType==='matching_pairs' && (!Array.isArray(value)
+      || value.length!==item.interactionConfig.matchingPrompts.length
+      || value.some(v=>v!==''&&!item.options.some(o=>o.id===v)))){
+      const error=new Error('Câu trả lời Nối cặp không khớp số cặp hoặc phương án.');error.code='MATCHING_RESPONSE_INVALID';error.httpStatus=400;throw error;
+    }
     if (item.interactionType === 'multi_choice_group'
       && item.interactionConfig?.maxSelections !== undefined) {
       const exclusive = item.interactionConfig.exclusiveOptionId;
@@ -193,6 +198,15 @@ function gradeItem(item, privateKey, responses) {
   if (item.graderType === 'rubric_async') {
     return { ...base, verdict: answered ? 'pending' : 'ungraded' };
   }
+  // Chọn nhiều so tập hợp; nối cặp so từng vị trí. Thiếu/thừa/đổi cặp đều không đạt.
+  if(['exact_option_set','exact_sequence'].includes(item.graderType)){
+    const selected=Array.isArray(raw)?raw:[],expected=privateKey.expectedOptionIds;
+    const correct=item.graderType==='exact_option_set'
+      ? selected.length===expected.length && expected.every(id=>selected.includes(id))
+      : selected.length===expected.length && expected.every((id,index)=>selected[index]===id);
+    return {...base,normalizedAnswer:answered?selected:null,verdict:correct?'correct':'incorrect',
+      scoreEarned:correct?item.maxScore:0,expectedAnswer:expected};
+  }
   if (item.graderType === 'accepted_text') {
     const normalized = answered ? normalizeText(raw, privateKey.normalization) : '';
     const wordLimit = privateKey.normalization.acceptedWordCountMax;
@@ -261,7 +275,8 @@ export function gradeLearningSubmission({ definition: inputDefinition, gradingKe
     }
   }
 
-  const itemResults = items.map(item => resultsById.get(item.itemVersionId));
+  const itemResults = items.map(item => ({...resultsById.get(item.itemVersionId),
+    ...(gradingKey.explanations?.[item.itemVersionId]?{explanation:gradingKey.explanations[item.itemVersionId]}:{})}));
   const typeMap = new Map();
   for (const result of itemResults) {
     const current = typeMap.get(result.pedagogicalTypeCode) || {
@@ -320,7 +335,7 @@ export function buildStudentQuizResult(internalResult, definitionInput, now = ne
     ...internalResult,
     items: internalResult.items.map(item => {
       const copy = { ...item };
-      if (!releaseAnswers) delete copy.expectedAnswer;
+      if (!releaseAnswers) {delete copy.expectedAnswer;delete copy.explanation;}
       return copy;
     }),
     answerRelease: releaseAnswers ? 'released' : 'hidden',

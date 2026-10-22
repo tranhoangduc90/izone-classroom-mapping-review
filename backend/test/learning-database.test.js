@@ -156,6 +156,7 @@ async function setupDatabase() {
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610090001_journey_schedule_changes.sql', import.meta.url), 'utf8'));
   await database.exec(await readFile(new URL('../ops/learning-migrations/202610190001_checkpoint_attendance_source.sql', import.meta.url), 'utf8'));
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202610220001_assignment_management.sql', import.meta.url), 'utf8'));
   await database.exec('CREATE TABLE IF NOT EXISTS learning.form_draft_class_lock(erp_course_class_id bigint PRIMARY KEY)');
   return { database, service: createLearningService({ pool: poolFrom(database) }) };
 }
