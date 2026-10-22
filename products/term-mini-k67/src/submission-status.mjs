@@ -29,7 +29,8 @@ export async function readSubmissionStatus(pool,slug,input,assertOwner=()=>{}){
   if(rows.length!==1)throw fail('SUBMISSION_NOT_FOUND',404);
   const {session:s,attempt:a}=rows[0];
   if(s?.superseded_at||a?.superseded_at)throw fail('STALE_ATTEMPT');
-  if(s)assertOwner(s,input);
+  // Quyền phát audio bảo vệ Listening; Reading giữ hợp đồng đọc theo token cả sau tải lại.
+  if(s&&input.section==='listening')assertOwner(s,input);
   const generation=Number(a?.generation??s?.generation??0);
   if((input.generation!==undefined&&input.generation!==generation)||(a&&s&&Number(a.generation||0)!==Number(s.generation||0)))throw fail('STALE_GENERATION');
   if(input.attemptToken&&a?.id!==input.attemptToken)throw fail('TOKEN_MISMATCH');
