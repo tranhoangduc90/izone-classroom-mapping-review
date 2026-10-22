@@ -12,7 +12,8 @@ const cases = [
   ['67-speaking-on_tap_lam_ro_diem_giua', 'lesson-5.html'],
   ['67-speaking-ly_do_hanh_vi', 'lesson-6.html'],
   ['67-speaking-cach_lam_mot_viec', 'lesson-7.html'],
-  ['67-speaking-so_sanh', 'lesson-8.html']
+  ['67-speaking-so_sanh', 'lesson-8.html'],
+  ['67-speaking-ke_chuyen_boi_canh_truoc_trong_sau', 'lesson-10.html']
 ];
 const documentId = 'fixture doc 8 + unicode';
 const classCode = 'IC2304';

@@ -35,7 +35,9 @@ function hasWhiteCtaStyle(style) {
 
 export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
   // Mã bài quyết định trang; giữ Doc ID và lớp để mở đúng bản homework riêng.
-  const page = assignmentCode === '67-speaking-so_sanh'
+  const page = assignmentCode === '67-speaking-ke_chuyen_boi_canh_truoc_trong_sau'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-10.html'
+    : assignmentCode === '67-speaking-so_sanh'
     ? '/izone-ai-team-pages/speaking-homework/lesson-8.html'
     : assignmentCode === '67-speaking-cach_lam_mot_viec'
     ? '/izone-ai-team-pages/speaking-homework/lesson-7.html'
