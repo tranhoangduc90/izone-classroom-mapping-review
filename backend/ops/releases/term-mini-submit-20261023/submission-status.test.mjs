@@ -39,6 +39,12 @@ for(const [name,data,code]of [
  ['token lỗi',{...input(),examSessionToken:'bad'},'INVALID_SUBMISSION_STATUS']])test(name,async()=>assert.rejects(readSubmissionStatus(pool,'term-test-1',data),e=>e.code===code));
 test('Sai test không trả dữ liệu của test khác',async()=>assert.rejects(readSubmissionStatus(pool,'term-test-2',input()),e=>e.status===404));
 test('Guard audio chủ cũ vẫn được thực thi cả khi đọc bài đã nộp',async()=>assert.rejects(readSubmissionStatus(pool,'term-test-1',input(),()=>{throw Object.assign(Error('owner'),{code:'AUDIO_OWNER_REQUIRED'});}),e=>e.code==='AUDIO_OWNER_REQUIRED'));
+
+test('Reading sau tải lại chỉ cần token lượt, không đòi quyền phát audio đã kết thúc',async()=>{
+ await db.query('UPDATE assessment.term_test_attempt SET reading_submitted_at=now(),completed_at=now() WHERE id=$1',[attempt]);
+ const r=await readSubmissionStatus(pool,'term-test-1',{section:'reading',attemptToken:attempt},()=>{throw Object.assign(Error('audio owner unavailable after reload'),{code:'AUDIO_OWNER_REQUIRED'});});
+ assert.equal(r.persisted,true);assert.deepEqual(r.receipt.answers,{1:'B'});
+});
 test('Phiếu legacy tìm bằng mã gửi, không cần roster hoặc tạo bài',async()=>{const r=await readSubmissionStatus(pool,'term-test-1',{section:'listening',clientSubmissionId:client});assert.equal(r.receipt.attemptToken,attempt);});
 test('Lượt đã thay thế không đọc thành biên nhận hiện hành',async()=>{await db.query('UPDATE assessment.term_test_attempt SET superseded_at=now() WHERE id=$1',[attempt]);await assert.rejects(readSubmissionStatus(pool,'term-test-1',{section:'reading',attemptToken:attempt}),e=>e.status===404);await db.query('UPDATE assessment.term_test_attempt SET superseded_at=NULL WHERE id=$1',[attempt]);});
 test('Route HTTP chỉ đọc trả Cache-Control và lỗi validation đúng status',async()=>{
