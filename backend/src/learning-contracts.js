@@ -203,7 +203,10 @@ export const formDefinitionV1Schema = z.object({
   estimatedMinutes: z.number().int().min(1).max(120).optional(),
   answerReleasePolicy: z.enum(['hidden', 'immediate', 'teacher_release']).default('hidden'),
   blocks: z.array(formBlockSchema).min(1).max(20)
-}).strict().superRefine((definition, context) => {
+}).strict().superRefine(refineDefinitionIdentity);
+
+// Cùng một bộ kiểm ID/thứ tự/quan hệ cho cả phiếu đầy đủ và nháp đang soạn.
+function refineDefinitionIdentity(definition, context) {
   const items = definition.blocks.flatMap(block => block.items);
   const blockIds = definition.blocks.map(block => block.blockId);
   const itemVersionIds = items.map(item => item.itemVersionId);
@@ -248,7 +251,23 @@ export const formDefinitionV1Schema = z.object({
       });
     }
   }
-});
+}
+
+// Chỉ lưu riêng trong form_draft. Preview, duyệt và phát hành vẫn dùng schema đầy đủ ở trên.
+// Chấp nhận phần trống và chữ chưa gõ xong, giữ giới hạn dung lượng, enum, ID và trường được phép.
+const draftConfigSchema=z.object({...interactionConfigSchema.shape,
+  matchingPrompts:z.array(z.string().max(300)).min(2).max(10).optional(),
+  responseLabels:z.array(z.string().max(100)).min(1).max(10).optional(),
+  beforeText:z.string().max(500).optional(),afterText:z.string().max(500).optional()
+}).strict();
+const draftItemSchema=z.object({...formItemSchema.shape,
+  prompt:z.string().max(2000),options:z.array(z.object({...optionSchema.shape,label:z.string().max(300)}).strict()).max(40).default([]),
+  interactionConfig:draftConfigSchema.default({})
+}).strict();
+const draftBlockSchema=z.object({...formBlockSchema.shape,title:z.string().max(200),items:z.array(draftItemSchema).max(40)}).strict();
+const formDraftDefinitionSchema=z.object({...formDefinitionV1Schema.shape,title:z.string().max(200),
+  blocks:z.array(draftBlockSchema).min(1).max(20)
+}).strict().superRefine(refineDefinitionIdentity);
 
 const normalizationSchema = z.object({
   unicode: z.literal('NFKC').default('NFKC'),
@@ -434,6 +453,10 @@ export const teacherHumanNoteV1Schema = z.object({
 
 export function parseFormDefinition(value) {
   return formDefinitionV1Schema.parse(value);
+}
+
+export function parseFormDraftDefinition(value) {
+  return formDraftDefinitionSchema.parse(value);
 }
 
 export function parseFormGradingKey(value) {

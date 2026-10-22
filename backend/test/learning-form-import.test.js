@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {previewFormImport,readDelimitedText} from '../src/learning-form-import.js';
+import {randomUUID} from 'node:crypto';
 const cell=value=>'"'+String(value).replaceAll('"','""')+'"';
 function csv(rows){return rows.map(row=>row.map(cell).join(',')).join('\r\n');}
+test('Nhập vào nháp có phần trống giữ phần gốc, còn câu mới nhập sai vẫn bị chặn',()=>{
+ const formVersionId=randomUUID(),blockId=randomUUID(),definition={schemaVersion:'FormDefinitionV1',formVersionId,title:'',kind:'mixed',answerReleasePolicy:'hidden',blocks:[{blockId,checkpoint:1,title:'',items:[]}]},gradingKey={schemaVersion:'FormGradingKeyV1',formVersionId,graderVersion:1,items:{},groups:{}};
+ const result=previewFormImport('type,prompt\nreflection,Em học được điều gì?',{definition,gradingKey});
+ assert.deepEqual(result.errors,[]);assert.equal(result.payload.definition.blocks[0].blockId,blockId);assert.equal(result.payload.definition.blocks[0].items.length,0);assert.equal(definition.blocks.length,1);
+ const bad=previewFormImport('type,prompt\nmcq,Chưa có phương án',{definition,gradingKey});assert.equal(bad.payload,null);assert.ok(bad.errors.length);
+});
 test('D05: CSV có nháy, phẩy, xuống dòng và Unicode giữ nội dung; văn bản tab được xem trước',()=>{
   const prompt='Em thấy "ý tưởng", nào hữu ích?\nHãy nói rõ bằng tiếng Việt.';
   const options=JSON.stringify([{id:'A',label:'Có, và giải thích'},{id:'B',label:'Chưa rõ'}]);

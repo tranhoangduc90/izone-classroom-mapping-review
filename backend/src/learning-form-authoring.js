@@ -1,7 +1,7 @@
 // Nhận definition/key của nháp; giữ nhóm hiện hành và Gạch chân từ khóa được Đức yêu cầu 22/10.
 // Copy tạo ID mới và giữ điều kiện/bố cục; validation báo vị trí cần sửa, không tự thêm loại bài/chấm AI.
 import crypto from 'node:crypto';
-import {parseFormDefinition,parseFormGradingKey} from './learning-contracts.js';
+import {parseFormDefinition,parseFormDraftDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {sha256,stableStringify} from './learning-domain.js';
 
 export const AUTHORING_TYPES=Object.freeze([
@@ -50,9 +50,10 @@ export class FormAuthoringError extends Error {
   constructor(code,message,issues=[],httpStatus=400) {super(message);this.code=code;this.issues=issues;this.httpStatus=httpStatus;}
 }
 
-export function validateAuthoringPayload({definition:rawDefinition,gradingKey:rawKey,requireAnswers=false}) {
+export function validateAuthoringPayload({definition:rawDefinition,gradingKey:rawKey,requireAnswers=false,allowIncomplete=false}) {
   let definition,gradingKey;
-  try {definition=parseFormDefinition(rawDefinition);gradingKey=parseFormGradingKey(rawKey);}
+  const savingDraft=allowIncomplete&&!requireAnswers;
+  try {definition=(savingDraft?parseFormDraftDefinition:parseFormDefinition)(rawDefinition);gradingKey=parseFormGradingKey(rawKey);}
   catch(error) {throw new FormAuthoringError('DRAFT_INVALID','Nháp có trường cần sửa.',error.issues||[]);}
   if(gradingKey.formVersionId!==definition.formVersionId) throw new FormAuthoringError('DRAFT_KEY_VERSION_MISMATCH','Đáp án không thuộc phiên bản nháp này.');
   if(Object.keys(gradingKey.groups).length) throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Chưa hỗ trợ chấm theo nhóm ngoài các phiếu hiện có.');
@@ -66,6 +67,7 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
       throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Câu '+item.position+' nằm ngoài các dạng Progress Log đang dùng.');
     }
     const key=gradingKey.items[item.itemVersionId];
+    if(savingDraft){if(item.graderType!=='none'&&!key)missing.push(item.itemVersionId);continue;}
     if(type==='keyword_selection'&&(item.options.some(option=>/\s/u.test(option.label))
       ||item.interactionConfig.maxSelections>Math.min(10,item.options.length))) {
       throw new FormAuthoringError('DRAFT_KEYWORDS_INVALID','Câu '+item.position+': mỗi lựa chọn cần là một từ; số từ được chọn tối đa không vượt số từ của câu hoặc 10.');
