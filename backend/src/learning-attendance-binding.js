@@ -64,7 +64,8 @@ export function createAttendanceBindingStore(pool) {
         }
         if (priorOperation.rows[0]?.status === 'intent' && resolved.status === 'resolved') {
           // Timeout không chứng minh execution cũ đã dừng; chỉ đọc lại, không PUT lần hai.
-          await db.query('UPDATE learning.portal_attendance_binding SET review_required = true WHERE assignment_id = $1::uuid', [payload.assignmentId]);
+          // Chỉ yêu cầu này cần đối chiếu; đích lớp vẫn đúng nên không khóa cả phiếu.
+          // Các nhánh đổi lịch/đích ở trên vẫn giữ cờ chặn chung để tránh ghi sai buổi.
           return { ...normalize(binding), reviewRequired: true, reason: 'write_outcome_unknown' };
         }
         // Giữ liên kết sau bất kỳ ý định ghi: timeout không cho phép chọn buổi mới.
