@@ -53,6 +53,16 @@ test('D01/D03/D05: nháp lưu trên DB, quyền owner/lớp, conflict, retry và
       approved_revision=revision,approved_by_email='lead@example.test',approved_at=now() WHERE id=$1::uuid`,[created.id]);
     const reset=await service.save({id:created.id,expectedRevision:2,sessionNumber:4,definition:next,gradingKey:checked.gradingKey,reviewer});
     assert.equal(reset.status,'draft');assert.equal(reset.approvedRevision,null);assert.equal(reset.revision,3);
+    // Nháp còn phần/câu trống được lưu và đọc lại đúng nguyên bản, chưa biến thành phiếu lớp.
+    const partialVersion=crypto.randomUUID(),partialDefinition={...checked.definition,formVersionId:partialVersion,title:'',blocks:[{blockId:crypto.randomUUID(),checkpoint:1,title:'',items:[]}]},partialKey={schemaVersion:'FormGradingKeyV1',formVersionId:partialVersion,graderVersion:1,items:{},groups:{}};
+    const partial=await service.create({classId:'1294',sessionNumber:11,operationId:crypto.randomUUID(),definition:partialDefinition,gradingKey:partialKey,reviewer});
+    assert.deepEqual((await service.get({id:partial.id,reviewer})).definition,partial.definition);
+    assert.equal(partial.definition.title,'');assert.equal(partial.definition.blocks[0].items.length,0);
+    const unfinishedItem={...structuredClone(checked.definition.blocks[0].items[0]),prompt:''};
+    if(unfinishedItem.options.length)unfinishedItem.options[0].label='';
+    partialDefinition.blocks[0].items=[unfinishedItem];
+    const partialSaved=await service.save({id:partial.id,expectedRevision:1,sessionNumber:11,definition:partialDefinition,gradingKey:partialKey,reviewer});
+    assert.equal((await service.get({id:partial.id,reviewer})).definition.blocks[0].items[0].prompt,'');assert.equal(partialSaved.revision,2);
     // Tạo nguồn published giả để kiểm sao chép/retry/remap; không có bài học viên thật.
     const source=payload(),assignmentId=crypto.randomUUID();
     const template=await database.query(`INSERT INTO learning.form_template(title,kind,created_by_email)

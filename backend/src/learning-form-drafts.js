@@ -31,7 +31,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
     return result.rows[0];
   }
   async function create({classId,sessionNumber,definition,gradingKey,operationId,sourceAssignmentId=null,reviewer}) {
-    const checked=validateAuthoringPayload({definition,gradingKey});
+    const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
     return withTransaction(pool,async client=>{
       await authorizeClass(client,classId,reviewer);
       const id=crypto.randomUUID();
@@ -87,7 +87,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
       return value;
     },
     async save({id,expectedRevision,sessionNumber,definition,gradingKey,reviewer}) {
-      const checked=validateAuthoringPayload({definition,gradingKey});
+      const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
         if(row.status==='published') throw error('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành; hãy sao chép thành nháp mới.');
