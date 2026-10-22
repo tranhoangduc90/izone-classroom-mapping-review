@@ -198,6 +198,26 @@ function gradeItem(item, privateKey, responses) {
   if (item.graderType === 'rubric_async') {
     return { ...base, verdict: answered ? 'pending' : 'ungraded' };
   }
+  // Giữ ID của nhóm và thứ tự ô nguồn; từng ô sai/trống nhận 0, không ảnh hưởng ô đúng khác.
+  if (item.graderType === 'accepted_text_sequence') {
+    const count=item.interactionConfig.responseCount;
+    if(privateKey.acceptedBySlot.length!==count||privateKey.acceptedBySlot.some(accepted=>!accepted.length)){
+      const error=new Error('Khóa chấm không khớp số ô.');error.code='GRADING_KEY_MISMATCH';error.httpStatus=500;throw error;
+    }
+    const values=Array.isArray(raw)?raw:Array(count).fill('');
+    const slotResults=privateKey.acceptedBySlot.map((accepted,slot)=>{
+      const value=values[slot]||'',normalized=normalizeText(value,privateKey.normalization),limit=privateKey.normalization.acceptedWordCountMax;
+      const invalid=Boolean(normalized&&limit&&normalized.split(/\s+/u).length>limit);
+      const correct=!invalid&&Boolean(normalized)&&accepted.some(answer=>normalizeText(answer,privateKey.normalization)===normalized);
+      return {slot,rawAnswer:value.trim()?value:null,normalizedAnswer:normalized||null,
+        answerState:invalid?'invalid':normalized?'answered':'blank',verdict:correct?'correct':'incorrect',
+        scoreEarned:correct?1:0,maxScore:1,expectedAnswer:accepted};
+    });
+    const scoreEarned=slotResults.reduce((sum,slot)=>sum+slot.scoreEarned,0);
+    return {...base,normalizedAnswer:slotResults.map(slot=>slot.normalizedAnswer||''),
+      verdict:scoreEarned===count?'correct':scoreEarned?'partial':'incorrect',scoreEarned,
+      expectedAnswer:privateKey.acceptedBySlot.map(accepted=>accepted[0]),slotResults};
+  }
   // Chọn nhiều so tập hợp; nối cặp so từng vị trí. Thiếu/thừa/đổi cặp đều không đạt.
   if(['exact_option_set','exact_sequence'].includes(item.graderType)){
     const selected=Array.isArray(raw)?raw:[],expected=privateKey.expectedOptionIds;
@@ -287,10 +307,10 @@ export function gradeLearningSubmission({ definition: inputDefinition, gradingKe
       maxScore: 0
     };
     if (result.maxScore > 0) {
-      current.total += 1;
+      current.total += result.slotResults?.length || 1;
       current.maxScore += result.maxScore;
       current.scoreEarned += result.scoreEarned;
-      if (result.verdict === 'correct') current.correct += 1;
+      current.correct += result.slotResults ? result.slotResults.filter(slot=>slot.verdict==='correct').length : Number(result.verdict==='correct');
     }
     typeMap.set(result.pedagogicalTypeCode, current);
   }
@@ -335,7 +355,10 @@ export function buildStudentQuizResult(internalResult, definitionInput, now = ne
     ...internalResult,
     items: internalResult.items.map(item => {
       const copy = { ...item };
-      if (!releaseAnswers) {delete copy.expectedAnswer;delete copy.explanation;}
+      if (!releaseAnswers) {
+        delete copy.expectedAnswer;delete copy.explanation;
+        if(copy.slotResults)copy.slotResults=copy.slotResults.map(slot=>{const safe={...slot};delete safe.expectedAnswer;return safe;});
+      }
       return copy;
     }),
     answerRelease: releaseAnswers ? 'released' : 'hidden',

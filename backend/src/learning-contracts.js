@@ -40,6 +40,7 @@ export const interactionTypeSchema = z.enum([
 export const graderTypeSchema = z.enum([
   'none',
   'accepted_text',
+  'accepted_text_sequence',
   'exact_option',
   'exact_option_set',
   'exact_sequence',
@@ -68,6 +69,10 @@ export const formItemSchema = z.object({
     .default('student_self_report'),
   releasePolicy: z.enum(['inherit', 'hidden', 'immediate', 'teacher_release']).default('inherit')
 }).strict().superRefine((item, context) => {
+  if (item.graderType === 'accepted_text_sequence'
+    && (item.layoutType !== 'numbered_short_texts' || item.maxScore !== item.interactionConfig.responseCount)) {
+    context.addIssue({code:'custom',path:['graderType'],message:'Chấm từng ô cần nhóm ô ngắn và mỗi ô một điểm.'});
+  }
   if (item.layoutType === 'matching_pairs' && (item.interactionType !== 'multi_choice_group'
     || !item.interactionConfig.matchingPrompts || item.options.length !== item.interactionConfig.matchingPrompts.length)) {
     context.addIssue({code:'custom',path:['interactionConfig'],message:'Nối cặp cần cùng số vế trái và phương án phải (2–10 cặp).'});
@@ -277,6 +282,11 @@ const normalizationSchema = z.object({
 }).strict();
 
 const privateItemKeySchema = z.discriminatedUnion('graderType', [
+  z.object({
+    graderType:z.literal('accepted_text_sequence'),
+    acceptedBySlot:z.array(z.array(z.string().trim().min(1).max(300)).max(40)).min(1).max(10),
+    normalization:normalizationSchema.default({})
+  }).strict(),
   z.object({graderType:z.literal('exact_option_set'),expectedOptionIds:z.array(z.string().trim().min(1).max(80)).min(1).max(10)}).strict(),
   z.object({graderType:z.literal('exact_sequence'),expectedOptionIds:z.array(z.string().trim().min(1).max(80)).min(2).max(10)}).strict(),
   z.object({
@@ -356,6 +366,12 @@ const resultItemSchema = z.object({
   maxScore: z.number().min(0),
   expectedAnswer: responseValueSchema.nullable().optional()
   ,explanation:z.string().max(2000).optional()
+  ,slotResults:z.array(z.object({
+    slot:z.number().int().min(0).max(9),rawAnswer:z.string().nullable(),normalizedAnswer:z.string().nullable(),
+    answerState:z.enum(['blank','answered','invalid']),verdict:z.enum(['correct','incorrect']),
+    scoreEarned:z.number().min(0).max(1),maxScore:z.literal(1),
+    expectedAnswer:z.array(z.string()).optional()
+  }).strict()).min(1).max(10).optional()
 }).strict();
 
 export const quizResultV1Schema = z.object({

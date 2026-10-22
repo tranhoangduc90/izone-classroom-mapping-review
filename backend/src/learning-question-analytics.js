@@ -4,8 +4,9 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
   if (new Set(students.map(s=>s.studentRef)).size !== students.length) throw new Error('ANALYTICS_DUPLICATE_STUDENT');
   const items = definition.blocks.flatMap(block => block.items);
   const summaries = items.map(item => {
-    const objective = item.graderType === 'exact_option' && item.maxScore > 0
-      && item.interactionType === 'single_choice';
+    const textSlots=item.graderType==='accepted_text_sequence'&&item.layoutType==='numbered_short_texts';
+    const objective = item.maxScore > 0 && (textSlots || item.graderType === 'exact_option'
+      && item.interactionType === 'single_choice');
     const counts = { roster: students.length, submitted:0, visible:0, hidden:0,
       unanswered:0, answered:0, graded:0, correct:0, incorrect:0, pending:0, manual:0, ungraded:0 };
     const choices = new Map((item.options || []).map(option => [option.id,{optionId:option.id,label:option.label,count:0,incorrect:0}]));
@@ -24,7 +25,8 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
       const grading = student.gradingItems?.find(answer => answer.itemVersionId === item.itemVersionId);
       const answered = response?.answerState === 'answered';
       counts[answered ? 'answered' : 'unanswered'] += 1;
-      const verdict = !objective || (!answered && !item.required && !config.requiredWhenVisible) ? 'ungraded'
+      const verdict = !objective || (!textSlots && !answered && !item.required && !config.requiredWhenVisible) ? 'ungraded'
+        : textSlots && grading?.verdict === 'partial' ? 'incorrect'
         : ['correct','incorrect'].includes(grading?.verdict) ? grading.verdict
         : ['manual_review','failed'].includes(student.gradingStatus) || grading?.verdict === 'manual_review' ? 'manual_review' : 'pending';
       if (['correct','incorrect'].includes(verdict)) { counts.graded += 1; counts[verdict] += 1; }
@@ -39,7 +41,7 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
         answered,verdict,optionIds:values.filter(id=>choices.has(id))});
     }
     return {itemVersionId:item.itemVersionId,position:item.position,prompt:item.prompt,
-      interactionType:item.interactionType,objective,counts,
+      interactionType:item.interactionType,objective,...(textSlots?{gradingUnit:'text_slots'}:{}),counts,
       errorRate:counts.graded ? counts.incorrect/counts.graded : null,
       choices:[...choices.values()].sort((a,b)=>b.incorrect-a.incorrect || b.count-a.count),students:studentResults};
   });
