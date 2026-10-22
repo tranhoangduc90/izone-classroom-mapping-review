@@ -1,11 +1,10 @@
-// Nhận definition/key của nháp; giữ nhóm hiện hành và Gạch chân từ khóa được Đức yêu cầu 22/10.
+// Nhận definition/key của nháp; không cho tạo mới dạng gạch chân đã được Đức yêu cầu gỡ.
 // Copy tạo ID mới và giữ điều kiện/bố cục; validation báo vị trí cần sửa, không tự thêm loại bài/chấm AI.
 import crypto from 'node:crypto';
 import {parseFormDefinition,parseFormDraftDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {sha256,stableStringify} from './learning-domain.js';
 
 export const AUTHORING_TYPES=Object.freeze([
-  {code:'keyword_selection',label:'Gạch chân từ khóa'},
   {code:'reflection',label:'Câu trả lời mở / nhìn lại bài học'},
   {code:'mcq',label:'Chọn một phương án'},
   {code:'multi',label:'Chọn nhiều đáp án'},
