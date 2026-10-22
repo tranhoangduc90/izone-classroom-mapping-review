@@ -61,7 +61,7 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   for(const item of items) {
     const type=authoringType(item);
     const allowed={none:AUTHORING_TYPES.map(t=>t.code),exact_option:['mcq','dropdown'],
-      exact_option_set:['multi'],exact_sequence:['matching'],accepted_text:['short_answer']};
+      exact_option_set:['multi'],exact_sequence:['matching'],accepted_text:['short_answer'],accepted_text_sequence:['gapfill','numbered_short_texts']};
     if(!type||!allowed[item.graderType]?.includes(type)) {
       throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Câu '+item.position+' nằm ngoài các dạng Progress Log đang dùng.');
     }
@@ -81,7 +81,8 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
             ||key.expectedOptionIds.some(id=>!item.options.some(o=>o.id===id))
             ||(item.graderType==='exact_option_set'&&key.expectedOptionIds.length>(item.interactionConfig.maxSelections||10))
             ||(item.graderType==='exact_sequence'&&key.expectedOptionIds.length!==item.interactionConfig.matchingPrompts.length)))
-        ||(item.graderType==='accepted_text'&&key.accepted.some(value=>!value.trim()))) {
+        ||(item.graderType==='accepted_text'&&key.accepted.some(value=>!value.trim()))
+        ||(item.graderType==='accepted_text_sequence'&&(key.acceptedBySlot.length!==item.interactionConfig.responseCount||key.acceptedBySlot.some(accepted=>!accepted.length)))) {
         throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Đáp án câu '+item.position+' không khớp phương án.');
       }
     } else if(key) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Câu không chấm không được có khóa chấm.');

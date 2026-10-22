@@ -50,7 +50,11 @@ export const fetchCourseSessionDetailSql = `SELECT assignment.id::text AS assign
   status.student_name_snapshot AS student_name, status.display_discriminator,
   status.submission_id::text AS submission_id, submission.response_payload AS responses,
   (SELECT jsonb_agg(jsonb_build_object('itemVersionId', item.item_version_id::text,
-    'verdict', item.verdict, 'scoreEarned', item.score_earned, 'maxScore', item.max_score))
+    'verdict', item.verdict, 'scoreEarned', item.score_earned, 'maxScore', item.max_score,
+    'slotResults', (SELECT jsonb_agg(slot - 'expectedAnswer')
+      FROM jsonb_array_elements(COALESCE((SELECT result->'slotResults'
+        FROM jsonb_array_elements(grading.result_json->'items') AS result
+        WHERE result->>'itemVersionId'=item.item_version_id::text), '[]'::jsonb)) AS slot)))
     FROM learning.grading_result_item AS item WHERE item.grading_run_id = grading.id) AS grading_items,
   (SELECT jsonb_build_object('noteText', note.note_text, 'sentAt', note.sent_at)
     FROM learning.teacher_session_feedback AS note
@@ -60,7 +64,7 @@ FROM learning.form_assignment AS assignment
 JOIN learning.form_version AS version ON version.id=assignment.form_version_id
 JOIN learning.assignment_student_status AS status ON status.assignment_id=assignment.id AND status.student_ref=$3::uuid
 LEFT JOIN learning.submission AS submission ON submission.id=status.submission_id
-LEFT JOIN LATERAL (SELECT run.id FROM learning.grading_run AS run WHERE run.submission_id=submission.id
+LEFT JOIN LATERAL (SELECT run.id,run.result_json FROM learning.grading_run AS run WHERE run.submission_id=submission.id
   AND run.status='complete' ORDER BY run.completed_at DESC NULLS LAST,run.created_at DESC,run.id DESC LIMIT 1) AS grading ON true
 WHERE assignment.erp_course_class_id=$1::bigint AND assignment.session_number=$2::integer
   AND assignment.status IN ('published','closed');`;

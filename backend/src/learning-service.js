@@ -122,6 +122,7 @@ function teacherLiveStudent(value) {
         const safe = { ...item };
         delete safe.expectedAnswer;
         delete safe.explanation;
+        if(safe.slotResults)safe.slotResults=safe.slotResults.map(slot=>{const entry={...slot};delete entry.expectedAnswer;return entry;});
         return safe;
       })
     } : null
