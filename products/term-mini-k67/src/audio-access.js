@@ -3,6 +3,7 @@ import {audioTransaction,listeningAudioSnapshot} from './audio-incidents.js';
 import {AudioRecoveryError} from './audio-recovery.js';
 import {assertAudioOwner} from './audio-owner.js';
 import {publicAudioCatalog} from './public-audio-catalog.js';
+import {withCloudflareAudio} from './cloudflare-audio.mjs';
 
 // Nhận mã phiên từ POST; kiểm quyền hiện tại trước khi cấp metadata hoặc khóa trong RAM.
 // Metadata ghim một lần: thay file trên server không được đổi nội dung của phiên đang thi.
@@ -19,11 +20,11 @@ export async function audioManifestFor(pool,assets,slug,token,publicManifest=nul
   if(!assets?.getAudioManifest)return null;
   const row=(await pool.query('SELECT listening_audio_manifest,listening_started_at FROM assessment.term_test_exam_session WHERE id=$1',[token])).rows[0];
   if(!row)return null;
-  if(row.listening_audio_manifest)return row.listening_audio_manifest;
+  if(row.listening_audio_manifest)return withCloudflareAudio(row.listening_audio_manifest);
   // Hash file trước khi lấy connection/khóa ghi; giao dịch chỉ chốt bản ghim một lần.
   // Chỉ phiên mới và trình duyệt hiểu MP3 được chuyển nguồn; không đổi bản ghim/phiên đang nghe.
   const manifest=publicManifest&&!row.listening_started_at?publicManifest:await assets.getAudioManifest(slug);
-  return audioTransaction(pool,db=>pinAudioManifest(db,token,manifest));
+  return withCloudflareAudio(await audioTransaction(pool,db=>pinAudioManifest(db,token,manifest)));
 }
 
 export async function authorizeAudioSession(db,input,slug,skipOwner=false,onlyOwner=false){
@@ -55,7 +56,7 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
         // Xác thực lại sau bước đọc file: quyền/owner có thể đã đổi trong lúc chờ hash.
         const {row,now}=await authorizeAudioSession(db,input.data,slug);
         return {ok:true,audioCacheSupported:true,examSessionToken:row.id,generation:Number(row.generation),
-          audioManifest:manifest,cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
+          audioManifest:withCloudflareAudio(manifest),cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
           listeningDurationSeconds:assets.getTiming(slug).listeningDurationSeconds,
           serverNow:new Date(now).toISOString(),listeningStartedAt:row.listening_started_at,
           ...(row.listening_started_at?await listeningAudioSnapshot(db,row.id):{}),
