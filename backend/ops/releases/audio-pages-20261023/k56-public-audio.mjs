@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs';
+import {withCloudflareAudio} from './cloudflare-audio.mjs';
 
 export const publicAudioCatalog = JSON.parse(readFileSync(new URL('./k56-public-audio-catalog.json', import.meta.url), 'utf8'));
 
@@ -30,7 +31,7 @@ export async function selectK56PublicAudio(pool, attempt) {
       }
     }
     await db.query('COMMIT');
-    return manifest;
+    return withCloudflareAudio(manifest);
   } catch (error) {
     await db.query('ROLLBACK');
     throw error;

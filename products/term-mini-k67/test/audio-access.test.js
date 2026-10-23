@@ -9,6 +9,9 @@ import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
 import {publicAudioCatalog} from '../src/public-audio-catalog.js';
 
+const cf=process.env.TEST_CF_AUDIO==='1';
+if(cf)process.env.AUDIO_CLOUDFLARE_ENABLED='true';
+const expectedMP3=m=>cf?{...m,cloudflare:{version:1,policy:'public-mp3-v1',chunkSize:524288}}:m;
 // Kiểm API/quyền/SQL/mã hóa thật; byte đề giả. Không mock pin phiên hoặc phép kiểm hash.
 let f,api,dir,assets;
 const studentRef='11111111-1111-4111-8111-111111111111',slugs=['term-test-1','term-test-2','mini-test-lesson-5'];
@@ -43,7 +46,7 @@ for(const slug of slugs)for(const mode of ['lis_first','read_first'])test(`${slu
   const{base,token}=await prepare(slug,mode);
   const lobby=await post(base,'audio-access',{...token,publicAudioVersion:1});
   assert.equal(lobby.status,200,JSON.stringify(lobby.body));
-  assert.deepEqual(lobby.body.audioManifest,publicAudioCatalog[slug]);
+  assert.deepEqual(lobby.body.audioManifest,expectedMP3(publicAudioCatalog[slug]));
   assert.equal(lobby.body.listeningStartedAt,null);
   assert.equal(lobby.body.audioKey,undefined);
   const started=await begin(base,token);assert.equal(started.status,200,JSON.stringify(started.body));
