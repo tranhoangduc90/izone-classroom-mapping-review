@@ -612,8 +612,16 @@ CROSS JOIN saved_grading_run;`;
 export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
-    course.erp_class_name_snapshot AS class_name
+    course.erp_class_name_snapshot AS class_name,
+    grant_snapshot.value->>'class_status_snapshot' AS class_status,
+    grant_snapshot.value->>'access_source' AS access_source
   FROM mapping.classroom_course_mapping AS course
+  LEFT JOIN LATERAL (
+    SELECT to_jsonb(access) AS value FROM mapping.reviewer_class_access AS access
+    WHERE access.erp_course_class_id=course.erp_course_class_id AND ($2::boolean OR access.reviewer_email=$1)
+    ORDER BY (access.reviewer_email=$1) DESC,(to_jsonb(access)->>'access_source'='portal') DESC,
+      to_jsonb(access)->>'source_seen_at' DESC NULLS LAST LIMIT 1
+  ) AS grant_snapshot ON true
   WHERE $2::boolean
     OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
@@ -1555,6 +1563,17 @@ SELECT
 FROM authorized_assignment
 LEFT JOIN roster_state ON roster_state.assignment_id = authorized_assignment.id
 GROUP BY authorized_assignment.id;`;
+
+// Cùng hợp đồng và guard của bản đầy đủ; lọc ngay từ roster để chỉ đọc người vừa đổi.
+export const fetchLearningTeacherLiveDraftDeltaSql = fetchLearningTeacherLiveDraftsSql.replace(
+  'JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id',
+  'JOIN learning.form_assignment_roster AS roster ON roster.assignment_id = assignment.id AND roster.student_ref=ANY($4::uuid[])'
+);
+
+// Kiểm đúng cùng quyền lớp; không tính lại lịch sử/hành trình chỉ để xác minh một lượt đọc trực tiếp.
+export const authorizeLearningLiveAssignmentSql = `SELECT assignment.id,assignment.erp_course_class_id::text AS class_id
+FROM learning.form_assignment AS assignment WHERE assignment.id=$1::uuid
+AND ($3::boolean OR ${buildLearningClassAccessPredicate({reviewerEmailSql:'$2',classIdSql:'assignment.erp_course_class_id'})});`;
 
 export const overrideLearningAttendanceSql = `WITH target AS (
   SELECT assignment.id, assignment.erp_course_class_id, assignment.session_number,

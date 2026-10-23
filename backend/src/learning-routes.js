@@ -12,6 +12,7 @@ import {createProgressLinkCipher} from './learning-journey-comments.js';
 import {createLearningAssignmentManagement} from './learning-assignment-management.js';
 import {createLearningFormLibrary} from './learning-form-library.js';
 import {createLearningPortalTestReader} from './learning-portal-tests.js';
+import {createLearningLiveUpdates} from './learning-realtime.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -216,7 +217,8 @@ function attemptRateKey(req) {
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
-  journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1' }) {
+  journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
+  realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null }) {
   const router = express.Router();
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
@@ -242,6 +244,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts});
+  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
+  router.liveUpdates=liveUpdates;
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
     limit: 12_000,
@@ -452,7 +456,21 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
       canAccessAllClasses: req.reviewer.canAccessAllClasses
     });
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, reviewer: req.reviewer, ...options });
+    return res.json({ ok: true, reviewer: req.reviewer, ...options,
+      assignments:options.assignments.map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
+      capabilities:{liveUpdates:realtimeEnabled} });
+  }));
+
+  router.get('/teacher/assignments/:assignmentId/live-updates',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
+    const input=parseOrReply(z.object({after:z.string().regex(/^\d{1,18}$/).default('0'),force:z.enum(['0','1']).default('0')}).strict(),req.query,res,'INVALID_LIVE_REVISION');if(!input)return;
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,update:await liveUpdates.read({...path,reviewer:req.reviewer,after:input.after,force:input.force==='1'})});
+  }));
+  router.get('/teacher/assignments/:assignmentId/events',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
+    const query=parseOrReply(z.object({}).strict(),req.query,res,'INVALID_STREAM_QUERY');if(!query)return;
+    await liveUpdates.subscribe(req,res,path);
   }));
 
   router.get('/teacher/question-library', authenticate, asyncRoute(async (_req, res) => {

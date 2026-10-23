@@ -42,7 +42,7 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
   } catch (error) {
     // Khởi tạo lỗi vẫn thu hồi database riêng, tránh để runner chờ connection còn mở.
     await pool.end();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await admin.query(`DROP DATABASE ${name}`);
     await admin.end();
     throw error;
   }
@@ -70,7 +70,9 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
   return { pool, clockPool, service: createLearningService({ pool: clockPool }), async close() {
     await applicationPool.end();
     await pool.end();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    // Pool.end() có thể kết thúc trước khi PostgreSQL nhận hết FIN của nhiều socket.
+    // DROP thường đợi đóng tự nhiên; FORCE có thể tự gây FATAL vào đúng lúc dọn test.
+    await admin.query(`DROP DATABASE ${name}`);
     await admin.end();
   } };
 }

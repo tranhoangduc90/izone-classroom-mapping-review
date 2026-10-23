@@ -41,7 +41,7 @@ const termTestWritingGradingService = withTermTestWritingNotifications(
     : null,
   writingNotifier
 );
-const learningAttendanceSync = createLearningAttendanceSync({ config });
+const learningAttendanceSync = createLearningAttendanceSync({ config, pool: learningPool });
 const app = createApp({
   config,
   pool,
@@ -84,6 +84,7 @@ server.headersTimeout = 16_000;
 server.keepAliveTimeout = 5_000;
 
 async function shutdown(signal) {
+  await app.locals.learningLiveUpdates?.close();
   writingNotifier.close();
   await speakingDocsNotifier.close();
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);

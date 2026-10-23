@@ -216,7 +216,14 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
     return res.json({ ok: true });
   }
 
-  return { authenticate, login, logout };
+  // Kết nối dài không thể gửi lại cookie sau headers; vẫn đọc phiên/quyền hiện hành mỗi nhịp kiểm.
+  async function revalidate(req) {
+    if(config.authMode==='legacy')return constantTimeEqual(req.get('x-review-token'),config.legacyReviewToken)
+      ?{email:'legacy@mapping.local',displayName:'Truy cập chuyển tiếp',role:'admin',canAccessAllClasses:true}:null;
+    const raw=readCookie(req,settings.cookieName);
+    return raw?(await accountFromSession(raw))?.reviewer||null:null;
+  }
+  return { authenticate, login, logout, revalidate };
 }
 
 // Export cũ được giữ để test hoặc module ngoài repo chưa cần đổi đồng thời.
