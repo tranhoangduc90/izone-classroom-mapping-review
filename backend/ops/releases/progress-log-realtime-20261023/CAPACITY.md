@@ -6,7 +6,7 @@ Phạm vi cuối được chốt: **30 lớp ×18 học viên =540 người**. �
 
 - API Node24.19 từ image live đã ghim, giới hạn2CPU/2GiB; PostgreSQL16 riêng2CPU/768MiB, Learning pool15 và Mapping pool5. VPS dùng chung với các dịch vụ khác; quota không phải CPU dành riêng.
 - Máy phát tải ở máy local, đi qua SSH loopback. HTTP gồm độ trễ mạng; hiệu chỉnh đồng hồ có RTT tốt nhất30ms. Không đưa cookie/khóa/hồ sơ người thật vào mô hình.
-- Cookie giả đi qua chính truy vấn xác minh/gia hạn phiên; không giả gọi Google hoặc broker. Ba NAT giả, phiếu hai phần/ba câu phản hồi mở, khoảng5,8KB câu trả lời/người. Không đại diện cho mọi độ dài đề, loại câu hoặc thiết bị.
+- Cookie giả đi qua chính truy vấn xác minh/gia hạn phiên; không giả gọi Google hoặc broker. Ba NAT giả, phiếu hai phần/ba câu phản hồi mở,5400 ký tự tương ứng7695 byte UTF-8 nội dung trả lời/người (chưa gồm tên trường/metadata). Không đại diện cho mọi độ dài đề, loại câu hoặc thiết bị.
 - Nháp mỗi10giây/người; thử một và hai tab/GV. Ca nộp dồn có540 người, mỗi người hai checkpoint rồi final trong cửa sổ30giây.
 - Độ trễ tới GV ở bảng là từ `savedAt` DB tới lúc client nhận JSON, chưa phải đo trọn tới DOM. Mốc DB trước commit nên gồm phần transaction còn lại. Kiểm Chrome riêng đã giữ panel/nháp, không lỗi JS; không cộng hai phép đo để tạo một p95 đầu cuối giả.
 
