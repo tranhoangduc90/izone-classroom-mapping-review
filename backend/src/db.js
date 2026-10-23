@@ -1,4 +1,5 @@
 import pg from 'pg';
+import {reuseLearningQueryPlans,reuseTeacherSessionQueryPlans} from './learning-query-plans.js';
 
 const { Pool } = pg;
 
@@ -12,6 +13,7 @@ export function createDatabasePool(config) {
     application_name: 'izone_mapping_review_api'
   });
 
+  reuseTeacherSessionQueryPlans(pool);
   pool.on('error', () => {
     // Không ghi connection string hoặc dữ liệu truy vấn vào log.
     console.error('PostgreSQL pool gặp lỗi kết nối nền.');
@@ -29,6 +31,7 @@ export function createLearningDatabasePool(config) {
     application_name: 'izone_learning_api'
   });
 
+  reuseLearningQueryPlans(pool);
   pool.on('error', () => {
     // Không ghi connection string, token hoặc nội dung học viên vào log.
     console.error('PostgreSQL pool Progress Log gặp lỗi kết nối nền.');

@@ -1360,14 +1360,18 @@ export function createApp({
       }
       return next();
     });
-    app.use('/api/learning', createLearningRouter({
+    const learningRouter=createLearningRouter({
       pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret, logger,
+      realtimeEnabled:config.learningRealtimeEnabled,realtimeStreamEnabled:config.learningRealtimeStreamEnabled,
+      revalidate:auth.revalidate,
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: createLearningTestResultReader({ pool })
-    }));
+    });
+    app.locals.learningLiveUpdates=learningRouter.liveUpdates;
+    app.use('/api/learning',learningRouter);
   }
   if (config.speakingHomeworkEnabled && !speakingHomeworkPool) {
     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');

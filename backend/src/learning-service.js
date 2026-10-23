@@ -33,6 +33,7 @@ import {
   fetchLearningRosterForClassSql,
   fetchLearningTeacherDashboardSql,
   fetchLearningTeacherLiveDraftsSql,
+  fetchLearningTeacherLiveDraftDeltaSql,
   fetchPublicLearningAssignmentSql,
   fetchLearningJourneyContextSql,
   fetchLearningJourneyPlanSql,
@@ -353,6 +354,11 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
 
   return {
     ...(comments||{}),
+    // Một snapshot đọc giữ cùng connection; không phải xếp hàng lại sau từng vùng dữ liệu.
+    readUsing(database){
+      const reader=createLearningService({pool:database,erpScheduleReader,testSourceReader,testResultReader,portalTestReader,journeyCommentsEnabled,progressLinkCipher});
+      return {getTeacherDashboard:reader.getTeacherDashboard,getTeacherLiveDrafts:reader.getTeacherLiveDrafts,getQuestionAnalytics:reader.getQuestionAnalytics};
+    },
     async getPublicAssignment(publicToken) {
       // Kế thừa cơ chế đang chạy: chỉ gộp lượt đọc cùng phiếu đang chờ, không lưu quyền lâu hơn.
       if(pendingPublicAssignments.has(publicToken))return pendingPublicAssignments.get(publicToken);
@@ -1384,11 +1390,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       };
     },
 
-    async getTeacherLiveDrafts({ assignmentId, reviewer }) {
-      const result = await pool.query(fetchLearningTeacherLiveDraftsSql, [
+    async getTeacherLiveDrafts({ assignmentId, reviewer, studentRefs = null }) {
+      const result = await pool.query(studentRefs ? fetchLearningTeacherLiveDraftDeltaSql : fetchLearningTeacherLiveDraftsSql, [
         assignmentId,
         reviewer.email,
-        reviewer.canAccessAllClasses
+        reviewer.canAccessAllClasses,
+        ...(studentRefs ? [studentRefs] : [])
       ]);
       const row = assertSingleRow(
         result,
