@@ -1,0 +1,88 @@
+{
+  "0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb": {
+    "assetVersion": "sha256-0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb",
+    "sha256": "0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb",
+    "byteLength": 7347304,
+    "encryptedByteLength": 7347304,
+    "envelopeVersion": "MP3",
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/audio-assets/science-experiment-0454a5b56ce8e764.mp3",
+    "chunkSize": 1048576,
+    "chunks": [
+      {
+        "byteLength": 1048576,
+        "sha256": "841d0a6907d81f363689294b21ac6c3e833fa5ca6ba72e1c5ee96cf9c526642f"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "7d0a5822364880fdfe2d2bd9f0b02e297b9b1132e21583f65262ddaa4b449db0"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "7bf95ff40381e18230ef3f5b6e6ce47a64a363fe16e444757fd2a0db135594cf"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "a0744f3590e2815154f2e393b05f11c7570e7aa72c441033f3551f56e6e6ee40"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "9fdc3a227f83f39db8c5582b7748adad75cbd331d3e082b93457d29795802bfb"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "1ec529108f7999ffdd166f300489cc590e17ef7504a1573691034c13a35b402a"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "1433395a9e269c90bef0e7044269723ed912a6269350d462496261ab1b77a793"
+      },
+      {
+        "byteLength": 7272,
+        "sha256": "09f0299de123f223687d798d0bd2b2a42588a3660ace8279e3f11d79aa3ca99e"
+      }
+    ]
+  },
+  "b0220f6be93db9e2ddc28f3debd48d86f81c6b69c809f12a4c1135bee08afacc": {
+    "assetVersion": "sha256-b0220f6be93db9e2ddc28f3debd48d86f81c6b69c809f12a4c1135bee08afacc",
+    "sha256": "b0220f6be93db9e2ddc28f3debd48d86f81c6b69c809f12a4c1135bee08afacc",
+    "byteLength": 7781196,
+    "encryptedByteLength": 7781196,
+    "envelopeVersion": "MP3",
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/audio-assets/inclusive-design-b0220f6be93db9e2.mp3",
+    "chunkSize": 1048576,
+    "chunks": [
+      {
+        "byteLength": 1048576,
+        "sha256": "d80741d5d9c4d75879a00675b5cb741c4dcdbf8ee2ad613e60fa6ee9d9a7bed1"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "6158b8e4e2b49a04bd3fc29379b9931b8bf7aec215089b7d5b5b60706800d227"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "a1a0f955f76a352d39aff99e9ccca9520d80e05ae0b4f919b4f7a7108807c652"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "5324c1752a8514d434f1d3089dd9964c4a9ff22720cf14f1c02a298c3b028064"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "65a51a5ef708f3e861b3e3eb1f35372550ed91c00cde07d317afef92473c9226"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "706bdb832d3d7a10828bed65489b3f6e446da2aae9c1a59408e42fd302cc01be"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "be90f37d7ab533d3a66214d6f5d82580c9ae54a208c0b62d1698c23e09fed92e"
+      },
+      {
+        "byteLength": 441164,
+        "sha256": "f1b5f61887c65b1ce7936a981cb013955611fc53d48ae9fd3d5b9609cd0813cc"
+      }
+    ]
+  }
+}
