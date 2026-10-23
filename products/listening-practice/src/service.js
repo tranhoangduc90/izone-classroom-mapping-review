@@ -1,5 +1,5 @@
 import {CODE,TOTAL_MS,ListeningError,fail,hash,secret,uuid,emptyDraft,validateContent,grade,statusMessage,
- issueLease,checkpoint,publicAttempt,checkLease,canonical} from './domain.js';
+ issueLease,checkpoint,recoverCheckpoint,publicAttempt,checkLease,canonical} from './domain.js';
 import {timingFor} from './domain.js';
 import {authoredLesson} from './authored-content.js';
 import {lessonFor} from './lessons.js';
@@ -222,7 +222,8 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
  });
  const resume=input=>operation(input,'resume',async(db,b,state)=>{
   const a=active(state,input.attemptId);
-  if(input.recovery){checkpoint(a,input.recovery.snapshot,input.recovery.lease,clock(),{recovery:true});}
+  if(input.recovery){if(!recoverCheckpoint(a,input.recovery.snapshot,input.recovery.lease,clock()))return view(db,b,state);}
+  else if(a.progressRecovery)return view(db,b,state);
   if(a.usedMs>=timingFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);return view(db,b,state);}
   const lease=issueLease(a,input.owner,clock());return view(db,b,state,{lease,definition:true});
  });
@@ -239,7 +240,8 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
    const b=await binding(db,{token:input.token}),state=await work(db,b),a=active(state,input.attemptId);
    checkLease(a,input.lease);
    if(a.status==='paused'&&!pause)fail('ATTEMPT_PAUSED','Lần làm bài đang tạm dừng.');
-   checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause});
+   if(pause){if(!recoverCheckpoint(a,input.snapshot,input.lease,clock())){await save(db,b,state);return view(db,b,state);}}
+   else checkpoint(a,input.snapshot,input.lease,clock());
    if(a.usedMs>=timingFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
    await save(db,b,state);return view(db,b,state);
@@ -250,13 +252,13 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   const old=state.attempts.at(-1);if(!old||old.id!==input.attemptId)fail('ATTEMPT_CHANGED','Lần làm bài đã đổi.');
   if(old.status==='submitted'&&input.lease)fail('ATTEMPT_CLOSED','Lần này vừa được nộp. Xem kết quả trước khi reset.');
   if(['running','paused'].includes(old.status)){
-   checkLease(old,input.lease);if(input.snapshot)checkpoint(old,input.snapshot,input.lease,clock(),{recovery:true});
+   checkLease(old,input.lease);if(input.snapshot)recoverCheckpoint(old,input.snapshot,input.lease,clock());
    old.status='reset';old.endedAt=new Date(clock()).toISOString();
   }
   const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
  });
  const submit=input=>operation(input,'submit',async(db,b,state)=>{
-  const a=active(state,input.attemptId);checkpoint(a,input.snapshot,input.lease,clock(),{recovery:true});
+  const a=active(state,input.attemptId);if(!recoverCheckpoint(a,input.snapshot,input.lease,clock()))return view(db,b,state);
   if(input.method==='timeout'&&a.usedMs<timingFor(b.code).totalMs)fail('TIME_NOT_EXHAUSTED','Máy chủ chưa xác nhận dùng hết giờ.');
   submitted(a,b,state,a.usedMs>=timingFor(b.code).totalMs?'timeout':'manual');await enqueue(db,b,state,a);return view(db,b,state);
  });
