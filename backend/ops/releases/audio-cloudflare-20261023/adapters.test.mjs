@@ -21,12 +21,12 @@ test('only the twelve exact public MP3 versions opt in; old pins and flags remai
   process.env.AUDIO_CLOUDFLARE_ASSETS=asset.sha256;assert.equal(withCloudflareAudio(m,true).cloudflare.version,1);
  }finally{if(prior===undefined)delete process.env.AUDIO_CLOUDFLARE_ASSETS;else process.env.AUDIO_CLOUDFLARE_ASSETS=prior;}
 });
-test('runtime helpers and client/Worker protocol and public catalog stay in parity',async()=>{
+test('runtime helpers stay in parity across checkout line endings',async()=>{
  const root=new URL('../../../../',import.meta.url);
  const sources=await Promise.all([
   new URL('../audio-pages-20261023/cloudflare-audio.mjs',import.meta.url),
   new URL('products/term-mini-k67/src/cloudflare-audio.mjs',root),
   new URL('products/listening-practice/src/cloudflare-audio.mjs',root)
- ].map(p=>readFile(p,'utf8')));
+ ].map(async p=>(await readFile(p,'utf8')).replaceAll('\r\n','\n')));
  assert.equal(sources[0],sources[1]);assert.equal(sources[0],sources[2]);
 });
