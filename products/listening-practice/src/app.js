@@ -8,6 +8,7 @@ import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
 import {matchingReview} from './review.js';
 import {lessonFor} from './lessons.js';
+import {sendPublicAudioMetadata} from './public-audio.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
 export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api'}){
@@ -28,9 +29,10 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
  const mediaFor=hash=>mediaCatalog[hash]||(hash===audioHash?{audioFile,review}:null);
  const withReview=(result,path)=>{const review=mediaFor(result.definition?.audio?.sha256)?.review;return matchingReview(review,result)?{...result,review,reviewAudioUrl:path}:result;};
- const sendReviewAudio=(result,res)=>{
+ const sendReviewAudio=(result,res,req)=>{
   const media=mediaFor(result.definition?.audio?.sha256),review=media?.review,audioFile=media?.audioFile;
   if(!matchingReview(review,result)||!audioFile)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
+  if(sendPublicAudioMetadata(req,res,result.definition?.audio?.sha256))return;
   res.set('Cache-Control','private, no-store');res.sendFile(audioFile);
  };
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
@@ -49,6 +51,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const access=await service.audioAccess({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
   const file=mediaFor(access.sha256)?.audioFile;
   if(!file)throw new ListeningError('AUDIO_UNAVAILABLE','Audio chưa sẵn sàng.',503);
+  if(sendPublicAudioMetadata(req,res,access.sha256))return;
   res.set('Cache-Control','private, no-store');res.sendFile(file);
  }));
  app.get('/api/config',(req,res)=>res.json({googleClientId}));
@@ -73,7 +76,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  }));
  app.get('/api/review-audio/:attemptId',wrap(async(req,res)=>{
   const result=await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
-  sendReviewAudio(result,res);
+  sendReviewAudio(result,res,req);
  }));
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap});
@@ -102,7 +105,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.get('/api/teacher/review-audio/:submissionId',wrap(async(req,res)=>{
   const identity=await teacherSessions.read(req);
   const result=await service.teacherResult({submissionId:z.uuid().parse(req.params.submissionId),email:identity.email,subject:identity.google_subject});
-  await teacherSessions.refresh(req,res,identity);sendReviewAudio(result,res);
+  await teacherSessions.refresh(req,res,identity);sendReviewAudio(result,res,req);
  }));
  app.use('/api/admin',(req,res,next)=>{
   const value=req.headers['x-listening-admin'];
