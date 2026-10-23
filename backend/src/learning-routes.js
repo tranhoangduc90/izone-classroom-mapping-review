@@ -218,7 +218,7 @@ function attemptRateKey(req) {
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
-  realtimeEnabled=false,realtimeStreamEnabled=true,revalidate=null }) {
+  realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null }) {
   const router = express.Router();
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
@@ -244,7 +244,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts});
-  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,logger});
+  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
   router.liveUpdates=liveUpdates;
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
@@ -456,7 +456,9 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
       canAccessAllClasses: req.reviewer.canAccessAllClasses
     });
     res.set('Cache-Control', 'no-store');
-    return res.json({ ok: true, reviewer: req.reviewer, ...options, capabilities:{liveUpdates:realtimeEnabled} });
+    return res.json({ ok: true, reviewer: req.reviewer, ...options,
+      assignments:options.assignments.map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
+      capabilities:{liveUpdates:realtimeEnabled} });
   }));
 
   router.get('/teacher/assignments/:assignmentId/live-updates',authenticate,asyncRoute(async(req,res)=>{

@@ -26,6 +26,7 @@ Luật nghiệp vụ giữ nguyên: lần nộp phần đầu thành công ghi n
 |---|---|
 | `LEARNING_REALTIME_ENABLED` | Mặc địnhfalse; bật sau migration và kiểm API. False giữ đường đọc tương thích |
 | `LEARNING_REALTIME_STREAM_ENABLED` | Mặc địnhtrue khi bật tính năng. False giữ đọc revision/delta và chế độ dự phòng |
+| `LEARNING_REALTIME_CLASS_IDS` | Danh sách ERP class ID ngăn cách bằng dấu phẩy; đợt thí điểm đặt`1294`(IC2305). Máy chủ kiểm scope và options đánh dấu từng phiếu; lớp khác giữ đường đọc cũ/Làm mới. Rỗng nghĩa toàn bộ lớp được cấp quyền, chỉ dùng khi đã chủ động mở rộng |
 | `LEARNING_DB_POOL_MAX` | Thử10/15/24; bản ứng viên cuối dùng15 trong kho thử, Mapping pool5. Pool24 không giải quyết ca nộp dồn; chưa áp dụng production |
 
 Phạm vi cuối Đức chốt là **30 lớp ×18 học viên =540 người**, không cần50 hoặc100 lớp. Các ngưỡng1s lưu nháp/2s cập nhật và nộp là mục tiêu thử, không phải bảo đảm đã đạt. Báo riêng mẫu số lớp/học viên, số tab, nhịp ghi, quota CPU/RAM, độ trễ và lỗi. Không suy khả năng tải từ HTTP200 hoặc số case test.

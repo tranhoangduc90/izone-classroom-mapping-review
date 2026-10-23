@@ -76,6 +76,19 @@ test('Gom writer trong cùng transaction nhưng hai giao dịch đồng thời v
   }finally{await tx.query('ROLLBACK').catch(()=>{});tx.release();await hub.close();await f.close();}
 });
 
+test('Giới hạn rollout kiểm class ID tại máy chủ, không thay quyền hoặc chặn dashboard cũ',async()=>{
+  const f=await setup();
+  const classId=(await f.admin.query('SELECT erp_course_class_id::text AS id FROM learning.form_assignment WHERE id=$1',[f.source.published.assignmentId])).rows[0].id;
+  const yes=createLearningLiveUpdates({pool:f.pool,service:f.service,classIds:[classId]}),no=createLearningLiveUpdates({pool:f.pool,service:f.service,classIds:['99999999']});
+  try{
+    const input={assignmentId:f.source.published.assignmentId,reviewer:teacher,force:true};
+    assert.ok((await yes.read(input)).dashboard);
+    await assert.rejects(no.read(input),error=>error.code==='LIVE_UPDATES_UNAVAILABLE');
+    assert.equal((await f.service.getTeacherDashboard(input)).assignmentId,input.assignmentId);
+    await assert.rejects(no.read({...input,reviewer:{email:'other@example.test',canAccessAllClasses:false}}),error=>error.httpStatus===404);
+  }finally{await yes.close();await no.close();await f.close();}
+});
+
 test('Phiên dùng kế hoạch truy vấn lại vẫn kiểm tài khoản, thu hồi và hết hạn tại DB mỗi lần',async()=>{
   const f=await setup(),sessions=new pg.Pool({connectionString:f.admin.options.connectionString,max:2});reuseTeacherSessionQueryPlans(sessions);
   try{

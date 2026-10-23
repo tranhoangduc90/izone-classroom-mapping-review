@@ -1363,6 +1363,7 @@ export function createApp({
     const learningRouter=createLearningRouter({
       pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret, logger,
       realtimeEnabled:config.learningRealtimeEnabled,realtimeStreamEnabled:config.learningRealtimeStreamEnabled,
+      realtimeClassIds:config.learningRealtimeClassIds,
       revalidate:auth.revalidate,
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,

@@ -1571,7 +1571,7 @@ export const fetchLearningTeacherLiveDraftDeltaSql = fetchLearningTeacherLiveDra
 );
 
 // Kiểm đúng cùng quyền lớp; không tính lại lịch sử/hành trình chỉ để xác minh một lượt đọc trực tiếp.
-export const authorizeLearningLiveAssignmentSql = `SELECT assignment.id
+export const authorizeLearningLiveAssignmentSql = `SELECT assignment.id,assignment.erp_course_class_id::text AS class_id
 FROM learning.form_assignment AS assignment WHERE assignment.id=$1::uuid
 AND ($3::boolean OR ${buildLearningClassAccessPredicate({reviewerEmailSql:'$2',classIdSql:'assignment.erp_course_class_id'})});`;
 
