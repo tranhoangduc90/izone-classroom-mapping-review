@@ -22,3 +22,15 @@ Source chuẩn ở `products/listening-practice/src/app.js`, `public-audio.js` v
 4. Chuyển từng API, kiểm health và endpoint thật; lỗi thì quay image cũ, giữ DB mới. Đọc lại source/public assets và dữ liệu. Không thử nộp/chấm/reset bài thật.
 
 Metadata public chứa URL/hash/size/chunk, không có credential hoặc định danh học viên. Khi thay audio tương lai, tạo tên chứa hash mới, kiểm bytes và cập nhật catalog; không ghi đè file hoặc bản ghim cũ. Các file MP3 hiện tại giữ nguyên chất lượng và mốc clip.
+
+## Gói chuẩn bị chặng 1–3
+
+Pages đã phát hành trước; API chưa phát hành. Source API giữ local đến khi Đức duyệt riêng quyền push/merge và chuyển runtime. K56 vẫn phải ghép từ đúng image đang chạy, không build lại toàn backend từ main.
+
+`release-control.py` là công cụ cho người triển khai sau khi có duyệt. Action `plan` chỉ đọc: đối chiếu container ID, image, cấu hình và SHA-256 source, dừng khi live đổi. `apply` chuyển **một** runtime, giữ env/port/mount/alias/restart policy và giữ container cũ. `rollback` dùng receipt của chính lần chuyển, giữ database hiện tại, không xóa container lỗi. Health fail tự quay API cũ; health thành công vẫn phải kiểm nghiệp vụ riêng trước khi chuyển API tiếp theo. Không chạy `apply` trong lượt chuẩn bị.
+
+Đầu vào là baseline riêng tư có `runtimes`/`sources`, catalog image ứng viên và đường receipt chưa tồn tại. Không ghi credential vào baseline hoặc đầu ra. Thứ tự sau duyệt: K56 demo → K56 thật → Listening. Sao lưu/dump và đọc phiên đang học thực hiện sát giờ phát hành; các bản sao lưu cũ chỉ là lịch sử.
+
+Kiểm cục bộ công cụ vận hành bằng `python backend/ops/releases/audio-pages-20261023/test-release-control.py`. Các kiểm này chứng minh guard/config/quyền quay lại trên fixture; không phải bằng chứng đã thay Docker production. Khi hệ thống dùng Compose, cần ghi image overlay vào đúng cấu hình phát hành sau duyệt để lần `compose up` sau giữ bản mới; không thay tệp cấu hình server trong chặng 1–3.
+
+Ca K56 endpoint dùng toàn app live, SQL PGlite và học viên giả cho ba bài × hai thứ tự × hai profile. Kiểm đồng thời trên PGlite dùng một kết nối tuần tự, không thay thế đo contention của pool PostgreSQL production. Điều kiện Reading đã nộp được thiết lập trong kho thử; phần chấm/ghi điểm giữ suite riêng. Browser Listening phải dùng nguyên bundle thật của Buổi 8/10 nhưng roster/Docs giả, không gửi side effect ra ngoài.
