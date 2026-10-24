@@ -8,3 +8,7 @@ Mục này áp dụng khi sửa/tạo Term/Mini hoặc phần dùng chung ảnh 
 - Giữ controller K56 v2/owner-hold K67, storage key, Writing revision/blank rule và chọn Writing độc lập phiếu L/R. Demo không ghi Portal; thi bù không mượn bài chính; không áp chính sách giờ của khóa hoặc sản phẩm khác.
 - Kiểm phần sửa và consumer bị ảnh hưởng bằng dữ liệu giả riêng; không trỏ fixture vào DB production. Trước/sau phát hành so từng ID/hash dữ liệu cũ, phân loại ghi mới hợp lệ. Rollback runtime/asset tương thích phải giữ bài mới; không restore dump cũ, reset hoặc chấm lại để quay code.
 - Tách Git đã nhập, runtime đã chuyển và kết quả người dùng đã quan sát. Giữ giới hạn chưa kiểm AI/Google/Portal/thiết bị thật; hướng dẫn này không cấp quyền production hoặc thêm cổng cơ học.
+
+## Bảo toàn giao diện master #170
+
+Khi sửa hoặc tạo giao diện, đọc [nguồn, ngoại lệ và kiểm hồi quy](docs/MASTER170_INTERFACE_MEMORY.md). Giữ theme/adapter hiện hành; không phục hồi font/màu cũ từ skill hoặc demo. Kiểm consumer thực sự chịu tác động và giữ trạng thái chưa xác minh; không tự thay Test, Progress Log hoặc handout SW. Lưu bộ nhớ không phát lại runtime hoặc cấp quyền mới.
