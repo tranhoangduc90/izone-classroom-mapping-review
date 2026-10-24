@@ -100,6 +100,16 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function isConnectionError(error) {
+  return error instanceof TypeError && /failed to fetch|networkerror|load failed/i.test(error.message);
+}
+
+function uiErrorMessage(error) {
+  return isConnectionError(error)
+    ? 'Chưa kết nối được với hệ thống. Hãy kiểm tra mạng rồi thử lại.'
+    : error.message;
+}
+
 function statusLabel(status) {
   return {
     pending_review: 'Chờ giảng viên duyệt',
@@ -296,7 +306,7 @@ function initializeGoogleSignIn() {
           state.idToken = '';
           state.connected = false;
           updateConnectionUi();
-          showNotice(`Không thể đăng nhập: ${error.message}`, false, 'error');
+          showNotice(`Không thể đăng nhập: ${uiErrorMessage(error)}`, false, isConnectionError(error) ? 'attention' : 'error');
         }
       }
     });
@@ -319,7 +329,7 @@ function initializeGoogleSignIn() {
 }
 
 let decisionFocus = null;
-function decisionFeedback(message = '') {
+function decisionFeedback(message = '', kind = '') {
   if (document.documentElement.dataset.izoneTheme !== 'master170' || document.body.dataset.m170Product !== 'mapping') return;
   let feedback = elements.decisionForm.querySelector('.m170-decision-feedback');
   if (!feedback && !message) return;
@@ -327,6 +337,7 @@ function decisionFeedback(message = '') {
     feedback = document.createElement('p'); feedback.className = 'm170-decision-feedback'; feedback.setAttribute('role', 'alert');
     elements.decisionForm.querySelector('.dialog-actions').before(feedback);
   }
+  if (kind) feedback.dataset.state = kind; else delete feedback.dataset.state;
   feedback.textContent = message; feedback.hidden = !message;
 }
 function openDecision(review, decision) {
@@ -424,7 +435,7 @@ elements.connectButton.addEventListener('click', async () => {
   } catch (error) {
     state.connected = false;
     updateConnectionUi();
-    showNotice(`Không thể kết nối: ${error.message}`, false, 'error');
+    showNotice(`Không thể kết nối: ${uiErrorMessage(error)}`, false, isConnectionError(error) ? 'attention' : 'error');
   } finally {
     elements.connectButton.disabled = false;
   }
@@ -456,8 +467,11 @@ elements.decisionForm.addEventListener('submit', async event => {
     showNotice(isDemo ? 'Đã cập nhật bản xem thử; chưa ghi vào cơ sở dữ liệu.' : successMessage, true);
     render();
   } catch (error) {
-    showNotice(`Không thể ghi nhận quyết định: ${error.message}`, false, 'error');
-    if (state.selectedReview === decisionContext && elements.decisionDialog.open) decisionFeedback(elements.notice.textContent);
+    const unknown = isConnectionError(error);
+    showNotice(unknown
+      ? 'Chưa xác nhận được quyết định vì mất kết nối. Ghi chú vẫn được giữ trong cửa sổ này.'
+      : `Không thể ghi nhận quyết định: ${uiErrorMessage(error)}`, false, unknown ? 'attention' : 'error');
+    if (state.selectedReview === decisionContext && elements.decisionDialog.open) decisionFeedback(elements.notice.textContent, unknown ? 'attention' : '');
   } finally {
     elements.confirmDecisionButton.disabled = false;
     if (document.documentElement.dataset.izoneTheme === 'master170' && document.body.dataset.m170Product === 'mapping'
@@ -502,7 +516,7 @@ elements.refreshButton.addEventListener('click', async () => {
     render();
     showNotice(isDemo ? 'Đã làm mới dữ liệu mẫu.' : 'Đã tải lại hàng chờ mới nhất.', true);
   } catch (error) {
-    showNotice(`Không thể làm mới: ${error.message}${state.reviews.length ? ' Danh sách đang hiển thị là bản tải trước.' : ''}`, false, 'error');
+    showNotice(`Không thể làm mới: ${uiErrorMessage(error)}${state.reviews.length ? ' Danh sách đang hiển thị là bản tải trước.' : ''}`, false, isConnectionError(error) ? 'attention' : 'error');
   } finally {
     elements.refreshButton.disabled = false;
   }
@@ -511,7 +525,7 @@ elements.refreshButton.addEventListener('click', async () => {
 elements.statusFilter.value = DEFAULT_REVIEW_STATUS;
 updateConnectionUi();
 if (isDemo) {
-  loadReviews().then(render).catch(error => showNotice(`Không tải được dữ liệu mẫu: ${error.message}`, false, 'error'));
+  loadReviews().then(render).catch(error => showNotice(`Không tải được dữ liệu mẫu: ${uiErrorMessage(error)}`, false, isConnectionError(error) ? 'attention' : 'error'));
 } else if (state.accessCode && state.reviewerName) {
   loadReviews()
     .then(() => {
@@ -522,7 +536,7 @@ if (isDemo) {
     .catch(error => {
       state.connected = false;
       updateConnectionUi();
-      showNotice(`Hãy kết nối lại: ${error.message}`);
+      showNotice(`Hãy kết nối lại: ${uiErrorMessage(error)}`);
     });
 } else {
   render();
