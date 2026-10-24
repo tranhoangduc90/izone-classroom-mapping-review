@@ -113,7 +113,8 @@ function confidenceClass(confidence) {
   return Number(confidence) >= 0.9 ? 'high' : 'medium';
 }
 
-function showNotice(message, success = false) {
+function showNotice(message, success = false, kind = 'attention') {
+  elements.notice.dataset.state = success ? 'success' : kind;
   elements.notice.textContent = message;
   elements.notice.classList.toggle('success', success);
 }
@@ -295,7 +296,7 @@ function initializeGoogleSignIn() {
           state.idToken = '';
           state.connected = false;
           updateConnectionUi();
-          showNotice(`Không thể đăng nhập: ${error.message}`);
+          showNotice(`Không thể đăng nhập: ${error.message}`, false, 'error');
         }
       }
     });
@@ -313,11 +314,23 @@ function initializeGoogleSignIn() {
   script.async = true;
   script.defer = true;
   script.onload = renderButton;
-  script.onerror = () => showNotice('Không tải được màn hình đăng nhập Google.');
+  script.onerror = () => showNotice('Không tải được màn hình đăng nhập Google.', false, 'error');
   document.head.append(script);
 }
 
+let decisionFocus = null;
+function decisionFeedback(message = '') {
+  if (document.documentElement.dataset.izoneTheme !== 'master170' || document.body.dataset.m170Product !== 'mapping') return;
+  let feedback = elements.decisionForm.querySelector('.m170-decision-feedback');
+  if (!feedback && !message) return;
+  if (!feedback) {
+    feedback = document.createElement('p'); feedback.className = 'm170-decision-feedback'; feedback.setAttribute('role', 'alert');
+    elements.decisionForm.querySelector('.dialog-actions').before(feedback);
+  }
+  feedback.textContent = message; feedback.hidden = !message;
+}
 function openDecision(review, decision) {
+  decisionFocus = { id: review.id, decision, opener: document.activeElement };
   if (!isDemo && !state.reviewerName) {
     showNotice('Hãy nhập tên người duyệt và kết nối lại trước khi xác nhận.');
     elements.reviewerName.focus();
@@ -351,6 +364,7 @@ function openDecision(review, decision) {
   }[decision] || 'Xác nhận mapping';
   elements.confirmDecisionButton.className = decision === 'reject' ? 'button button-danger' : 'button button-primary';
   elements.decisionNote.value = '';
+  decisionFeedback();
   elements.decisionDialog.showModal();
 }
 
@@ -410,7 +424,7 @@ elements.connectButton.addEventListener('click', async () => {
   } catch (error) {
     state.connected = false;
     updateConnectionUi();
-    showNotice(`Không thể kết nối: ${error.message}`);
+    showNotice(`Không thể kết nối: ${error.message}`, false, 'error');
   } finally {
     elements.connectButton.disabled = false;
   }
@@ -428,6 +442,8 @@ elements.decisionForm.addEventListener('submit', async event => {
   if (event.submitter && event.submitter !== elements.confirmDecisionButton) return;
   if (!state.selectedReview) return;
   const { review, decision } = state.selectedReview;
+  const decisionContext = state.selectedReview;
+  decisionFeedback();
   elements.confirmDecisionButton.disabled = true;
   try {
     await saveDecision(review, decision, elements.decisionNote.value.trim());
@@ -440,9 +456,15 @@ elements.decisionForm.addEventListener('submit', async event => {
     showNotice(isDemo ? 'Đã cập nhật bản xem thử; chưa ghi vào cơ sở dữ liệu.' : successMessage, true);
     render();
   } catch (error) {
-    showNotice(`Không thể ghi nhận quyết định: ${error.message}`);
+    showNotice(`Không thể ghi nhận quyết định: ${error.message}`, false, 'error');
+    if (state.selectedReview === decisionContext && elements.decisionDialog.open) decisionFeedback(elements.notice.textContent);
   } finally {
     elements.confirmDecisionButton.disabled = false;
+    if (document.documentElement.dataset.izoneTheme === 'master170' && document.body.dataset.m170Product === 'mapping'
+        && state.selectedReview === decisionContext && elements.decisionDialog.open && document.activeElement === document.body) {
+      elements.confirmDecisionButton.focus({preventScroll: true});
+      elements.confirmDecisionButton.scrollIntoView({block: 'nearest', behavior: 'instant'});
+    }
   }
 });
 
@@ -454,6 +476,15 @@ elements.decisionDialog.addEventListener('cancel', event => {
   closeDecisionDialog();
 });
 elements.decisionDialog.addEventListener('close', () => {
+  if (!elements.decisionDialog.open && decisionFocus) {
+    const { id, decision, opener } = decisionFocus;
+    const buttons = [...elements.reviewTableBody.querySelectorAll('[data-decision]')];
+    const target = opener?.isConnected ? opener
+      : buttons.find(button => button.dataset.id === id && button.dataset.decision === decision)
+        || buttons.find(button => button.dataset.id === id) || elements.statusFilter;
+    target.focus();
+    decisionFocus = null;
+  }
   state.selectedReview = null;
 });
 
@@ -471,7 +502,7 @@ elements.refreshButton.addEventListener('click', async () => {
     render();
     showNotice(isDemo ? 'Đã làm mới dữ liệu mẫu.' : 'Đã tải lại hàng chờ mới nhất.', true);
   } catch (error) {
-    showNotice(`Không thể làm mới: ${error.message}`);
+    showNotice(`Không thể làm mới: ${error.message}${state.reviews.length ? ' Danh sách đang hiển thị là bản tải trước.' : ''}`, false, 'error');
   } finally {
     elements.refreshButton.disabled = false;
   }
@@ -480,7 +511,7 @@ elements.refreshButton.addEventListener('click', async () => {
 elements.statusFilter.value = DEFAULT_REVIEW_STATUS;
 updateConnectionUi();
 if (isDemo) {
-  loadReviews().then(render).catch(error => showNotice(`Không tải được dữ liệu mẫu: ${error.message}`));
+  loadReviews().then(render).catch(error => showNotice(`Không tải được dữ liệu mẫu: ${error.message}`, false, 'error'));
 } else if (state.accessCode && state.reviewerName) {
   loadReviews()
     .then(() => {

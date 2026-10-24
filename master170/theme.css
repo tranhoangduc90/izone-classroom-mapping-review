@@ -1,0 +1,66 @@
+/* Master #170 v1.0: chỉ entry được chuyển mới bật theme.
+   Các view Test dùng chung dashboard không nhận lớp giao diện này. */
+@font-face {
+  font-family: 'Source Sans 3';
+  src: url('./assets/SourceSans3-Variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Sans 3';
+  src: url('./assets/SourceSans3-Italic-Variable.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+}
+html[data-izone-theme='master170'] body:not([data-kind='test']) {
+  --m170-font: 'Source Sans 3', system-ui, sans-serif;
+  --m170-canvas: #f5f6f8;
+  --m170-surface: #fff;
+  --m170-structure: #174265;
+  --m170-ink: #1f2937;
+  --m170-muted: #586477;
+  --m170-brand: #db0829;
+  --m170-action: #152b4e;
+  --m170-action-hover: #10213c;
+  --m170-line: #dce1e7;
+  --m170-control: #7c8798;
+  --m170-selected: #edf1f7;
+  --m170-pending-bg: #e6eef5;
+  --m170-pending-fg: #174265;
+  --m170-attention-bg: #fff4e0;
+  --m170-attention-fg: #8a5300;
+  --m170-success-bg: #e4f5ea;
+  --m170-success-fg: #166534;
+  --m170-error-bg: #fde8eb;
+  --m170-error-fg: #9b0a22;
+  --m170-neutral-bg: #eaedf2;
+  --m170-neutral-fg: #586477;
+  font-family: var(--m170-font);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--m170-ink);
+  background: var(--m170-canvas);
+  color-scheme: light;
+}
+html[data-izone-theme='master170'] body:not([data-kind='test']) :where(input, textarea, select, button) { font-family: inherit; }
+html[data-izone-theme='master170'] body:not([data-kind='test']) :where(h1, h2, h3) { color: var(--m170-structure); font-weight: 700; line-height: 1.3; }
+html[data-izone-theme='master170'] body:not([data-kind='test']) :focus-visible { outline: 3px solid var(--m170-brand); outline-offset: 3px; }
+html[data-izone-theme='master170'] body:not([data-kind='test']) .m170-logo { display: block; width: auto; height: 48px; max-width: 100%; object-fit: contain; flex-shrink: 0; }
+@media (max-width: 600px) {
+  html[data-izone-theme='master170'] body:not([data-kind='test']) .m170-logo { height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-izone-theme='master170']:has(body:not([data-kind='test'])) { scroll-behavior: auto !important; }
+  html[data-izone-theme='master170'] body:not([data-kind='test']),
+  html[data-izone-theme='master170'] body:not([data-kind='test']) *,
+  html[data-izone-theme='master170'] body:not([data-kind='test']) *::before,
+  html[data-izone-theme='master170'] body:not([data-kind='test']) *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
