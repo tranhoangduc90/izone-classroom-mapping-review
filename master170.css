@@ -1,0 +1,32 @@
+@import url('./master170/theme.css');
+body[data-m170-product='mapping'] {
+  --ink: var(--m170-ink); --muted: var(--m170-muted); --line: var(--m170-line);
+  --surface: var(--m170-surface); --surface-soft: var(--m170-canvas);
+  --navy: var(--m170-structure); --blue: var(--m170-action);
+  --green: var(--m170-success-fg); --amber: var(--m170-attention-fg);
+  --red: var(--m170-error-fg); --shadow: none;
+}
+body[data-m170-product='mapping'] .topbar { background: var(--m170-surface); color: var(--m170-ink); border-bottom: 1px solid var(--m170-line); padding-top: 24px; padding-bottom: 24px; }
+body[data-m170-product='mapping'] .topbar h1 { font-size: 28px; letter-spacing: normal; margin-top: 16px; }
+body[data-m170-product='mapping'] :is(.subtitle, .topbar .eyebrow) { color: var(--m170-muted); }
+body[data-m170-product='mapping'] .eyebrow { color: var(--m170-muted); font-weight: 600; }
+body[data-m170-product='mapping'] .access-panel.connected { background: var(--m170-success-bg); border-color: var(--m170-line); }
+body[data-m170-product='mapping'] h2 { font-size: 22px; }
+body[data-m170-product='mapping'] h3 { font-size: 18px; }
+body[data-m170-product='mapping'] :is(.panel, .summary-card, .decision-dialog) { border-radius: 12px; box-shadow: none; }
+body[data-m170-product='mapping'] :is(label, td, .button) { font-size: 16px; }
+body[data-m170-product='mapping'] :is(th, .student-meta, .account-email, .reason, .summary-label, .access-panel p:not(.eyebrow), .confidence-row, .status, .mode-badge, .eyebrow) { font-size: 14px; text-transform: none; letter-spacing: normal; }
+body[data-m170-product='mapping'] :is(input, select, textarea) { border-color: var(--m170-control); border-radius: 8px; }
+body[data-m170-product='mapping'] .button { border-radius: 8px; box-shadow: none; }
+body[data-m170-product='mapping'] .button-primary:hover { background: var(--m170-action-hover); }
+body[data-m170-product='mapping'] .topbar .button-secondary { background: var(--m170-surface); color: var(--m170-action); border: 1px solid var(--m170-control); }
+body[data-m170-product='mapping'] .mode-badge { background: var(--m170-neutral-bg); color: var(--m170-neutral-fg); border-color: var(--m170-line); white-space: normal; }
+body[data-m170-product='mapping'] :is(.notice, .status-pending_review) { background: var(--m170-attention-bg); color: var(--m170-attention-fg); border-color: var(--m170-line); }
+body[data-m170-product='mapping'] :is(.notice.success, .status-approved) { background: var(--m170-success-bg); color: var(--m170-success-fg); border-color: var(--m170-line); }
+body[data-m170-product='mapping'] .notice[data-state='error'] { background: var(--m170-error-bg); color: var(--m170-error-fg); border-color: var(--m170-line); }
+body[data-m170-product='mapping'] :is(.status-rejected, .button-danger) { background: var(--m170-error-bg); color: var(--m170-error-fg); }
+body[data-m170-product='mapping'] .status-superseded { background: var(--m170-neutral-bg); color: var(--m170-neutral-fg); }
+body[data-m170-product='mapping'] .dialog-summary { font-size: 16px; }
+body[data-m170-product='mapping'] .m170-decision-feedback { margin: 12px 0; padding: 12px 16px; color: var(--m170-error-fg); background: var(--m170-error-bg); font-size: 16px; line-height: 1.5; border-radius: 8px; overflow-wrap: anywhere; }
+body[data-m170-product='mapping'] .dialog-close { width: 44px; height: 44px; }
+@media (max-width: 600px) { body[data-m170-product='mapping'] .topbar h1 { font-size: 26px; } }

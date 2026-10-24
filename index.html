@@ -1,16 +1,17 @@
 <!doctype html>
-<html lang="vi">
+<html data-izone-theme="master170" lang="vi">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Màn hình giảng viên duyệt ghép học viên ERP với tài khoản Google Classroom">
     <title>Duyệt ghép học viên</title>
     <link rel="stylesheet" href="styles.css">
-  </head>
-  <body>
+  <link rel="stylesheet" href="./master170.css">
+</head>
+  <body data-m170-product="mapping">
     <header class="topbar">
       <div>
-        <p class="eyebrow">IZONE · Google Classroom</p>
+        <img class="m170-logo" src="./master170/assets/izone-logo-color.png" alt="IZONE — IELTS chiến lược" width="145" height="48">
         <h1>Duyệt ghép học viên</h1>
         <p class="subtitle">Giảng viên xác nhận đề xuất ghép từ hệ thống ERP với tài khoản Google Classroom.</p>
       </div>
@@ -107,7 +108,7 @@
       </section>
     </main>
 
-    <dialog id="decisionDialog" class="decision-dialog">
+    <dialog id="decisionDialog" class="decision-dialog" aria-labelledby="dialogTitle">
       <form method="dialog" id="decisionForm">
         <button class="dialog-close" id="closeDecisionButton" type="button" aria-label="Đóng">×</button>
         <p class="eyebrow">Xác nhận quyết định</p>
@@ -129,6 +130,6 @@
     </dialog>
 
     <script src="config.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=20261024-master170-feedback2"></script>
   </body>
 </html>
