@@ -62,3 +62,10 @@ Hợp đồng request/response nằm ở `docs/data-contract.md`; bản phác th
 ## GitHub Pages
 
 Trang được triển khai từ nhánh `main`, thư mục `/ (root)`. Repo chỉ chứa mã nguồn giao diện và tài liệu kỹ thuật; không đưa dữ liệu học viên hoặc credential vào lịch sử Git.
+
+
+## Phản hồi mất kết nối trên giao diện — 24/10/2026
+
+Lỗi kết nối do trình duyệt được hiển thị bằng tiếng Việt với trạng thái cần chú ý. Nếu mất phản hồi khi gửi quyết định hoặc tải lại sau khi gửi, cửa sổ nói rõ kết quả chưa được xác nhận và ghi chú vẫn còn trong cửa sổ. Người dùng có thể đóng rồi làm mới để đọc lại hàng chờ; giao diện không tự gửi lại quyết định. Lỗi HTTP/API có phản hồi giữ nguyên lời và trạng thái lỗi hiện hành.
+
+Kiểm hồi quy: `tests/mapping-recovery-copy-browser.mjs`, đặt `PLAYWRIGHT_MODULE` và `MAPPING_RECOVERY_EVIDENCE_DIR` ra ngoài repo rồi chạy bằng Node. 26 ca trên 1440×1000 và 320×568 dùng frontend thật cùng Google/API giả, gồm đăng nhập, làm mới, gửi quyết định, mất phản hồi trước/sau xác nhận máy chủ, 403, 500 và JSON lỗi. Kiểm giữ đúng phiếu/tài khoản/ghi chú, không tự POST lại và đọc lại sau thao tác làm mới. Có thể đặt `MAPPING_RECOVERY_REVISION` để kiểm bản Git hoặc `MAPPING_RECOVERY_PUBLIC_BASE` để lấy tài nguyên Pages; API vẫn là fixture. Chưa xác minh Google Sign-In, quyền lớp, ERP hoặc Classroom thật và thiết bị thật. Không đổi API, xác thực, nghiệp vụ, dữ liệu hoặc backend Test/Progress Log.

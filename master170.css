@@ -28,5 +28,6 @@ body[data-m170-product='mapping'] :is(.status-rejected, .button-danger) { backgr
 body[data-m170-product='mapping'] .status-superseded { background: var(--m170-neutral-bg); color: var(--m170-neutral-fg); }
 body[data-m170-product='mapping'] .dialog-summary { font-size: 16px; }
 body[data-m170-product='mapping'] .m170-decision-feedback { margin: 12px 0; padding: 12px 16px; color: var(--m170-error-fg); background: var(--m170-error-bg); font-size: 16px; line-height: 1.5; border-radius: 8px; overflow-wrap: anywhere; }
+body[data-m170-product='mapping'] .m170-decision-feedback[data-state='attention'] { color: var(--m170-attention-fg); background: var(--m170-attention-bg); }
 body[data-m170-product='mapping'] .dialog-close { width: 44px; height: 44px; }
 @media (max-width: 600px) { body[data-m170-product='mapping'] .topbar h1 { font-size: 26px; } }
