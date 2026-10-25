@@ -1,0 +1,59 @@
+[
+  {
+    "lesson": 11,
+    "title": "Deep-sea mining",
+    "book": 19,
+    "test": 4,
+    "passage": 2,
+    "totalMs": 1200000,
+    "preparationMethods": {
+      "information": [
+        "Đọc các mẩu thông tin, xác định từ khóa nội dung và quan hệ cần tìm.",
+        "Scan bài đọc rồi đối chiếu nét nghĩa tương đồng; chọn chữ cái của đoạn.",
+        "Có thể làm nhóm này sau khi đã hiểu nội dung chính; một đoạn có thể chứa nhiều mẩu thông tin."
+      ],
+      "people": [
+        "Đọc danh sách tên, xác định vị trí mỗi người hoặc nhóm người trong bài.",
+        "Đọc thông tin quanh tên rồi đối chiếu ý với phát biểu.",
+        "Một người hoặc nhóm người có thể được dùng nhiều lần; kiểm đúng người đưa ra nhận định."
+      ],
+      "summary": [
+        "Đọc cả phần tóm tắt, đánh dấu từ khóa và giới hạn ONE WORD ONLY.",
+        "Xác định từ loại và loại thông tin cần điền.",
+        "Định vị trong bài, chọn đúng một từ và đọc lại câu hoàn chỉnh."
+      ]
+    },
+    "code": "67-practice-reading_c19_t4_p2_deep_sea_mining",
+    "groups": [
+      {
+        "id": "information",
+        "kind": "matching",
+        "label": "Matching Information",
+        "start": 14,
+        "end": 17
+      },
+      {
+        "id": "people",
+        "kind": "names",
+        "label": "Matching Names",
+        "start": 18,
+        "end": 23
+      },
+      {
+        "id": "summary",
+        "kind": "summary",
+        "label": "Summary Completion",
+        "start": 24,
+        "end": 26
+      }
+    ],
+    "paragraphs": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F"
+    ]
+  }
+]
