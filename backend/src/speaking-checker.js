@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { checkHowToSubmission } from './speaking-how-to-checker.js';
 import { checkStorySubmission } from './speaking-story-checker.js';
+import { checkStoryDetailSubmission } from './speaking-story-detail-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
 
@@ -127,6 +128,7 @@ export function validCompleted(section, messages, proposed) {
 
 export async function checkSubmission(input, dependencies = {}) {
   const section = input?.section;
+  if (section === 'story_detail') return checkStoryDetailSubmission(input, dependencies);
   if (section === 'how_to_do') return checkHowToSubmission(input, dependencies);
   if (['story_context', 'story_sequence'].includes(section)) return checkStorySubmission(input, dependencies);
   if (!sectionRules[section]) {
