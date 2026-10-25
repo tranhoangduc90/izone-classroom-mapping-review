@@ -97,7 +97,11 @@ function planProgressCell(document,tabId,progress) {
   const url=new URL(progress.link);
   if(url.origin!=='https://tranhoangduc90.github.io'||!/^\/izone-ai-team-pages\/speaking-homework\/teacher(?:-progress)?\.html$/.test(url.pathname))throw new Error('DOC_LINK_INVALID');
   if(existing===progress.text&&linkedLabel(runs,existing,progress.link))return {requests:[],revisionId:document.revisionId,status:'already_current'};
-  const known=existing===progress.lastText&&(!existing||linkedLabel(runs,existing,progress.lastLink));
+  // Bootstrap only: an operator must first record the exact old text/link in server-owned metadata.
+  const legacyStatus=progress.initialStatus&&/^(?:xong|đã hoàn thành đủ|https:\/\/chatgpt\.com\/share\/[a-f0-9-]{36})$/iu.test(existing);
+  const oldLinks=[...new Set(runs.map(r=>r.link).filter(Boolean))].sort();
+  const approvedInitial=legacyStatus&&JSON.stringify(oldLinks)===JSON.stringify(progress.lastLink?[progress.lastLink]:[]);
+  const known=existing===progress.lastText&&(!existing||linkedLabel(runs,existing,progress.lastLink)||approvedInitial);
   const attempted=existing===progress.attemptText&&linkedLabel(runs,existing,progress.attemptLink);
   const legacyFinal=progress.receiptId&&existing===STATUS_TEXT&&linkedLabel(runs,existing,progress.link);
   if(!known&&!attempted&&!legacyFinal)throw new Error('DOC_MANUAL_CONFLICT');

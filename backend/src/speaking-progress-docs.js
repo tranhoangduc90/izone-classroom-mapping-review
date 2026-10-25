@@ -84,7 +84,8 @@ export function planProgressWrite(document,row) {
   checkProgressDocument(document,row);
   return planSpeakingStatusWrite({document,documentId:row.document_id,tabId:row.tab_id,receiptId:row.payload.receiptId,
     teacherBaseUrl:teacherBase+'teacher.html',progress:{...row.payload,lastText:row.last_text,lastLink:row.last_link,
-      attemptText:row.attempt_text,attemptLink:row.attempt_link}});
+      attemptText:row.attempt_text,attemptLink:row.attempt_link,
+      initialStatus:Number(row.applied_sequence)===0&&!row.payload.receiptId}});
 }
 export function verifyProgressWrite(document,row) {
   checkProgressDocument(document,row);

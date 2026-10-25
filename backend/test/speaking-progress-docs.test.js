@@ -30,3 +30,21 @@ test('wrong document or a modified link cannot count as synchronized',()=>{
   assert.equal(verifyProgressWrite(document(payload.text,'https://example.invalid'),row),false);
   assert.throws(()=>planProgressWrite({...document(),documentId:'another-doc'},row),/DOC_IDENTITY_MISMATCH/);
 });
+
+test('first synchronization can adopt an approved exact legacy status while keeping ordinary manual edits protected',()=>{
+  for(const text of ['xong','đã hoàn thành đủ']){
+    const approved={...row,last_text:text,last_link:'',applied_sequence:0};
+    assert.ok(planProgressWrite(document(text),approved).requests.length);
+    assert.throws(()=>planProgressWrite(document(text),row),/DOC_MANUAL_CONFLICT/);
+    assert.throws(()=>planProgressWrite(document(text+' mới'),approved),/DOC_MANUAL_CONFLICT/);
+    assert.throws(()=>planProgressWrite(document(text),{...approved,applied_sequence:1}),/DOC_MANUAL_CONFLICT/);
+  }
+});
+
+test('adopting a legacy share URL requires its exact link and excludes already submitted work',()=>{
+  const text='https://chatgpt.com/share/10000000-0000-4000-8000-000000000001';
+  const approved={...row,last_text:text,last_link:text,applied_sequence:0};
+  assert.ok(planProgressWrite(document(text,text),approved).requests.length);
+  assert.throws(()=>planProgressWrite(document(text,'https://example.invalid'),approved),/DOC_MANUAL_CONFLICT/);
+  assert.throws(()=>planProgressWrite(document(text,text),{...approved,payload:{...payload,receiptId:'10000000-0000-4000-8000-000000000002'}}),/DOC_MANUAL_CONFLICT/);
+});
