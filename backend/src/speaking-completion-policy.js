@@ -24,6 +24,23 @@ export function speakingFingerprint(messages) {
   return createHash('sha256').update(messages.map(m => `${m.role}\u0000${m.text.trim()}`).join('\u0001')).digest('hex');
 }
 
+function intermediateCompletion(messages,quote,index) {
+  const scoped=/(?:bước|phần|part)\s*(?:\d+|một|hai|ba|bốn|năm|đầu)|(?:\d+|một|hai|ba|bốn|năm)\s*(?:bước|phần|điểm|câu)/iu.test(quote);
+  const whole=/(?:hoàn\s*(?:thành|tất)|xong).{0,35}(?:toàn bộ|tất cả)\s*(?:bài|buổi)|(?:hoàn\s*(?:thành|tất)|xong)\s*(?:bài luyện|bài tập|buổi học|buổi luyện)/iu.test(quote);
+  if(!scoped||whole)return false;
+  const text=messages[index]?.text||'',offset=text.indexOf(quote),claim=quote.search(candidate);
+  const tail=[text.slice(Math.max(0,offset)+Math.max(0,claim)+4),...messages.slice(index+1,index+3).filter(m=>m.role==='assistant').map(m=>m.text)].join('\n\n');
+  const tasks=/(?:bây giờ|tiếp theo|chuyển sang|sang bước).{0,100}?(?:bước\s*\d|phần\s*\d|part\s*[13])|(?:^|\n)\s*#{0,6}\s*\*{0,2}(?:bước|phần|part)\s*\d[^\n]{0,180}(?:thực hành|luyện|practice|fluency|part\s*[13])|hãy\s+(?:ghép|nói lại|trả lời)[^\n]{0,150}(?:toàn bộ|hoàn chỉnh|từ đầu đến cuối)/gimu;
+  for(const task of tail.matchAll(tasks)){
+    const prefix=tail.slice(Math.max(0,task.index-180),task.index);
+    if(/tùy chọn|luyện thêm|nếu.{0,30}muốn|bạn.{0,15}muốn|optional/iu.test(prefix))continue;
+    const next=tail.slice(task.index,task.index+180);
+    if(/tổng\s*kết/iu.test(next)&&!/[?]|part\s*[13]|câu hỏi|hãy\s+(?:trả lời|nói|viết)/iu.test(next))continue;
+    return true;
+  }
+  return false;
+}
+
 // Nhận hội thoại và bài đang nộp; chỉ chọn ngữ cảnh để AI hiểu lời kết thúc.
 // Giữ số tin gốc và mọi ứng viên, kể cả lời kết thúc trước phần luyện thêm.
 // Vượt giới hạn trả lỗi để kiểm lại, không kết luận học viên làm thiếu.
@@ -37,7 +54,7 @@ function completionContext(messages) {
       if (/^\s*>/.test(paragraph) || !candidate.test(paragraph)) continue;
       const found = paragraph.search(candidate);
       const quote = paragraph.slice(Math.max(0, found - 200), found + 700).trim();
-      if (quote.length >= 10) candidates.push({ id: `c${candidates.length + 1}`, message: i + 1, quote });
+      if (quote.length >= 10 && !intermediateCompletion(messages,quote,i)) candidates.push({ id: `c${candidates.length + 1}`, message: i + 1, quote });
     }
     for (let p = Math.max(0, i - 2); p <= Math.min(messages.length - 1, i + 2); p++) selected.add(p);
   }
@@ -97,14 +114,10 @@ export function validateCompletion(messages, result) {
   // Không dùng câu trong code hoặc blockquote làm lời xác nhận thực tế của chatbot.
   const prose = text.replace(/```[\s\S]*?```/g, '').split('\n').filter(line => !/^\s*>/.test(line)).join('\n');
   if (!prose.includes(result.quote)) throw new Error('COMPLETION_QUOTED_EXAMPLE');
-  const context = [text, ...messages.slice(result.message, result.message + 2).filter(m => m.role === 'assistant').map(m => m.text)].join('\n');
-  const stepClaim = /(?:bước|phần|part)\s*\d|\d\s*câu/iu.test(result.quote);
-  const wholeClaim = /(?:toàn bộ|tất cả|buổi (?:học|luyện)|bài (?:tập|luyện))/iu.test(result.quote);
-  const nextRequired = /(?:bây giờ|tiếp theo|chuyển sang|sang bước).{0,100}(?:bước\s*\d|phần\s*\d|part\s*[13])/isu.test(context);
-  if (stepClaim && !wholeClaim && nextRequired && !/tổng\s*kết|luyện\s*thêm|tùy\s*chọn|optional/iu.test(context)) {
+  if (intermediateCompletion(messages,result.quote,result.message-1)) {
     throw new Error('COMPLETION_STEP_ONLY');
   }
-  return { policyVersion: COMPLETION_POLICY, recognizerVersion:'goal-recognition-20261025-v2',message: result.message, quote: result.quote,
+  return { policyVersion: COMPLETION_POLICY, recognizerVersion:'scope-recognition-20261025-v3',message: result.message, quote: result.quote,
     scope: 'whole_practice', matched: true, confidence: result.confidence };
 }
 
