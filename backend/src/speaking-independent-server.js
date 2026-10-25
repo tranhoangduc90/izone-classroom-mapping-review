@@ -12,6 +12,8 @@ import { runSpeakingDoctorJob } from './speaking-doctor-worker.js';
 import { timingSafeEqual,createHash } from 'node:crypto';
 import { createIndependentDocuments,createDocsGateway,writeIndependentDocument } from './speaking-independent-documents.js';
 import { createOpeningDocsGateway } from './speaking-docs-read.js';
+import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
+import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
@@ -162,11 +164,13 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const source=createIndependentSourceClient({base:env.SPEAKING_SOURCE_URL,secret:env.SPEAKING_SOURCE_SECRET});
   const gateway=env.SPEAKING_DOCS_GATEWAY_URL?createDocsGateway({url:env.SPEAKING_DOCS_GATEWAY_URL,secret:env.SPEAKING_DOCS_GATEWAY_SECRET}):null;
   const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
+  const progressGateway=env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE}):null;
+  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
-  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,gateway):null}});
+  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
   const teacher=createSpeakingTeacherProgress({pool,source});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
-  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await pool.end();});
+  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await pool.end();});
 }

@@ -50,6 +50,8 @@ async function fixture() {
   }
   await db.exec(`ALTER TABLE speaking_homework.assignment_document ADD COLUMN classroom_submission_id text,
     ADD COLUMN cta_verified_at timestamptz;
+    ALTER TABLE speaking_homework.assignment ADD COLUMN registration_source text NOT NULL DEFAULT 'classroom';
+    ALTER TABLE speaking_homework.practice_link ADD COLUMN evidence jsonb NOT NULL DEFAULT '{}'::jsonb;
     INSERT INTO speaking_homework.assignment (class_id,course_id,course_work_id,assignment_code,title,status)
       VALUES (2304,'100','101','${code}','Homework Lesson 3','open'),
         (2305,'200','201','${code}','Homework Lesson 3','open');

@@ -7,6 +7,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
+import {createSpeakingDocsJobs} from '../src/speaking-docs-jobs.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
   verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
@@ -29,7 +30,7 @@ function poolFrom(db) {
   return { query, async connect() { return { query, release() {} }; } };
 }
 
-async function fixture() {
+async function fixture({progressDocsEnabled=false}={}) {
   const db = new PGlite();
   await db.exec(`
     CREATE SCHEMA mapping;
@@ -61,6 +62,8 @@ async function fixture() {
   `);
   const migration = await readFile(new URL('../ops/migrations/202609270001_speaking_homework_candidate.sql', import.meta.url), 'utf8');
   await db.exec(migration);
+  await db.exec(`CREATE TABLE speaking_homework.main_conversation_snapshot(link_id uuid PRIMARY KEY,original_fingerprint text,fingerprint text,messages jsonb,source text DEFAULT 'accepted',recovery_job_id uuid);
+    CREATE TABLE speaking_homework.practice_conversation_snapshot(LIKE speaking_homework.main_conversation_snapshot INCLUDING ALL);`);
   await db.exec(`ALTER TABLE speaking_homework.assignment_document
     ADD COLUMN classroom_submission_id TEXT,
     ADD COLUMN cta_verified_at TIMESTAMPTZ;
@@ -81,6 +84,7 @@ async function fixture() {
   await db.exec(doctorMigration);
   const lesson4Migration = await readFile(new URL('../ops/migrations/202609290003_speaking_lesson4_practice.sql', import.meta.url), 'utf8');
   await db.exec(lesson4Migration);
+  await db.exec("ALTER TABLE speaking_homework.practice_link ADD COLUMN evidence jsonb NOT NULL DEFAULT '{}'::jsonb;");
   const directMigration = await readFile(new URL('../ops/migrations/202609300001_speaking_direct_homework.sql', import.meta.url), 'utf8');
   await db.exec(directMigration);
   assert.equal((await pool.query('SELECT doctor_course_key FROM speaking_homework.assignment WHERE id = $1',
@@ -110,8 +114,47 @@ async function fixture() {
       (assignment_id, student_ref, document_id, token_hash) VALUES ($1, $2, $3, $4)`,
     [assignmentId, ref, doc, crypto.createHash('sha256').update(token).digest('hex')]);
   }
-  return { db, pool, service: createSpeakingHomeworkService({ pool }) };
+  if(progressDocsEnabled){
+    await db.exec("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='speaking_homework_api') THEN CREATE ROLE speaking_homework_api; END IF; END $$;");
+    await db.exec(await readFile(new URL('../ops/migrations/202610250930_speaking_progress_docs.sql',import.meta.url),'utf8'));
+  }
+  return { db, pool, service: createSpeakingHomeworkService({ pool,progressDocsEnabled }) };
 }
+
+test('legacy records Docs progress immediately after one accepted part without a receipt',async()=>{
+  const f=await fixture({progressDocsEnabled:true});try{
+    await checkAccepted(f.service,accessToken,studentRef,'paraphrase','a',5);
+    const state=(await f.pool.query('SELECT * FROM speaking_homework.doc_progress')).rows;
+    assert.equal(state.length,1);assert.equal(state[0].document_id,'doc-A');
+    assert.match(state[0].payload.text,/đã xác nhận 5 câu/);assert.equal(state[0].payload.receiptId,null);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_homework.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
+test('legacy managed final waits without consuming attempts and remains compatible with flag off',async()=>{
+  const f=await fixture({progressDocsEnabled:true});try{
+    await checkAccepted(f.service,accessToken,studentRef,'paraphrase','a',5);
+    await checkAccepted(f.service,accessToken,studentRef,'speaking','b',3);
+    const receipt=await f.service.finish({accessToken,studentRef});
+    for(let i=0;i<7;i++)assert.equal(await f.service.claimOutboxJob('write_doc'),null);
+    const old=createSpeakingHomeworkService({pool:f.pool,progressDocsEnabled:false});
+    assert.equal(await old.claimOutboxJob('write_doc'),null);
+    const pending=(await f.pool.query("SELECT attempts FROM speaking_homework.outbox WHERE kind='write_doc'")).rows[0];
+    assert.equal(pending.attempts,0);
+    await f.pool.query("UPDATE speaking_homework.doc_progress SET status='verified',applied_sequence=sequence");
+    const job=await old.claimOutboxJob('write_doc');assert.ok(job.job_id);
+    const row=(await f.pool.query('SELECT * FROM speaking_homework.doc_progress')).rows[0];
+    assert.equal(row.payload.receiptId,receipt.id);
+    const document={documentId:row.document_id,revisionId:'test-final-revision',tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[
+      {paragraph:{elements:[{textRun:{content:row.assignment_code+'\n'}}]}},
+      {table:{tableRows:[{tableCells:[{content:[{paragraph:{elements:[{textRun:{content:'TÌNH TRẠNG NỘP BÀI SPEAKING\n'}}]}}]}]},
+      {tableCells:[{content:[{paragraph:{elements:[{startIndex:100,endIndex:101+row.payload.text.length,textRun:{content:row.payload.text+'\n',textStyle:{link:{url:row.payload.link}}}}]}}]}]}]}}
+    ]}}}]};
+    const writer=createSpeakingDocsJobs({pool:f.pool,progressDocsEnabled:false});
+    assert.equal((await writer.plan({jobId:job.job_id,document})).requests.length,0);
+    assert.equal((await writer.verifyAndComplete({jobId:job.job_id,document})).status,'done');
+  }finally{await f.db.close();}
+});
 
 async function checkAccepted(service, token, ref, part, letter, count, fp = fingerprint(letter)) {
   await service.requestCheck({ accessToken: token, studentRef: ref, part, rawUrl: share(letter) });

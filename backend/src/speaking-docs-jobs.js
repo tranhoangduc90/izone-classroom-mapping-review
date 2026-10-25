@@ -1,15 +1,24 @@
 import { planSpeakingStatusWrite, verifySpeakingStatusWrite } from './speaking-docs-writer.js';
 import { SpeakingHomeworkError } from './speaking-homework.js';
+import {verifyProgressWrite,existingSpeakingDocsProgress} from './speaking-progress-docs.js';
 
 const TEACHER_PAGE = 'https://tranhoangduc90.github.io/izone-ai-team-pages/speaking-homework/teacher.html';
 
 // Dữ liệu vào: job ghi Google Docs đã nhận bởi worker và JSON của Docs API.
 // Việc chính: xác minh job/Doc/receipt rồi lập lệnh chỉ sửa ô vàng dưới tiêu đề Speaking.
 // Kết quả: kế hoạch có khóa revision, hoặc xác nhận ô đã ghi đúng sau một lần retry.
-export function createSpeakingDocsJobs({ pool }) {
+export function createSpeakingDocsJobs({ pool,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true' }) {
+  async function managed(job,document){
+    if(!progressDocsEnabled&&!await existingSpeakingDocsProgress(pool,'speaking_homework',job.grant_id))return null;
+    const row=(await pool.query('SELECT * FROM speaking_homework.doc_progress WHERE unit_id=$1',[job.grant_id])).rows[0];
+    if(!row)return null;
+    if(row.payload.receiptId!==job.receipt_id||row.status!=='verified'||!verifyProgressWrite(document,row))
+      throw new SpeakingHomeworkError('DOC_PROGRESS_PENDING','Tiến độ Docs đang chờ đồng bộ; bài đã nộp vẫn được giữ.');
+    return row;
+  }
   async function loadJob(jobId) {
     const found = await pool.query(`SELECT o.id, o.status, o.kind, r.id AS receipt_id,
-        g.document_id
+        g.document_id,g.id AS grant_id
       FROM speaking_homework.outbox o
       JOIN speaking_homework.receipt r ON r.id = o.receipt_id
       JOIN speaking_homework.submission s ON s.id = r.submission_id
@@ -24,6 +33,7 @@ export function createSpeakingDocsJobs({ pool }) {
 
   async function plan({ jobId, document }) {
     const job = await loadJob(jobId);
+    if(await managed(job,document))return {status:'already_current',requests:[],documentId:job.document_id,receiptId:job.receipt_id,revisionId:document.revisionId};
     if (job.status === 'done') {
       if (!verifySpeakingStatusWrite({ document, documentId: job.document_id,
         linkUrl: `${TEACHER_PAGE}?receipt=${job.receipt_id}` })) {
@@ -45,7 +55,7 @@ export function createSpeakingDocsJobs({ pool }) {
   async function verifyAndComplete({ jobId, document }) {
     const job = await loadJob(jobId);
     const linkUrl = `${TEACHER_PAGE}?receipt=${job.receipt_id}`;
-    if (!verifySpeakingStatusWrite({ document, documentId: job.document_id, linkUrl })) {
+    if (!await managed(job,document) && !verifySpeakingStatusWrite({ document, documentId: job.document_id, linkUrl })) {
       throw new SpeakingHomeworkError('DOC_READBACK_MISMATCH',
         'Google Docs chưa có đúng dòng xác nhận và link giảng viên.');
     }

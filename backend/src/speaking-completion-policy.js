@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 export const COMPLETION_POLICY = 'speaking-fairness-2026-10-18-v1';
 const ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT
   || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
-const candidate = /hoàn\s*(?:thành|tất)|xong|(?:kết\s*thúc|finish).{0,25}(?:buổi|bài|luyện|practice|session)|(?:buổi|bài|luyện|practice|session).{0,45}(?:kết\s*thúc|complete|finish|ended)|(?:you|we).{0,25}(?:complete|finish)|all\s*done|that.s\s*(?:all|everything)/iu;
+const candidate = /hoàn\s*(?:thành|tất)|xong|(?:đã\s+)?đạt\s+(?:(?:được|đủ)\s+)?(?:tiêu\s*chí|mục\s*tiêu|yêu\s*cầu)|(?:meet|met|achiev\w*)\s+(?:the\s+|all\s+|your\s+)?(?:criteria|requirements?|goals?|objectives?|targets?)|(?:kết\s*thúc|finish).{0,25}(?:buổi|bài|luyện|practice|session)|(?:buổi|bài|luyện|practice|session).{0,45}(?:kết\s*thúc|complete|finish|ended)|(?:you|we).{0,25}(?:complete|finish)|all\s*done|that.s\s*(?:all|everything)/iu;
 const titles = {
+  story_context: 'Xây dựng bối cảnh 4+2: ba tình huống có hướng dẫn',
+  story_sequence: 'Kể chuyện O-B-D-A: Mở đầu, Trước, Trong, Sau; mỗi phần ba câu',
   how_to_do: 'Cách làm một việc: phần có hướng dẫn và phần tự do',
   comparison_direct: 'So sánh trực tiếp: phần có hướng dẫn và phần tự do',
   comparison_extended: 'So sánh mở rộng: phần có hướng dẫn và phần tự do',
@@ -66,6 +68,7 @@ export async function analyzeChatbotCompletion(messages, target, call = fetch) {
       'Không tính lời học viên, ví dụ/prompt được trích dẫn, câu điều kiện/tương lai, hay chỉ xong một câu/một bước trong khi còn phần bắt buộc. Với bài hai giai đoạn, xong phần có hướng dẫn rồi giao phần tự do chưa phải xong cả bài. Một emoji hoặc lời khen riêng lẻ chưa xác nhận hoàn thành.',
       'Nếu cùng tin hoặc tin kế tiếp chatbot đang giao bước thực hành bắt buộc mới (ví dụ: Bước 3 đạt hai câu Part 1, bây giờ sang Bước 4 luyện Part 3), thì KHÔNG chọn lời xong bước cũ làm kết thúc cả bài. Phần 3/Part 3 có câu hỏi thực hành vẫn là bài tập; không nhầm với phần Tổng kết chỉ ôn lại kiến thức.',
       'Với bài hai phần thực hành: chatbot đã báo xong phần có hướng dẫn trước đó, rồi báo xong toàn bộ phần tự do thì đủ xác nhận hoàn thành các lượt luyện. Phần tổng kết sau đó không phải lượt thực hành bắt buộc. Lời xác nhận sớm vẫn có giá trị kể cả chatbot rút lại hoặc sửa lời sau đó.',
+      'Cách diễn đạt “đã đạt tiêu chí/mục tiêu/yêu cầu” của bước thực hành CUỐI CÙNG cũng là lời xác nhận hoàn thành. Đối chiếu các bước trước và lộ trình đã nêu: ví dụ Bước 1 nhận diện, Bước 2 hoàn thành câu, Bước 3 trả lời hai câu Part 1; đã xong Bước 1–2 và chatbot báo đạt tiêu chí Bước 3 thì nhận cả bài. Câu hỏi “bạn muốn luyện thêm không?” sau mốc này là tùy chọn. Không nhầm đạt mục tiêu bước đầu với hoàn thành cả bài nếu còn phần bắt buộc.',
       'Hãy tìm lời hoàn thành cả bài từ đầu tới cuối. Chỉ cần MỘT lời hoàn thành thực tế ở BẤT KỲ thời điểm nào là đủ. Đặc biệt, lời hoàn thành rõ cả bài ở tin sớm không bị vô hiệu bởi chatbot về sau đổi ý và đòi bổ sung. Nếu có nhiều ứng viên, ưu tiên lời hoàn thành rõ cả buổi/bài sớm nhất.',
       'Chỉ trả JSON {"completed":true,"matched":true,"confidence":0.99,"scope":"whole_practice","candidateId":"c12"}. Chọn DUY NHẤT mã ứng viên đã cho; không tự viết câu trích hoặc bịa số tin. Nếu không có xác nhận thì completed=false; chưa chắc confidence<0.8. Những tin không liên quan có thể đã được lược; không suy từ khoảng trống rằng học viên thiếu bài.',
       'CÁC LỜI ỨNG VIÊN (vẫn phải phân biệt ví dụ và kết thúc bước nhỏ):', JSON.stringify(context.candidates),
@@ -101,7 +104,7 @@ export function validateCompletion(messages, result) {
   if (stepClaim && !wholeClaim && nextRequired && !/tổng\s*kết|luyện\s*thêm|tùy\s*chọn|optional/iu.test(context)) {
     throw new Error('COMPLETION_STEP_ONLY');
   }
-  return { policyVersion: COMPLETION_POLICY, message: result.message, quote: result.quote,
+  return { policyVersion: COMPLETION_POLICY, recognizerVersion:'goal-recognition-20261025-v2',message: result.message, quote: result.quote,
     scope: 'whole_practice', matched: true, confidence: result.confidence };
 }
 

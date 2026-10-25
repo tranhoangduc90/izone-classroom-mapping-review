@@ -3,6 +3,9 @@ import { withTransaction } from './db.js';
 import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
 import { createPendingRoster } from './pending-roster.js';
 import { hasChatbotCompletion } from './speaking-completion-policy.js';
+import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
+import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
+import { saveConversationSnapshot,readConversationSnapshot } from './speaking-conversation-snapshot.js';
 
 const hash = s => createHash('sha256').update(s).digest('hex');
 const fail = (code,message,status=409) => { throw new SpeakingHomeworkError(code,message,status); };
@@ -12,7 +15,9 @@ const latestSql = `SELECT DISTINCT ON(kind,part) * FROM speaking_independent.lin
 // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
 // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
 // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
-export function createIndependentSpeaking({pool,accessSecret,source,documents}) {
+export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true'}) {
+  const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
+  const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
   if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
   const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function context(input) { return source.context(input); }
@@ -119,7 +124,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
     await unitContext(u);
     return u;
   }
-  async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows; }
+  async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows.map(l=>({...l,linkId:l.id})); }
   async function queue(db,u,kind,key,link=null) {
     await db.query(`INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key,link_id)
       VALUES($1,$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING`,[u,kind,key,link]);
@@ -130,6 +135,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
     const {rows:jobs}=await pool.query('SELECT kind,status,link_id FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
     const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
     return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
+      docsProgress:await readSpeakingDocsProgress(pool,'speaking_independent',u.id),
       links:all.filter(l=>l.kind==='main').map(l=>{const review=jobs.some(j=>j.link_id===l.id&&j.kind==='check_main'&&j.status==='review');return {...l,check_status:review?'rejected':l.status,check_code:review?'CHECK_REVIEW_REQUIRED':l.check_code};}),
       practiceLinks:all.filter(l=>l.kind==='practice').map(l=>{const review=jobs.some(j=>j.link_id===l.id&&j.kind==='check_practice'&&j.status==='review');return {...l,status:review?'rejected':l.status,check_code:review?'CHECK_REVIEW_REQUIRED':l.check_code,analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null};}),
       processing:Object.fromEntries(jobs.filter(j=>!j.link_id).map(j=>[j.kind,{status:j.status}]))};
@@ -166,6 +172,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $10='accepted' THEN now() END) RETURNING *`,
       [u.id,kind,part,slot,exerciseId,title,(old?.revision||0)+1,share.url,share.shareId,linkOnly?'accepted':'pending',linkOnly?hash(`link-only:${share.shareId}`):null,linkOnly?0:null]);
       if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
+      await enqueueSpeakingProgress(db,'speaking_independent',u.id);
       return {id:l.id,status:l.status};
     });
   }
@@ -190,6 +197,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       await db.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[u.id]);
       await queue(db,u.id,'analyze_homework',`doctor:${r.id}`);
       if (u.document_id) await queue(db,u.id,'write_doc',`doc:${r.id}:${u.document_id}`);
+      await enqueueSpeakingProgress(db,'speaking_independent',u.id);
       return r;
     });
   }
@@ -210,11 +218,14 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
   }
   async function claimJob() {
     return withTransaction(pool,async db=>{
+      const managed=progressDocsEnabled||(await db.query("SELECT to_regclass('speaking_independent.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true;
       // Giữ job bốn phút, dài hơn ngân sách đọc/AI tối đa 165 giây; quá năm lượt chuyển kiểm lại.
       await db.query(`UPDATE speaking_independent.job SET status='review',last_error=coalesce(last_error,'RETRY_EXHAUSTED')
         WHERE attempts>=5 AND (status='failed' OR (status='processing' AND lease_until<now()))`);
       const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE attempts<5 AND available_at<=now()
         AND (status IN ('pending','failed') OR (status='processing' AND lease_until<now()))
+        ${managed?`AND (kind<>'write_doc' OR NOT EXISTS(SELECT 1 FROM speaking_independent.doc_progress d
+          WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`);
       if (!j) return null;
       const owner=randomUUID();
@@ -276,7 +287,9 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
         await db.query('RELEASE SAVEPOINT reserve_practice');
         if(status==='accepted') await queue(db,j.work_unit_id,'analyze_practice',`analyze:${j.link_id}`,j.link_id);
       }
+      if(status==='accepted') await saveConversationSnapshot(db,'speaking_independent',job.link_kind,j.link_id,result.fingerprint,result.snapshot);
       await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1",[j.id,JSON.stringify({status})]);
+      await enqueueSpeakingProgress(db,'speaking_independent',j.work_unit_id);
       return {status};
     });
   }
@@ -319,7 +332,8 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
       failCheckJob:failWorker,failPracticeCheckJob:failWorker,failPracticeAnalysisJob:failWorker,failOutboxJob:failWorker,
       getDoctorCatalog:()=>catalog(job.u),getPracticeDoctorCatalog:()=>catalog(job.u),
       recordDoctorEvent:r=>mutateJob(job,db=>recordEvent(db,job.u,r)),
-      completeDoctorJob:completeAnalysis,completePracticeAnalysisJob:completeAnalysis};
+      completeDoctorJob:completeAnalysis,completePracticeAnalysisJob:completeAnalysis,
+      getAcceptedConversation:({kind,linkId,fingerprint})=>readConversationSnapshot(pool,'speaking_independent',kind,linkId,fingerprint)};
   }
   async function teacherReceipt(receiptId,headers) {
     const {rows:[u]}=await pool.query(`SELECT u.*,p.class_id,p.class_code,p.student_name,p.course_id,r.id AS receipt_id,r.created_at AS receipt_created
@@ -337,5 +351,5 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents}) 
   }
   return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,workerService,failJob,
     requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
-    pool,context,grant,links,queue,mutateJob};
+    pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
 }
