@@ -30,7 +30,7 @@ Chạy `db/004-shared-entry.sql` bằng role owner trước image mới. Migrati
 
 Đối chiếu runtime trước phát hành thấy image `izone-load100-reading:20261017-1` giữ thêm tối ưu gộp các lượt đọc context đang chờ. Bản này bảo toàn thay đổi đó (source context quan sát SHA-256 `ea3f827e9de086bf594fdaf0fe98ef0f036768e1deb9ebe734c2d5550d7989f1`), thêm catalog và kiểm 100 lời gọi cùng lúc chỉ đọc nguồn một lần. Các runtime source còn lại khớp bản buổi 9 trước đó.
 
-Lượt shared lưu kết quả trong Reading, không xếp hàng Google Docs; giảng viên xem link kết quả với quyền Google/lớp hiện có. Link Homework cũ vẫn kiểm owner/CTA và ghi Docs theo luồng cũ. Không sửa Classroom, nguồn context hoặc các sản phẩm khác. Preview thêm tham số cuối `shared` để kiểm hai lớp/người giả bằng cùng API/SQL.
+Từ 21/10/2026, lượt shared buổi 9 lưu kết quả và xếp hàng cập nhật Homework cá nhân. Worker tìm đúng bản sao bằng UUID/lớp → mapping Google → submission Classroom → mã bài/tab; chỉ quản lý một dòng tự động, giữ chữ nhập tay và link chung. Xem [cách chạy bù, kiểm và quay lại](ops/shared-homework-20261021.md). Giảng viên xem link kết quả với quyền Google/lớp hiện có. Link Homework cũ vẫn kiểm owner/CTA và ghi Docs theo luồng cũ. Không thay trạng thái nộp Classroom, nguồn context hoặc các sản phẩm khác. Preview thêm tham số cuối `shared` để kiểm hai lớp/người giả bằng cùng API/SQL.
 
 Backend sở hữu danh tính theo bản Docs, lượt làm, giờ đã dùng, nháp, bài nộp và công việc ghi Docs. API ngữ cảnh K67 `/v1/snapshot` được dùng chỉ đọc theo hợp đồng v1; không truy cập bảng hoặc khởi động consumer của Term/Speaking. Các lớp có bài Reading được đăng ký riêng.
 

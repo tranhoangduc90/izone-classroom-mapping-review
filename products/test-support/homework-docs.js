@@ -2,7 +2,7 @@
 // Không gọi Google; sai document/tab/phạm vi ghi làm test lỗi, không tự sửa fixture để khớp output.
 import assert from 'node:assert/strict';
 
-export function homeworkDocsFixture({code,documentId,tabId,cta,entryUrl,prefix,heading}){
+export function homeworkDocsFixture({code,documentId,tabId,cta,entryUrl,prefix,heading,codeInTable=false}){
  const manual='Em đã nộp bài ạ — link em giữ riêng.',manualLink='https://manual.test/original';
  let value=manual,autoLink='',writes=0;
  const paragraph=(start,text,link='')=>({paragraph:{elements:[{startIndex:start,endIndex:start+text.length+1,textRun:{content:text+'\n',textStyle:{link:link?{url:link}:undefined}}}]}});
@@ -12,7 +12,8 @@ export function homeworkDocsFixture({code,documentId,tabId,cta,entryUrl,prefix,h
    const elements=[{startIndex:300,endIndex:300+manual.length,textRun:{content:manual,textStyle:{link:{url:manualLink},bold:true}}}];
    if(value.length>manual.length)elements.push({startIndex:300+manual.length,endIndex:300+value.length,textRun:{content:value.slice(manual.length),textStyle:{link:autoLink?{url:autoLink}:undefined}}});
    elements.push({startIndex:300+value.length,endIndex:301+value.length,textRun:{content:'\n'}});
-   return{documentId,revisionId:'fixture-revision-'+writes,tabs:[{tabProperties:{tabId},documentTab:{body:{content:[paragraph(1,code),paragraph(100,cta,entryUrl),{table:{tableRows:[{tableCells:[{content:[paragraph(200,heading)]}]},{tableCells:[{content:[{paragraph:{elements}}]}]}]}}]}}}]};
+   const rows=[...(codeInTable?[{tableCells:[{content:[paragraph(150,code)]}]}]:[]),{tableCells:[{content:[paragraph(200,heading)]}]},{tableCells:[{content:[{paragraph:{elements}}]}]}];
+   return{documentId,revisionId:'fixture-revision-'+writes,tabs:[{tabProperties:{tabId},documentTab:{body:{content:[...(!codeInTable?[paragraph(1,code)]:[]),paragraph(100,cta,entryUrl),{table:{tableRows:rows}}]}}}]};
   },
   write:async(id,plan)=>{
    assert.equal(id,documentId);assert.equal(plan.revisionId,'fixture-revision-'+writes);

@@ -6,6 +6,7 @@ import {createReadingService} from './service.js';
 import {createApp} from './app.js';
 import {createDocsAdapter,createDocsWorker} from './docs.js';
 import {createOwnerVerifier} from './owner.js';
+import {createSharedHomeworkResolver} from './shared-homework.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -24,7 +25,8 @@ const service=createReadingService({pool,context,pageBase:c.READING_PAGE_BASE,ve
 const verifier=new OAuth2Client(c.READING_GOOGLE_CLIENT_ID);
 const app=createApp({pool,service,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.READING_GOOGLE_CLIENT_ID})).getPayload()});
-const worker=createDocsWorker({pool,docs});
+const resolveSharedHomework=createSharedHomeworkResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
+const worker=createDocsWorker({pool,docs,resolveSharedHomework});
 let stopping=false;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
 const workerDone=workerLoop();
