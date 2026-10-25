@@ -1,6 +1,11 @@
 import { createHash, createHmac } from 'node:crypto';
+import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
+import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
+import { saveConversationSnapshot, readConversationSnapshot } from './speaking-conversation-snapshot.js';
 import { withTransaction } from './db.js';
 import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+import { isDoctorText } from './speaking-doctor-text.js';
+import { hasChatbotCompletion } from './speaking-completion-policy.js';
 
 export class SpeakingHomeworkError extends Error {
   constructor(code, message, httpStatus = 409) {
@@ -51,7 +56,14 @@ function shouldPrioritizeRecommendation(row, occurredAt) {
   return lastTimes.length === 0 || eventTime - Math.max(...lastTimes) > 5 * 86400000;
 }
 
-export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
+export function createSpeakingHomeworkService({ pool, accessSecret = '', progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true' }) {
+  const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
+  const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
+  const progressClaimGuard=`AND (o.kind <> 'write_doc' OR NOT EXISTS (
+    SELECT 1 FROM speaking_homework.receipt r JOIN speaking_homework.submission s ON s.id=r.submission_id
+    JOIN speaking_homework.doc_progress d ON d.unit_id=s.access_grant_id
+    WHERE r.id=o.receipt_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence
+      OR d.payload->>'receiptId' IS DISTINCT FROM r.id::text)))`;
   async function resolveAssignmentDocument(documentId, assignmentCode, classCode = '') {
     const result = await pool.query(`
       SELECT d.document_id, d.student_ref AS bound_student_ref,
@@ -240,7 +252,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   async function latestLinks(submissionId, client = pool) {
     const result = await client.query(`
       SELECT DISTINCT ON (part) id, part, revision, share_url, share_id, fingerprint,
-        check_status, check_code, question_count, typing_warning, voice_confirmed, checked_at
+        check_status, check_code, question_count, evidence, typing_warning, voice_confirmed, checked_at
       FROM speaking_homework.submission_link WHERE submission_id = $1
       ORDER BY part, revision DESC`, [submissionId]);
     return result.rows;
@@ -256,19 +268,24 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     [grant.assignment_id]);
     const practice = await pool.query(`SELECT DISTINCT ON (p.slot)
       p.id, p.slot, p.revision, p.share_url, p.exercise_id, p.status,
-      p.check_code, p.question_count, p.typing_warning, p.voice_confirmed,
-      a.status AS analysis_status
+      p.check_code, p.question_count, p.evidence, p.typing_warning, p.voice_confirmed,
+      CASE WHEN a.status='failed' AND a.attempts>=5 THEN 'review' ELSE a.status END AS analysis_status
       FROM speaking_homework.practice_link p
       LEFT JOIN speaking_homework.practice_analysis_job a ON a.practice_link_id = p.id
       WHERE p.access_grant_id = $1 ORDER BY p.slot, p.revision DESC`, [grant.grant_id]);
+    const jobs = receipt.rows[0] ? await pool.query(`SELECT kind,
+      CASE WHEN status='failed' AND attempts>=5 THEN 'review' ELSE status END AS status
+      FROM speaking_homework.outbox WHERE receipt_id=$1`, [receipt.rows[0].id]) : { rows: [] };
     return {
+      processing: Object.fromEntries(jobs.rows.map(j => [j.kind, { status: j.status }])),
       assignment: { id: grant.assignment_id, title: grant.title, classId: grant.class_id,
         courseWorkId: grant.course_work_id, documentId: grant.document_id,
         requiredPracticeCount: grant.required_practice_count,
         doctorEnabled: Boolean(grant.doctor_course_key) },
       student: { ref: studentRef, name: grant.student_name },
       status: submission.status, parts: parts.rows, links, practiceLinks: practice.rows,
-      receipt: receipt.rows[0] || null
+      receipt: receipt.rows[0] || null,
+      docsProgress:await readSpeakingDocsProgress(pool,'speaking_homework',grant.grant_id)
     };
   }
 
@@ -308,6 +325,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         VALUES ($1, $2, $3, $4, $5) RETURNING id, revision`,
       [submission.id, part, (previous?.revision || 0) + 1, share.url, share.shareId]);
       await client.query('INSERT INTO speaking_homework.check_job (link_id) VALUES ($1)', [inserted.rows[0].id]);
+      await enqueueSpeakingProgress(client,'speaking_homework',grant.grant_id);
       return { linkId: inserted.rows[0].id, status: 'pending', revision: inserted.rows[0].revision };
     });
   }
@@ -316,11 +334,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   // Việc chính: áp ngưỡng câu, so dấu vân tay với bài đã nộp trong khóa, lưu bằng chứng.
   // Kết quả: accepted/rejected bền; retry cùng job không ghi đè kết luận.
   async function completeCheck({ checkJobId, fingerprint, questionCount, qualityPassed,
-    typingWarning = null, evidence = {} }) {
+    typingWarning = null, evidence = {}, snapshot = null }) {
     return withTransaction(pool, async client => {
       const found = await client.query(`
         SELECT j.id AS job_id, j.status AS job_status, l.id AS link_id, l.part, l.share_id,
-          l.check_status, a.course_id, s.id AS submission_id, p.min_questions
+          l.check_status, a.course_id, s.id AS submission_id, s.access_grant_id AS grant_id, p.min_questions
         FROM speaking_homework.check_job j
         JOIN speaking_homework.submission_link l ON l.id = j.link_id
         JOIN speaking_homework.submission s ON s.id = l.submission_id
@@ -336,8 +354,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         throw new SpeakingHomeworkError('CHECK_NOT_ACTIVE', 'Lượt kiểm chưa được nhận xử lý.');
       }
       const minimum = Number(row.min_questions);
-      let code = !qualityPassed || questionCount < minimum ? 'INSUFFICIENT_PRACTICE' : null;
-      if (!code && row.part === 'clarify_1') {
+      const byChatbot = hasChatbotCompletion(evidence);
+      let code = !qualityPassed || (!byChatbot && questionCount < minimum) ? 'INSUFFICIENT_PRACTICE' : null;
+      if (!code && !byChatbot && row.part === 'clarify_1') {
         const covered = new Set(Array.isArray(evidence?.coveredCategories)
           ? evidence.coveredCategories : []);
         if (!['noun', 'verb', 'adjective'].every(category => covered.has(category))) {
@@ -352,6 +371,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         if (duplicate.rows.length) code = 'REUSED_CONVERSATION';
       }
       const status = code ? 'rejected' : 'accepted';
+      if (status === 'accepted') await saveConversationSnapshot(client, 'speaking_homework', 'main', row.link_id, fingerprint, snapshot);
       await client.query(`
         UPDATE speaking_homework.submission_link
         SET fingerprint = $2, question_count = $3, check_status = $4, check_code = $5,
@@ -361,6 +381,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         JSON.stringify(null), JSON.stringify(evidence)]);
       await client.query(`UPDATE speaking_homework.check_job SET status = 'done', updated_at = now() WHERE id = $1`,
         [checkJobId]);
+      await enqueueSpeakingProgress(client,'speaking_homework',row.grant_id);
       return { linkId: row.link_id, status, code };
     });
   }
@@ -441,6 +462,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   // Worker đọc một việc đã có biên nhận. Mất phản hồi sau side effect phải đọc lại đích trước khi báo done.
   async function claimOutboxJob(kind = '') {
     return withTransaction(pool, async client => {
+      const managed=progressDocsEnabled||(await client.query("SELECT to_regclass('speaking_homework.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true;
       const found = await client.query(`
         SELECT o.id AS job_id
         FROM speaking_homework.outbox o
@@ -448,14 +470,14 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
           AND (o.status = 'pending'
           OR (o.status = 'failed' AND o.updated_at < now() - INTERVAL '30 seconds')
           OR (o.status = 'processing' AND o.updated_at < now() - INTERVAL '5 minutes'))
-          AND o.attempts < 5
+          AND o.attempts < 5 ${managed?progressClaimGuard:''}
         ORDER BY o.created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [kind]);
       if (!found.rows.length) return null;
       const details = await client.query(`
         SELECT o.id AS job_id, o.kind, o.attempts, r.id AS receipt_id,
           g.document_id, g.student_ref, a.class_id, a.course_id, a.course_work_id,
           (SELECT jsonb_object_agg(l.part, jsonb_build_object(
-            'url', l.share_url, 'fingerprint', l.fingerprint
+            'url', l.share_url, 'fingerprint', l.fingerprint, 'linkId', l.id
           )) FROM speaking_homework.submission_link l
           WHERE l.submission_id = s.id
             AND l.id IN (SELECT DISTINCT ON (part) id
@@ -591,9 +613,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         if (!allowed.has(match?.exerciseId)
           || !acceptedParts.has(match?.part)
           || !Number.isInteger(match?.evidenceMessage) || match.evidenceMessage < 1
-          || typeof match?.evidenceQuote !== 'string' || match.evidenceQuote.length < 5
+          || !isDoctorText(match?.evidenceQuote) || match.evidenceQuote.length < 5
           || match.evidenceQuote.length > 160
-          || typeof match?.reason !== 'string' || !match.reason.trim() || match.reason.length > 500) {
+          || !isDoctorText(match?.reason) || !match.reason.trim() || match.reason.length > 500) {
           throw new SpeakingHomeworkError('DOCTOR_RESULT_INVALID', 'Bằng chứng bài luyện không hợp lệ.');
         }
         seen.add(match.exerciseId);
@@ -695,6 +717,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       if (kinds.includes('write_doc')) {
         await client.query("SELECT pg_notify('speaking_homework_write_doc_ready', '')");
       }
+      await enqueueSpeakingProgress(client,'speaking_homework',grant.grant_id);
       return receipt.rows[0];
     });
   }
@@ -827,6 +850,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       [grant.grant_id, slot, (previous?.revision || 0) + 1, share.url, share.shareId, exerciseId]);
       await client.query('INSERT INTO speaking_homework.practice_check_job (practice_link_id) VALUES ($1)',
         [inserted.rows[0].id]);
+      await enqueueSpeakingProgress(client,'speaking_homework',grant.grant_id);
       return { linkId: inserted.rows[0].id, status: 'pending', revision: inserted.rows[0].revision, slot };
     });
   }
@@ -851,11 +875,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
   }
 
   async function completePracticeCheck({ checkJobId, fingerprint, questionCount,
-    qualityPassed, matchedExerciseId, typingWarning = null }) {
+    qualityPassed, matchedExerciseId, typingWarning = null, evidence = {}, snapshot = null }) {
     const outcome = await withTransaction(pool, async client => {
       const found = await client.query(`SELECT j.status AS job_status, p.id AS link_id,
         p.status, p.share_id, p.exercise_id, p.fingerprint, p.checked_at,
-        g.student_ref, a.class_id, a.course_id, a.id AS assignment_id
+        g.student_ref, g.id AS grant_id, a.class_id, a.course_id, a.id AS assignment_id
         FROM speaking_homework.practice_check_job j
         JOIN speaking_homework.practice_link p ON p.id = j.practice_link_id
         JOIN speaking_homework.access_grant g ON g.id = p.access_grant_id
@@ -867,8 +891,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       if (row.job_status !== 'processing') {
         throw new SpeakingHomeworkError('CHECK_NOT_ACTIVE', 'Lượt kiểm chưa được nhận xử lý.');
       }
-      let code = !qualityPassed || questionCount < 1 ? 'INSUFFICIENT_PRACTICE' : null;
-      if (!code && matchedExerciseId !== row.exercise_id) code = 'EXERCISE_MISMATCH';
+      let code = !qualityPassed || (!hasChatbotCompletion(evidence) && questionCount < 1) ? 'INSUFFICIENT_PRACTICE' : null;
+      if (matchedExerciseId !== row.exercise_id) code = 'EXERCISE_MISMATCH';
       if (!code) {
         const existing = await client.query(`SELECT 1 FROM speaking_homework.conversation_claim
           WHERE course_id = $1 AND (share_id = $2 OR fingerprint = $3) LIMIT 1`,
@@ -888,16 +912,18 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
           ON CONFLICT (class_id, student_ref, exercise_id) DO NOTHING`,
         [row.class_id, row.student_ref, row.exercise_id]);
       }
+      if (status === 'accepted') await saveConversationSnapshot(client, 'speaking_homework', 'practice', row.link_id, fingerprint, snapshot);
       await client.query(`UPDATE speaking_homework.practice_link
         SET fingerprint = $2, question_count = $3, status = $4, check_code = $5,
-          typing_warning = $6::jsonb, checked_at = now() WHERE id = $1`,
-      [row.link_id, fingerprint, questionCount, status, code, JSON.stringify(null)]);
+          typing_warning = $6::jsonb, evidence = $7::jsonb, checked_at = now() WHERE id = $1`,
+      [row.link_id, fingerprint, questionCount, status, code, JSON.stringify(null), JSON.stringify(evidence)]);
       await client.query(`UPDATE speaking_homework.practice_check_job
         SET status = 'done', updated_at = now() WHERE id = $1`, [checkJobId]);
       if (status === 'accepted') {
         await client.query(`INSERT INTO speaking_homework.practice_analysis_job
           (practice_link_id) VALUES ($1) ON CONFLICT DO NOTHING`, [row.link_id]);
       }
+      await enqueueSpeakingProgress(client,'speaking_homework',row.grant_id);
       return { ...row, status, check_code: code, alreadyDone: false };
     });
     if (outcome.status === 'accepted') {
@@ -1041,8 +1067,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
       for (const match of matches) {
         if (!allowed.has(match?.exerciseId)
           || !Number.isInteger(match?.evidenceMessage) || match.evidenceMessage < 1
-          || typeof match?.evidenceQuote !== 'string' || match.evidenceQuote.length < 5
-          || typeof match?.reason !== 'string' || !match.reason.trim()) {
+          || !isDoctorText(match?.evidenceQuote) || match.evidenceQuote.length < 5
+          || !isDoctorText(match?.reason) || !match.reason.trim()) {
           throw new SpeakingHomeworkError('DOCTOR_RESULT_INVALID', 'Dẫn chứng lỗi chưa hợp lệ.');
         }
         unique.add(match.exerciseId);
@@ -1109,6 +1135,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
         (SELECT jsonb_agg(jsonb_build_object(
           'slot', p.slot, 'exerciseTitle', e.title, 'url', p.share_url,
           'status', p.status, 'analysisStatus', aj.status,
+          'evidence', p.evidence,
           'voiceConfirmed', p.voice_confirmed, 'typingWarning', p.typing_warning
         ) ORDER BY p.slot) FROM speaking_homework.practice_link p
         JOIN speaking_homework.doctor_exercise e ON e.id = p.exercise_id
@@ -1150,5 +1177,6 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '' }) {
     finish, recordDoctorEvent, listDoctor, requestPracticeCheck, claimPracticeCheckJob,
     completePracticeCheck, confirmPracticeVoice, failPracticeCheckJob, rejectPracticeCheckJob,
     claimPracticeAnalysisJob, getPracticeDoctorCatalog, completePracticeAnalysisJob,
-    failPracticeAnalysisJob, getTeacherReceipt, resolveGrant };
+    failPracticeAnalysisJob, getTeacherReceipt, resolveGrant,
+    getAcceptedConversation: ({ kind, linkId, fingerprint }) => readConversationSnapshot(pool, 'speaking_homework', kind, linkId, fingerprint) };
 }

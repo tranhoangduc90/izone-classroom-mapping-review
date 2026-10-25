@@ -3,6 +3,7 @@ import { withTransaction } from './db.js';
 import { SpeakingHomeworkError } from './speaking-homework.js';
 import { planSpeakingCopyCta,verifySpeakingCopyCta } from './speaking-classroom-copies.js';
 import { planSpeakingStatusWrite,verifySpeakingStatusWrite } from './speaking-independent-status.js';
+import { enqueueSpeakingProgress,enqueueExistingSpeakingProgress,existingSpeakingDocsProgress,createSpeakingProgressDocsWorker,readSpeakingDocsProgress } from './speaking-progress-docs.js';
 
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const error=(code,message)=>{throw new SpeakingHomeworkError(code,message);};
@@ -221,6 +222,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
           await db.query(`INSERT INTO speaking_independent.document_binding(document_id,tab_id,assignment_code,work_unit_id,verified_revision,template_digest)
             VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(document_id,tab_id,assignment_code) DO UPDATE SET verified_revision=EXCLUDED.verified_revision
             WHERE speaking_independent.document_binding.work_unit_id=EXCLUDED.work_unit_id`,[input.documentId,v.tabId,b.assignment_code,u.id,v.revision,u.template_digest]);
+          await (process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true'?enqueueSpeakingProgress:enqueueExistingSpeakingProgress)(db,'speaking_independent',u.id);
           if(u.status==='submitted') {
             const r=(await db.query('SELECT id FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id])).rows[0];
             await db.query(`INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key) VALUES($1,'write_doc',$2) ON CONFLICT DO NOTHING`,[u.id,`doc:${r.id}:${input.documentId}`]);
@@ -300,16 +302,24 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
 // Không báo done nếu Docs chưa chứa đúng biên nhận độc lập.
 export async function writeIndependentDocument(service,job,gateway) {
   try {
-    const document=await gateway.get(job.u.document_id);
-    const linkUrl=`${teacherPage}?receipt=${job.receipt_id}&system=independent`;
-    if(!verifySpeakingStatusWrite({document,documentId:job.u.document_id,tabId:job.u.tab_id,linkUrl})) {
-      const plan=planSpeakingStatusWrite({document,documentId:job.u.document_id,tabId:job.u.tab_id,receiptId:job.receipt_id,teacherBaseUrl:teacherPage});
-      for(const r of plan.requests) if(r.updateTextStyle?.textStyle?.link) r.updateTextStyle.textStyle.link.url=linkUrl;
-      await gateway.write(job.u.document_id,{requests:plan.requests,writeControl:{requiredRevisionId:plan.revisionId}});
+    if(!service.progressDocsEnabled&&!await existingSpeakingDocsProgress(service.pool,'speaking_independent',job.u.id)){
+      const document=await gateway.get(job.u.document_id);
+      const linkUrl=`${teacherPage}?receipt=${job.receipt_id}&system=independent`;
+      if(!verifySpeakingStatusWrite({document,documentId:job.u.document_id,tabId:job.u.tab_id,linkUrl})){
+        const plan=planSpeakingStatusWrite({document,documentId:job.u.document_id,tabId:job.u.tab_id,receiptId:job.receipt_id,teacherBaseUrl:teacherPage});
+        for(const r of plan.requests)if(r.updateTextStyle?.textStyle?.link)r.updateTextStyle.textStyle.link.url=linkUrl;
+        await gateway.write(job.u.document_id,{requests:plan.requests,writeControl:{requiredRevisionId:plan.revisionId}});
+      }
+      const readback=await gateway.get(job.u.document_id);
+      if(!verifySpeakingStatusWrite({document:readback,documentId:job.u.document_id,tabId:job.u.tab_id,linkUrl}))throw new Error('DOC_READBACK_MISMATCH');
+      await service.mutateJob(job,db=>db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL WHERE id=$1",[job.job_id,JSON.stringify({documentId:job.u.document_id,revisionId:readback.revisionId})]));
+      return;
     }
-    const readback=await gateway.get(job.u.document_id);
-    if(!verifySpeakingStatusWrite({document:readback,documentId:job.u.document_id,tabId:job.u.tab_id,linkUrl})) throw new Error('DOC_READBACK_MISMATCH');
-    await service.mutateJob(job,db=>db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL WHERE id=$1",[job.job_id,JSON.stringify({documentId:job.u.document_id,revisionId:readback.revisionId})]));
+    await enqueueSpeakingProgress(service.pool,'speaking_independent',job.u.id);
+    await createSpeakingProgressDocsWorker({pool:service.pool,schema:'speaking_independent',gateway}).once(job.u.id);
+    const state=await readSpeakingDocsProgress(service.pool,'speaking_independent',job.u.id);
+    if(state?.status!=='verified')throw new Error('DOC_PROGRESS_PENDING');
+    await service.mutateJob(job,db=>db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL WHERE id=$1",[job.job_id,JSON.stringify({documentId:job.u.document_id,progressVerified:true})]));
   }catch(e){await service.failJob(job,String(e.code||e.message||'DOC_WRITE_FAILED').slice(0,100));}
 }
 

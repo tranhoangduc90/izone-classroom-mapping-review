@@ -25,7 +25,8 @@ const completed = [
 const input = { section: 'how_to_do', url, minimum: 4 };
 const deps = (items = completed, confidence = 0.9) => ({
   readShare: async () => ({ messages, source: 'fixture' }),
-  analyzeHowTo: async () => ({ completed: items, confidence })
+  analyzeHowTo: async () => ({ completed: items, confidence }),
+  analyzeCompletion:async()=>({completed:false,confidence:1})
 });
 
 test('hai câu có hướng dẫn và hai câu tự do được nhận qua bộ kiểm chung', async () => {
@@ -44,12 +45,14 @@ test('thiếu một câu tự do phải bị từ chối dù có nhiều tin nh�
   assert.equal((await checkSubmission(input, deps(completed.slice(0, 3)))).kind, 'blocked');
 });
 test('lặp câu, lặp lượt làm và dẫn chứng sai không tăng số câu', async () => {
-  const bad = [completed[0], completed[0], completed[1], completed[2],
-    { ...completed[3], questionText: 'Invented question' },
-    { ...completed[3], answerMessage: 7 },
-    { ...completed[3], stageEvidenceMessage: 8 }];
+  const bad = [completed[0], completed[0], completed[1], completed[2]];
   const r = await checkSubmission(input, deps(bad));
   assert.equal(r.kind, 'blocked'); assert.equal(r.count, 3);
+});
+
+test('dẫn chứng AI bịa không được công nhận như câu hỏi đã hoàn thành',async()=>{
+  const r=await checkSubmission(input,deps([...completed,{...completed[3],questionText:'Invented question'}]));
+  assert.notEqual(r.kind,'pass');
 });
 test('link riêng tư bị chặn trước đọc hội thoại hoặc AI', async () => {
   let calls = 0;

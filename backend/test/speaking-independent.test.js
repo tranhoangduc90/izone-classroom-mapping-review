@@ -12,6 +12,7 @@ import { createIndependentDocuments,validateIndependentDocument } from '../src/s
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
 import { performance } from 'node:perf_hooks';
+import {createSpeakingProgressDocsWorker} from '../src/speaking-progress-docs.js';
 
 const ref='60000000-0000-4000-8000-000000000006';
 const code='67-speaking-ly_do_hanh_vi';
@@ -86,6 +87,9 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   // Live còn khóa hội thoại nguồn legacy; migration phải giữ cả loại nguồn lịch sử này.
   await db.exec("ALTER TABLE speaking_homework.conversation_claim DROP CONSTRAINT conversation_claim_source_kind_check, ADD CONSTRAINT conversation_claim_source_kind_check CHECK(source_kind IN ('homework','practice','legacy'))");
   await db.exec(await readFile(new URL('../ops/migrations/202610080530_speaking_independent_intake.sql',import.meta.url),'utf8'));
+  for(const name of ['202610250930_speaking_progress_docs.sql','202610250931_speaking_independent_progress_docs.sql'])
+    await db.exec(await readFile(new URL('../ops/migrations/'+name,import.meta.url),'utf8'));
+  await db.exec(`CREATE TABLE speaking_independent.conversation_snapshot(link_id uuid PRIMARY KEY,original_fingerprint text,fingerprint text,messages jsonb,source text DEFAULT 'accepted',recovery_job_id uuid)`);
   const query=async(sql,params)=>{const r=await db.query(sql,params);return {...r,rowCount:r.rowCount??r.rows.length};};
   const pool=nativePool||{query,async connect(){return {query,release(){}};}};
   let active=true;
@@ -99,11 +103,61 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
       selectionStudents:active?[{student_ref:ref,name:'Học viên fixture'},...(unapproved?[{student_ref:exercise(88),name:'Tên ERP chưa ghép'}]:[])]:[],
       exercises,recommendations};},
     async teacher(_class,headers){return headers.cookie==='teacher=allowed';}};
-  const service=createIndependentSpeaking({pool,source,accessSecret:'fixture-secret-32-characters-long-only'});
+  const service=createIndependentSpeaking({pool,source,accessSecret:'fixture-secret-32-characters-long-only',progressDocsEnabled:true});
   const session=start?await service.startSelected({assignmentCode:code,classCode:'IC2304',studentRef:ref}):null;
   const identity=session?{accessToken:session.accessToken,studentRef:ref}:null;
   return {db,pool,service,session,identity,source,drop:()=>{active=false;}};
 }
+
+test('independent syncs an accepted part before submission and recovers lost Google acknowledgement',async()=>{
+  const f=await fixture();try{
+    const id=f.session.workUnitId,documentId='progress-fixture-doc';
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id=$2,tab_id='t.0' WHERE id=$1",[id,documentId]);
+    await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(700)});
+    let text='',link='',writes=0;
+    const get=async()=>({documentId,revisionId:'revision-'+writes,tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[
+      {paragraph:{elements:[{textRun:{content:code+'\n'}}]}},
+      {table:{tableRows:[{tableCells:[{content:[{paragraph:{elements:[{textRun:{content:'TÌNH TRẠNG NỘP BÀI SPEAKING\n'}}]}}]}]},
+        {tableCells:[{content:[{paragraph:{elements:[{startIndex:100,endIndex:101+text.length,textRun:{content:text+'\n',textStyle:{link:{url:link}}}}]}}]}]}]}}
+    ]}}}]});
+    const worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:{get,async write(_id,body){
+      writes++;text=body.requests.find(r=>r.insertText).insertText.text;
+      link=body.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url;
+      throw new Error('NETWORK_ACK_LOST');
+    }}});
+    await worker.once(id);
+    let row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0];
+    assert.equal(row.status,'pending');assert.match(row.payload.text,/1\/5 phần/);assert.equal(row.payload.receiptId,null);
+    await f.pool.query('UPDATE speaking_independent.doc_progress SET available_at=now() WHERE unit_id=$1',[id]);
+    await worker.once(id);
+    row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0];
+    assert.equal(row.status,'verified');assert.equal(writes,1);
+    assert.equal((await f.service.open(f.identity)).docsProgress.status,'verified');
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
+test('final Docs jobs wait without consuming retries, including when new enrollment is disabled',async()=>{
+  const f=await fixture();try{
+    const id=f.session.workUnitId;
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id='wait-fixture-doc',tab_id='t.0' WHERE id=$1",[id]);
+    for(const [part,n]of [['benefit_harm',1],['reason_action',2],['freestyle',3]])await f.service.requestCheck({...f.identity,part,rawUrl:url(800+n)});
+    for(let slot=1;slot<=2;slot++)await f.service.requestPracticeCheck({...f.identity,slot,exerciseId:exercise(slot),rawUrl:url(810+slot)});
+    const links=(await f.pool.query('SELECT id FROM speaking_independent.link ORDER BY created_at,id')).rows;
+    for(const [i,l]of links.entries())await f.pool.query("UPDATE speaking_independent.link SET status='accepted',question_count=2,fingerprint=$2 WHERE id=$1",[l.id,fingerprint(i+1)]);
+    await f.pool.query("UPDATE speaking_independent.job SET status='done'");
+    const receipt=await f.service.finish(f.identity);
+    await f.pool.query("UPDATE speaking_independent.job SET status='done' WHERE kind<>'write_doc'");
+    for(let i=0;i<7;i++)assert.equal(await f.service.claimJob(),null);
+    const old=createIndependentSpeaking({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',progressDocsEnabled:false});
+    assert.equal(await old.claimJob(),null);
+    const job=(await f.pool.query("SELECT attempts,status FROM speaking_independent.job WHERE kind='write_doc'")).rows[0];
+    assert.equal(job.attempts,0);assert.equal(job.status,'pending');
+    await f.pool.query("UPDATE speaking_independent.doc_progress SET status='verified',applied_sequence=sequence");
+    assert.equal((await old.claimJob()).kind,'write_doc');
+    assert.equal((await old.open(f.identity)).receipt.id,receipt.id);
+  }finally{await f.db.close();}
+});
 
 test('Lesson 6 mở lớp và phiên khi không có assignment hoặc bản Docs',async()=>{
   const f=await fixture();try{

@@ -12,12 +12,16 @@ import { startSpeakingGradeWorker } from './speaking-grade-worker.js';
 import { startSpeakingDoctorWorker } from './speaking-doctor-worker.js';
 import { createSpeakingDocsNotifier } from './speaking-docs-notifier.js';
 import { startSpeakingPracticeWorker } from './speaking-practice-worker.js';
+import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
+import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
 const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
+const progressGateway=process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE}):null;
+const speakingProgressWorker=startSpeakingProgressDocsWorker({pool:speakingHomeworkPool,schema:'speaking_homework',gateway:speakingHomeworkPool?progressGateway:null});
 const speakingDocsNotifier = createSpeakingDocsNotifier({
   pool: speakingHomeworkPool,
   url: process.env.SPEAKING_DOCS_NOTIFY_URL || '',
@@ -94,6 +98,7 @@ async function shutdown(signal) {
     await speakingGradeWorker.stop();
     await speakingDoctorWorker.stop();
     await speakingPracticeWorker.stop();
+    await speakingProgressWorker.stop();
     await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end()]);
     process.exit(0);
   });

@@ -31,9 +31,10 @@ test('writer chỉ điền ô vàng và gắn link lên đúng cụm từ, dùng
     receiptId, teacherBaseUrl });
   assert.equal(plan.status, 'write');
   assert.equal(plan.requests[0].insertText.location.index, 163);
-  assert.equal(plan.requests[1].updateTextStyle.range.startIndex,
+  const hyperlink=plan.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle;
+  assert.equal(hyperlink.range.startIndex,
     163 + status.indexOf('link này'));
-  assert.equal(plan.requests[1].updateTextStyle.range.tabId, 't.0');
+  assert.equal(hyperlink.range.tabId, 't.0');
   assert.equal(plan.revisionId, 'revision-1');
   assert.equal(verifySpeakingStatusWrite({ document: fixture(status + '\n', plan.linkUrl),
     documentId, linkUrl: plan.linkUrl }), true);
@@ -43,9 +44,13 @@ test('writer chỉ điền ô vàng và gắn link lên đúng cụm từ, dùng
   assert.equal(repeat.requests.length, 0);
 });
 
-test('writer dừng khi ô đã có nội dung khác hoặc link trỏ sang receipt khác', () => {
-  assert.throws(() => planSpeakingStatusWrite({ document: fixture('Nội dung của người khác\n'),
-    documentId, receiptId, teacherBaseUrl }), /DOC_STATUS_CELL_NOT_EMPTY/);
-  assert.throws(() => planSpeakingStatusWrite({ document: fixture(status + '\n', 'https://example.test/wrong'),
-    documentId, receiptId, teacherBaseUrl }), /DOC_STATUS_LINK_MISMATCH/);
+test('writer legacy đang phát hành thay đúng vùng trạng thái bằng revision, sửa link biên nhận cũ', () => {
+  // Deployed since 01/10: the legacy final writer replaces its status cell.
+  // Managed incremental Docs use the separate planner/manual-conflict tests.
+  const old='Nội dung trạng thái cũ\n';
+  const plan=planSpeakingStatusWrite({document:fixture(old),documentId,receiptId,teacherBaseUrl});
+  assert.deepEqual(plan.requests[0].deleteContentRange.range,{startIndex:163,endIndex:163+old.length-1,tabId:'t.0'});
+  const repair=planSpeakingStatusWrite({document:fixture(status+'\n','https://example.test/wrong'),documentId,receiptId,teacherBaseUrl});
+  assert.equal(repair.status,'write');
+  assert.equal(repair.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url,teacherBaseUrl+'?receipt='+receiptId);
 });
