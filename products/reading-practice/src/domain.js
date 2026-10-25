@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import {lessonFor,ROBOTS_CODE} from './lessons.js';
+import {authoredLesson,validateAuthoredContent,gradeAuthored} from './authored-content.js';
 
 export const CODE='67-practice-reading_matching_heading_mcq';
 export const PRODUCT='PRODUCT-READING-PRACTICE-K67';
@@ -37,6 +38,7 @@ export const emptyDraft=(code=CODE)=>({answers:{},flags:[],notes:'',annotations:
 export function validateSnapshot(input,code=CODE){const parsed=schemaFor(code).safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
 export function validateContent(bundle){
  if(!bundle||typeof bundle!=='object')fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
+ if(bundle.definition?.authored){try{return validateAuthoredContent(bundle);}catch(e){fail('CONTENT_INVALID',e.message,400);}}
  const lesson=lessonFor(bundle?.code),ids=lesson.questionIds;
  if(bundle.totalMs!==TOTAL_MS||!bundle.version||!bundle.definition||!bundle.key||!bundle.explanations?.entries)
   fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
@@ -63,7 +65,8 @@ export function validateContent(bundle){
  return bundle;
 }
 export const normalize=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
-export function grade(answers,key,code=CODE){
+export function grade(answers,key,code=CODE,definition){
+ if(authoredLesson(code))return gradeAuthored(answers,key,definition);
  const lesson=lessonFor(code),rows=lesson.questionIds.map(n=>{
   const value=normalize(answers[n]);
   // Summary chỉ nhận một từ và/hoặc một số, không nới khóa theo chuỗi con.
@@ -73,12 +76,23 @@ export function grade(answers,key,code=CODE){
  });
  return{score:rows.filter(r=>r.state==='correct').length,rows};
 }
+// Chỉ lấy hai số tổng hợp từ kết quả đã khóa; thiếu/mâu thuẫn thì giữ thông báo cũ.
+// Số câu trống vẫn thuộc mẫu số; không dùng số thứ tự câu cuối hoặc đáp án học viên nhập.
+export function resultSummary(a){
+ const result=a.result,rows=result?.rows,score=result?.score;
+ if(!Array.isArray(rows)||!rows.length||!Number.isInteger(score)||score<0||score>rows.length
+  ||a.finalScore!==score||rows.filter(r=>r.state==='correct').length!==score
+  ||rows.some(r=>!Number.isInteger(r.number)||!['correct','incorrect','blank'].includes(r.state))
+  ||new Set(rows.map(r=>r.number)).size!==rows.length)return null;
+ return {correct:score,total:rows.length};
+}
 export function statusMessage(a,firstCompleted){
  if(a.status!=='submitted')return a.no===1?'Đã bắt đầu làm bài lần đầu tiên.':`Đã bắt đầu làm bài số ${a.no} (đã reset ${a.no-1} lần).`;
  const text=a.no===1?'Đã hoàn thành ngay từ lần đầu.':firstCompleted&&firstCompleted!==a.no
   ?`Đã hoàn thành lượt luyện lại số ${a.no} (tổng ${a.no-1} lần reset). Lần hoàn thành đầu tiên: lượt ${firstCompleted}.`
   :`Đã hoàn thành sau ${a.no-1} lần reset (lần làm bài số ${a.no}).`;
- return text+(a.method==='timeout'?' Hệ thống tự thu bài do hết thời gian.':'')+' Giảng viên nhấn vào đây để xem kết quả.';
+ const summary=resultSummary(a),scoreText=summary?` Kết quả: đúng ${summary.correct}/${summary.total} câu.`:'';
+ return text+scoreText+(a.method==='timeout'?' Hệ thống tự thu bài do hết thời gian.':'')+' Giảng viên nhấn vào đây để xem kết quả.';
 }
 export function issueLease(a,owner,clock){
  const token=secret();a.lease={id:uuid(),owner,tokenHash:hash(token),lastSeen:clock,startedAt:clock,
@@ -98,12 +112,12 @@ export function checkpoint(a,input,lease,clock,{recovery=false,code=CODE}={}){
  // Khi nối lại không trừ thời gian vắng; chỉ nhận phần active chưa ACK, tối đa 5 giây.
  const unconfirmed=Math.max(0,draft.activeMs-a.lease.acceptedActiveMs);
  const increase=recovery?Math.min(HEARTBEAT_MS,unconfirmed,delta):delta;
- a.usedMs=Math.min(TOTAL_MS,a.usedMs+increase);
+ a.usedMs=Math.min(lessonFor(code).totalMs,a.usedMs+increase);
  a.lease.acceptedActiveMs=a.usedMs-a.lease.baselineMs;
  a.lease.lastSeen=clock;a.draft=draft;
  return a;
 }
 export function publicAttempt(a){
  const copy=structuredClone(a);delete copy.lease;
- return{...copy,...copy.draft,leaseId:a.lease?.id,remainingMs:Math.max(0,TOTAL_MS-a.usedMs)};
+ return{...copy,...copy.draft,leaseId:a.lease?.id,remainingMs:Math.max(0,lessonFor(a.code||CODE).totalMs-a.usedMs)};
 }

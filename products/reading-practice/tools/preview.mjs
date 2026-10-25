@@ -4,6 +4,7 @@ import {localPool} from './local-pool.mjs';
 import {createReadingService} from '../src/service.js';
 import {createApp} from '../src/app.js';
 import {secret,uuid} from '../src/domain.js';
+import {registerAuthoredLesson} from '../src/authored-content.js';
 
 // Local chạy cùng API và SQL nghiệp vụ; roster/Google là fixture, tuyệt đối không phát hành chế độ này.
 const [contentPath,staticRoot,dataPath,portInput='4389',mode='homework']=process.argv.slice(2);
@@ -18,7 +19,9 @@ const classes=[{id:'1124',classCode:'CHẠY THỬ 67'},{id:'1293',classCode:'CH�
  teacher:async(c,email,subject)=>Object.hasOwn(members,c)&&email==='teacher@example.test'&&subject==='local-google'};
 const port=Number(portInput),base=`http://127.0.0.1:${port}/`;
 const service=createReadingService({pool,context,pageBase:path.basename(staticRoot)==='reading-practice'?base:base+'reading-practice/',verifyBinding:async input=>({fixtureOnly:true,documentId:input.documentId,studentRef:input.studentRef})});
-const bundle=JSON.parse(await readFile(contentPath,'utf8'));await service.seedContent(bundle);
+const bundle=JSON.parse(await readFile(contentPath,'utf8'));
+if(bundle.definition?.authored)registerAuthoredLesson(bundle.definition.lesson);
+await service.seedContent(bundle);
 let entryUrl;
 if(mode==='shared')entryUrl=(await service.configureSharedLesson({code:bundle.code,contentVersion:bundle.version,status:'open'})).url;
 else{

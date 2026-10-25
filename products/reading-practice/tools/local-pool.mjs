@@ -17,5 +17,6 @@ export async function localPool(path){
   await db.exec(`ALTER TABLE reading_practice.binding ADD COLUMN owner_proof jsonb NOT NULL DEFAULT '{"fixtureOnly":true}'`);
  await db.exec(await readFile(new URL('../db/003-teacher-session.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../db/004-shared-entry.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../db/005-authored-time.sql',import.meta.url),'utf8'));
  return pool;
 }

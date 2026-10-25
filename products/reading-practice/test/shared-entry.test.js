@@ -5,6 +5,7 @@ import {fixture} from './helpers.js';
 import {ROBOTS_CODE} from '../src/lessons.js';
 import {emptyDraft,secret,uuid} from '../src/domain.js';
 import {createApp} from '../src/app.js';
+import {queueSharedHomeworkBackfill} from '../src/shared-homework-backfill.js';
 
 // Nội dung giả có cấu trúc 14 câu; kiểm hành vi bằng SQL/HTTP, không đưa đề/key Cambridge vào Git.
 function bundle(){
@@ -36,13 +37,16 @@ test('Link chung: đăng nhập đồng thời chỉ một binding, lớp/UUID s
  await assert.rejects(f.login('1124',f.memberB.studentRef),e=>e.code==='STUDENT_NOT_ELIGIBLE');await assert.rejects(f.login('9999'),e=>e.code==='STUDENT_NOT_ELIGIBLE');
  f.members['1124']=[];await assert.rejects(f.login(),e=>e.code==='STUDENT_NOT_ELIGIBLE');await assert.rejects(f.service.read({token:logins[0].token}),e=>e.code==='STUDENT_NOT_ELIGIBLE');
 });
-test('Link chung: nộp 14/14, mở lại đúng lịch sử; hai lớp không trộn và không sinh job Docs',async t=>{
+test('Link chung buổi 9: nộp 14/14, hai lớp không trộn và xếp hàng ghi Homework đúng một lần',async t=>{
  const f=await setup(t),loginA=await f.login(),loginB=await f.login('1293',f.memberB.studentRef);
  const first=await f.service.begin({token:loginA.token,owner:'A',operationId:uuid()});assert.equal(first.attempts[0].activeQuestion,27);
  const snapshot={...emptyDraft(ROBOTS_CODE),answers:Object.fromEntries(Object.keys(f.content.key).map(n=>[n,'C'])),sequence:1,flags:[40],activeQuestion:40,tab:'mcq',notes:'Nháp A'};
  const input={token:loginA.token,attemptId:first.attempts[0].id,lease:first.lease,snapshot,method:'manual',operationId:uuid()};
- const done=await f.service.submit(input),retry=await f.service.submit(input);assert.equal(done.attempts[0].finalScore,14);assert.equal(done.attempts[0].submissionId,retry.attempts[0].submissionId);assert.equal(done.events.at(-1).docs,'not_applicable');
- assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM reading_practice.doc_job WHERE binding_id=$1',[loginA.identity.bindingId])).rows[0].n,0);
+ const done=await f.service.submit(input),retry=await f.service.submit(input);assert.equal(done.attempts[0].finalScore,14);assert.equal(done.attempts[0].submissionId,retry.attempts[0].submissionId);assert.equal(done.events.at(-1).docs,'pending');
+ const jobs=(await f.pool.query('SELECT sequence,kind,payload FROM reading_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[loginA.identity.bindingId])).rows;
+ assert.deepEqual(jobs.map(j=>[j.sequence,j.kind]),[[1,'status'],[2,'status']]);
+ assert.equal(jobs[1].payload.link,'https://example.test/reading-practice/teacher.html#submission='+done.attempts[0].submissionId);
+ assert.ok(jobs[1].payload.text.includes('Kết quả: đúng 14/14 câu.'));
  const reopened=await f.login();assert.equal(reopened.attempts[0].finalScore,14);assert.equal(reopened.attempts[0].notes,'Nháp A');assert.deepEqual((await f.service.read({token:loginB.token})).attempts,[]);
  await assert.rejects(f.service.result({token:loginB.token,attemptId:done.attempts[0].id}),e=>e.code==='RESULT_NOT_AVAILABLE');
  assert.equal((await f.service.login({entryToken:f.entryToken,studentRef:f.studentRef,classCode:'FIXTURE 67'})).identity.entryMode,'homework');
@@ -70,4 +74,21 @@ test('Link chung qua HTTP: metadata, login, chưa nộp khóa key và admin mở
  const denied=await request(app).post('/api/shared-login').send({code:ROBOTS_CODE,classId:'1124',studentRef:f.memberB.studentRef});assert.equal(denied.status,403);
  assert.equal((await request(app).post('/api/admin/shared-lesson').send({code:ROBOTS_CODE,contentVersion:f.content.version,status:'closed'})).status,403);
  assert.equal((await request(app).get('/api/result/'+uuid()).set('Authorization','Bearer '+logged.body.token)).status,404);
+});
+
+test('Cập nhật bù: chỉ học viên đã hoàn thành, chạy lại không trùng và giữ nguyên bài/điểm',async t=>{
+ const f=await setup(t),a=await f.login(),b=await f.login('1293',f.memberB.studentRef);
+ const first=await f.service.begin({token:a.token,owner:'A',operationId:uuid()});
+ await f.service.begin({token:b.token,owner:'B',operationId:uuid()});
+ const done=await f.service.submit({token:a.token,attemptId:first.attempts[0].id,lease:first.lease,operationId:uuid(),method:'manual',snapshot:{...emptyDraft(ROBOTS_CODE),sequence:1}});
+ await f.pool.query('DELETE FROM reading_practice.doc_job WHERE binding_id IN ($1,$2)',[a.identity.bindingId,b.identity.bindingId]);
+ const before=(await f.pool.query('SELECT binding_id,state,updated_at FROM reading_practice.work ORDER BY binding_id')).rows;
+ const options={pool:f.pool,pageBase:'https://example.test/reading-practice/'};
+ assert.deepEqual(await queueSharedHomeworkBackfill(options),{commit:false,eligible:1,existing:0,wouldQueue:1});
+ assert.deepEqual(await queueSharedHomeworkBackfill({...options,commit:true}),{commit:true,eligible:1,existing:0,queued:1});
+ assert.deepEqual(await queueSharedHomeworkBackfill({...options,commit:true}),{commit:true,eligible:1,existing:1,queued:0});
+ const jobs=(await f.pool.query('SELECT binding_id,sequence,payload FROM reading_practice.doc_job WHERE kind=\'status\'')).rows;
+ assert.equal(jobs.length,1);assert.equal(jobs[0].binding_id,a.identity.bindingId);assert.equal(jobs[0].sequence,2);
+ assert.equal(jobs[0].payload.link,'https://example.test/reading-practice/teacher.html#submission='+done.attempts[0].submissionId);
+ assert.deepEqual((await f.pool.query('SELECT binding_id,state,updated_at FROM reading_practice.work ORDER BY binding_id')).rows,before);
 });

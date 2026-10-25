@@ -1,4 +1,5 @@
 import {fail} from './domain.js';
+import {authoredLesson} from './authored-content.js';
 
 // Chỉ chứa cấu trúc và nhãn bài; đề, khóa chấm và lời giải vẫn ở kho nội dung riêng tư.
 export const LEGACY_CODE='67-practice-reading_matching_heading_mcq';
@@ -12,6 +13,7 @@ const lessons={
   groups:[{kind:'names',label:'Matching Names',start:27,end:33},{kind:'endings',label:'Sentence Endings',start:34,end:36},{kind:'mcq',label:'Multiple Choice',start:37,end:40}],paragraphs:Array.from({length:11},(_,i)=>String(i+1))}
 };
 export function lessonFor(code=LEGACY_CODE){
+ const authored=authoredLesson(code);if(authored)return authored;
  const lesson=Object.hasOwn(lessons,code)?lessons[code]:null;if(!lesson)fail('CONTENT_INVALID','Mã bài Reading chưa được hỗ trợ.',400);
  return structuredClone({...lesson,totalMs:1200000,questionIds:lesson.groups.flatMap(g=>Array.from({length:g.end-g.start+1},(_,i)=>String(g.start+i)))});
 }
