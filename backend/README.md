@@ -1,5 +1,7 @@
 # API duyệt mapping độc lập
 
+Homework Speaking Lesson 2–11 — cập nhật 25/10/2026: đọc [hồ sơ xác nhận và tiến độ từng phần](ops/releases/speaking-progress-recovery-20261025/README.md) trước các mốc Speaking cũ. Gói đã phát hành trên hai runtime, công nhận đúng lời hoàn tất, giữ snapshot dài và đồng bộ Docs từng phần; không rebuild toàn main hoặc chạy công cụ khôi phục chỉ vì đang đọc/lưu bộ nhớ.
+
 Trạng thái nâng cấp Progress Log ngày 01/10/2026: đọc [bộ nhớ phát hành](docs/PROGRESS_LOG_UPGRADE_20261001_PROJECT_MEMORY.md) trước khi thay API/demo/schema. Bản đã triển khai, còn chờ nghiệm thu Portal và phiên giảng viên thật.
 
 API này phục vụ web duyệt mapping mà không dùng execution của n8n. n8n chỉ còn nhiệm vụ quét ERP, Classroom và Lark theo lịch rồi ghi dữ liệu vào PostgreSQL.
