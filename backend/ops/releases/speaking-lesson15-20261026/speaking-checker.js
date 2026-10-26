@@ -1,9 +1,11 @@
+import { checkObjectSubmission } from './speaking-object-checker.js';
 import { createHash } from 'node:crypto';
 import { conversationSnapshot } from './speaking-conversation-snapshot.js';
 import { checkHowToSubmission } from './speaking-how-to-checker.js';
 import { checkStorySubmission } from './speaking-story-checker.js';
 import { checkStoryDetailSubmission } from './speaking-story-detail-checker.js';
 import { checkPersonSubmission } from './speaking-person-checker.js';
+import { checkStoryOutcomeSubmission } from './speaking-story-outcome-checker.js';
 import { checkComparisonSubmission } from './speaking-comparison-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
@@ -283,6 +285,8 @@ async function checkStandardSubmission(input, dependencies = {}) {
 // Lỗi xác minh được chuyển kiểm lại; không biến lỗi AI thành thông báo học viên làm thiếu.
 export async function checkSubmission(input, dependencies = {}) {
   if (['person_intro', 'person_traits', 'person_ending'].includes(input?.section)) return checkPersonSubmission(input, dependencies);
+  if (['object_intro', 'object_description'].includes(input?.section)) return checkObjectSubmission(input, dependencies);
+  if (input?.section === 'story_outcome') return checkStoryOutcomeSubmission(input, dependencies);
   if (input?.section === 'story_detail') return checkStoryDetailSubmission(input, dependencies);
   if (['story_context', 'story_sequence'].includes(input?.section)) return checkStorySubmission(input, dependencies);
   let conversation;

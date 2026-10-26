@@ -14,6 +14,6 @@ Nguồn: Google Docs `1alzzEIIeGvDMC0iDlZwj731y0Dxwtkeg_435cERKa7I`, tab `t.0`; 
 
 Kiểm và backup riêng tư trên laptop: `E:/Codex-Data/speaking67-lesson15-20261026/`. Các kiểm trình duyệt dùng API giả; PostgreSQL trong RAM kiểm năm phần/receipt/Bác sĩ AI, không là bài học viên thật. Workflow thử `FJwh7qi4r12nE32e` inactive, execution `3014426` success với dữ liệu giả và không gọi dịch vụ ngoài.
 
-Chưa chuyển production tại thời điểm tạo gói. Sau khi được phép: backup catalogue/ledger; overlay đúng image của hai API; giữ toàn bộ env/mount/network, worker tiến độ, phiên GV và cấu hình điểm danh; thêm template và hai registry; đọc lại API/URL/asset. Không sửa Docs nguồn, giao Classroom, nộp/chấm thay học viên hoặc gửi email thử.
+Hai API và database đã chuyển trong quyền Đức xác nhận ngày 26/10/2026. Speaking độc lập giữ source Lesson 12 vừa phát và thêm đúng ba module; API Mapping chung chỉ thêm route CTA Lesson 15. Image kiểm lần lượt 19/19 và 14/14; toàn bộ config/source hash đọc lại khớp, container cũ giữ để quay lại. Trạng thái điểm danh/outcome Portal và số submission/receipt cũ trước–sau không đổi; chưa tạo ca Portal mới. Hai registry đã đọc lại mã mới, giữ active/settings. Không sửa Docs nguồn, giao Classroom, nộp/chấm thay học viên hoặc gửi email thử.
 
 Rollback bằng image/container và snapshot workflow trước phát hành, giữ tiến độ/receipt mới; không restore dump đè dữ liệu mới. Template có bài phát sinh chỉ đóng theo phạm vi được phép, không xóa lịch sử. Điểm danh Portal không có outcome mới vẫn phải báo chưa kiểm.
