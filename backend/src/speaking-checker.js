@@ -4,6 +4,7 @@ import { checkHowToSubmission } from './speaking-how-to-checker.js';
 import { checkStorySubmission } from './speaking-story-checker.js';
 import { checkStoryDetailSubmission } from './speaking-story-detail-checker.js';
 import { checkStoryOutcomeSubmission } from './speaking-story-outcome-checker.js';
+import { checkPersonSubmission } from './speaking-person-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
 
@@ -132,6 +133,7 @@ export async function checkSubmission(input, dependencies = {}) {
   if (['object_intro', 'object_description'].includes(input?.section)) return checkObjectSubmission(input, dependencies);
   if (input?.section === 'story_outcome') return checkStoryOutcomeSubmission(input, dependencies);
   const section = input?.section;
+  if (['person_intro', 'person_traits', 'person_ending'].includes(section)) return checkPersonSubmission(input, dependencies);
   if (section === 'story_detail') return checkStoryDetailSubmission(input, dependencies);
   if (section === 'how_to_do') return checkHowToSubmission(input, dependencies);
   if (['story_context', 'story_sequence'].includes(section)) return checkStorySubmission(input, dependencies);
