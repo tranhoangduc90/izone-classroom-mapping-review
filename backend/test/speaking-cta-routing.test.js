@@ -13,7 +13,10 @@ const cases = [
   ['67-speaking-ly_do_hanh_vi', 'lesson-6.html'],
   ['67-speaking-cach_lam_mot_viec', 'lesson-7.html'],
   ['67-speaking-so_sanh', 'lesson-8.html'],
-  ['67-speaking-ke_chuyen_boi_canh_truoc_trong_sau', 'lesson-10.html']
+  ['67-speaking-freestyle_on_tap', 'lesson-9.html'],
+  ['67-speaking-ke_chuyen_boi_canh_truoc_trong_sau', 'lesson-10.html'],
+  ['67-speaking-ke_chuyen_dien_bien_chi_tiet', 'lesson-11.html'],
+  ['67-speaking-ke_chuyen_ket_cuc_y_nghia', 'lesson-12.html']
 ];
 const documentId = 'fixture doc 8 + unicode';
 const classCode = 'IC2304';
