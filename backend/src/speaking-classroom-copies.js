@@ -37,6 +37,8 @@ export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
   // Mã bài quyết định trang; giữ Doc ID và lớp để mở đúng bản homework riêng.
   const page = assignmentCode === '67-speaking-ta_nguoi'
     ? '/izone-ai-team-pages/speaking-homework/lesson-15.html'
+    : assignmentCode === '67-speaking-ta_vat_mieu_ta_chuc_nang_what_if'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-14.html'
     : assignmentCode === '67-speaking-ta_vat_gioi_thieu_mieu_ta'
     ? '/izone-ai-team-pages/speaking-homework/lesson-13.html'
     : assignmentCode === '67-speaking-ke_chuyen_ket_cuc_y_nghia'
