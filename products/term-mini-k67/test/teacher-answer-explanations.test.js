@@ -8,6 +8,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { explanationDefinitionSql } from '../src/teacher-answer-explanations.js';
 import { listTermTestTeacherResultsSql } from '../src/sql.js';
+import { publicAudioCatalog } from '../src/public-audio-catalog.js';
 
 // HTTP qua middleware đăng nhập thật của ứng dụng, với DB và nguồn giả trên máy local.
 // Kiểm việc truyền phạm vi quyền, chọn đúng học viên và chặn kết quả đã thay đổi.
@@ -17,7 +18,7 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const studentRef = '11111111-1111-4111-8111-111111111111';
 const otherRef = '22222222-2222-4222-8222-222222222222';
 const completedAt = '2026-08-25T14:22:10.284374+00:00';
-for (const slug of ['mini-test-lesson-5', 'term-test-2']) test(`${slug}: giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn kết quả, không lộ token hoặc ghi điểm`, async t => {
+for (const slug of ['term-test-1', 'mini-test-lesson-5', 'term-test-2']) test(`${slug}: giảng viên xem lời giải đúng lớp/học viên qua cùng nguồn kết quả, không lộ token hoặc ghi điểm`, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'k67-teacher-explanations-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const definitions = { listening: { questions: [{ number: 11, accepted: ['A'] }] }, reading: { questions: [{ number: 14, accepted: ['v'] }] } };
@@ -33,6 +34,10 @@ for (const slug of ['mini-test-lesson-5', 'term-test-2']) test(`${slug}: giảng
   const entry = (number, answer) => ({ number, section: 0, answers: [answer], evidence: [[{ text: 'Dẫn chứng giả' }]], blocks: [{ analysis: [[{ text: 'Lời giải giả' }]] }] });
   const bundle = { schemaVersion: 1, testSlug: definition.test_slug, definitionVersion: 1, contentSha256: hash(content),
     definitionSha256: hash(canonical(definitions)), skills: { listening: { entries: { 11: entry(11, 'A') } }, reading: { entries: { 14: entry(14, 'v') } } } };
+  if (slug === 'term-test-1') {
+    bundle.reviewAudio = {sha256:publicAudioCatalog[slug].sha256,asset:new URL(publicAudioCatalog[slug].url).pathname.split('/').at(-1),durationMs:1734766};
+    bundle.skills.listening.entries[11].replay = [{id:'fixture-clip',startMs:1000,endMs:3000}];
+  }
   await fs.mkdir(path.join(root, definition.test_slug));
   await fs.writeFile(path.join(root, definition.test_slug, 'content.json'), content);
   const source = path.join(root, definition.test_slug, 'explanations.json');
@@ -70,6 +75,7 @@ for (const slug of ['mini-test-lesson-5', 'term-test-2']) test(`${slug}: giảng
   assert.equal(response.body.review.answers.listening['11'], 'C');
   assert.equal(response.body.review.result.listening.details[0].studentAnswer, 'C');
   assert.equal(response.headers['cache-control'], 'no-store, private');
+  if (slug === 'term-test-1') assert.deepEqual(response.body.review.bundle.reviewAudio,bundle.reviewAudio);
   assert.doesNotMatch(JSON.stringify(response.body), /attemptToken|teacher-fixture-only|legacy@mapping.local/);
   missingDefinition = true; assert.equal((await get()).status, 404); missingDefinition = false;
   await fs.writeFile(source, JSON.stringify({ ...bundle, definitionVersion: 2 }));
