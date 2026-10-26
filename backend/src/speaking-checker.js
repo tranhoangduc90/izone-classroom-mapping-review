@@ -1,3 +1,4 @@
+import { checkObjectSubmission } from './speaking-object-checker.js';
 import { createHash } from 'node:crypto';
 import { checkHowToSubmission } from './speaking-how-to-checker.js';
 import { checkStorySubmission } from './speaking-story-checker.js';
@@ -128,6 +129,7 @@ export function validCompleted(section, messages, proposed) {
 }
 
 export async function checkSubmission(input, dependencies = {}) {
+  if (['object_intro', 'object_description'].includes(input?.section)) return checkObjectSubmission(input, dependencies);
   if (input?.section === 'story_outcome') return checkStoryOutcomeSubmission(input, dependencies);
   const section = input?.section;
   if (section === 'story_detail') return checkStoryDetailSubmission(input, dependencies);

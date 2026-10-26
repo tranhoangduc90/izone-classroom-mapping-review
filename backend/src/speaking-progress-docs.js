@@ -8,7 +8,7 @@ const label=part=>({freestyle:'Speaking chính',speaking:'Speaking chính',parap
   clarify_1:'Làm rõ cấp 1',clarify_2:'Làm rõ cấp 2',clarify_3:'Làm rõ cấp 3',insert_middle:'Chèn điểm giữa',
   reason_action:'Lý do làm một việc',benefit_harm:'Lợi và hại',how_to_do:'Cách làm một việc',
   comparison_direct:'So sánh trực tiếp',comparison_extended:'So sánh mở rộng',story_context:'Xây dựng bối cảnh',
-  story_sequence:'Trình tự câu chuyện',story_detail:'Diễn biến chi tiết'})[part];
+  story_sequence:'Trình tự câu chuyện',story_detail:'Diễn biến chi tiết',object_intro:'Mở bài tả vật',object_description:'Miêu tả chi tiết một vật'})[part];
 
 // Only trusted server state determines progress; no learner text/exercise titles in Docs.
 export function progressPayload({parts,links,requiredPracticeCount,receiptId,assignmentCode,documentId,independent}) {
@@ -19,7 +19,7 @@ export function progressPayload({parts,links,requiredPracticeCount,receiptId,ass
   if(receiptId){url.searchParams.set('receipt',receiptId);if(independent)url.searchParams.set('system','independent');}
   else {url.searchParams.set('code',assignmentCode);url.searchParams.set('documentId',documentId);}
   const heading=receiptId?'Đã nộp bài thành công.':accepted===required.length?'Đã xác nhận đủ các phần — đang hoàn tất nộp bài.':`Đã xác nhận ${accepted}/${required.length} phần bắt buộc.`;
-  const lines=required.map(({title,link})=>`${title}: ${link?.status==='accepted'?'đã xác nhận'+(link.kind==='main'&&Number(link.question_count)>0?` ${link.question_count} câu`:''):link?.status==='pending'?'đang kiểm tra':link?.status==='rejected'?'chưa được công nhận':'chưa xác nhận'}.`);
+  const lines=required.map(({title,link})=>`${title}: ${link?.status==='accepted'?'đã xác nhận'+(link.kind==='main'&&Number(link.question_count)>0?` ${link.question_count} ${['object_intro','object_description'].includes(link.part)?'lượt':'câu'}`:''):link?.status==='pending'?'đang kiểm tra':link?.status==='rejected'?'chưa được công nhận':'chưa xác nhận'}.`);
   return {text:[heading,...lines,'Giảng viên nhấn vào đây để xem '+(receiptId?'kết quả.':'tiến độ.')].join('\n'),link:url.href,receiptId:receiptId||null};
 }
 
