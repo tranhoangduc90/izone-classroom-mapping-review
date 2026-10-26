@@ -62,6 +62,17 @@ test('lời giải chỉ mở sau đủ kỹ năng, đúng lượt, đúng ngu�
   assert.equal((await get(tokens['mini-test-lesson-5:lr'])).status, 200);
   assert.equal((await get(tokens['term-test-1:lr_only'])).status, 200);
   assert.equal((await get(tokens['mini-test-lesson-5:started'])).status, 404);
+  const term1file = path.join(root, 'term-test-1', 'explanations.json');
+  const term1 = JSON.parse(await fs.readFile(term1file, 'utf8'));
+  const term1audio = structuredClone(term1);
+  term1audio.reviewAudio = {sha256:publicAudioCatalog['term-test-1'].sha256,
+    asset:new URL(publicAudioCatalog['term-test-1'].url).pathname.split('/').at(-1),durationMs:1734766};
+  term1audio.skills.listening.entries[11].replay = [{id:'term1-fixture',startMs:1000,endMs:3000}];
+  await fs.writeFile(term1file, JSON.stringify(term1audio));
+  const term1review = await get(tokens['term-test-1:complete']);
+  assert.equal(term1review.status,200);assert.deepEqual(term1review.body.review.bundle.reviewAudio,term1audio.reviewAudio);
+  assert.equal((await get(tokens['term-test-1:started'])).status,404);
+  await fs.writeFile(term1file, JSON.stringify(term1));
   assert.equal((await get(tokens['term-test-2:complete'])).status, 200);
   assert.equal((await get(tokens['term-test-2:lr_only'])).status, 200);
   for (const state of ['started', 'lr']) assert.equal((await get(tokens[`term-test-2:${state}`])).status, 404);
