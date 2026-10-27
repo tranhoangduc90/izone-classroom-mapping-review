@@ -1727,5 +1727,94 @@ export const ASSETS = {
       }
     ],
     "key": "cf-chunks-lab/3881716311bc53826cbcae5fc7e791b226777c46b438e88637d4d63e9794f0cd.mp3"
+  },
+  "homework-listening-02-scandinavian": {
+    "id": "homework-listening-02-scandinavian",
+    "sha256": "55ba7cb1a65490cde404a36eca6e654040f91d98882d4628528037c0bdb1a30f",
+    "byteLength": 10337151,
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-homework/audio-assets/scandinavian-studies-55ba7cb1a65490cd.mp3",
+    "chunks": [
+      {
+        "byteLength": 524288,
+        "sha256": "7e298f75fd096aa16de8e455a8564adbc612383cefc9808d0e3d6e4bd5fca176"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "2d7aa5f8c4f7852d02671a685b56c51f2849989633fb25b7ece9196941626036"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "ed2cf7572d355a681e5bb5c3428136c46a1ae174b5455fa4fcac2c0d36a7a4af"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "41bb250e30413dbe1ce61451f0c8078711bdff7bccd193e182db32e62a698abc"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "b184353664c92b396b09726633a7247a0353935dab63314fcebb7d260dc95e41"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "1ad4b0762119b2775562db6b03ba5137dbad830ef4a2315484dedacc501a3cfd"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "84a6719a5226ef2419e4045f011e1e371498a3ec93fb6864cbfe6960564b0522"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "3461a09eabce475cee997a5aa8167df889339dae79aa51217c9cdbf5f629e5c6"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "69dfe11a1d3354f4b0889f9876b20eb54c4f3c2bae6b99f4a318bbf63f65f58c"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "1541e2f0b7f1aab88f64ad8b48d3e17b8eedfd458ac9005321bc6107ecbfa411"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "6b34ae45aed6d146b862c20a71c4563c2cee1f0b7a1ed22540c99af4717a8d9c"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "366369546bff7923382cca3ec3bb7397b869cfa721be76b3b9c2f10f11f61bd2"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "5357b62c69ba892d1a0864730b73eeb6b1a100e94c64a3357349441f9ea2de16"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "4b02e39d03dfeca48b30cce92429fb5aa9df9125dbce6aae389c5e23240fa168"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "0b94e57f4115268b555bc7af29389efab5596db2bdae12867b87dc3648ff16f4"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "88bbd77adb637377cd9c48f78f7d69b688823a55b7a17ec864530d389db26d9f"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "02de002c606aba3b5fff609ee4ab011a7cbefd2961504f4719680b9834f07750"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "ccfe370f23cc45c96cdf2c9fd32baeb3dd84b7f24e174149ed2122fdc938bf87"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "297ae6fd5f5cbb7cb0479d6f76f1ced52330ffbab438d80af0cebdd71ffede68"
+      },
+      {
+        "byteLength": 375679,
+        "sha256": "efbfa6f57aeb88b6e7dd7a781a3ffceab9cc7e7a17601cdb79aed60ab408ec44"
+      }
+    ],
+    "key": "cf-chunks-lab/55ba7cb1a65490cde404a36eca6e654040f91d98882d4628528037c0bdb1a30f.mp3"
   }
 };
