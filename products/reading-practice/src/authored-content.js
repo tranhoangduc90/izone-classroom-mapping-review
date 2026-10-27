@@ -24,6 +24,20 @@ export function registerAuthoredLesson(input){
  }
  check(new Set(ids).size===ids.length&&ids.every((n,i)=>!i||+n>+ids[i-1]),'Số câu trùng hoặc sai thứ tự.');
  check(Array.isArray(lesson.paragraphs)&&lesson.paragraphs.length&&lesson.paragraphs.every(p=>/^[a-zA-Z0-9_-]+$/.test(p)),'Mã đoạn không hợp lệ.');
+ // Full test nhận nhiều passage; mỗi câu/đoạn phải thuộc đúng một passage.
+ if(lesson.passages!==undefined){
+  check(Array.isArray(lesson.passages)&&lesson.passages.length>1,'Thiếu các passage của full test.');
+  const passageIds=new Set(),covered=[],paragraphs=[];
+  for(const p of lesson.passages){
+   check(/^[a-z][a-z0-9_-]*$/.test(p.id)&&!passageIds.has(p.id)&&text(p.title)&&text(p.label),'Passage không hợp lệ/trùng.');
+   check(Number.isInteger(p.start)&&Number.isInteger(p.end)&&p.end>=p.start,'Khoảng câu passage không hợp lệ.');
+   check(Array.isArray(p.paragraphs)&&p.paragraphs.length&&p.paragraphs.every(id=>lesson.paragraphs.includes(id)),'Đoạn không thuộc passage.');
+   passageIds.add(p.id);paragraphs.push(...p.paragraphs);
+   for(let n=p.start;n<=p.end;n++)covered.push(String(n));
+  }
+  check(same(covered,ids)&&same(paragraphs,lesson.paragraphs)&&new Set(paragraphs).size===paragraphs.length,'Passage thiếu/trùng hoặc sai thứ tự câu/đoạn.');
+  check(lesson.groups.every(g=>lesson.passages.filter(p=>g.start>=p.start&&g.end<=p.end).length===1),'Nhóm câu vượt ranh giới passage.');
+ }
  if(lesson.audioMs!==undefined)check(Number.isInteger(lesson.audioMs)&&lesson.audioMs>0&&Number.isInteger(lesson.reviewMs)&&lesson.reviewMs>=0&&lesson.totalMs===lesson.audioMs+lesson.reviewMs,'Audio/thời gian rà không khớp.');
  lesson.questionIds=ids;lesson.authored=true;
  const old=registry.get(lesson.code);
@@ -45,6 +59,7 @@ export function validateAuthoredContent(bundle){
  const paragraph=p=>p&&Array.isArray(p.runs)&&p.runs.length&&p.runs.every(r=>typeof r.text==='string'&&['foreground','background'].every(k=>r[k]===undefined||/^#[0-9a-f]{6}$/i.test(r[k])));
  for(const [i,g] of d.groups.entries()){
   const meta=l.groups[i],qs=g.questions,expected=ids.filter(n=>+n>=meta.start&&+n<=meta.end);
+  if(l.passages)check(g.start===meta.start&&g.end===meta.end,'Phạm vi nhóm nội dung không khớp metadata.');
   check(g.kind===meta.kind&&text(g.instruction)&&Array.isArray(qs)&&same(qs.map(q=>String(q.n)),expected),'Thiếu chỉ dẫn/câu hỏi trong nhóm.');
   check(!g.image||/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.image),'Hình đề phải nhúng riêng trong bundle, không dùng URL ngoài.');
   const options=g.options;
@@ -65,6 +80,7 @@ export function validateAuthoredContent(bundle){
    check(Array.isArray(e.evidenceGroups)&&e.evidenceGroups.length,'Thiếu dẫn chứng.');
    for(const ev of e.evidenceGroups){
     check(l.paragraphs.includes(ev.paragraph)&&Array.isArray(ev.paragraphs)&&ev.paragraphs.length&&ev.paragraphs.every(paragraph),'Dẫn chứng không khớp đoạn.');
+    if(l.passages)check(l.passages.find(p=>q.n>=p.start&&q.n<=p.end).paragraphs.includes(ev.paragraph),'Dẫn chứng nằm ở passage khác câu hỏi.');
     check(Array.isArray(ev.marks)&&ev.marks.length&&ev.marks.every(m=>Number.isInteger(m.start)&&Number.isInteger(m.end)&&m.start>=0&&m.end>m.start&&m.end<=passage[ev.paragraph].length),'Vị trí dẫn chứng ngoài nguồn.');
    }
   }
