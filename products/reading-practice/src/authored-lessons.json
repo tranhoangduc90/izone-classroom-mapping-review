@@ -55,5 +55,193 @@
       "E",
       "F"
     ]
+  },
+  {
+    "code": "67-practice-reading_c21_t1_full_test",
+    "lesson": 14,
+    "title": "Cambridge 21 · Test 1 · Full Reading",
+    "sourceLabel": "Cambridge 21 · Test 1 · Reading Passage 1–3",
+    "book": 21,
+    "test": 1,
+    "totalMs": 3600000,
+    "passages": [
+      {
+        "id": "p1",
+        "label": "Passage 1",
+        "title": "The Davies Sisters",
+        "start": 1,
+        "end": 13,
+        "paragraphs": [
+          "p1_1",
+          "p1_2",
+          "p1_3",
+          "p1_4",
+          "p1_5",
+          "p1_6",
+          "p1_7",
+          "p1_8",
+          "p1_9",
+          "p1_10",
+          "p1_11",
+          "p1_12",
+          "p1_13"
+        ],
+        "labels": {
+          "p1_1": "1",
+          "p1_2": "2",
+          "p1_3": "3",
+          "p1_4": "4",
+          "p1_5": "5",
+          "p1_6": "6",
+          "p1_7": "7",
+          "p1_8": "8",
+          "p1_9": "9",
+          "p1_10": "10",
+          "p1_11": "*",
+          "p1_12": "*",
+          "p1_13": "*"
+        }
+      },
+      {
+        "id": "p2",
+        "label": "Passage 2",
+        "title": "Why we need silence",
+        "start": 14,
+        "end": 26,
+        "paragraphs": [
+          "p2_A",
+          "p2_B",
+          "p2_C",
+          "p2_D",
+          "p2_E",
+          "p2_F",
+          "p2_G"
+        ],
+        "labels": {
+          "p2_A": "A",
+          "p2_B": "B",
+          "p2_C": "C",
+          "p2_D": "D",
+          "p2_E": "E",
+          "p2_F": "F",
+          "p2_G": "G"
+        }
+      },
+      {
+        "id": "p3",
+        "label": "Passage 3",
+        "title": "Book review: The World of Sugar by Ulbe Bosma",
+        "start": 27,
+        "end": 40,
+        "paragraphs": [
+          "p3_1",
+          "p3_2",
+          "p3_3",
+          "p3_4",
+          "p3_5",
+          "p3_6",
+          "p3_7",
+          "p3_8"
+        ],
+        "labels": {
+          "p3_1": "1",
+          "p3_2": "2",
+          "p3_3": "3",
+          "p3_4": "4",
+          "p3_5": "5",
+          "p3_6": "6",
+          "p3_7": "7",
+          "p3_8": "8"
+        }
+      }
+    ],
+    "paragraphs": [
+      "p1_1",
+      "p1_2",
+      "p1_3",
+      "p1_4",
+      "p1_5",
+      "p1_6",
+      "p1_7",
+      "p1_8",
+      "p1_9",
+      "p1_10",
+      "p1_11",
+      "p1_12",
+      "p1_13",
+      "p2_A",
+      "p2_B",
+      "p2_C",
+      "p2_D",
+      "p2_E",
+      "p2_F",
+      "p2_G",
+      "p3_1",
+      "p3_2",
+      "p3_3",
+      "p3_4",
+      "p3_5",
+      "p3_6",
+      "p3_7",
+      "p3_8"
+    ],
+    "groups": [
+      {
+        "id": "p1_g1",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 1,
+        "end": 7
+      },
+      {
+        "id": "p1_g2",
+        "kind": "tfng",
+        "label": "True / False / Not Given",
+        "start": 8,
+        "end": 13
+      },
+      {
+        "id": "p2_g1",
+        "kind": "matching",
+        "label": "Matching information",
+        "start": 14,
+        "end": 17
+      },
+      {
+        "id": "p2_g2",
+        "kind": "summary",
+        "label": "Summary completion",
+        "start": 18,
+        "end": 21
+      },
+      {
+        "id": "p2_g3",
+        "kind": "names",
+        "label": "Matching names",
+        "start": 22,
+        "end": 26
+      },
+      {
+        "id": "p3_g1",
+        "kind": "mcq",
+        "label": "Multiple choice",
+        "start": 27,
+        "end": 30
+      },
+      {
+        "id": "p3_g2",
+        "kind": "summary",
+        "label": "Summary completion with a word list",
+        "start": 31,
+        "end": 36
+      },
+      {
+        "id": "p3_g3",
+        "kind": "ynng",
+        "label": "Yes / No / Not Given",
+        "start": 37,
+        "end": 40
+      }
+    ]
   }
 ]
