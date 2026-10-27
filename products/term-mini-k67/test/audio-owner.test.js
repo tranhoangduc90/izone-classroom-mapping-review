@@ -63,3 +63,63 @@ test('Thiếu proof/epoch, sai generation và tokenless legacy không vượt tr
   assert.equal((await api.post(base+'/listening').send({classCode:'IC2304',studentRef,clientSubmissionId:randomUUID(),answers:{11:'A'}})).status,409);
   assert.equal((await f.db.query('SELECT listening_submitted_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0].listening_submitted_at,null);
 });
+
+for(const mode of ['lis_first','read_first'])test(`${mode}: xác nhận chuyển phòng chờ giữ nguyên phiên, nháp và Reading đã nộp`,async()=>{
+  const {base,token}=await prepare('term-test-2',mode),first=await claim(base,token),next=fresh();
+  const before=(await f.db.query('SELECT * FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  const status=await post(base,'session/audio-owner',{...token,...next,action:'status'});
+  assert.equal(status.body.canRecoverPreparation,true);
+  const transfer=await post(base,'session/audio-owner',{...token,...next,action:'recover-preparation',expectedOwnerEpoch:first.owner.ownerEpoch});
+  assert.equal(transfer.status,200,JSON.stringify(transfer.body));next.ownerEpoch=transfer.body.ownerEpoch;
+  const after=(await f.db.query('SELECT * FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  for(const field of Object.keys(before).filter(k=>!['audio_owner_id','audio_owner_page_id','audio_owner_proof_hash','audio_owner_epoch'].includes(k)))assert.deepEqual(after[field],before[field],field);
+  assert.equal((await start(base,token,first.owner)).status,409);
+  assert.equal((await start(base,token,next)).status,200);
+  const active=await post(base,'session/audio-owner',{...token,...fresh(),action:'recover-preparation',expectedOwnerEpoch:next.ownerEpoch});
+  assert.equal(active.status,409,'cannot take over an active listening exam');
+});
+
+test('Hai xác nhận phục hồi cùng epoch chỉ có một chủ thắng; sai generation không ghi',async()=>{
+  const {base,token}=await prepare(),first=await claim(base,token);
+  const recover=owner=>post(base,'session/audio-owner',{...token,...owner,action:'recover-preparation',expectedOwnerEpoch:first.owner.ownerEpoch});
+  const results=await Promise.all([recover(fresh()),recover(fresh())]);
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+  assert.equal((await post(base,'session/audio-owner',{...token,...fresh(),generation:1,action:'recover-preparation',expectedOwnerEpoch:first.owner.ownerEpoch+1})).status,409);
+});
+
+for(const mode of ['lis_first','read_first'])test(`${mode}: preview does not reserve ownership; simultaneous native Starts have one winner and preserve Reading`,async()=>{
+  const {base,token}=await prepare('term-test-2',mode),a=fresh(),b=fresh();
+  const beforeAttempt=(await f.db.query('SELECT * FROM assessment.term_test_attempt WHERE exam_session_id=$1',[token.examSessionToken])).rows;
+  // A stale lobby reservation from an older client must not trap the new client.
+  const stale=await claim(base,token);assert.equal(stale.r.status,200);
+  for(const owner of [a,b]){
+    const status=await post(base,'session/audio-owner',{...token,...owner,action:'status'});
+    assert.equal(status.status,200);assert.equal(status.body.ownerStartVersion,2);
+    assert.equal(status.body.listeningStartedAt,null);
+  }
+  const begin=owner=>post(base,'session/start',{...token,...owner,ownerStartVersion:2,audioProtocolVersion:1,audioEventId:randomUUID()});
+  const results=await Promise.all([begin(a),begin(b)]);
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,409],JSON.stringify(results.map(r=>r.body)));
+  const winner=results[0].status===200?a:b,reply=results.find(r=>r.status===200),loser=winner===a?b:a;
+  const saved=(await f.db.query('SELECT * FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  assert.equal(saved.audio_owner_id,winner.ownerId);assert.ok(saved.listening_started_at);
+  // Retry exactly the request whose ACK was lost, including its old epoch.
+  const retry=await begin(winner);assert.equal(retry.status,200,JSON.stringify(retry.body));
+  assert.equal(retry.body.listeningDeadlineAt,reply.body.listeningDeadlineAt);
+  assert.deepEqual(retry.body.audioOwner,reply.body.audioOwner);
+  assert.equal((await begin(loser)).status,409);
+  const next={...winner,pageId:randomUUID(),ownerEpoch:reply.body.audioOwner.ownerEpoch,reclaim:true};
+  const resumed=await begin(next);assert.equal(resumed.status,200,JSON.stringify(resumed.body));
+  assert.equal(resumed.body.listeningDeadlineAt,reply.body.listeningDeadlineAt);
+  assert.equal((await begin(winner)).status,409,'old page cannot follow the new epoch');
+  const afterAttempt=(await f.db.query('SELECT * FROM assessment.term_test_attempt WHERE exam_session_id=$1',[token.examSessionToken])).rows;
+  assert.deepEqual(afterAttempt,beforeAttempt,'Reading result must survive listening start/reload');
+});
+
+test('prestart manifest metadata can be pinned without owner; active draft still requires owner',async()=>{
+  const {base,token}=await prepare(),claimed=await claim(base,token),next=fresh();
+  await f.db.query('UPDATE assessment.term_test_exam_session SET listening_audio_manifest=$2 WHERE id=$1',[token.examSessionToken,JSON.stringify({fixture:true})]);
+  assert.equal((await post(base,'session/start',{...token,...next,ownerStartVersion:2,audioProtocolVersion:1})).status,200);
+  await assert.rejects(f.db.query(`UPDATE assessment.term_test_exam_session SET listening_draft='{"11":"B"}' WHERE id=$1`,[token.examSessionToken]),/AUDIO_OWNER_REQUIRED/);
+  assert.equal((await start(base,token,claimed.owner)).status,409);
+});
