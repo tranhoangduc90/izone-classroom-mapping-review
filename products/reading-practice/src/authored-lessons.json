@@ -57,6 +57,59 @@
     ]
   },
   {
+    "lesson": 13,
+    "title": "Frozen Food",
+    "book": 20,
+    "test": 3,
+    "passage": 1,
+    "totalMs": 1200000,
+    "preparationMethods": {
+      "notes": [
+        "Khoanh tròn giới hạn từ được điền: ONE WORD ONLY.",
+        "Nghiên cứu phần ghi chú và xác định loại từ cho mỗi chỗ trống.",
+        "Skim bài text để tìm ra những đoạn liên quan chứa đáp án.",
+        "Scan đoạn văn và điền đáp án đúng, chú ý giới hạn từ."
+      ],
+      "statements": [
+        "Đọc kĩ câu hỏi và gạch chân từ khóa.",
+        "Scan từ khóa đã gạch trong bài đọc.",
+        "Chú ý tới controlling words (not, only, the majority etc.).",
+        "Nếu có thông tin trong câu hỏi không có phần tương ứng trong bài đọc, chọn NOT GIVEN. Nếu mọi thông tin đều khớp, chọn TRUE; nếu có thông tin trái ngược hoặc sai lệch, chọn FALSE."
+      ]
+    },
+    "code": "67-practice-reading_c20_t3_p1_frozen_food",
+    "groups": [
+      {
+        "id": "notes",
+        "kind": "completion",
+        "label": "Note Completion",
+        "start": 1,
+        "end": 7
+      },
+      {
+        "id": "statements",
+        "kind": "tfng",
+        "label": "TRUE / FALSE / NOT GIVEN",
+        "start": 8,
+        "end": 13
+      }
+    ],
+    "paragraphs": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12"
+    ]
+  },
+  {
     "code": "67-practice-reading_c21_t1_full_test",
     "lesson": 14,
     "title": "Cambridge 21 · Test 1 · Full Reading",
