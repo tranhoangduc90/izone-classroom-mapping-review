@@ -43,18 +43,23 @@ export async function authorizeAudioSession(db,input,slug,skipOwner=false,onlyOw
 }
 
 export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=false}) {
+  const authorizeDownload=async(db,input,slug)=>{
+    const value=await authorizeAudioSession(db,input,slug,true);
+    if(value.row.listening_started_at)assertAudioOwner(value.row);
+    return value;
+  };
   const schema=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonnegative(),publicAudioVersion:z.literal(1).optional()});
   app.post('/api/term-tests/:testSlug/session/audio-access',limiter,async(req,res,next)=>{
     try {
       const input=schema.safeParse(req.body),slug=req.params.testSlug;
       if(!input.success||!assets?.supports(slug))return res.status(400).json({ok:false,error:'INVALID_AUDIO_ACCESS'});
       if(!enabled||!assets.getAudioManifest)return res.set('Cache-Control','no-store, private').json({ok:true,audioCacheSupported:false});
-      await audioTransaction(pool,db=>authorizeAudioSession(db,input.data,slug));
+      await audioTransaction(pool,db=>authorizeDownload(db,input.data,slug));
       const manifest=await audioManifestFor(pool,assets,slug,input.data.examSessionToken,
         publicEnabled&&input.data.publicAudioVersion===1?publicAudioCatalog[slug]:null);
       const value=await audioTransaction(pool,async db=>{
         // Xác thực lại sau bước đọc file: quyền/owner có thể đã đổi trong lúc chờ hash.
-        const {row,now}=await authorizeAudioSession(db,input.data,slug);
+        const {row,now}=await authorizeDownload(db,input.data,slug);
         return {ok:true,audioCacheSupported:true,examSessionToken:row.id,generation:Number(row.generation),
           audioManifest:withCloudflareAudio(manifest),cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
           listeningDurationSeconds:assets.getTiming(slug).listeningDurationSeconds,

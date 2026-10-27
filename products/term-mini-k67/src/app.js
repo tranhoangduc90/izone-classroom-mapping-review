@@ -1,5 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import { mountSubmissionStatus } from './submission-status.mjs';
+import { mountExamClock } from './exam-clock.mjs';
 import { assertAudioOwner as assertSubmissionOwner } from './audio-owner.js';
 import crypto from "node:crypto";
 import { mountTermStudentIdentity } from './student-identity.js';
@@ -18,13 +19,14 @@ import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
-import {audioOwnerPool,audioOwnerContext,mountAudioOwner} from './audio-owner.js';
+import {audioOwnerPool,audioOwnerContext,mountAudioOwner,claimAudioOwnerAtStart} from './audio-owner.js';
 import {examRateIdentity,examRateKey} from './exam-rate-limit.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
-import {mountTeacherSavedProgress} from './teacher-saved-progress.js';
+import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
+import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
@@ -90,6 +92,7 @@ const examSessionPrepareSchema = z.object({
 });
 
 const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
+  ownerStartVersion:z.literal(2).optional(),
   audioStartGuardVersion:z.literal(1).optional(),
   generation:z.number().int().nonnegative().optional(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
@@ -470,6 +473,7 @@ export function createApp({
     legacyHeaders: false,
     message: { ok: false, error: 'RATE_LIMITED', message: 'Có quá nhiều yêu cầu; vui lòng thử lại sau.' }
   });
+  mountExamClock(app,{pool,limiter:testReadLimiter});
   const testWriteLimiter = rateLimit({
     keyGenerator:examRateKey,
     windowMs: 60_000,
@@ -865,10 +869,13 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_EXAM_SESSION', message: 'Yêu cầu bắt đầu bài thi không hợp lệ.' });
     }
     const timing = termTestAssetService.getTiming(slug.data);
+    let startedOwner=null;
     const beginSession=async db=>{
       if(config.audioCacheEnabled||config.audioOwnerEnabled){
-        const auth=await authorizeAudioSession(db,parsed.data,slug.data);
-        if(config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
+        const deferred=parsed.data.ownerStartVersion===2;
+        const auth=await authorizeAudioSession(db,parsed.data,slug.data,deferred);
+        if(deferred&&(config.audioOwnerEnabled||Number(auth.row.audio_owner_protocol)===1))startedOwner=await claimAudioOwnerAtStart(db,auth.row,req.body);
+        if(!deferred&&config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
           throw new AudioRecoveryError('AUDIO_OWNER_REQUIRED','Hãy tải lại trang và xác nhận quyền phát audio trước khi bắt đầu.');
       }
       const before=parsed.data.audioProtocolVersion===1?await activateListeningProtection(db,parsed.data,slug.data,config.audioIncidentEnabled):null;
@@ -900,6 +907,7 @@ export function createApp({
       examSessionToken: session.exam_session_token,
       studentName: session.student_name,
       generation: Number(session.generation)||0,
+      ...(startedOwner?{audioOwner:startedOwner}:{}),
       listeningStartedAt: session.listening_started_at,
       listeningDeadlineAt: session.listening_deadline_at,
       serverNow: session.server_now,
@@ -921,7 +929,8 @@ export function createApp({
     keyGenerator:examRateKey,message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
   mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled,publicEnabled:config.publicAudioEnabled});
-  mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled});
+  mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled,
+    onRecovery:({testSlug,sessionId,ownerEpoch})=>logTermTestEvent('audio_preparation_recovered',testSlug,sessionId,{ownerEpoch})});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
@@ -1363,6 +1372,8 @@ export function createApp({
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
   mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
+  mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
+    readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});
   app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, requireContext, asyncRoute(async (req, res) => {
     const result = await pool.query(listTermTestTeacherOptionsSql, [

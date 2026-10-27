@@ -5,6 +5,7 @@ import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests
 import {recordListeningAudio} from './audio-recovery.js';
 import {activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
+import {claimAudioOwnerAtStart} from './audio-owner.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -12,6 +13,7 @@ const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
+  ownerStartVersion:z.literal(2).optional(),
   audioStartGuardVersion:z.literal(1).optional(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional(),
@@ -248,14 +250,17 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const parsed=input.safeParse(req.body);if(!parsed.success)throw error('INVALID_REQUEST','Dữ liệu lưu bài không hợp lệ.',400);
     const data=parsed.data;
     clientCheck(data,row,paper);
+    let startedOwner=null;
     const out=await tx(async db=>{
       const r=await locked(db,row);clientCheck(data,r,paper);
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
       if(action.endsWith('start')) {
         if(action==='listening/start'&&r.exam_delivery==='cbt'){
-          const auth=await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug,false,!config.audioCacheEnabled&&!config.audioOwnerEnabled);
-          if(config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
+          const deferred=data.ownerStartVersion===2;
+          const auth=await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug,deferred,!config.audioCacheEnabled&&!config.audioOwnerEnabled);
+          if(deferred&&(config.audioOwnerEnabled||Number(auth.row?.audio_owner_protocol)===1))startedOwner=await claimAudioOwnerAtStart(db,auth.row,req.body);
+          if(!deferred&&config.audioOwnerEnabled&&!auth.row.listening_started_at&&Number(auth.row.audio_owner_protocol)!==1)
             throw error('AUDIO_OWNER_REQUIRED','Hãy tải lại trang để xác nhận quyền phát audio.');
         }
         if(state.nextSection!==section&&!r[`${section}_submitted_at`])throw error('SECTION_NOT_OPEN','Hãy hoàn thành kỹ năng trước.');
@@ -328,7 +333,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const state=orderState(out);
     const syncRow={...out,attempt_token:out.id,test_slug:slug,class_id:String(out.erp_course_class_id),student_id:String(out.erp_student_contact_id),class_name:out.class_name_snapshot,student_name:out.student_name_snapshot};
     const portalSyncStatus=out.completed_at&& !paper ? await syncComplete(syncRow,out.combined_result):paper?'not_applicable':'pending_sections';
-    const response={...state,portalSyncStatus,next:state.nextSection};
+    const response={...state,portalSyncStatus,next:state.nextSection,...(startedOwner?{audioOwner:startedOwner}:{})};
     if(['reading','listening'].includes(action))response.timedOut=Boolean(out[action+'_timed_out']);
     if(action.endsWith('draft'))Object.assign(response,{accepted:out.draftAccepted,revision:sectionRevision(out,action),draft:action.startsWith('reading')?out.reading_draft:out.session_draft,deadlineAt:action.startsWith('reading')?out.reading_deadline_at:out.session_deadline_at,savedAt:action.startsWith('reading')?out.reading_draft_updated_at:out.listening_draft_updated_at});
     if(action==='listening/start'&&out.exam_delivery==='cbt')Object.assign(response,{content:await assets.getContent(slug),timing:assets.getTiming(slug),
