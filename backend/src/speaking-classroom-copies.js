@@ -47,6 +47,8 @@ export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
     ? '/izone-ai-team-pages/speaking-homework/lesson-11.html'
     : assignmentCode === '67-speaking-ke_chuyen_boi_canh_truoc_trong_sau'
     ? '/izone-ai-team-pages/speaking-homework/lesson-10.html'
+    : assignmentCode === '67-speaking-freestyle_on_tap'
+    ? '/izone-ai-team-pages/speaking-homework/lesson-9.html'
     : assignmentCode === '67-speaking-so_sanh'
     ? '/izone-ai-team-pages/speaking-homework/lesson-8.html'
     : assignmentCode === '67-speaking-cach_lam_mot_viec'
