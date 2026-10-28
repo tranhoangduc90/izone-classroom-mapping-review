@@ -296,5 +296,247 @@
         "end": 40
       }
     ]
+  },
+  {
+    "code": "67-practice-reading_c21_t2_full_test",
+    "lesson": 16,
+    "title": "Cambridge 21 · Test 2 · Full Reading",
+    "sourceLabel": "Cambridge 21 · Test 2 · Reading Passage 1–3",
+    "book": 21,
+    "test": 2,
+    "totalMs": 3600000,
+    "passages": [
+      {
+        "id": "p1",
+        "label": "Passage 1",
+        "title": "Do animals dream?",
+        "start": 1,
+        "end": 13,
+        "paragraphs": [
+          "p1_1",
+          "p1_2",
+          "p1_3",
+          "p1_4",
+          "p1_5",
+          "p1_6",
+          "p1_7",
+          "p1_8",
+          "p1_9",
+          "p1_10"
+        ],
+        "labels": {
+          "p1_1": "1",
+          "p1_2": "2",
+          "p1_3": "3",
+          "p1_4": "4",
+          "p1_5": "5",
+          "p1_6": "6",
+          "p1_7": "7",
+          "p1_8": "8",
+          "p1_9": "9",
+          "p1_10": "10"
+        }
+      },
+      {
+        "id": "p2",
+        "label": "Passage 2",
+        "title": "Mapungubwe",
+        "start": 14,
+        "end": 26,
+        "paragraphs": [
+          "p2_A",
+          "p2_B",
+          "p2_C",
+          "p2_D",
+          "p2_E",
+          "p2_F",
+          "p2_G"
+        ],
+        "labels": {
+          "p2_A": "A",
+          "p2_B": "B",
+          "p2_C": "C",
+          "p2_D": "D",
+          "p2_E": "E",
+          "p2_F": "F",
+          "p2_G": "G"
+        }
+      },
+      {
+        "id": "p3",
+        "label": "Passage 3",
+        "title": "Artificial Intelligence",
+        "start": 27,
+        "end": 40,
+        "paragraphs": [
+          "p3_1",
+          "p3_2",
+          "p3_3",
+          "p3_4",
+          "p3_5",
+          "p3_6",
+          "p3_7",
+          "p3_8",
+          "p3_9",
+          "p3_10",
+          "p3_11"
+        ],
+        "labels": {
+          "p3_1": "1",
+          "p3_2": "2",
+          "p3_3": "3",
+          "p3_4": "4",
+          "p3_5": "5",
+          "p3_6": "6",
+          "p3_7": "7",
+          "p3_8": "8",
+          "p3_9": "9",
+          "p3_10": "10",
+          "p3_11": "11"
+        }
+      }
+    ],
+    "paragraphs": [
+      "p1_1",
+      "p1_2",
+      "p1_3",
+      "p1_4",
+      "p1_5",
+      "p1_6",
+      "p1_7",
+      "p1_8",
+      "p1_9",
+      "p1_10",
+      "p2_A",
+      "p2_B",
+      "p2_C",
+      "p2_D",
+      "p2_E",
+      "p2_F",
+      "p2_G",
+      "p3_1",
+      "p3_2",
+      "p3_3",
+      "p3_4",
+      "p3_5",
+      "p3_6",
+      "p3_7",
+      "p3_8",
+      "p3_9",
+      "p3_10",
+      "p3_11"
+    ],
+    "groups": [
+      {
+        "id": "p1_g1",
+        "kind": "completion",
+        "label": "Table completion",
+        "start": 1,
+        "end": 5
+      },
+      {
+        "id": "p1_g2",
+        "kind": "tfng",
+        "label": "True / False / Not Given",
+        "start": 6,
+        "end": 13
+      },
+      {
+        "id": "p2_g1",
+        "kind": "matching",
+        "label": "Matching information",
+        "start": 14,
+        "end": 19
+      },
+      {
+        "id": "p2_g2",
+        "kind": "mcq",
+        "label": "Multiple choice — choose TWO",
+        "start": 20,
+        "end": 21
+      },
+      {
+        "id": "p2_g3",
+        "kind": "summary",
+        "label": "Summary completion",
+        "start": 22,
+        "end": 26
+      },
+      {
+        "id": "p3_g1",
+        "kind": "mcq",
+        "label": "Multiple choice",
+        "start": 27,
+        "end": 29
+      },
+      {
+        "id": "p3_g2",
+        "kind": "summary",
+        "label": "Summary completion with a word list",
+        "start": 30,
+        "end": 35
+      },
+      {
+        "id": "p3_g3",
+        "kind": "ynng",
+        "label": "Yes / No / Not Given",
+        "start": 36,
+        "end": 39
+      },
+      {
+        "id": "p3_g4",
+        "kind": "mcq",
+        "label": "Multiple choice — subtitle",
+        "start": 40,
+        "end": 40
+      }
+    ],
+    "preparationMethods": {
+      "p1_g1": [
+        "Khoanh giới hạn ONE WORD ONLY.",
+        "Đọc quan hệ hàng/cột và dự đoán loại từ.",
+        "Định vị đoạn tương ứng, điền đúng một từ trong bài."
+      ],
+      "p1_g2": [
+        "Đọc câu và gạch chân từ khóa, chú ý từ giới hạn.",
+        "Tìm đủ thông tin tương ứng: thiếu thông tin thì NOT GIVEN.",
+        "Đủ thông tin: cùng nghĩa TRUE; trái nghĩa FALSE."
+      ],
+      "p2_g1": [
+        "Đọc các ý cần tìm, xác định nội dung chính.",
+        "Scan từng đoạn A–G và đối chiếu nghĩa, không chỉ từ giống nhau.",
+        "Chọn chữ cái của đoạn chứa đúng thông tin."
+      ],
+      "p2_g2": [
+        "Đọc câu hỏi và định vị thông tin trước khi nhìn lựa chọn.",
+        "Tự nén ý cần tìm rồi đối chiếu từng phương án.",
+        "Loại phương án sai hoặc thiếu căn cứ; chọn đúng số đáp án yêu cầu."
+      ],
+      "p2_g3": [
+        "Đọc cả đoạn summary và dự đoán loại từ.",
+        "Định vị thông tin, đối chiếu paraphrase.",
+        "Điền đúng một từ từ bài hoặc chọn chữ cái từ bank theo chỉ dẫn."
+      ],
+      "p3_g1": [
+        "Đọc câu hỏi và định vị thông tin trước khi nhìn lựa chọn.",
+        "Tự nén ý cần tìm rồi đối chiếu từng phương án.",
+        "Loại phương án sai hoặc thiếu căn cứ; chọn đúng số đáp án yêu cầu."
+      ],
+      "p3_g2": [
+        "Đọc cả đoạn summary và dự đoán loại từ.",
+        "Định vị thông tin, đối chiếu paraphrase.",
+        "Điền đúng một từ từ bài hoặc chọn chữ cái từ bank theo chỉ dẫn."
+      ],
+      "p3_g3": [
+        "Đọc nhận định và chú ý từ giới hạn.",
+        "Đối chiếu quan điểm tác giả; thiếu ý tương ứng thì NOT GIVEN.",
+        "Đồng ý YES; trái quan điểm NO."
+      ],
+      "p3_g4": [
+        "Đọc câu hỏi và định vị thông tin trước khi nhìn lựa chọn.",
+        "Tự nén ý cần tìm rồi đối chiếu từng phương án.",
+        "Loại phương án sai hoặc thiếu căn cứ; chọn đúng số đáp án yêu cầu."
+      ]
+    }
   }
 ]

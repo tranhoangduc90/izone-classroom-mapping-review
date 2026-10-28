@@ -63,6 +63,18 @@ export function validateAuthoredContent(bundle){
   check(g.kind===meta.kind&&text(g.instruction)&&Array.isArray(qs)&&same(qs.map(q=>String(q.n)),expected),'Thiếu chỉ dẫn/câu hỏi trong nhóm.');
   check(!g.image||/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.image),'Hình đề phải nhúng riêng trong bundle, không dùng URL ngoài.');
   const options=g.options;
+  // Giữ quan hệ hàng/cột và từng ô điểm của nhóm chọn nhiều; lỗi dừng trước seed.
+  if(g.table){
+   const t=g.table;
+   check(g.kind==='completion'&&Array.isArray(t.headers)&&t.headers.length>0&&t.headers.every(v=>typeof v==='string')&&Array.isArray(t.rows)&&t.rows.length>0&&t.rows.every(row=>Array.isArray(row)&&row.length===t.headers.length&&row.every(v=>typeof v==='string')),'Bảng câu hỏi không hợp lệ.');
+   const blanks=t.rows.flat().flatMap(v=>[...v.matchAll(/\{\{(\d+)\}\}/g)].map(m=>m[1]));
+   check(same(blanks,expected)&&!g.summaryParagraphs,'Ô trống trong bảng thiếu, trùng hoặc sai thứ tự câu.');
+  }
+  if(g.chooseCount!==undefined){
+   check(g.kind==='mcq'&&Number.isInteger(g.chooseCount)&&g.chooseCount===qs.length&&g.chooseCount>1&&Array.isArray(options)&&options.length>=g.chooseCount&&!g.table&&!g.summaryParagraphs&&qs.every(q=>!q.multiple&&!q.options),'Nhóm chọn nhiều phải giữ từng ô điểm và một ngân hàng chung.');
+   const first=bundle.key[qs[0].n];
+   check(Array.isArray(first)&&first.length===g.chooseCount&&new Set(first).size===first.length&&qs.every(q=>same(bundle.key[q.n],first)),'Key nhóm chọn nhiều phải là cùng tập đáp án, không trùng.');
+  }
   if(g.summaryParagraphs){
    check(Array.isArray(g.summaryParagraphs)&&g.summaryParagraphs.length&&g.summaryParagraphs.every(text),'Thiếu đoạn tóm tắt.');
    const blanks=g.summaryParagraphs.flatMap(p=>[...p.matchAll(/\{\{(\d+)\}\}/g)].map(m=>m[1]));
@@ -90,12 +102,16 @@ export function validateAuthoredContent(bundle){
 }
 export function gradeAuthored(answers,key,definition){
  const clean=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
- const rows=definition.groups.flatMap(g=>g.questions.map(q=>{
+ const rows=definition.groups.flatMap(g=>{
+  const used=new Set();
+  return g.questions.map(q=>{
   const raw=String(answers[q.n]??''),value=clean(raw),multiple=Boolean(q.multiple);
   const norm=v=>multiple?clean(v).split('|').sort().join('|'):clean(v);
   const limit=q.maxWords??g.maxWords;
   const within=!limit||value.split(/\s+/).filter(Boolean).length<=limit;
-  return{number:q.n,answer:raw,expected:key[q.n],state:!value?'blank':within&&key[q.n].some(k=>norm(k)===norm(value))?'correct':'incorrect'};
- }));
+  const correct=within&&key[q.n].some(k=>norm(k)===norm(value))&&(!g.chooseCount||!used.has(value));
+  if(g.chooseCount&&value)used.add(value);
+  return{number:q.n,answer:raw,expected:key[q.n],state:!value?'blank':correct?'correct':'incorrect'};
+ });});
  return{score:rows.filter(r=>r.state==='correct').length,rows};
 }
