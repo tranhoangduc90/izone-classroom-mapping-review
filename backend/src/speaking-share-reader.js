@@ -1,4 +1,8 @@
+import https from 'node:https';
+import { createGunzip, createBrotliDecompress, createInflate } from 'node:zlib';
+
 const DEFAULT_ENDPOINT = 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_get_chatgpt';
+const MAX_HTML_BYTES = 12 * 1024 * 1024;
 
 function validateShareUrl(value) {
   let url;
@@ -9,7 +13,8 @@ function validateShareUrl(value) {
   }
 
   const allowedHosts = new Set(['chatgpt.com', 'www.chatgpt.com', 'chat.openai.com']);
-  if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname) || !url.pathname.startsWith('/share/')) {
+  if (url.protocol !== 'https:' || url.username || url.password || url.port
+    || !allowedHosts.has(url.hostname) || !url.pathname.startsWith('/share/')) {
     throw new Error('Chỉ chấp nhận link HTTPS dạng chatgpt.com/share/...');
   }
   return url.toString();
@@ -213,26 +218,57 @@ function buildOrderedMessages(conversation) {
   return { orderedBy: 'create_time_fallback', messages: sortedMessages };
 }
 
-async function fetchDirectHtml(shareUrl) {
-  const response = await fetch(shareUrl, {
-    headers: {
-      accept: 'text/html,application/xhtml+xml',
-      'accept-language': 'vi-VN,vi;q=0.9,en;q=0.8',
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0 Safari/537.36',
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(30_000),
+// Nhận Share công khai; đọc HTTPS với header tối đa 64 KiB, thân tối đa 12 MiB.
+// Redirect vẫn phải là Share hợp lệ; deadline chung chặn treo/nhỏ giọt dữ liệu.
+// Trả HTML đầy đủ cho parser; lỗi mạng/trang thiếu dữ liệu không thành bài chưa đạt.
+async function fetchDirectHtml(shareUrl, deadline, redirects = 0) {
+  validateShareUrl(shareUrl);
+  if (redirects > 4 || Date.now() >= deadline) throw new Error('SHARE_READ_LIMIT');
+  return new Promise((resolve, reject) => {
+    const request = https.get(shareUrl, {
+      maxHeaderSize: 64 * 1024,
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      headers: {
+        accept: 'text/html,application/xhtml+xml',
+        'accept-language': 'vi-VN,vi;q=0.9,en;q=0.8',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0 Safari/537.36',
+      },
+    }, response => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+        response.resume();
+        try {
+          const next = new URL(response.headers.location, shareUrl).toString();
+          validateShareUrl(next);
+          resolve(fetchDirectHtml(next, deadline, redirects + 1));
+        } catch (error) { reject(error); }
+        return;
+      }
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`ChatGPT trả HTTP ${response.statusCode}.`));
+        return;
+      }
+      const decoder = { gzip: createGunzip, br: createBrotliDecompress, deflate: createInflate }[response.headers['content-encoding']];
+      const body = decoder ? response.pipe(decoder()) : response;
+      let length = 0;
+      const chunks = [];
+      response.on('error', reject);
+      body.on('error', reject);
+      body.on('data', chunk => {
+        length += chunk.length;
+        if (length > MAX_HTML_BYTES) {
+          const error = new Error('SHARE_HTML_TOO_LARGE');
+          body.destroy(error); request.destroy(error); reject(error);
+        } else chunks.push(chunk);
+      });
+      body.on('end', () => {
+        const html = Buffer.concat(chunks).toString('utf8');
+        if (!/^\s*<!doctype html/i.test(html)) reject(new Error('ChatGPT không trả HTML hợp lệ.'));
+        else resolve(html);
+      });
+    });
+    request.on('error', reject);
   });
-
-  if (!response.ok) {
-    throw new Error(`ChatGPT trả HTTP ${response.status}.`);
-  }
-
-  const html = await response.text();
-  if (!html.includes('<!DOCTYPE html')) {
-    throw new Error('ChatGPT không trả HTML hợp lệ.');
-  }
-  return html;
 }
 
 async function fetchViaN8n(shareUrl) {
@@ -253,6 +289,28 @@ async function fetchViaN8n(shareUrl) {
 }
 
 function parseConversationHtml(html, source) {
+  // Share hiện có cả React Router stream và Octane transcript JSON.
+  // Chỉ lấy text/markdown gốc theo thứ tự rows; không lấy HTML đã render hay mẫu UI.
+  const octane = html.match(/<script\b[^>]*\bid=["']octane-conversation-transcript["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (octane) {
+    const transcript = JSON.parse(octane[1]);
+    if (!Array.isArray(transcript.rows)) throw new Error('OCTANE_TRANSCRIPT_INVALID');
+    const messages = [];
+    for (const row of transcript.rows) {
+      const role = row?.frame?.role;
+      if (!['user', 'assistant'].includes(role)) continue;
+      // DIL cung cấp bản văn bản đầy đủ riêng; không thực thi code hay lấy constants/UI.
+      const text = role === 'user' ? row.frame.text
+        : row.source?.markdown?.trim() ? row.source.markdown : row.source?.dil?.fallbackMarkdown;
+      const id = row.frame.id || row.source?.messageId;
+      if (typeof id !== 'string' || !id || typeof text !== 'string' || !text.trim()) throw new Error('OCTANE_MESSAGE_INVALID');
+      messages.push({ id, node_id: row.key || id, role, create_time: null, update_time: null, text });
+    }
+    if (!messages.length || new Set(messages.map(m => m.id)).size !== messages.length) throw new Error('OCTANE_TRANSCRIPT_INVALID');
+    return { source, conversationTitle: html.match(/<title>([^<]*)<\/title>/i)?.[1] || '',
+      create_time: null, update_time: null, current_node: messages.at(-1).node_id,
+      ordered_by: 'octane_transcript_rows', messages_count: messages.length, messages };
+  }
   const rawStrings = extractEnqueueArgs(html);
   if (!rawStrings.length) throw new Error('Trang share không chứa streamController.enqueue(...).');
 
@@ -266,6 +324,7 @@ function parseConversationHtml(html, source) {
 
   const conversation = decodeDevalue(payload, conversationIndex);
   const ordered = buildOrderedMessages(conversation);
+  if (!ordered.messages.length) throw new Error('Trang Share chưa chứa lời thoại.');
   return {
     source,
     conversationTitle: conversation?.title ?? '',
@@ -284,16 +343,19 @@ function parseConversationHtml(html, source) {
 export async function readSpeakingShare(shareUrl, n8nOnly = false) {
   validateShareUrl(shareUrl);
   if (!n8nOnly) {
-    try {
-      const html = await fetchDirectHtml(shareUrl);
-      return parseConversationHtml(html, 'direct');
-    } catch (directError) {
+    let directError;
+    const deadline = Date.now() + 30_000;
+    for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt++) {
       try {
-        const html = await fetchViaN8n(shareUrl);
-        return parseConversationHtml(html, 'n8n_fallback');
-      } catch (n8nError) {
-        throw new Error(`Đọc trực tiếp lỗi: ${directError.message} n8n fallback lỗi: ${n8nError.message}`);
-      }
+        const html = await fetchDirectHtml(shareUrl, Math.min(deadline, Date.now() + 15_000));
+        return parseConversationHtml(html, 'direct');
+      } catch (error) { directError = error; }
+    }
+    try {
+      const html = await fetchViaN8n(shareUrl);
+      return parseConversationHtml(html, 'n8n_fallback');
+    } catch (n8nError) {
+      throw new Error(`Đọc trực tiếp lỗi: ${directError?.message || 'SHARE_READ_LIMIT'} n8n fallback lỗi: ${n8nError.message}`);
     }
   }
 
