@@ -48,6 +48,10 @@ const catalog = {
   "3881716311bc53826cbcae5fc7e791b226777c46b438e88637d4d63e9794f0cd": {
     "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/substitute-test-2-k67-computer-based/assets/private/listening-substitute-test-2-k67.mp3",
     "byteLength": 41881391
+  },
+  "07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476": {
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/audio-assets/c21-t1-full-07ae42b9617bf4e2.mp3",
+    "byteLength": 25841624
   }
 };
 export function withCloudflareAudio(manifest,enabled=process.env.AUDIO_CLOUDFLARE_ENABLED==='true') {

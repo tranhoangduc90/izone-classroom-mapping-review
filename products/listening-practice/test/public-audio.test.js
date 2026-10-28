@@ -10,7 +10,7 @@ const cf=process.env.TEST_CF_AUDIO==='1';
 if(cf)process.env.AUDIO_CLOUDFLARE_ENABLED='true';
 // Real service/SQL authorization with a deliberately absent local file: the
 // successful manifest path proves that no audio file bytes are served by VPS.
-for(const sha of ['0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb','b0220f6be93db9e2ddc28f3debd48d86f81c6b69c809f12a4c1135bee08afacc'])
+for(const sha of ['0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb','b0220f6be93db9e2ddc28f3debd48d86f81c6b69c809f12a4c1135bee08afacc','07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476'])
 test('MP3 '+sha.slice(0,8)+' keeps active owner, post-submit review and teacher class checks',async t=>{
   const f=await fixture();t.after(f.close);
   await f.pool.query(`UPDATE listening_practice.content SET definition=jsonb_set(definition,'{audio,sha256}',to_jsonb($1::text))`,[sha]);
