@@ -44,3 +44,23 @@ test('an explicit whole-practice confirmation survives a later change of mind',(
   const messages=[{role:'assistant',text:quote},{role:'assistant',text:'Bây giờ sang Bước 4 luyện Part 3. Why do people travel?'}];
   assert.equal(validateCompletion(messages,{completed:true,matched:true,confidence:.99,scope:'whole_practice',message:1,quote}).message,1);
 });
+
+const finalQuote='Bạn đã hoàn thành cả 4 bước luyện tập!';
+const finalSummary='# 5. Tổng kết toàn bộ buổi luyện tập\n\n<title>'+finalQuote+'</title>\n\n**Bước 3 — IELTS Speaking Part 1**\n\nĐã thực hành 2 câu hỏi và sử dụng từ nối hợp lý.\n\n**Bước 4 — IELTS Speaking Part 3**\n\nĐã trình bày ưu điểm, nhược điểm và quan điểm cá nhân.\n\nNếu bạn muốn, tôi có thể tạo thêm câu hỏi luyện tập.';
+
+test('a past-tense Part 1/Part 3 recap does not invalidate completion of all four steps',async()=>{
+  const messages=[{role:'assistant',text:finalSummary}];
+  const result=await analyzeChatbotCompletion(messages,'Bổ sung từ nối giữa các câu',async(_url,options)=>{
+    const prompt=JSON.parse(options.body).prompt;
+    const candidates=JSON.parse(prompt.split('CÁC LỜI ỨNG VIÊN (vẫn phải phân biệt ví dụ và kết thúc bước nhỏ):\n\n')[1].split('\n\nNGỮ CẢNH HỘI THOẠI:')[0]);
+    const final=candidates.find(c=>c.quote.includes(finalQuote));
+    assert.ok(final,'the actual final confirmation must reach the AI');
+    return {ok:true,json:async()=>({text:JSON.stringify({completed:true,matched:true,confidence:.99,scope:'whole_practice',candidateId:final.id})})};
+  });
+  assert.equal(validateCompletion(messages,result).scope,'whole_practice');
+});
+
+test('a real new mandatory question after a recap is still a required task',()=>{
+  const text=finalSummary.replace('Nếu bạn muốn, tôi có thể tạo thêm câu hỏi luyện tập.','## Bước 5: Thực hành Part 3\nWhy do people shop online?\nHãy trả lời câu hỏi bắt buộc này.');
+  assert.throws(()=>validateCompletion([{role:'assistant',text}],{completed:true,matched:true,confidence:.99,scope:'whole_practice',message:1,quote:finalQuote}),/COMPLETION_STEP_ONLY/);
+});

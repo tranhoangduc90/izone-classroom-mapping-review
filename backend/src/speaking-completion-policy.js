@@ -29,9 +29,19 @@ function intermediateCompletion(messages,quote,index) {
   const whole=/(?:hoàn\s*(?:thành|tất)|xong).{0,35}(?:toàn bộ|tất cả)\s*(?:bài|buổi)|(?:hoàn\s*(?:thành|tất)|xong)\s*(?:bài luyện|bài tập|buổi học|buổi luyện)/iu.test(quote);
   if(!scoped||whole)return false;
   const text=messages[index]?.text||'',offset=text.indexOf(quote),claim=quote.search(candidate);
-  const tail=[text.slice(Math.max(0,offset)+Math.max(0,claim)+4),...messages.slice(index+1,index+3).filter(m=>m.role==='assistant').map(m=>m.text)].join('\n\n');
+  const tailOffset=Math.max(0,offset)+Math.max(0,claim)+4;
+  const ownTail=text.slice(tailOffset);
+  const tail=[ownTail,...messages.slice(index+1,index+3).filter(m=>m.role==='assistant').map(m=>m.text)].join('\n\n');
   const tasks=/(?:bây giờ|tiếp theo|chuyển sang|sang bước).{0,100}?(?:bước\s*\d|phần\s*\d|part\s*[13])|(?:^|\n)\s*#{0,6}\s*\*{0,2}(?:bước|phần|part)\s*\d[^\n]{0,180}(?:thực hành|luyện|practice|fluency|part\s*[13])|hãy\s+(?:ghép|nói lại|trả lời)[^\n]{0,150}(?:toàn bộ|hoàn chỉnh|từ đầu đến cuối)/gimu;
   for(const task of tail.matchAll(tasks)){
+    // Mục tổng kết thuật lại phần ĐÃ làm không phải bài mới. Chỉ bỏ qua tiêu đề
+    // có kết quả quá khứ ngay sau nó trong chính tin này; câu hỏi/bước mới vẫn chặn.
+    const headings=[...text.slice(0,tailOffset+Math.min(task.index,ownTail.length)).matchAll(/(?:^|\n)#{1,6}\s+([^\n]+)/g)];
+    const inWholeSummary=/tổng\s*kết\s+(?:toàn bộ|cả)\s+(?:buổi|bài)/iu.test(headings.at(-1)?.[1]||'');
+    const afterTask=tail.slice(task.index+task[0].length);
+    if(task.index<ownTail.length&&inWholeSummary&&/^\s*#{0,6}\s*\*{0,2}(?:bước|phần|part)/iu.test(task[0])
+      && !/[?]|thực hành|luyện|practice|fluency/iu.test(task[0])
+      && /^(?:\s|\*|<[^>]+>)*Đã\s/iu.test(afterTask))continue;
     const prefix=tail.slice(Math.max(0,task.index-180),task.index);
     if(/tùy chọn|luyện thêm|nếu.{0,30}muốn|bạn.{0,15}muốn|optional/iu.test(prefix))continue;
     const next=tail.slice(task.index,task.index+180);

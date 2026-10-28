@@ -109,6 +109,70 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   return {db,pool,service,session,identity,source,drop:()=>{active=false;}};
 }
 
+test('the same main Share can be checked again after exhausted technical retries without duplicating an active retry',async()=>{
+  const f=await fixture();try{
+    const input={...f.identity,part:'reason_action',rawUrl:url(41)};
+    const first=await f.service.requestCheck(input);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='CONTENT_CHECK_UNAVAILABLE' WHERE link_id=$1",[first.id]);
+    const opened=await f.service.open(f.identity);
+    assert.equal(opened.links.find(l=>l.id===first.id).retryable,true);
+    const next=await f.service.requestCheck(input);
+    assert.notEqual(next.id,first.id);
+    assert.equal((await f.service.requestCheck(input)).id,next.id);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.job WHERE kind=$1',[ 'check_main' ])).rows[0].n,2);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+    assert.equal((await f.pool.query('SELECT status FROM speaking_independent.job WHERE link_id=$1',[first.id])).rows[0].status,'review');
+  }finally{await f.db.close();}
+});
+
+test('the same practice Share recovers exhausted checks while accepted and in-flight work remain idempotent',async()=>{
+  const f=await fixture();try{
+    const input={...f.identity,slot:1,exerciseId:exercise(1),rawUrl:url(42)};
+    const first=await f.service.requestPracticeCheck(input);
+    assert.equal((await f.service.requestPracticeCheck(input)).id,first.id);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='PRACTICE_CHECK_ERROR' WHERE link_id=$1",[first.id]);
+    assert.equal((await f.service.open(f.identity)).practiceLinks[0].retryable,true);
+    const next=await f.service.requestPracticeCheck(input);
+    assert.notEqual(next.id,first.id);
+    await f.pool.query("UPDATE speaking_independent.link SET status='accepted',check_code=NULL WHERE id=$1",[next.id]);
+    assert.equal((await f.service.requestPracticeCheck(input)).id,next.id);
+    assert.equal((await f.service.open(f.identity)).practiceLinks[0].retryable,false);
+    await assert.rejects(f.service.requestPracticeCheck({...input,studentRef:exercise(99)}));
+  }finally{await f.db.close();}
+});
+
+test('native PostgreSQL: twenty concurrent retries create one new check and preserve accepted links',
+  {skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:60000},async()=>{
+  const f=await fixture();try{
+    const accepted=await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(601)});
+    const input={...f.identity,part:'reason_action',rawUrl:url(602)};
+    const first=await f.service.requestCheck(input);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='CONTENT_CHECK_UNAVAILABLE' WHERE link_id=$1",[first.id]);
+    const responses=await Promise.all(Array.from({length:20},()=>f.service.requestCheck(input)));
+    assert.equal(new Set(responses.map(r=>r.id)).size,1);
+    assert.notEqual(responses[0].id,first.id);
+    assert.equal((await f.pool.query("SELECT count(*)::int AS n FROM speaking_independent.link WHERE part='reason_action'")).rows[0].n,2);
+    assert.equal((await f.pool.query('SELECT status FROM speaking_independent.link WHERE id=$1',[accepted.id])).rows[0].status,'accepted');
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
+test('a submitted receipt is preserved while the same extra-practice Share gets one retry in its original slot',async()=>{
+  const f=await fixture();try{
+    await f.pool.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[f.session.workUnitId]);
+    const receipt=(await f.pool.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1) RETURNING id',[f.session.workUnitId])).rows[0].id;
+    await assert.rejects(f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(610)}));
+    const input={...f.identity,slot:null,exerciseId:exercise(1),rawUrl:url(611)};
+    const first=await f.service.requestPracticeCheck(input);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='PRACTICE_CHECK_ERROR' WHERE link_id=$1",[first.id]);
+    const retry=await f.service.requestPracticeCheck(input);
+    assert.notEqual(retry.id,first.id);
+    assert.equal((await f.service.requestPracticeCheck(input)).id,retry.id);
+    assert.deepEqual((await f.pool.query('SELECT DISTINCT slot FROM speaking_independent.link')).rows,[{slot:3}]);
+    assert.equal((await f.pool.query('SELECT id FROM speaking_independent.receipt WHERE work_unit_id=$1',[f.session.workUnitId])).rows[0].id,receipt);
+  }finally{await f.db.close();}
+});
+
 test('independent syncs an accepted part before submission and recovers lost Google acknowledgement',async()=>{
   const f=await fixture();try{
     const id=f.session.workUnitId,documentId='progress-fixture-doc';
