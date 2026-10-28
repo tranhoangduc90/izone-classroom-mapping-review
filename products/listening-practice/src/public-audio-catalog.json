@@ -84,5 +84,116 @@
         "sha256": "f1b5f61887c65b1ce7936a981cb013955611fc53d48ae9fd3d5b9609cd0813cc"
       }
     ]
+  },
+  "07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476": {
+    "assetVersion": "sha256-07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476",
+    "sha256": "07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476",
+    "byteLength": 25841624,
+    "encryptedByteLength": 25841624,
+    "envelopeVersion": "MP3",
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/audio-assets/c21-t1-full-07ae42b9617bf4e2.mp3",
+    "chunkSize": 1048576,
+    "chunks": [
+      {
+        "byteLength": 1048576,
+        "sha256": "b71de2e91d388aa415b3d2c15c50fceb35f7aa9b51cf3b15a28bec007b1eeac0"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "9c28f0e1db8f137b2aa0af634b67b9dd21ebc6482c5cc501789a69ad39d607e8"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "d1da5494ea0b09121fa3f4dc48ab211f7dc910edf6a19869621363d1766ac7b0"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "314fdfcacf69af8c625e96bdfc50ee470a3b468226b4cc0b4f4dbf37361aaf54"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "f9ebbfa854a3f22c415cd8794b88150ff70e8cc0e81dfb354355a6a46031fd3c"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "69f940df18ba5ab14139be9dfcc49b99800e4c9a559082c333c81e20237f7a5c"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "9b7ffa03053ee21083f55817137a08af8e9d2653a886007c181e795f2db51854"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "f08e6e3757cddb6557810f44f2716c88b1243a2ff313c04b5a34d95d89cf91a5"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "52ea9943617c3ca283b1b8c1405f1025cc9b59ddcde810ef214c848d6dccdf2f"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "488bbf588f154b2fdc48107bd15469899e0606ac0e307cdec474cebe24016149"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "b3fd3e18d637a6e349fbe5e1312f45e4cd8e3d42c9a7fc730f3ce1438aa4502f"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "e3d9507ae50b3128df80a5277b59c20a92d868d312979d0315b9cdde57c4b3b5"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "5702c631fc5beec54959296830a40da1640c97c1edda35b36f06a053d4495fe4"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "34d33618d81a4593de63d2a7b913f9303ef4a613c2805c11db73be763c735372"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "7103e9db586e52eba445d7cb9558a056ff48811f092c32703dcd5b21245e571d"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "e28049c34d50c0c3eb480c9b1a78e5297d0e3382e26f32a84e88d45820ff4ad6"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "3e539a5d9ca0ee6be1b6a671a7938f405871c5fab4534489c28ae1573aaeedc9"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "9ceac2a5726cbb3aefdb3d734d589718e64ec4685a2da4935050c287ddb6082e"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "6cab082d66b4eaca5dcefb6b8b39ee5ef9cf96b2d55540de1ed53b5e8f821de3"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "5e6c97ca08ccacf2175f7569c4cb45abaa751c6ab97777f1882403457be789ed"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "3a2f3f55beb93b30e6f677f96b1cfe43e2066b96fd14f676aa2e49fba3b298b5"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "705b3d3adcae5e7bae13e530c3dc784f0f91dfd1a82c48e7d41241c956ffcb67"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "c898cf7273e42529ab265c733d4ac23f072ee4806970ef79ecf104ffcd1e0e5e"
+      },
+      {
+        "byteLength": 1048576,
+        "sha256": "1ce2f18cba419e316abfc670ef8c7167e15724c286a9447acba3b07378edaa44"
+      },
+      {
+        "byteLength": 675800,
+        "sha256": "c3a99b48082e592f4b4edb0cd37b6383e66917f86a9e094929241982691eefb3"
+      }
+    ]
   }
 }
