@@ -10,6 +10,15 @@ function cellRuns(cell) {
     }));
 }
 function cellText(cell) { return cellRuns(cell).map(run => run.text).join('').trim(); }
+function isCurrentStatus(cell, linkUrl) {
+  const content = cell.content || [];
+  if (content.length !== 1 || !content[0].paragraph || content[0].paragraph.bullet) return false;
+  const elements = content[0].paragraph.elements || [];
+  if (elements.some(element => !element.textRun)) return false;
+  const runs = cellRuns(cell);
+  return runs.map(run => run.text).join('') === `${STATUS_TEXT}\n`
+    && runs.some(run => run.text.includes(LINK_TEXT) && run.link === linkUrl);
+}
 function statusCell(document, tabId) {
   const tab = document.tabs?.find(item => item.tabProperties?.tabId === tabId);
   if (!tab) throw new Error('DOC_TAB_NOT_FOUND');
@@ -34,7 +43,7 @@ function statusCell(document, tabId) {
 }
 
 // Dữ liệu vào: Docs JSON đã đọc, đúng Doc ID, receipt và URL màn giáo viên.
-// Việc chính: chỉ nhắm ô vàng dưới heading, gắn link lên đúng hai từ, khóa revision.
+// Việc chính: xóa mọi nội dung trong đúng ô vàng, giữ newline cuối và khóa revision.
 // Kết quả: batchUpdate có thể chạy một lần; khi đã ghi đúng thì trả no-op.
 export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', receiptId, teacherBaseUrl }) {
   if (document.documentId !== documentId || !document.revisionId) throw new Error('DOC_IDENTITY_MISMATCH');
@@ -48,23 +57,31 @@ export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', r
   teacherUrl.searchParams.set('receipt', receiptId);
   const linkUrl = teacherUrl.href;
   const cell = statusCell(document, tabId);
-  const existing = cellText(cell);
-  if (existing === STATUS_TEXT) {
-    const runs = cellRuns(cell);
-    if (runs.some(run => run.text.includes(LINK_TEXT) && run.link === linkUrl)) {
-      return { status: 'already_current', linkUrl, requests: [], revisionId: document.revisionId };
-    }
-    throw new Error('DOC_STATUS_LINK_MISMATCH');
+  if (isCurrentStatus(cell, linkUrl)) {
+    return { status: 'already_current', linkUrl, requests: [], revisionId: document.revisionId };
   }
-  if (existing) throw new Error('DOC_STATUS_CELL_NOT_EMPTY');
-  const paragraph = cell.content?.find(item => item.paragraph);
-  if (!paragraph || paragraph.startIndex == null) throw new Error('DOC_STATUS_PARAGRAPH_MISSING');
-  const start = paragraph.startIndex;
+  const first = cell.content?.[0];
+  const last = cell.content?.at(-1);
+  const start = first?.startIndex;
+  const end = last?.endIndex ?? last?.paragraph?.elements?.at(-1)?.endIndex;
+  const finalRun = last?.paragraph?.elements?.at(-1)?.textRun?.content;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start
+    || !finalRun?.endsWith('\n')) throw new Error('DOC_STATUS_RANGE_INVALID');
+  // Xóa chữ, hình nội tuyến và bảng lồng; newline cuối giữ cấu trúc ô nguyên vẹn.
+  const deleteEnd = end - 1;
   const linkStart = start + STATUS_TEXT.indexOf(LINK_TEXT);
+  const messageRange = { startIndex: start, endIndex: start + STATUS_TEXT.length, tabId };
   return {
     status: 'write', linkUrl, revisionId: document.revisionId,
     requests: [
+      ...(deleteEnd > start ? [{ deleteContentRange: {
+        range: { startIndex: start, endIndex: deleteEnd, tabId }
+      } }] : []),
       { insertText: { location: { index: start, tabId }, text: STATUS_TEXT } },
+      // Nội dung mới không mang danh sách hoặc hyperlink cũ; chỉ cụm link có URL mới.
+      { deleteParagraphBullets: { range: messageRange } },
+      { updateTextStyle: { range: messageRange,
+        textStyle: { underline: false }, fields: 'link,underline' } },
       { updateTextStyle: { range: { startIndex: linkStart,
         endIndex: linkStart + LINK_TEXT.length, tabId },
         textStyle: { link: { url: linkUrl }, underline: true }, fields: 'link,underline' } }
@@ -75,6 +92,5 @@ export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', r
 export function verifySpeakingStatusWrite({ document, documentId, tabId = 't.0', linkUrl }) {
   if (document.documentId !== documentId) return false;
   const cell = statusCell(document, tabId);
-  return cellText(cell) === STATUS_TEXT
-    && cellRuns(cell).some(run => run.text.includes(LINK_TEXT) && run.link === linkUrl);
+  return isCurrentStatus(cell, linkUrl);
 }

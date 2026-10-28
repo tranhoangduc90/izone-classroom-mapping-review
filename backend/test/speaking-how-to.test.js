@@ -51,8 +51,18 @@ test('lặp câu, lặp lượt làm và dẫn chứng sai không tăng số câ
 });
 
 test('dẫn chứng AI bịa không được công nhận như câu hỏi đã hoàn thành',async()=>{
+  // Thay câu tự do thứ hai bằng dẫn chứng bịa: chỉ còn ba câu có thật.
+  const r=await checkSubmission(input,deps([...completed.slice(0,3),{...completed[3],questionText:'Invented question'}]));
+  assert.equal(r.kind,'blocked');
+  assert.equal(r.count,3);
+  assert.deepEqual(r.stageCounts,{guided:2,free:1});
+});
+
+test('dẫn chứng bịa thêm vào không tăng số câu hoặc làm mất bốn câu hợp lệ',async()=>{
   const r=await checkSubmission(input,deps([...completed,{...completed[3],questionText:'Invented question'}]));
-  assert.notEqual(r.kind,'pass');
+  assert.equal(r.kind,'pass');
+  assert.equal(r.count,4);
+  assert.deepEqual(r.stageCounts,{guided:2,free:2});
 });
 test('link riêng tư bị chặn trước đọc hội thoại hoặc AI', async () => {
   let calls = 0;
