@@ -43,5 +43,151 @@
     "audioMs": 486322,
     "reviewMs": 120000,
     "totalMs": 606322
+  },
+  {
+    "lesson": 15,
+    "title": "Cambridge 21 · Test 1 · Full Listening",
+    "book": 21,
+    "test": 1,
+    "sourceLabel": "Cambridge 21 · Test 1 · Listening Part 1–4",
+    "parts": [
+      {
+        "id": "part1",
+        "title": "Part 1 · Oyster Bay Sailing Club courses",
+        "start": 1,
+        "end": 10,
+        "startMs": 0,
+        "endMs": 350955,
+        "splitAfter": 6
+      },
+      {
+        "id": "part2",
+        "title": "Part 2 · Working as a makeup trainee",
+        "start": 11,
+        "end": 20,
+        "startMs": 350955,
+        "endMs": 764970,
+        "splitAfter": 16
+      },
+      {
+        "id": "part3",
+        "title": "Part 3 · Ocean biodiversity",
+        "start": 21,
+        "end": 30,
+        "startMs": 764970,
+        "endMs": 1149205,
+        "splitAfter": 24
+      },
+      {
+        "id": "part4",
+        "title": "Part 4 · Sources of rubber",
+        "start": 31,
+        "end": 40,
+        "startMs": 1149205,
+        "endMs": 1615060
+      }
+    ],
+    "preparationGroups": [
+      {
+        "label": "Completion — bảng và ghi chú",
+        "preparationSteps": [
+          "Đọc giới hạn từ/số của từng nhóm.",
+          "Đoán loại từ và dạng thông tin cần điền; xác định từ khóa.",
+          "Nghe theo trình tự, chú ý paraphrase và số ít/số nhiều."
+        ]
+      },
+      {
+        "label": "Multiple Choice A–C",
+        "preparationSteps": [
+          "Đọc câu hỏi, xác định kịch bản audio",
+          "Đọc A-C: đọc hiểu + đào sâu ý nghĩa (dịch tiếng Việt / paraphrase tiếng Anh / tưởng tượng hình ảnh / so sánh các phương án với nhau...)",
+          "Nghe audio: để ý thái độ người nói, nhận định rõ ít nhất 2/3 option trong A B C"
+        ]
+      },
+      {
+        "label": "Multiple Choice — chọn HAI",
+        "preparationSteps": [
+          "Đọc câu hỏi chung và phân biệt đủ năm phương án A–E.",
+          "Nghe ý kiến và thái độ của cả hai người nói; đối chiếu các cách diễn đạt tương đương.",
+          "Chọn tối đa hai phương án; mỗi đáp án đúng được một điểm, không xét thứ tự."
+        ]
+      },
+      {
+        "label": "Matching",
+        "preparationSteps": [
+          "Đọc các mục cần ghép và hiểu rõ điểm khác nhau giữa các phương án.",
+          "Nghe, ghi chú cách diễn đạt tương đương rồi chọn chữ cái.",
+          "Giữ đúng hướng dẫn của từng nhóm; nhóm Q17–20 có thể dùng lại một chữ cái."
+        ]
+      }
+    ],
+    "code": "67-practice-listening_c21_t1_full_test",
+    "groups": [
+      {
+        "id": "p1-table",
+        "kind": "completion",
+        "label": "Table completion",
+        "start": 1,
+        "end": 6
+      },
+      {
+        "id": "p1-notes",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 7,
+        "end": 10
+      },
+      {
+        "id": "p2-mcq",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 1",
+        "start": 11,
+        "end": 16
+      },
+      {
+        "id": "p2-matching",
+        "kind": "matching",
+        "label": "Matching",
+        "start": 17,
+        "end": 20
+      },
+      {
+        "id": "p3-pair-21",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 21,
+        "end": 22
+      },
+      {
+        "id": "p3-pair-23",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 23,
+        "end": 24
+      },
+      {
+        "id": "p3-matching",
+        "kind": "matching",
+        "label": "Matching",
+        "start": 25,
+        "end": 30
+      },
+      {
+        "id": "p4-notes",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 31,
+        "end": 40
+      }
+    ],
+    "paragraphs": [
+      "P1",
+      "P2",
+      "P3",
+      "P4"
+    ],
+    "audioMs": 1615060,
+    "reviewMs": 120000,
+    "totalMs": 1735060
   }
 ]

@@ -23,6 +23,22 @@ export function registerAuthoredLesson(input){
  check(new Set(ids).size===ids.length&&ids.every((n,i)=>!i||+n>+ids[i-1]),'Số câu trùng hoặc sai thứ tự.');
  check(Array.isArray(lesson.paragraphs)&&lesson.paragraphs.length&&lesson.paragraphs.every(p=>/^[a-zA-Z0-9_-]+$/.test(p)),'Mã đoạn không hợp lệ.');
  if(lesson.audioMs!==undefined)check(Number.isInteger(lesson.audioMs)&&lesson.audioMs>0&&Number.isInteger(lesson.reviewMs)&&lesson.reviewMs>=0&&lesson.totalMs===lesson.audioMs+lesson.reviewMs,'Audio/thời gian rà không khớp.');
+ if(lesson.parts!==undefined){
+  // Một lượt nhiều part: câu và mốc nghe phải liền nhau, không cấp lại giờ ở mỗi phần.
+  check(Array.isArray(lesson.parts)&&lesson.parts.length>1,'Danh sách part không hợp lệ.');
+  const partIds=new Set(),covered=[];let previousEnd=0;
+  for(const part of lesson.parts){
+   check(text(part.id)&&/^[a-z][a-z0-9_-]*$/.test(part.id)&&!partIds.has(part.id)&&text(part.title),'Mã/tên part không hợp lệ.');
+   check(Number.isInteger(part.start)&&Number.isInteger(part.end)&&part.start>0&&part.end>=part.start,'Khoảng câu của part không hợp lệ.');
+   partIds.add(part.id);for(let n=part.start;n<=part.end;n++)covered.push(String(n));
+   check(Number.isInteger(part.startMs)&&Number.isInteger(part.endMs)&&part.startMs===previousEnd&&part.endMs>part.startMs&&part.endMs<=lesson.audioMs,'Mốc audio của part không hợp lệ.');
+   previousEnd=part.endMs;
+   if(part.splitAfter!==undefined)check(Number.isInteger(part.splitAfter)&&part.splitAfter>=part.start&&part.splitAfter<part.end,'Vị trí chia vùng part không hợp lệ.');
+  }
+  check(same(covered,ids),'Các part phải phủ đúng mỗi số câu một lần theo thứ tự.');
+  check(previousEnd===lesson.audioMs,'Mốc cuối part chưa khớp toàn audio.');
+  check(lesson.groups.every(g=>lesson.parts.some(p=>g.start>=p.start&&g.end<=p.end)),'Nhóm câu vượt qua ranh giới part.');
+ }
  lesson.questionIds=ids;lesson.authored=true;
  const old=registry.get(lesson.code);
  check(!old||same(old,lesson),'Mã bài đã dùng cho cấu trúc khác; cần mã mới.');
@@ -46,6 +62,18 @@ export function validateAuthoredContent(bundle){
   check(g.kind===meta.kind&&text(g.instruction)&&Array.isArray(qs)&&same(qs.map(q=>String(q.n)),expected),'Thiếu chỉ dẫn/câu hỏi trong nhóm.');
   check(!g.image||/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(g.image),'Hình đề phải nhúng riêng trong bundle, không dùng URL ngoài.');
   const options=g.options;
+  check(g.answerMode===undefined||g.answerMode==='unordered-pair','Kiểu nhóm đáp án không hợp lệ.');
+  if(g.answerMode==='unordered-pair'){
+   check(g.kind==='mcq'&&qs.length===2&&!qs.some(q=>q.multiple),'Nhóm chọn hai phải có hai ô điểm độc lập.');
+   const accepted=bundle.key[qs[0].n];
+   check(Array.isArray(accepted)&&accepted.length===2&&new Set(accepted.map(v=>String(v).toLowerCase())).size===2&&accepted.every(v=>!v.includes('|'))&&qs.every(q=>same(bundle.key[q.n],accepted)),'Key nhóm chọn hai không khớp hai ô.');
+  }
+  if(g.table){
+   check(g.kind==='completion'&&Array.isArray(g.table.headers)&&g.table.headers.length>0&&g.table.headers.every(text)&&Array.isArray(g.table.rows)&&g.table.rows.length>0,'Bảng điền từ không hợp lệ.');
+   check(g.table.rows.every(row=>Array.isArray(row)&&row.length===g.table.headers.length&&row.every(text)),'Hàng/cột của bảng điền từ không khớp.');
+   const slots=g.table.rows.flat().flatMap(cell=>[...cell.matchAll(/\{(\d+)\}/g)].map(m=>m[1]));
+   check(new Set(slots).size===slots.length&&same([...slots].sort((a,b)=>+a-+b),expected),'Ô nhập của bảng phải khớp đúng số câu.');
+  }
   if(options)check(options.length&&new Set(options.map(o=>o.value)).size===options.length&&options.every(o=>text(o.value)&&text(o.text)),'Ngân hàng lựa chọn không hợp lệ.');
   for(const q of qs){
    check(Number.isInteger(q.n)&&text(q.text),'Số câu phải là số nguyên và câu hỏi không trống.');
@@ -67,12 +95,18 @@ export function validateAuthoredContent(bundle){
 }
 export function gradeAuthored(answers,key,definition){
  const clean=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
- const rows=definition.groups.flatMap(g=>g.questions.map(q=>{
+ const rows=definition.groups.flatMap(g=>{
+  if(g.answerMode==='unordered-pair'){
+   // Tiêu thụ từng đáp án đúng một lần; nhập trùng không sinh điểm thứ hai.
+   const remaining=new Set(key[g.questions[0].n].map(clean));
+   return g.questions.map(q=>{const raw=String(answers[q.n]??''),value=clean(raw),correct=remaining.delete(value);return{number:q.n,answer:raw,expected:key[q.n],state:!value?'blank':correct?'correct':'incorrect'};});
+  }
+  return g.questions.map(q=>{
   const raw=String(answers[q.n]??''),value=clean(raw),multiple=Boolean(q.multiple);
   const norm=v=>multiple?clean(v).split('|').sort().join('|'):clean(v);
   const limit=q.maxWords??g.maxWords;
   const within=!limit||value.split(/\s+/).filter(Boolean).length<=limit;
   return{number:q.n,answer:raw,expected:key[q.n],state:!value?'blank':within&&key[q.n].some(k=>norm(k)===norm(value))?'correct':'incorrect'};
- }));
+ });});
  return{score:rows.filter(r=>r.state==='correct').length,rows};
 }
