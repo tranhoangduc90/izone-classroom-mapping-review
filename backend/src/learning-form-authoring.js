@@ -1,6 +1,7 @@
 // Nhận definition/key của nháp; không cho tạo mới dạng gạch chân đã được Đức yêu cầu gỡ.
 // Copy tạo ID mới và giữ điều kiện/bố cục; validation báo vị trí cần sửa, không tự thêm loại bài/chấm AI.
 import crypto from 'node:crypto';
+import {effectiveItemKind} from './learning-item-kinds.js';
 import {parseFormDefinition,parseFormDraftDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {sha256,stableStringify} from './learning-domain.js';
 
@@ -55,6 +56,11 @@ export class FormAuthoringError extends Error {
   constructor(code,message,issues=[],httpStatus=400) {super(message);this.code=code;this.issues=issues;this.httpStatus=httpStatus;}
 }
 
+// Chỉ xác nhận đúng nội dung/khóa đang xem; đổi câu hoặc key làm xác nhận cũ hết hiệu lực.
+export function importReviewContent(item,key){
+  return stableStringify({item,answer:key.items[item.itemVersionId]||null,reference:key.referenceAnswers?.[item.itemVersionId]||null});
+}
+
 export function validateAuthoringPayload({definition:rawDefinition,gradingKey:rawKey,requireAnswers=false,allowIncomplete=false}) {
   let definition,gradingKey;
   const savingDraft=allowIncomplete&&!requireAnswers;
@@ -64,17 +70,18 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   if(Object.keys(gradingKey.groups).length) throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Chưa hỗ trợ chấm theo nhóm ngoài các phiếu hiện có.');
   const items=definition.blocks.flatMap(block=>block.items),byId=new Map(items.map(item=>[item.itemVersionId,item]));
   const missing=[];
-  for(const block of definition.blocks) if(block.kind) for(const item of block.items) {
+  for(const block of definition.blocks) for(const item of block.items) {
+    const kind=effectiveItemKind(item,block);if(!kind)continue;
     const type=authoringType(item);
-    if(!AUTHORING_CATALOG[block.kind].includes(type)) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
-      'Câu '+item.position+' không thuộc danh mục '+(block.kind==='survey'?'Khảo sát':'Bài tập')+'. Giữ nội dung và chuyển câu sang phần phù hợp.');
+    if(!AUTHORING_CATALOG[kind].includes(type)) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
+      'Câu '+item.position+' không thuộc danh mục '+(kind==='survey'?'Khảo sát':'Bài tập')+'. Giữ nội dung và chọn chế độ phù hợp.');
     if(!item.skillCodes.length || item.skillCodes.some(code=>!['general','listening','reading','speaking','writing'].includes(code)))
       throw new FormAuthoringError('DRAFT_SKILL_REQUIRED','Câu '+item.position+': hãy chọn Kỹ năng, hoặc chủ động chọn Chung.');
-    if(block.kind==='survey'&&(item.graderType!=='none'||item.maxScore!==0||rawKey.items?.[item.itemVersionId]))
+    if(kind==='survey'&&(item.graderType!=='none'||item.maxScore!==0||rawKey.items?.[item.itemVersionId]))
       throw new FormAuthoringError('DRAFT_SURVEY_NOT_SCORED','Khảo sát chỉ ghi nhận thông tin; chuyển đáp án sang đáp án tham khảo trước khi lưu.');
-    if(block.kind==='exercise'&&item.graderType==='none')
+    if(kind==='exercise'&&item.graderType==='none')
       throw new FormAuthoringError('DRAFT_EXERCISE_GRADER_REQUIRED','Câu '+item.position+' trong Bài tập cần luật chấm.');
-    if(block.kind==='exercise'&&type==='multi') {
+    if(kind==='exercise'&&type==='multi') {
       const count=gradingKey.items[item.itemVersionId]?.expectedOptionIds?.length;
       if(count&&item.interactionConfig.maxSelections!==count) throw new FormAuthoringError('DRAFT_SELECTION_LIMIT_MISMATCH',
         'Câu '+item.position+': giới hạn chọn phải bằng số đáp án đúng.');
@@ -111,14 +118,37 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   }
   for(const id of Object.keys(gradingKey.items)) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có đáp án tham chiếu câu không tồn tại.');
   for(const id of Object.keys(gradingKey.referenceAnswers||{})) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có đáp án tham khảo của câu không tồn tại.');
+  for(const [id,slots]of Object.entries(gradingKey.referenceAnswersBySlot||{})) {
+    if(!byId.has(id)||slots.length!==byId.get(id).interactionConfig.responseCount)throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Tham khảo từng ô không khớp câu hoặc số ô.');
+  }
+  for(const [id,state]of Object.entries(gradingKey.authoringState||{})){
+    const item=byId.get(id);if(!item)throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Metadata tham chiếu câu không tồn tại.');
+    const blankIds=new Set(item.interactionConfig.blankIds||[]);
+    for(const blankId of Object.keys(state.sources||{}))if(!blankIds.has(blankId))throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Chữ gốc không khớp mã ô trống.');
+    for(const [blankId,rows]of Object.entries(state.answerRows||{})){
+      if(item.interactionType!=='short_text')throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án chỉ dành cho câu điền từ.');
+      if(!blankIds.has(blankId)&&!(blankId==='answer'&&!item.interactionConfig.responseCount))throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án không khớp mã ô trống.');
+      if(new Set(rows.map(row=>row.id)).size!==rows.length)throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Mã hàng đáp án bị trùng.');
+      if(!savingDraft&&rows.some(row=>!row.value.trim()))throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Câu '+item.position+': hãy nhập đáp án hoặc bỏ ô đáp án còn trống.');
+      const block=definition.blocks.find(block=>block.items.some(value=>value.itemVersionId===id)),kind=effectiveItemKind(item,block),survey=kind==='survey'||kind===null&&item.graderType==='none',slot=(item.interactionConfig.blankIds||[]).indexOf(blankId);
+      const canonical=item.interactionConfig.responseCount?(survey?gradingKey.referenceAnswersBySlot?.[id]?.[slot]??(gradingKey.referenceAnswers?.[id]?.[slot]?[gradingKey.referenceAnswers[id][slot]]:[]):gradingKey.items[id]?.acceptedBySlot?.[slot]||[]):survey?gradingKey.referenceAnswers?.[id]||[]:gradingKey.items[id]?.accepted||[];
+      if(JSON.stringify(rows.map(row=>row.value.trim()).filter(Boolean))!==JSON.stringify(canonical.map(value=>value.trim())))throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án câu '+item.position+' chưa khớp khóa chấm. Hãy mở lại và kiểm đáp án.');
+    }
+  }
   for(const id of Object.keys(gradingKey.explanations||{})) if(!byId.has(id)) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Có lời giải của câu không tồn tại.');
+  for(const id of Object.keys(gradingKey.importSources||{}))if(!byId.has(id))throw new FormAuthoringError('DRAFT_IMPORT_SOURCE_INVALID','Dấu vết nguồn không thuộc câu hiện có.');
+  for(const [id,review]of Object.entries(gradingKey.importReviews||{})){
+    if(!byId.has(id))throw new FormAuthoringError('DRAFT_IMPORT_REVIEW_INVALID','Cảnh báo nhập nguồn không thuộc câu hiện có.');
+    if(requireAnswers&&review.reviewedContent!==importReviewContent(byId.get(id),gradingKey))
+      throw new FormAuthoringError('DRAFT_IMPORT_REVIEW_REQUIRED',review.sourceLabel+': còn cảnh báo key cần giảng viên xử lý và xác nhận.');
+  }
   if(requireAnswers&&missing.length) throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Còn '+missing.length+' câu cần chọn đáp án trước khi duyệt.');
   return {definition,gradingKey,missingAnswers:missing,contentHash:sha256(stableStringify({definition,gradingKey}))};
 }
 
 export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) {
-  const checked=validateAuthoringPayload(payload),definition=structuredClone(checked.definition),gradingKey=structuredClone(checked.gradingKey);
-  const versionId=uuid(),ids=new Map();
+  const checked=validateAuthoringPayload({...payload,allowIncomplete:true}),definition=structuredClone(checked.definition),gradingKey=structuredClone(checked.gradingKey);
+  const versionId=uuid(),ids=new Map(),blanks=new Map();
   definition.formVersionId=versionId;gradingKey.formVersionId=versionId;
   for(const block of definition.blocks) {
     block.blockId=uuid();
@@ -127,6 +157,7 @@ export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) 
       if(legacySentenceLines[old]&&!item.interactionConfig.sentenceLines) item.interactionConfig.sentenceLines=structuredClone(legacySentenceLines[old]);
       // Bản sao vẫn là cùng câu chuyên môn; chỉ phiên bản và định danh điều khiển thay đổi.
       item.itemVersionId=ids.get(old);
+      if(item.interactionConfig.blankIds)item.interactionConfig.blankIds=item.interactionConfig.blankIds.map(id=>{const next=uuid();blanks.set(id,next);return next;});
     }
   }
   for(const item of definition.blocks.flatMap(block=>block.items)) {
@@ -136,6 +167,20 @@ export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) 
   gradingKey.items=Object.fromEntries(Object.entries(gradingKey.items).map(([id,key])=>[ids.get(id),key]));
   if(gradingKey.savedExerciseKeys)gradingKey.savedExerciseKeys=Object.fromEntries(Object.entries(gradingKey.savedExerciseKeys).filter(([id])=>ids.has(id)).map(([id,key])=>[ids.get(id),key]));
   if(gradingKey.referenceAnswers) gradingKey.referenceAnswers=Object.fromEntries(Object.entries(gradingKey.referenceAnswers).map(([id,value])=>[ids.get(id),value]));
+  if(gradingKey.referenceAnswersBySlot) gradingKey.referenceAnswersBySlot=Object.fromEntries(Object.entries(gradingKey.referenceAnswersBySlot).map(([id,value])=>[ids.get(id),value]));
+  if(gradingKey.authoringState)gradingKey.authoringState=Object.fromEntries(Object.entries(gradingKey.authoringState).map(([id,state])=>[ids.get(id),{
+    ...(state.exerciseShape?{exerciseShape:remapExerciseShape(state.exerciseShape,blanks)}:{}),
+    ...(state.sources?{sources:Object.fromEntries(Object.entries(state.sources).map(([blankId,text])=>[blanks.get(blankId),text]))}:{}),
+    ...(state.answerRows?{answerRows:Object.fromEntries(Object.entries(state.answerRows).map(([blankId,rows])=>[blanks.get(blankId)||blankId,rows.map(row=>({...row,id:uuid()}))]))}:{})
+  }]));
   if(gradingKey.explanations) gradingKey.explanations=Object.fromEntries(Object.entries(gradingKey.explanations).map(([id,value])=>[ids.get(id),value]));
-  return validateAuthoringPayload({definition,gradingKey});
+  if(gradingKey.importSources)gradingKey.importSources=Object.fromEntries(Object.entries(gradingKey.importSources).map(([id,value])=>[ids.get(id),value]));
+  if(gradingKey.importReviews)gradingKey.importReviews=Object.fromEntries(Object.entries(gradingKey.importReviews).map(([id,value])=>{
+    const {reviewedContent,...review}=value;return [ids.get(id),review];
+  }));
+  return validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
+}
+
+function remapExerciseShape(value,blanks){
+  try{const shape=JSON.parse(value);if(Array.isArray(shape)&&Array.isArray(shape[1]))shape[1]=shape[1].map(id=>blanks.get(id)||id);else if(Array.isArray(shape.blanks))shape.blanks=shape.blanks.map(id=>blanks.get(id)||id);return JSON.stringify(shape);}catch{return value;}
 }

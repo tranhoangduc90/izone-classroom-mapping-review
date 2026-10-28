@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {effectiveItemKind} from './learning-item-kinds.js';
 
 const uuidSchema = z.string().uuid();
 const codeSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9_.-]{1,79}$/);
@@ -18,14 +19,21 @@ const interactionConfigSchema = z.object({
   matchingPrompts: z.array(z.string().trim().min(1).max(300)).min(2).max(10).optional(),
   sentenceLines: z.array(z.object({
     title: z.string().trim().max(100).optional(),
-    parts: z.array(z.string().max(500)).min(1).max(10)
+    parts: z.array(z.string().max(2000)).min(1).max(11)
   }).strict()).min(1).max(10).optional(),
+  tableLayout: z.object({
+    columnHeaders:z.array(z.string().trim().min(1).max(100)).min(1).max(10),
+    rows:z.array(z.object({label:z.string().trim().max(300),cells:z.array(z.object({
+      text:z.string().max(1000).optional(),lineIndexes:z.array(z.number().int().min(0).max(9)).min(1).max(10).optional()
+    }).strict()).min(1).max(10)}).strict()).min(1).max(20)
+  }).strict().optional(),
   blankIds: z.array(uuidSchema).min(1).max(10).optional(),
   beforeText: z.string().trim().min(1).max(500).optional(),
   afterText: z.string().trim().min(1).max(500).optional(),
   visibleWhenItemVersionId: uuidSchema.optional(),
   visibleWhenValue: z.string().trim().min(1).max(80).optional(),
   requiredWhenVisible: z.boolean().optional(),
+  showOnlyWhenSelected: z.boolean().optional(),
   maxSelections: z.number().int().min(1).max(40).optional(),
   exclusiveOptionId: z.string().trim().min(1).max(80).optional()
 }).strict();
@@ -50,6 +58,7 @@ export const graderTypeSchema = z.enum([
 ]);
 
 export const formItemSchema = z.object({
+  kind: z.enum(['exercise','survey']).optional(),
   itemFamilyId: uuidSchema,
   itemVersionId: uuidSchema,
   position: z.number().int().min(1).max(100),
@@ -139,6 +148,14 @@ export const formItemSchema = z.object({
         message: 'Số ô nằm trong câu phải bằng responseCount.'
       });
     }
+    const table=item.interactionConfig.tableLayout;
+    if(table){
+      const indexes=table.rows.flatMap(row=>row.cells.flatMap(cell=>cell.lineIndexes||[]));
+      const expected=sentenceLines?.flatMap((line,index)=>line.parts.length>1?[index]:[])||[];
+      if(!sentenceLines||table.rows.some(row=>row.cells.length!==table.columnHeaders.length)
+        ||new Set(indexes).size!==indexes.length||indexes.length!==expected.length||indexes.some(index=>!expected.includes(index)))
+        context.addIssue({code:'custom',path:['interactionConfig','tableLayout'],message:'Bảng cần đủ hàng/cột và mỗi dòng có ô được tham chiếu đúng một lần.'});
+    }
   } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels || item.interactionConfig.sentenceLines || item.interactionConfig.blankIds) {
     context.addIssue({
       code: 'custom',
@@ -146,6 +163,10 @@ export const formItemSchema = z.object({
       message: 'responseCount chỉ dùng cho layout numbered_short_texts.'
     });
   }
+  if(item.interactionConfig.tableLayout&&item.layoutType!=='numbered_short_texts')
+    context.addIssue({code:'custom',path:['interactionConfig','tableLayout'],message:'Bảng chỉ dùng với nhóm ô ngắn.'});
+  if(item.interactionConfig.showOnlyWhenSelected!==undefined&&(!item.interactionConfig.visibleWhenItemVersionId||item.layoutType!=='inline_option_text'))
+    context.addIssue({code:'custom',path:['interactionConfig','showOnlyWhenSelected'],message:'Chỉ dùng hiển thị theo lựa chọn cho ô Khác có điều kiện.'});
   if (item.layoutType === 'reasoning_chain_completion') {
     if (item.interactionType !== 'short_text'
       || !item.interactionConfig.beforeText
@@ -204,7 +225,7 @@ const formBlockSchema = z.object({
   instructions: z.string().trim().max(2_000).optional().default(''),
   items: z.array(formItemSchema).min(1).max(40)
 }).strict().superRefine((block, context) => {
-  if (block.kind === 'survey') for (const [index, item] of block.items.entries()) {
+  for (const [index, item] of block.items.entries()) if(effectiveItemKind(item,block)==='survey') {
     if (item.graderType !== 'none' || item.maxScore !== 0) {
       context.addIssue({code:'custom',path:['items',index,'graderType'],
         message:'Phần Khảo sát chỉ ghi nhận thông tin, không chấm điểm.'});
@@ -337,7 +358,24 @@ export const formGradingKeyV1Schema = z.object({
   savedExerciseKeys: z.record(uuidSchema, privateItemKeySchema).optional(),
   groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({}),
   explanations: z.record(uuidSchema,z.string().trim().min(1).max(2000)).optional(),
-  referenceAnswers: z.record(uuidSchema, z.array(z.string().trim().min(1).max(300)).min(1).max(10)).optional()
+  referenceAnswers: z.record(uuidSchema, z.array(z.string().trim().min(1).max(300)).min(1).max(40)).optional(),
+  referenceAnswersBySlot:z.record(uuidSchema,z.array(z.array(z.string().trim().min(1).max(300)).max(40)).min(1).max(10)).optional(),
+  // Metadata chỉ trả qua bộ soạn có quyền, không có trong public definition.
+  authoringState:z.record(uuidSchema,z.object({
+    exerciseShape:z.string().max(128000).optional(),
+    sources:z.record(uuidSchema,z.string().max(2000)).optional(),
+    answerRows:z.record(z.string().min(1).max(80),z.array(z.object({id:uuidSchema,value:z.string().max(300),touched:z.boolean().optional()}).strict()).max(40)).optional()
+  }).strict()).optional(),
+  importSources:z.record(uuidSchema,z.object({documentId:z.string().regex(/^[A-Za-z0-9_-]{10,120}$/u),tabId:z.string().max(200),
+    sourceHash:z.string().regex(/^[a-f0-9]{64}$/u),questionKey:z.string().regex(/^[a-f0-9]{64}$/u),contentHash:z.string().regex(/^[a-f0-9]{64}$/u),sourceLabel:z.string().max(500)
+  }).strict()).optional(),
+  importReviews: z.record(uuidSchema,z.object({
+    sourceLabel:z.string().max(500),sourceQuote:z.string().max(20000),sourceKey:z.string().max(10000),
+    sourceHash:z.string().regex(/^[a-f0-9]{64}$/u),keyStatus:z.enum(['missing','mismatch','conflict','proposed']),
+    documentId:z.string().regex(/^[A-Za-z0-9_-]{10,120}$/u).optional(),tabId:z.string().max(200).optional(),revisionId:z.string().max(1000).optional(),
+    candidates:z.array(z.string().max(2000)).max(40),messages:z.array(z.string().max(2000)).max(20),
+    reviewedContent:z.string().max(30000).optional()
+  }).strict()).optional()
 }).strict();
 
 export const scoreResponseSchema = z.object({
@@ -391,7 +429,8 @@ const resultItemSchema = z.object({
     answerState:z.enum(['blank','answered','invalid']),verdict:z.enum(['correct','incorrect']),
     scoreEarned:z.number().min(0).max(1),maxScore:z.literal(1),
     expectedAnswer:z.array(z.string()).optional()
-  }).strict()).min(1).max(10).optional()
+  }).strict()).min(1).max(10).optional(),
+  referenceSlots:z.array(z.object({slot:z.number().int().min(0).max(9),rawAnswer:z.string().nullable(),expectedAnswer:z.array(z.string().min(1).max(300)).max(40)}).strict()).min(1).max(10).optional()
 }).strict();
 
 export const quizResultV1Schema = z.object({

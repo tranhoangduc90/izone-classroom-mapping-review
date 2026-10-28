@@ -124,7 +124,7 @@ export function previewFormImport(raw,{definition:baseDefinition,gradingKey:base
   try {
     // Nội dung mới nhập phải hợp lệ; phần nháp cũ còn trống vẫn được giữ để giảng viên viết tiếp.
     const addedIds=new Set(items.map(item=>item.itemVersionId)),addedKey=structuredClone(gradingKey);
-    for(const name of ['items','referenceAnswers','explanations'])if(addedKey[name])addedKey[name]=Object.fromEntries(Object.entries(addedKey[name]).filter(([id])=>addedIds.has(id)));
+    for(const name of ['items','referenceAnswers','referenceAnswersBySlot','authoringState','savedExerciseKeys','explanations','importReviews','importSources'])if(addedKey[name])addedKey[name]=Object.fromEntries(Object.entries(addedKey[name]).filter(([id])=>addedIds.has(id)));
     validateAuthoringPayload({definition:{...definition,title:definition.title||'Kiểm nội dung nhập',blocks:[...blocks.values()]},gradingKey:addedKey});
     const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
     return {rows,errors,payload:{definition:checked.definition,gradingKey:checked.gradingKey},

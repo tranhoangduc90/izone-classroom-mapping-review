@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {surveyItemIds} from './learning-item-kinds.js';
 import {
   evidenceEnvelopeV1Schema,
   parseFormDefinition,
@@ -295,10 +296,12 @@ export function gradeLearningSubmission({ definition: inputDefinition, gradingKe
     }
   }
 
-  const surveyIds=new Set(definition.blocks.filter(block=>block.kind==='survey').flatMap(block=>block.items.map(item=>item.itemVersionId)));
+  const surveyIds=surveyItemIds(definition);
   const itemResults = items.map(item => ({...resultsById.get(item.itemVersionId),
     ...(surveyIds.has(item.itemVersionId)&&gradingKey.referenceAnswers?.[item.itemVersionId]
       ?{expectedAnswer:gradingKey.referenceAnswers[item.itemVersionId]}:{}),
+    ...(surveyIds.has(item.itemVersionId)&&gradingKey.referenceAnswersBySlot?.[item.itemVersionId]?.some(answers=>answers.length)
+      ?{referenceSlots:gradingKey.referenceAnswersBySlot[item.itemVersionId].map((expectedAnswer,slot)=>({slot,rawAnswer:resultsById.get(item.itemVersionId).rawAnswer?.[slot]??null,expectedAnswer}))}:{}),
     ...(gradingKey.explanations?.[item.itemVersionId]?{explanation:gradingKey.explanations[item.itemVersionId]}:{})}));
   const typeMap = new Map();
   for (const result of itemResults) {
@@ -354,17 +357,18 @@ export function evaluateCompleteness(definitionInput, responsesInput) {
 export function buildStudentQuizResult(internalResult, definitionInput, now = new Date()) {
   const definition = parseFormDefinition(definitionInput);
   const releaseAnswers = definition.answerReleasePolicy === 'immediate';
-  const surveyIds=new Set(definition.blocks.filter(block=>block.kind==='survey').flatMap(block=>block.items.map(item=>item.itemVersionId)));
+  const surveyIds=surveyItemIds(definition);
   return {
     ...internalResult,
     items: internalResult.items.map(item => {
       const copy = { ...item };
       if (!releaseAnswers && !surveyIds.has(item.itemVersionId)) {
         delete copy.expectedAnswer;delete copy.explanation;
+        delete copy.referenceSlots;
         if(copy.slotResults)copy.slotResults=copy.slotResults.map(slot=>{const safe={...slot};delete safe.expectedAnswer;return safe;});
       }
       // Không dựng khung đáp án rỗng cho khảo sát chưa có nội dung tham khảo.
-      if(surveyIds.has(item.itemVersionId)&&!copy.expectedAnswer){delete copy.expectedAnswer;delete copy.explanation;}
+      if(surveyIds.has(item.itemVersionId)&&!copy.expectedAnswer&&!copy.referenceSlots?.some(slot=>slot.expectedAnswer.length)){delete copy.expectedAnswer;delete copy.explanation;}
       return copy;
     }),
     answerRelease: releaseAnswers ? 'released' : 'hidden',

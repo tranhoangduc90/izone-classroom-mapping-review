@@ -58,8 +58,8 @@ export const fetchCourseSessionDetailSql = `SELECT assignment.id::text AS assign
     || CASE WHEN EXISTS (
       SELECT 1 FROM jsonb_array_elements(version.public_definition->'blocks') AS block,
         jsonb_array_elements(block->'items') AS question
-      WHERE block->>'kind'='survey' AND question->>'itemVersionId'=item.item_version_id::text
-    ) THEN COALESCE((SELECT jsonb_strip_nulls(jsonb_build_object('expectedAnswer', result->'expectedAnswer'))
+      WHERE COALESCE(question->>'kind',block->>'kind')='survey' AND question->>'itemVersionId'=item.item_version_id::text
+    ) THEN COALESCE((SELECT jsonb_strip_nulls(jsonb_build_object('expectedAnswer', result->'expectedAnswer','referenceSlots',result->'referenceSlots'))
       FROM jsonb_array_elements(grading.result_json->'items') AS result
       WHERE result->>'itemVersionId'=item.item_version_id::text), '{}'::jsonb)
     ELSE '{}'::jsonb END)

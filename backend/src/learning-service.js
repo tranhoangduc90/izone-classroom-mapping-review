@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {effectiveItemKind} from './learning-item-kinds.js';
 import { readCheckpointAttendance, recordCheckpointAttendance } from './learning-checkpoint-attendance.js';
 import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule } from './learning-schedule-plan.js';
@@ -100,14 +101,15 @@ function studentFeedbackDefinition(definitionInput, override) {
 }
 
 function gradeCheckpoint(definition, gradingKey, block, responses) {
-  if (!block || (definition.answerReleasePolicy !== 'immediate' && block.kind !== 'survey')) return null;
+  const hasSurvey=block?.items.some(item=>effectiveItemKind(item,block)==='survey');
+  if (!block || (definition.answerReleasePolicy !== 'immediate' && !hasSurvey)) return null;
   const scopedDefinition = { ...definition, blocks: [block] };
   const result = gradeLearningSubmission({
     definition: scopedDefinition,
     gradingKey,
     responses: asObject(responses)
   });
-  return result.summary.maxScore > 0 || block.kind === 'survey'
+  return result.summary.maxScore > 0 || hasSurvey
     ? buildStudentQuizResult(result, scopedDefinition)
     : null;
 }
@@ -123,6 +125,7 @@ function teacherLiveStudent(value) {
         const safe = { ...item };
         delete safe.expectedAnswer;
         delete safe.explanation;
+        delete safe.referenceSlots;
         if(safe.slotResults)safe.slotResults=safe.slotResults.map(slot=>{const entry={...slot};delete entry.expectedAnswer;return entry;});
         return safe;
       })

@@ -1,0 +1,29 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+import {PGlite} from '@electric-sql/pglite';
+import {createLearningDemoApp,createPGlitePool,initializeLearningDemoDatabase} from '../src/learning-demo.js';
+import {createLearningLibraryDemoGrant} from '../src/learning-demo-grant.js';
+import {validateAuthoringPayload} from '../src/learning-form-authoring.js';
+import {sha256,stableStringify} from '../src/learning-domain.js';
+test('T15 API/DB: mixed question modes keep hidden exercise keys, survey slot variants, retry and saved identity',{timeout:40000},async()=>{
+ const db=new PGlite();let server;
+ try{
+  await initializeLearningDemoDatabase(db);const secret='the15-isolated-fixture-secret-0000000000',origin='https://fixture.example',formVersionId=randomUUID();
+  const make=(position,kind)=>({itemFamilyId:randomUUID(),itemVersionId:randomUUID(),kind,position,prompt:'Câu giả '+position,interactionType:'short_text',layoutType:'numbered_short_texts',pedagogicalTypeCode:'sentence_completion',graderType:kind==='survey'?'none':'accepted_text_sequence',maxScore:kind==='survey'?0:1,skillCodes:['general'],options:[],interactionConfig:{responseCount:1,blankIds:[randomUUID()],sentenceLines:[{title:'',parts:['Đoạn ','.']}]}});
+  const a=make(1,'exercise'),b=make(2,'survey'),c=make(3,'survey');
+  const payload=validateAuthoringPayload({definition:{schemaVersion:'FormDefinitionV1',formVersionId,title:'Phiếu giả hỗn hợp',courseCode:'56',kind:'mixed',answerReleasePolicy:'hidden',blocks:[{blockId:randomUUID(),kind:'survey',checkpoint:1,title:'Cùng một phần',items:[a,b,c]}]},gradingKey:{schemaVersion:'FormGradingKeyV1',formVersionId,graderVersion:1,groups:{},items:{[a.itemVersionId]:{graderType:'accepted_text_sequence',acceptedBySlot:[['exercise secret','exercise variant']]}},referenceAnswersBySlot:{[b.itemVersionId]:[['tham khảo một','tham khảo hai']]},authoringState:{[a.itemVersionId]:{sources:{[a.interactionConfig.blankIds[0]]:'nguyên văn riêng'}}}},requireAnswers:true});
+  const before=stableStringify(payload.definition),hash=sha256(stableStringify(payload)),entry={id:randomUUID(),revision:1,contentHash:hash};
+  const source={sourceLibraryId:entry.id,sourceRevision:1,contentHash:hash,sourceAssignmentId:null,className:'Lớp giả',courseCode:'56',sessionNumber:1,title:payload.definition.title,definition:payload.definition,gradingKey:payload.gradingKey,definitionHash:sha256(stableStringify(payload.definition)),blockReleases:[],answerReleaseOverride:null};
+  const app=createLearningDemoApp({pool:createPGlitePool(db),allowedOrigin:origin,grantSecret:secret,fetchSource:async()=>source});server=app.listen(0,'127.0.0.1');await new Promise(done=>server.once('listening',done));const base='http://127.0.0.1:'+server.address().port;
+  async function post(path,body,extra={}){const response=await fetch(base+path,{method:'POST',headers:{origin,'content-type':'application/json','x-progress-log-demo':'1',...extra},body:JSON.stringify(body)}),result=await response.json();assert.equal(response.ok,true,JSON.stringify({path,status:response.status,result}));return result;}
+  const grant=createLearningLibraryDemoGrant({entry,reviewer:{email:'fixture@example.test'},secret}),{run}=await post('/api/demo/runs',{grant});await post('/api/demo/runs/open-blocks',{}, {'x-demo-teacher-token':run.teacherToken});
+  const {assignment}=await post('/api/learning/assignments/open',{publicToken:run.publicToken});assert.deepEqual({...assignment.definition,formVersionId:payload.definition.formVersionId},payload.definition);assert.doesNotMatch(JSON.stringify(assignment),/exercise secret|tham khảo một|nguyên văn riêng/);
+  const studentRef=assignment.roster[0].studentRef,{attempt}=await post('/api/learning/attempts/start',{publicToken:run.publicToken,studentRef,identityConfirmed:true,clientIdempotencyKey:randomUUID()});
+  const responses={[a.itemVersionId]:['exercise variant'],[b.itemVersionId]:['ý riêng'],[c.itemVersionId]:['không tham khảo']},block=assignment.definition.blocks[0];
+  const cp=await post('/api/learning/attempts/checkpoints/submit',{attemptToken:attempt.attemptToken,checkpointSubmissionId:randomUUID(),blockId:block.blockId,checkpoint:1,definitionHash:assignment.definitionHash,draftRevision:0,responses,idempotencyKey:randomUUID()}),result=cp.checkpointSubmission.result;
+  assert.equal(result.summary.maxScore,1);assert.equal(result.summary.scoreEarned,1);assert.equal(result.answerRelease,'hidden');assert.doesNotMatch(JSON.stringify(result),/exercise secret|nguyên văn riêng/);
+  assert.equal(result.items[0].slotResults[0].expectedAnswer,undefined);assert.deepEqual(result.items[1].referenceSlots[0].expectedAnswer,['tham khảo một','tham khảo hai']);assert.equal(result.items[1].verdict,'ungraded');assert.equal(result.items[2].expectedAnswer,undefined);assert.equal(result.items[2].referenceSlots,undefined);
+  const input={attemptToken:attempt.attemptToken,submissionId:randomUUID(),definitionHash:assignment.definitionHash,draftRevision:0,responses};await post('/api/learning/attempts/submit',input);await post('/api/learning/attempts/submit',input);
+  const detail=await post('/api/learning/student/course-session-detail',{publicToken:run.publicToken,studentRef,identityConfirmed:true,sessionNumber:1});assert.equal(detail.detail.gradingItems[0].expectedAnswer,undefined);assert.deepEqual(detail.detail.gradingItems[1].referenceSlots[0].expectedAnswer,['tham khảo một','tham khảo hai']);assert.doesNotMatch(JSON.stringify(detail),/exercise secret|nguyên văn riêng/);
+  assert.equal((await db.query('SELECT count(*)::int n FROM learning.submission')).rows[0].n,1);assert.equal(stableStringify(source.definition),before);
+ }finally{if(server)await new Promise(done=>server.close(done));await db.close();}
+});
