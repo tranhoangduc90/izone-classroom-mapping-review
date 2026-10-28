@@ -6,6 +6,7 @@ import { withTransaction } from './db.js';
 import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
 import { isDoctorText } from './speaking-doctor-text.js';
 import { hasChatbotCompletion } from './speaking-completion-policy.js';
+import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
 
 export class SpeakingHomeworkError extends Error {
   constructor(code, message, httpStatus = 409) {
@@ -269,9 +270,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     const practice = await pool.query(`SELECT DISTINCT ON (p.slot)
       p.id, p.slot, p.revision, p.share_url, p.exercise_id, p.status,
       p.check_code, p.question_count, p.evidence, p.typing_warning, p.voice_confirmed,
+      c.status AS check_job_status,c.attempts AS check_job_attempts,
       CASE WHEN a.status='failed' AND a.attempts>=5 THEN 'review' ELSE a.status END AS analysis_status
       FROM speaking_homework.practice_link p
       LEFT JOIN speaking_homework.practice_analysis_job a ON a.practice_link_id = p.id
+      LEFT JOIN speaking_homework.practice_check_job c ON c.practice_link_id = p.id
       WHERE p.access_grant_id = $1 ORDER BY p.slot, p.revision DESC`, [grant.grant_id]);
     const jobs = receipt.rows[0] ? await pool.query(`SELECT kind,
       CASE WHEN status='failed' AND attempts>=5 THEN 'review' ELSE status END AS status
@@ -283,7 +286,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         requiredPracticeCount: grant.required_practice_count,
         doctorEnabled: Boolean(grant.doctor_course_key) },
       student: { ref: studentRef, name: grant.student_name },
-      status: submission.status, parts: parts.rows, links, practiceLinks: practice.rows,
+      status: submission.status, parts: parts.rows,
+      links:links.map(l=>speakingCheckView(l,null,'check_status')),
+      practiceLinks:practice.rows.map(({check_job_status,check_job_attempts,...link})=>speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts})),
       receipt: receipt.rows[0] || null,
       docsProgress:await readSpeakingDocsProgress(pool,'speaking_homework',grant.grant_id)
     };
@@ -825,8 +830,12 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
             'Hãy hoàn tất hai bài bổ trợ bắt buộc trước khi nộp bài luyện thêm.');
         }
         const prior = latest.rows.find(row => row.share_id === share.shareId);
-        if (prior) return { linkId: prior.id, status: prior.status, revision: prior.revision, slot: prior.slot };
-        slot = Math.max(2, ...latest.rows.map(row => Number(row.slot))) + 1;
+        if(prior){
+          const job=prior.status==='accepted'?null:(await client.query('SELECT status,attempts FROM speaking_homework.practice_check_job WHERE practice_link_id=$1',[prior.id])).rows[0];
+          if(!canRetrySpeakingCheck(prior,job)&&prior.status!=='rejected')return { linkId: prior.id, status: prior.status, revision: prior.revision, slot: prior.slot };
+          if(Number(prior.slot)<=2||prior.exercise_id!==exerciseId)throw new SpeakingHomeworkError('SAME_CONVERSATION','Mỗi bài luyện cần một hội thoại riêng.');
+          slot=Number(prior.slot);
+        }else slot = Math.max(2, ...latest.rows.map(row => Number(row.slot))) + 1;
       } else if (submitted.rows[0]?.status === 'submitted') {
         throw new SpeakingHomeworkError('HOMEWORK_ALREADY_SUBMITTED',
           'Homework đã nộp. Hãy dùng ô Luyện thêm để ghi lượt mới.');
@@ -842,7 +851,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
       }
       const previous = latest.rows.find(row => row.slot === slot);
       if (previous?.share_id === share.shareId && previous.status !== 'rejected') {
-        return { linkId: previous.id, status: previous.status, revision: previous.revision };
+        const job=previous.status==='accepted'?null:(await client.query('SELECT status,attempts FROM speaking_homework.practice_check_job WHERE practice_link_id=$1',[previous.id])).rows[0];
+        if(!canRetrySpeakingCheck(previous,job))return { linkId: previous.id, status: previous.status, revision: previous.revision };
       }
       const inserted = await client.query(`INSERT INTO speaking_homework.practice_link
         (access_grant_id, slot, revision, share_url, share_id, exercise_id)

@@ -121,6 +121,22 @@ async function fixture({progressDocsEnabled=false}={}) {
   return { db, pool, service: createSpeakingHomeworkService({ pool,progressDocsEnabled }) };
 }
 
+test('legacy practice reports exhausted technical checks and allows one new revision of the same link',async()=>{
+  const f=await fixture();try{
+    const exercise=(await f.pool.query("INSERT INTO speaking_homework.doctor_exercise(course_key,source_record_id,title,exercise_url) VALUES('67','retry-fixture','Bài bổ trợ fixture','https://example.test/retry') RETURNING id")).rows[0].id;
+    const grant=(await f.pool.query('SELECT id FROM speaking_homework.access_grant WHERE student_ref=$1 AND document_id=$2',[studentRef,'doc-A'])).rows[0].id;
+    await f.pool.query("UPDATE speaking_homework.assignment SET required_practice_count=2 WHERE assignment_code='67-speaking-lesson-2'");
+    const input={accessToken,studentRef,slot:1,exerciseId:exercise,rawUrl:share('f')};
+    const first=await f.service.requestPracticeCheck(input);
+    await f.pool.query("UPDATE speaking_homework.practice_check_job SET status='failed',attempts=5,last_error_code='PRACTICE_CHECK_ERROR' WHERE practice_link_id=$1",[first.linkId]);
+    assert.equal((await f.service.open({accessToken,studentRef})).practiceLinks[0].retryable,true);
+    const next=await f.service.requestPracticeCheck(input);
+    assert.notEqual(next.linkId,first.linkId);
+    assert.equal((await f.service.requestPracticeCheck(input)).linkId,next.linkId);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_homework.practice_link WHERE access_grant_id=$1',[grant])).rows[0].n,2);
+  }finally{await f.db.close();}
+});
+
 test('legacy records Docs progress immediately after one accepted part without a receipt',async()=>{
   const f=await fixture({progressDocsEnabled:true});try{
     await checkAccepted(f.service,accessToken,studentRef,'paraphrase','a',5);

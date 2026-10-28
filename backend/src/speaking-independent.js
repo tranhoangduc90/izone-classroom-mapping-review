@@ -6,6 +6,7 @@ import { hasChatbotCompletion } from './speaking-completion-policy.js';
 import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
 import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
 import { saveConversationSnapshot,readConversationSnapshot } from './speaking-conversation-snapshot.js';
+import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
 
 const hash = s => createHash('sha256').update(s).digest('hex');
 const fail = (code,message,status=409) => { throw new SpeakingHomeworkError(code,message,status); };
@@ -132,12 +133,12 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
   async function open(identity) {
     const u=await grant(identity);
     const all=await links(u.id);
-    const {rows:jobs}=await pool.query('SELECT kind,status,link_id FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
+    const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
     const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
     return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
       docsProgress:await readSpeakingDocsProgress(pool,'speaking_independent',u.id),
-      links:all.filter(l=>l.kind==='main').map(l=>{const review=jobs.some(j=>j.link_id===l.id&&j.kind==='check_main'&&j.status==='review');return {...l,check_status:review?'rejected':l.status,check_code:review?'CHECK_REVIEW_REQUIRED':l.check_code};}),
-      practiceLinks:all.filter(l=>l.kind==='practice').map(l=>{const review=jobs.some(j=>j.link_id===l.id&&j.kind==='check_practice'&&j.status==='review');return {...l,status:review?'rejected':l.status,check_code:review?'CHECK_REVIEW_REQUIRED':l.check_code,analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null};}),
+      links:all.filter(l=>l.kind==='main').map(l=>speakingCheckView({...l,check_status:l.status},jobs.find(j=>j.link_id===l.id&&j.kind==='check_main'),'check_status')),
+      practiceLinks:all.filter(l=>l.kind==='practice').map(l=>({...speakingCheckView(l,jobs.find(j=>j.link_id===l.id&&j.kind==='check_practice')),analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null})),
       processing:Object.fromEntries(jobs.filter(j=>!j.link_id).map(j=>[j.kind,{status:j.status}]))};
   }
   async function request(identity,{part,slot=null,exerciseId=null,rawUrl,kind}) {
@@ -157,13 +158,18 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
         title=e.title;
         if (slot===null) {
           if (u.status!=='submitted') fail('HOMEWORK_REQUIRED','Nộp Homework trước khi luyện thêm.');
-          slot=Math.max(2,...(await links(u.id,db)).filter(l=>l.kind==='practice').map(l=>l.slot))+1;
+          const existing=await links(u.id,db);
+          const prior=existing.find(l=>l.kind==='practice'&&l.slot>=3&&l.share_id===share.shareId&&l.exercise_id===exerciseId);
+          slot=prior?Number(prior.slot):Math.max(2,...existing.filter(l=>l.kind==='practice').map(l=>l.slot))+1;
         }
         part=`practice_${slot}`;
       }
       const all=await links(u.id,db);
       const old=all.find(l=>l.kind===kind&&l.part===part);
-      if (old?.share_url===share.url && old.exercise_id===exerciseId && old.status!=='rejected') return {id:old.id,status:old.status};
+      if (old?.share_url===share.url && old.exercise_id===exerciseId && old.status!=='rejected') {
+        const job=old.status==='accepted'?null:(await db.query('SELECT status,attempts FROM speaking_independent.job WHERE link_id=$1 AND kind=$2',[old.id,kind==='main'?'check_main':'check_practice'])).rows[0];
+        if(!canRetrySpeakingCheck(old,job))return {id:old.id,status:old.status};
+      }
       if (all.some(l=>l.part!==part && (l.share_id===share.shareId || (kind==='practice'&&l.kind==='practice'&&l.slot<=2&&slot<=2&&l.exercise_id===exerciseId))))
         fail('SAME_CONVERSATION','Mỗi phần cần một hội thoại riêng và hai bài bổ trợ khác nhau.');
       const linkOnly=kind==='main'&&min===0;
