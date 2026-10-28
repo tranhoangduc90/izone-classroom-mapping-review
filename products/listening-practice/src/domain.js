@@ -94,7 +94,10 @@ export function checkpoint(a,input,lease,clock,{recovery=false}={}){
  let increase=recovery?Math.min(RECOVERY_MS,unconfirmed,delta):a.lease.awaitingPlayback?Math.min(unconfirmed,delta):delta;
  if(recovery&&a.phase==='listening'){
   const audioAdvance=Math.max(0,(draft.audioPosition-(a.draft.audioPosition||0))*1000);
-  if(audioAdvance>unconfirmed+1000||audioAdvance>0&&!a.lease.activated)fail('AUDIO_POSITION_INVALID','Vị trí nghe chưa khớp thời gian phát đã xác nhận.',400);
+  // Audio tiến từ snapshot trước; acceptedActiveMs là giờ máy chủ đã tính,
+  // có thể đi trước activeMs của snapshot khi ACK chậm. So hai delta cùng mốc.
+  const reportedAdvance=Math.max(0,draft.activeMs-(a.draft.activeMs||0));
+  if(audioAdvance>reportedAdvance+1000||audioAdvance>0&&!a.lease.activated)fail('AUDIO_POSITION_INVALID','Vị trí nghe chưa khớp thời gian phát đã xác nhận.',400);
   if(draft.phase==='listening')increase=Math.min(increase,Math.max(0,draft.audioPosition*1000-a.usedMs));
  }
  // Thời gian máy chủ giới hạn tiến độ audio; không nhận tua hoặc chuyển rà bài sớm.

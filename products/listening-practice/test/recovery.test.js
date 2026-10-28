@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture} from './helpers.js';
-import {authoredLesson} from '../src/authored-content.js';
+import {authoredLesson,registerAuthoredLesson} from '../src/authored-content.js';
 import {CODE,emptyDraft,secret,uuid} from '../src/domain.js';
 
 // Hồi quy lỗi chuyển tab: SQL thật trong bộ nhớ, người và nội dung giả.
 // Kiểm thời gian/nháp/lượt qua service; không dùng key thật hoặc Google.
 const C10='67-practice-listening_c20_t3_p4_inclusive_design';
+const FULL='67-practice-listening_full-recovery-fixture';
+registerAuthoredLesson({code:FULL,title:'Full recovery fixture',lesson:78,totalMs:720000,audioMs:600000,reviewMs:120000,
+ paragraphs:['P1','P2','P3','P4'],groups:[1,2,3,4].map(n=>({id:'part'+n,kind:'completion',label:'Notes',start:(n-1)*10+1,end:n*10})),
+ parts:[1,2,3,4].map(n=>({id:'part'+n,title:'Part '+n,start:(n-1)*10+1,end:n*10,startMs:(n-1)*150000,endMs:n*150000}))});
 async function setup(code){
  const f=await fixture();let token=f.token;
- if(code===C10){
+ if(code!==CODE){
   const lesson=authoredLesson(code),paragraphs=Object.fromEntries(lesson.paragraphs.map(p=>[p,'Fixture evidence.']));
   const groups=lesson.groups.map(g=>({...g,instruction:'Write ONE WORD.',maxWords:1,questions:Array.from({length:g.end-g.start+1},(_,i)=>({n:g.start+i,text:'Fixture ___.'}))}));
   const p={runs:[{text:'Fixture'}]},key=Object.fromEntries(lesson.questionIds.map(n=>[n,['fixture']]));
@@ -27,7 +31,35 @@ async function setup(code){
  async function advance(ms){for(let rest=ms;rest>0;){const dt=Math.min(5000,rest);rest-=dt;f.advance(dt);d.sequence++;d.activeMs+=dt;d.audioPosition+=dt/1000;await f.service.pulse({...input,snapshot:structuredClone(d)});}}
  return{...f,token,start,id,d,input,advanceListening:advance};
 }
-for(const [label,code] of [['Buổi 8',CODE],['Buổi 10',C10]]){
+for(const [label,code] of [['Buổi 8',CODE],['Buổi 10',C10],['Full 4 part',FULL]]){
+ test(`${label}: Pause đối soát audio từ snapshot đã lưu khi ACK tính thời gian khác mốc`,async()=>{
+  const f=await setup(code);try{
+   await f.advanceListening(50000);f.advance(5908);
+   Object.assign(f.d,{sequence:f.d.sequence+1,activeMs:54816,audioPosition:54.776439});
+   const saved=await f.service.pulse({...f.input,snapshot:structuredClone(f.d)});
+   assert.equal(saved.attempts.at(-1).usedMs,55908);
+   f.advance(2849);Object.assign(f.d,{sequence:f.d.sequence+1,activeMs:57665,audioPosition:57.625596,notes:'Nháp trước khi rời cửa sổ'});
+   const paused=await f.service.pause({...f.input,snapshot:structuredClone(f.d)}),a=paused.attempts.at(-1);
+   assert.equal(a.progressRecovery,undefined);assert.equal(a.id,f.id);assert.equal(a.no,1);
+   assert.ok(Math.abs(a.usedMs-57625.596)<.001);assert.equal(a.audioPosition,57.625596);assert.equal(a.notes,f.d.notes);
+   f.advance(60000);const resumed=await f.service.resume({token:f.token,attemptId:f.id,owner:'device1',operationId:uuid(),recovery:{lease:f.input.lease,snapshot:f.d}});
+   assert.ok(resumed.lease);assert.ok(Math.abs(resumed.attempts.at(-1).usedMs-57625.596)<.001);assert.equal(resumed.attempts.length,1);
+  }finally{await f.close();}
+ });
+ test(`${label}: Tiếp tục phục hồi được trạng thái kẹt cũ mà không Reset hoặc cộng giờ vắng`,async()=>{
+  const f=await setup(code);try{
+   await f.advanceListening(50000);f.advance(5908);
+   Object.assign(f.d,{sequence:f.d.sequence+1,activeMs:54816,audioPosition:54.776439});
+   await f.service.pulse({...f.input,snapshot:structuredClone(f.d)});
+   const row=(await f.pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[f.start.identity.bindingId])).rows[0],a=row.state.attempts.at(-1);
+   a.status='paused';a.lease.activationCancelled=true;a.progressRecovery={code:'PROGRESS_RESYNC_REQUIRED',reason:'AUDIO_POSITION_INVALID',reportedAudioPosition:57.625596,reportedActiveMs:57665,reportedPhase:'listening'};
+   await f.pool.query('UPDATE listening_practice.work SET state=$2 WHERE binding_id=$1',[f.start.identity.bindingId,row.state]);
+   Object.assign(f.d,{sequence:f.d.sequence+1,activeMs:57665,audioPosition:57.625596,notes:'Nháp đang kẹt vẫn được giữ'});
+   f.advance(86400000);const resumed=await f.service.resume({token:f.token,attemptId:f.id,owner:'device1',operationId:uuid(),recovery:{lease:f.input.lease,snapshot:f.d}}),after=resumed.attempts.at(-1);
+   assert.equal(after.progressRecovery,undefined);assert.ok(resumed.lease);assert.equal(after.id,f.id);assert.equal(after.no,1);
+   assert.ok(Math.abs(after.usedMs-57625.596)<.001);assert.equal(after.audioPosition,57.625596);assert.equal(after.notes,f.d.notes);assert.equal(resumed.attempts.length,1);
+  }finally{await f.close();}
+ });
  test(`${label}: gián đoạn 9 giây giữ nháp/lượt 1, nghỉ lâu không mất giờ, tự nộp một lần`,async()=>{
   const f=await setup(code);try{
    await f.advanceListening(10000);f.advance(9000);f.d.sequence++;f.d.activeMs+=9000;f.d.audioPosition+=9;
@@ -69,7 +101,7 @@ for(const [label,code] of [['Buổi 8',CODE],['Buổi 10',C10]]){
  });
  test(`${label}: gián đoạn qua cuối audio giữ thời gian rà đã dùng, không cấp lại 2 phút`,async()=>{
   const f=await setup(code);try{
-   const duration=code===C10?486322:459207;await f.advanceListening(duration-3000);
+   const duration=authoredLesson(code)?.audioMs||459207;await f.advanceListening(duration-3000);
    f.advance(9000);Object.assign(f.d,{sequence:f.d.sequence+1,activeMs:duration+6000,audioPosition:duration/1000,phase:'review'});
    const response=await f.service.pause({...f.input,snapshot:f.d}),a=response.attempts.at(-1);
    assert.equal(a.phase,'review');assert.equal(a.usedMs,duration+6000);assert.equal(a.reviewRemainingMs,114000);
