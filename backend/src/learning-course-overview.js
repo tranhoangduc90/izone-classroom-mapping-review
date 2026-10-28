@@ -54,7 +54,15 @@ export const fetchCourseSessionDetailSql = `SELECT assignment.id::text AS assign
     'slotResults', (SELECT jsonb_agg(slot - 'expectedAnswer')
       FROM jsonb_array_elements(COALESCE((SELECT result->'slotResults'
         FROM jsonb_array_elements(grading.result_json->'items') AS result
-        WHERE result->>'itemVersionId'=item.item_version_id::text), '[]'::jsonb)) AS slot)))
+        WHERE result->>'itemVersionId'=item.item_version_id::text), '[]'::jsonb)) AS slot))
+    || CASE WHEN EXISTS (
+      SELECT 1 FROM jsonb_array_elements(version.public_definition->'blocks') AS block,
+        jsonb_array_elements(block->'items') AS question
+      WHERE block->>'kind'='survey' AND question->>'itemVersionId'=item.item_version_id::text
+    ) THEN COALESCE((SELECT jsonb_strip_nulls(jsonb_build_object('expectedAnswer', result->'expectedAnswer'))
+      FROM jsonb_array_elements(grading.result_json->'items') AS result
+      WHERE result->>'itemVersionId'=item.item_version_id::text), '{}'::jsonb)
+    ELSE '{}'::jsonb END)
     FROM learning.grading_result_item AS item WHERE item.grading_run_id = grading.id) AS grading_items,
   (SELECT jsonb_build_object('noteText', note.note_text, 'sentAt', note.sent_at)
     FROM learning.teacher_session_feedback AS note
