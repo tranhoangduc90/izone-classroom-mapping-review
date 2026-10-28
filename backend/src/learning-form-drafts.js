@@ -53,6 +53,16 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
   return {
     ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader}),
     create,
+    async copyDraft({id,classId,sessionNumber,operationId,reviewer}){
+      const source=await owned(pool,id,reviewer);
+      const token=sha256(id+':'+operationId);
+      operationId=token.slice(0,8)+'-'+token.slice(8,12)+'-4'+token.slice(13,16)+'-a'+token.slice(17,20)+'-'+token.slice(20,32);
+      const prior=(await pool.query('SELECT id,erp_course_class_id,session_number,owner_email FROM learning.form_draft WHERE create_operation_id=$1::uuid',[operationId])).rows[0];
+      if(prior){if(String(prior.erp_course_class_id)!==String(classId)||Number(prior.session_number)!==sessionNumber||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
+        throw error('DRAFT_OPERATION_CONFLICT','Mã sao chép đã dùng cho đích khác.');return dto(await owned(pool,prior.id,reviewer));}
+      const payload=copyAuthoringPayload({definition:source.public_definition,gradingKey:source.private_definition});
+      return create({...payload,classId,sessionNumber,operationId,reviewer});
+    },
     async demoSource({grant}) {
       const active=await pool.query(`SELECT account.email,account.role,account.can_access_all_classes,
         EXISTS(SELECT 1 FROM learning.progress_log_admin AS admin WHERE lower(admin.reviewer_email)=lower(account.email)

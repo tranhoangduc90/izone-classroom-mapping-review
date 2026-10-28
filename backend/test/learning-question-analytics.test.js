@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildQuestionAnalytics} from '../src/learning-question-analytics.js';
 
+test('R09: phiếu lịch sử không khai báo options vẫn thống kê được, key chỉ được truyền vào nhánh giáo viên',()=>{
+  const item={itemVersionId:'legacy',position:1,prompt:'Câu mở',interactionType:'long_text',graderType:'none',maxScore:0};
+  const result=buildQuestionAnalytics({assignmentId:'a',definition:{formVersionId:'v',blocks:[{items:[item]}]},students:[]});
+  assert.deepEqual(result.items[0].options,[]);assert.equal(result.items[0].correctAnswer,null);
+  const question={...item,interactionType:'single_choice',graderType:'exact_option',maxScore:1,options:[{id:'A',label:'Đáp án nguồn'}]};
+  const teacher=buildQuestionAnalytics({assignmentId:'a',definition:{formVersionId:'v',blocks:[{items:[question]}]},
+    gradingKey:{items:{legacy:{expectedOptionId:'A'}}},students:[]});
+  assert.deepEqual(teacher.items[0].correctAnswer,['Đáp án nguồn']);
+});
+
 const objective={itemVersionId:'q1',position:1,prompt:'Chọn đáp án',interactionType:'single_choice',graderType:'exact_option',required:true,maxScore:1,
   options:[{id:'A',label:'Phương án A'},{id:'B',label:'Phương án B'}]};
 const definition={formVersionId:'form',blocks:[{items:[objective,

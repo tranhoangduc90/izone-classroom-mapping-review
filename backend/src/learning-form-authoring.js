@@ -18,6 +18,12 @@ export const AUTHORING_TYPES=Object.freeze([
   {code:'self_reported_score',label:'Số câu đúng học viên tự khai'}
 ]);
 
+// Danh mục tạo mới theo từng phần; reader các phiên bản cũ vẫn giữ các dạng lịch sử.
+export const AUTHORING_CATALOG=Object.freeze({
+  exercise:['mcq','multi','short_answer','gapfill','dropdown'],
+  survey:['mcq','multi','short_answer','gapfill','dropdown','reflection','self_reported_score']
+});
+
 const legacySentenceLines={
   '56000000-0000-4000-8400-000000000004':[
     {title:'Task Response:',parts:['Yêu cầu người viết phải trả lời đúng ',' và ','.']},
@@ -58,6 +64,22 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   if(Object.keys(gradingKey.groups).length) throw new FormAuthoringError('DRAFT_TYPE_NOT_ALLOWED','Chưa hỗ trợ chấm theo nhóm ngoài các phiếu hiện có.');
   const items=definition.blocks.flatMap(block=>block.items),byId=new Map(items.map(item=>[item.itemVersionId,item]));
   const missing=[];
+  for(const block of definition.blocks) if(block.kind) for(const item of block.items) {
+    const type=authoringType(item);
+    if(!AUTHORING_CATALOG[block.kind].includes(type)) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
+      'Câu '+item.position+' không thuộc danh mục '+(block.kind==='survey'?'Khảo sát':'Bài tập')+'. Giữ nội dung và chuyển câu sang phần phù hợp.');
+    if(!item.skillCodes.length || item.skillCodes.some(code=>!['general','listening','reading','speaking','writing'].includes(code)))
+      throw new FormAuthoringError('DRAFT_SKILL_REQUIRED','Câu '+item.position+': hãy chọn Kỹ năng, hoặc chủ động chọn Chung.');
+    if(block.kind==='survey'&&(item.graderType!=='none'||item.maxScore!==0||rawKey.items?.[item.itemVersionId]))
+      throw new FormAuthoringError('DRAFT_SURVEY_NOT_SCORED','Khảo sát chỉ ghi nhận thông tin; chuyển đáp án sang đáp án tham khảo trước khi lưu.');
+    if(block.kind==='exercise'&&item.graderType==='none')
+      throw new FormAuthoringError('DRAFT_EXERCISE_GRADER_REQUIRED','Câu '+item.position+' trong Bài tập cần luật chấm.');
+    if(block.kind==='exercise'&&type==='multi') {
+      const count=gradingKey.items[item.itemVersionId]?.expectedOptionIds?.length;
+      if(count&&item.interactionConfig.maxSelections!==count) throw new FormAuthoringError('DRAFT_SELECTION_LIMIT_MISMATCH',
+        'Câu '+item.position+': giới hạn chọn phải bằng số đáp án đúng.');
+    }
+  }
   for(const item of items) {
     const type=authoringType(item);
     const allowed={none:AUTHORING_TYPES.map(t=>t.code),exact_option:['mcq','dropdown'],
@@ -112,6 +134,7 @@ export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) 
     if(dependency) item.interactionConfig.visibleWhenItemVersionId=ids.get(dependency);
   }
   gradingKey.items=Object.fromEntries(Object.entries(gradingKey.items).map(([id,key])=>[ids.get(id),key]));
+  if(gradingKey.savedExerciseKeys)gradingKey.savedExerciseKeys=Object.fromEntries(Object.entries(gradingKey.savedExerciseKeys).filter(([id])=>ids.has(id)).map(([id,key])=>[ids.get(id),key]));
   if(gradingKey.referenceAnswers) gradingKey.referenceAnswers=Object.fromEntries(Object.entries(gradingKey.referenceAnswers).map(([id,value])=>[ids.get(id),value]));
   if(gradingKey.explanations) gradingKey.explanations=Object.fromEntries(Object.entries(gradingKey.explanations).map(([id,value])=>[ids.get(id),value]));
   return validateAuthoringPayload({definition,gradingKey});

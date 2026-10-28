@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { LearningError, createLearningService } from './learning-service.js';
 import { createScheduleMonitor } from './learning-schedule-reconciliation.js';
 import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
-import { createLearningDemoGrant,createLearningDraftDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
+import { createLearningDemoGrant,createLearningDraftDemoGrant,createLearningLibraryDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
 import {createLearningFormDraftService} from './learning-form-drafts.js';
 import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 import {createProgressLinkCipher} from './learning-journey-comments.js';
@@ -324,8 +324,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     }
     if(req.body?.grant) {
       const grant=verifyLearningDemoGrant(req.body.grant,demoSourceSecret);
-      if(!grant||grant.kind!=='draft') return res.status(403).json({ok:false,error:'DRAFT_PREVIEW_DENIED'});
-      res.set('Cache-Control','no-store');return res.json({ok:true,source:await drafts.demoSource({grant})});
+      if(!grant||!['draft','library'].includes(grant.kind)) return res.status(403).json({ok:false,error:'DRAFT_PREVIEW_DENIED'});
+      res.set('Cache-Control','no-store');return res.json({ok:true,source:grant.kind==='library'?await formLibrary.demoSource({grant}):await drafts.demoSource({grant})});
     }
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
@@ -565,7 +565,32 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_LIBRARY_COPY');if(!input)return;
     res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft:await formLibrary.copy({...path,...input,reviewer:req.reviewer})});
   }));
+  router.post('/teacher/form-library/:id/preview-grant',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!path)return;
+    if(!demoSourceSecret)return res.status(503).json({ok:false,message:'Chưa cấu hình xem trước.'});
+    const entry=await formLibrary.previewInfo({...path,reviewer:req.reviewer});res.set('Cache-Control','no-store');
+    return res.json({ok:true,grant:createLearningLibraryDemoGrant({entry,reviewer:req.reviewer,secret:demoSourceSecret})});
+  }));
+  router.get('/teacher/form-publications',authenticate,asyncRoute(async(req,res)=>{
+    res.set('Cache-Control','no-store');return res.json({ok:true,publications:await drafts.listPublications({reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-publications/from-source',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({source:z.enum(['assignment','library']),id:uuidSchema,operationId:uuidSchema}).strict(),req.body,res,'INVALID_PUBLICATION_SOURCE');if(!input)return;
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,publication:await drafts.publicationFromSource({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-publications/:id/assign',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_PUBLICATION_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema,targets:z.array(z.object({
+      classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100)
+    }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_DELIVERY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer})});
+  }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
+  router.post('/teacher/form-drafts/:id/copy',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_COPY');if(!input)return;
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft:await drafts.copyDraft({...path,...input,reviewer:req.reviewer})});
+  }));
   router.get('/teacher/form-drafts/review-queue',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.reviewQueue({...input,reviewer:req.reviewer})});
@@ -574,16 +599,17 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.getReview({...input,reviewer:req.reviewer})});
   }));
-  for(const action of ['request-review','approve','publish','preview-grant']) router.post('/teacher/form-drafts/:id/'+action,authenticate,asyncRoute(async(req,res)=>{
+  for(const action of ['request-review','approve','publish','publish-library','preview-grant']) router.post('/teacher/form-drafts/:id/'+action,authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
     const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),
       ...(action==='approve'?{expectedHash:z.string().regex(/^[0-9a-f]{64}$/)}:{}),
-      ...(action==='publish'?{operationId:uuidSchema}:{})}).strict(),req.body,res,'INVALID_DRAFT_ACTION');if(!input)return;
+      ...(['publish','publish-library'].includes(action)?{operationId:uuidSchema}:{})}).strict(),req.body,res,'INVALID_DRAFT_ACTION');if(!input)return;
     res.set('Cache-Control','no-store');
     const args={...path,...input,reviewer:req.reviewer};
     if(action==='request-review') return res.json({ok:true,draft:await drafts.requestReview(args)});
     if(action==='approve') return res.json({ok:true,draft:await drafts.approve(args)});
     if(action==='publish') return res.status(201).json({ok:true,published:await drafts.publish(args)});
+    if(action==='publish-library') return res.status(201).json({ok:true,publication:await drafts.publishLibrary(args)});
     if(!demoSourceSecret) return res.status(503).json({ok:false,message:'Chưa cấu hình xem thử.'});
     const draft=await drafts.get(args);
     if(draft.revision!==input.expectedRevision) return res.status(409).json({ok:false,error:'DRAFT_STALE',message:'Nháp đã đổi; tải và đối chiếu lại.'});

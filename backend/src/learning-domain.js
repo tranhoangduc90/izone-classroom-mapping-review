@@ -91,10 +91,10 @@ function assertResponseIdentity(definition, responses) {
       const error=new Error('Câu trả lời Nối cặp không khớp số cặp hoặc phương án.');error.code='MATCHING_RESPONSE_INVALID';error.httpStatus=400;throw error;
     }
     if (item.interactionType === 'multi_choice_group'
-      && item.interactionConfig?.maxSelections !== undefined) {
+      && (item.interactionConfig?.maxSelections !== undefined || item.layoutType === 'multiple_choice_cards')) {
       const exclusive = item.interactionConfig.exclusiveOptionId;
       if (!Array.isArray(value)
-        || value.length > item.interactionConfig.maxSelections
+        || value.length > (item.interactionConfig.maxSelections ?? item.options.length)
         || new Set(value).size !== value.length
         || value.some(optionId => !item.options.some(option => option.id === optionId))
         || (exclusive && value.includes(exclusive) && value.length > 1)) {
@@ -295,7 +295,10 @@ export function gradeLearningSubmission({ definition: inputDefinition, gradingKe
     }
   }
 
+  const surveyIds=new Set(definition.blocks.filter(block=>block.kind==='survey').flatMap(block=>block.items.map(item=>item.itemVersionId)));
   const itemResults = items.map(item => ({...resultsById.get(item.itemVersionId),
+    ...(surveyIds.has(item.itemVersionId)&&gradingKey.referenceAnswers?.[item.itemVersionId]
+      ?{expectedAnswer:gradingKey.referenceAnswers[item.itemVersionId]}:{}),
     ...(gradingKey.explanations?.[item.itemVersionId]?{explanation:gradingKey.explanations[item.itemVersionId]}:{})}));
   const typeMap = new Map();
   for (const result of itemResults) {
@@ -351,14 +354,17 @@ export function evaluateCompleteness(definitionInput, responsesInput) {
 export function buildStudentQuizResult(internalResult, definitionInput, now = new Date()) {
   const definition = parseFormDefinition(definitionInput);
   const releaseAnswers = definition.answerReleasePolicy === 'immediate';
+  const surveyIds=new Set(definition.blocks.filter(block=>block.kind==='survey').flatMap(block=>block.items.map(item=>item.itemVersionId)));
   return {
     ...internalResult,
     items: internalResult.items.map(item => {
       const copy = { ...item };
-      if (!releaseAnswers) {
+      if (!releaseAnswers && !surveyIds.has(item.itemVersionId)) {
         delete copy.expectedAnswer;delete copy.explanation;
         if(copy.slotResults)copy.slotResults=copy.slotResults.map(slot=>{const safe={...slot};delete safe.expectedAnswer;return safe;});
       }
+      // Không dựng khung đáp án rỗng cho khảo sát chưa có nội dung tham khảo.
+      if(surveyIds.has(item.itemVersionId)&&!copy.expectedAnswer){delete copy.expectedAnswer;delete copy.explanation;}
       return copy;
     }),
     answerRelease: releaseAnswers ? 'released' : 'hidden',

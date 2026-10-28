@@ -20,6 +20,7 @@ const interactionConfigSchema = z.object({
     title: z.string().trim().max(100).optional(),
     parts: z.array(z.string().max(500)).min(1).max(10)
   }).strict()).min(1).max(10).optional(),
+  blankIds: z.array(uuidSchema).min(1).max(10).optional(),
   beforeText: z.string().trim().min(1).max(500).optional(),
   afterText: z.string().trim().min(1).max(500).optional(),
   visibleWhenItemVersionId: uuidSchema.optional(),
@@ -114,6 +115,9 @@ export const formItemSchema = z.object({
   }
   if (item.layoutType === 'numbered_short_texts') {
     const { responseCount, responseLabels, sentenceLines } = item.interactionConfig;
+    if(item.interactionConfig.blankIds&&(item.interactionConfig.blankIds.length!==responseCount
+      ||new Set(item.interactionConfig.blankIds).size!==responseCount))
+      context.addIssue({code:'custom',path:['interactionConfig','blankIds'],message:'Mỗi ô trống cần mã riêng, đúng số ô.'});
     if (item.interactionType !== 'short_text' || !Number.isInteger(responseCount)) {
       context.addIssue({
         code: 'custom',
@@ -135,7 +139,7 @@ export const formItemSchema = z.object({
         message: 'Số ô nằm trong câu phải bằng responseCount.'
       });
     }
-  } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels || item.interactionConfig.sentenceLines) {
+  } else if (item.interactionConfig.responseCount || item.interactionConfig.responseLabels || item.interactionConfig.sentenceLines || item.interactionConfig.blankIds) {
     context.addIssue({
       code: 'custom',
       path: ['interactionConfig'],
@@ -193,11 +197,24 @@ export const formItemSchema = z.object({
 
 const formBlockSchema = z.object({
   blockId: uuidSchema,
+  // Không đặt default: phiên bản cũ giữ nguyên JSON/hash và chính sách chấm.
+  kind: z.enum(['exercise', 'survey']).optional(),
   checkpoint: z.number().int().min(1).max(3),
   title: z.string().trim().min(1).max(200),
   instructions: z.string().trim().max(2_000).optional().default(''),
   items: z.array(formItemSchema).min(1).max(40)
-}).strict();
+}).strict().superRefine((block, context) => {
+  if (block.kind === 'survey') for (const [index, item] of block.items.entries()) {
+    if (item.graderType !== 'none' || item.maxScore !== 0) {
+      context.addIssue({code:'custom',path:['items',index,'graderType'],
+        message:'Phần Khảo sát chỉ ghi nhận thông tin, không chấm điểm.'});
+    }
+    if (item.layoutType === 'multiple_choice_cards' && item.interactionConfig.maxSelections !== undefined) {
+      context.addIssue({code:'custom',path:['items',index,'interactionConfig','maxSelections'],
+        message:'Khảo sát cho chọn tùy số phương án phù hợp.'});
+    }
+  }
+});
 
 export const formDefinitionV1Schema = z.object({
   schemaVersion: z.literal('FormDefinitionV1'),
@@ -205,6 +222,7 @@ export const formDefinitionV1Schema = z.object({
   courseCode: codeSchema.optional(),
   title: z.string().trim().min(1).max(200),
   kind: z.enum(['reflection', 'mixed', 'quiz']),
+  instructions: z.string().max(2000).optional(),
   estimatedMinutes: z.number().int().min(1).max(120).optional(),
   answerReleasePolicy: z.enum(['hidden', 'immediate', 'teacher_release']).default('hidden'),
   blocks: z.array(formBlockSchema).min(1).max(20)
@@ -315,6 +333,8 @@ export const formGradingKeyV1Schema = z.object({
   formVersionId: uuidSchema,
   graderVersion: z.number().int().positive(),
   items: z.record(uuidSchema, privateItemKeySchema).default({}),
+  // Giữ key khi giáo viên đổi Bài tập sang Khảo sát rồi đổi lại; engine chỉ chấm items.
+  savedExerciseKeys: z.record(uuidSchema, privateItemKeySchema).optional(),
   groups: z.record(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), privateGroupKeySchema).default({}),
   explanations: z.record(uuidSchema,z.string().trim().min(1).max(2000)).optional(),
   referenceAnswers: z.record(uuidSchema, z.array(z.string().trim().min(1).max(300)).min(1).max(10)).optional()
@@ -331,7 +351,7 @@ export const scoreResponseSchema = z.object({
 
 export const responseValueSchema = z.union([
   z.string().max(12_000),
-  z.array(z.string().max(2_000)).min(1).max(10),
+  z.array(z.string().max(2_000)).min(1).max(40),
   scoreResponseSchema
 ]);
 

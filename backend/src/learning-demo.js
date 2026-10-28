@@ -272,16 +272,17 @@ export function createLearningDemoApp({ pool, fetchSource, allowedOrigin, grantS
         return res.json({ ok: true, existing: true,
           run: { publicToken: existing.rows[0].public_token } });
       }
-      const source = await fetchSource(grant.kind==='draft'?{grant:req.body.grant}:grant.publicToken);
+      const source = await fetchSource(['draft','library'].includes(grant.kind)?{grant:req.body.grant}:grant.publicToken);
       const mismatch=grant.kind==='draft'
         ?source.sourceDraftId!==grant.draftId||source.sourceRevision!==grant.revision||source.contentHash!==grant.contentHash
+        :grant.kind==='library'?source.sourceLibraryId!==grant.entryId||source.sourceRevision!==grant.revision||source.contentHash!==grant.contentHash
         :source.sourceAssignmentId!==grant.assignmentId||source.definitionHash!==grant.definitionHash;
       if (mismatch) {
         return res.status(409).json({ ok: false, error: 'SOURCE_CHANGED',
           message: 'Phiếu nguồn đã thay đổi. Hãy mở lại dashboard giảng viên.' });
       }
       return res.status(201).json({ ok: true, existing: false,
-        run: await createRun(grant.kind==='draft'?grant.draftId:grant.publicToken, source) });
+        run: await createRun(grant.kind==='draft'?grant.draftId:grant.kind==='library'?grant.entryId:grant.publicToken, source) });
     }
     catch (error) { return next(error); }
   });

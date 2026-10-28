@@ -8,10 +8,11 @@ import {createPGlitePool,initializeLearningDemoDatabase} from '../src/learning-d
 import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {createLearningFormLibrary} from '../src/learning-form-library.js';
 import {previewFormImport} from '../src/learning-form-import.js';
+import {createLearningLibraryDemoGrant,verifyLearningDemoGrant} from '../src/learning-demo-grant.js';
 test('Kho phiếu: không tự coi phiếu đã dùng là chuẩn; bản chụp riêng và retry đúng nguồn',async()=>{
  const db=new PGlite();try{
   await initializeLearningDemoDatabase(db);
-  for(const f of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql'])await db.exec(await readFile(new URL('../ops/learning-migrations/'+f,import.meta.url),'utf8'));
+  for(const f of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql','202610280001_form_publications.sql'])await db.exec(await readFile(new URL('../ops/learning-migrations/'+f,import.meta.url),'utf8'));
   await db.exec(`ALTER TABLE mapping.reviewer_account ADD COLUMN role text DEFAULT 'teacher';
    INSERT INTO mapping.classroom_course_mapping VALUES(1294,'Lớp giả','approved',NULL,NULL);
    INSERT INTO mapping.reviewer_account(email,status) VALUES('owner@example.test','active'),('other@example.test','active');
@@ -29,6 +30,14 @@ test('Kho phiếu: không tự coi phiếu đã dùng là chuẩn; bản chụp 
   await assert.rejects(()=>library.store({...input,scope:'izone',operationId:randomUUID()}),e=>e.code==='LIBRARY_APPROVAL_DENIED');
   await db.query("INSERT INTO learning.progress_log_admin(reviewer_email,status,grant_reference) VALUES($1,'active','Explicit test fixture authority')",[reviewer.email]);
   const shared=await library.store({...input,scope:'izone',operationId:randomUUID()});
+  const preview=await library.previewInfo({id:shared.id,reviewer:other}),secret='test-library-preview-secret-only-not-production';
+  const token=createLearningLibraryDemoGrant({entry:preview,reviewer:other,secret}),grant=verifyLearningDemoGrant(token,secret);
+  assert.equal(grant.kind,'library');assert.equal(grant.entryId,shared.id);
+  const source=await library.demoSource({grant});assert.equal(source.sourceLibraryId,shared.id);assert.equal(source.title,draft.definition.title);
+  await assert.rejects(()=>library.demoSource({grant:{...grant,contentHash:'0'.repeat(64)}}),e=>e.code==='LIBRARY_PREVIEW_STALE');
+  await db.query("UPDATE mapping.reviewer_account SET status='inactive' WHERE email=$1",[other.email]);
+  await assert.rejects(()=>library.demoSource({grant}),e=>e.code==='LIBRARY_PREVIEW_DENIED');
+  await db.query("UPDATE mapping.reviewer_account SET status='active' WHERE email=$1",[other.email]);
   assert.equal((await library.list({scope:'izone',reviewer:other,skill:'speaking'})).length,1);
   const request={id:shared.id,classId:'1294',sessionNumber:12,operationId:randomUUID(),reviewer:other};
   const copy=await library.copy(request),retry=await library.copy(request);assert.equal(copy.id,retry.id);

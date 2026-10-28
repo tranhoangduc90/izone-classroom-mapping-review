@@ -3,7 +3,7 @@ import { readCheckpointAttendance, recordCheckpointAttendance } from './learning
 import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule } from './learning-schedule-plan.js';
 import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
-import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline } from './learning-submission-deadline.js';
+import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
 import { withTransaction } from './db.js';
@@ -100,14 +100,14 @@ function studentFeedbackDefinition(definitionInput, override) {
 }
 
 function gradeCheckpoint(definition, gradingKey, block, responses) {
-  if (definition.answerReleasePolicy !== 'immediate' || !block) return null;
+  if (!block || (definition.answerReleasePolicy !== 'immediate' && block.kind !== 'survey')) return null;
   const scopedDefinition = { ...definition, blocks: [block] };
   const result = gradeLearningSubmission({
     definition: scopedDefinition,
     gradingKey,
     responses: asObject(responses)
   });
-  return result.summary.maxScore > 0
+  return result.summary.maxScore > 0 || block.kind === 'survey'
     ? buildStudentQuizResult(result, scopedDefinition)
     : null;
 }
@@ -215,7 +215,8 @@ function normalizeJourneyTestSources(value) {
 }
 
 function buildStudentCourseJourney(row) {
-  const sessions = asArray(row.sessions);
+  const sessions = asArray(row.sessions).map(({submissionWindowSource,...session})=>({...session,
+    ...(submissionWindowSource?{submissionWindow:submissionWindowFromRow(submissionWindowSource)}:{})}));
   const reports = asArray(row.reports);
   const attendedStatuses = new Set(['self_confirmed', 'teacher_confirmed']);
   return {
@@ -803,7 +804,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const session = journey.sessions.find(item => item.sessionNumber === input.sessionNumber);
       if (!session) throw new LearningError('JOURNEY_SESSION_NOT_FOUND', 'Không tìm thấy buổi học trong hành trình.', 404);
       const hasSubmission = ['complete','incomplete'].includes(session.completeness);
-      if (!hasSubmission && session.sessionComment) return {
+      if (!hasSubmission && (session.sessionComment || session.testResult)) return {
         classId:journey.class.classId,student:journey.student,sessionNumber:input.sessionNumber,
         sessionDate:session.sessionDate,status:session.assignmentId?'not_submitted':'no_assignment',
         definition:null,responses:{},gradingItems:[],sessionComment:session.sessionComment,
@@ -1337,10 +1338,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const access = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
         [assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
       assertSingleRow(access,'ASSIGNMENT_ACCESS_DENIED','Không tìm thấy phiếu trong phạm vi được cấp quyền.',404);
-      const definition = await pool.query(`SELECT version.public_definition FROM learning.form_assignment AS assignment
-        JOIN learning.form_version AS version ON version.id = assignment.form_version_id WHERE assignment.id = $1::uuid;`,[assignmentId]);
+      const definition = await pool.query(`SELECT version.public_definition,grading.private_definition FROM learning.form_assignment AS assignment
+        JOIN learning.form_version AS version ON version.id = assignment.form_version_id
+        LEFT JOIN learning.form_grading_key grading ON grading.form_version_id=version.id WHERE assignment.id = $1::uuid;`,[assignmentId]);
       const students = await pool.query(fetchQuestionAnalyticsSql,[assignmentId]);
-      return buildQuestionAnalytics({assignmentId,definition:definition.rows[0].public_definition,students:students.rows});
+      return buildQuestionAnalytics({assignmentId,definition:asObject(definition.rows[0].public_definition),
+        gradingKey:asObject(definition.rows[0].private_definition),students:students.rows});
     },
 
     async getTeacherDashboard({ assignmentId, reviewer }) {

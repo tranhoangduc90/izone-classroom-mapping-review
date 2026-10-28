@@ -5,6 +5,7 @@ import {validateAuthoringPayload,FormAuthoringError} from './learning-form-autho
 import {sha256,stableStringify} from './learning-domain.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {decorateSchedule} from './learning-schedule-plan.js';
+import {createLearningFormPublications} from './learning-form-publications.js';
 import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
 
@@ -56,6 +57,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
       definitionHash:current.definition_hash,rosterCount:current.roster_count,blockCount:current.block_count,replayed};
   }
   return {
+    ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader}),
     async reviewQueue({classId,reviewer}) {
       await authorizeClass(pool,classId,reviewer);
       const result=await pool.query(`SELECT * FROM learning.form_draft WHERE erp_course_class_id=$1::bigint

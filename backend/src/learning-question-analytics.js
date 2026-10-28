@@ -1,6 +1,6 @@
 // Nhận một bài hiện hành mỗi học viên và lần chấm hoàn tất mới nhất, trả thống kê xác định.
 // Câu mở/tự khai/điều kiện ẩn không biến thành câu sai; không gọi AI hoặc thay dữ liệu gốc.
-export function buildQuestionAnalytics({ assignmentId, definition, students, capturedAt = new Date().toISOString() }) {
+export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = null, students, capturedAt = new Date().toISOString() }) {
   if (new Set(students.map(s=>s.studentRef)).size !== students.length) throw new Error('ANALYTICS_DUPLICATE_STUDENT');
   const items = definition.blocks.flatMap(block => block.items);
   const summaries = items.map(item => {
@@ -8,7 +8,7 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
     // Câu điền từ có đáp án dùng kết quả máy chủ; câu chỉ đối chiếu vẫn không tính sai.
     const scoredText=item.graderType==='accepted_text'&&item.interactionType==='short_text';
     const objective = item.maxScore > 0 && (textSlots || scoredText || item.graderType === 'exact_option'
-      && item.interactionType === 'single_choice');
+      && item.interactionType === 'single_choice' || ['exact_option_set','exact_sequence'].includes(item.graderType));
     const counts = { roster: students.length, submitted:0, visible:0, hidden:0,
       unanswered:0, answered:0, graded:0, correct:0, incorrect:0, pending:0, manual:0, ungraded:0 };
     const choices = new Map((item.options || []).map(option => [option.id,{optionId:option.id,label:option.label,count:0,incorrect:0}]));
@@ -42,7 +42,12 @@ export function buildQuestionAnalytics({ assignmentId, definition, students, cap
       studentResults.push({studentRef:student.studentRef,name:student.name,discriminator:student.discriminator||'',submissionId:student.submissionId,
         answered,verdict,optionIds:values.filter(id=>choices.has(id))});
     }
+    // Hàm này chỉ được gọi sau kiểm quyền giáo viên; không dùng output cho endpoint học viên.
+    const key=gradingKey?.items?.[item.itemVersionId],optionLabel=id=>(item.options||[]).find(option=>option.id===id)?.label||id;
+    const correctAnswer=key?.expectedOptionId?[optionLabel(key.expectedOptionId)]:key?.expectedOptionIds?.map(optionLabel)
+      ||key?.accepted||key?.acceptedBySlot||null;
     return {itemVersionId:item.itemVersionId,position:item.position,prompt:item.prompt,
+      options:(item.options||[]).map(option=>({...option})),correctAnswer,
       interactionType:item.interactionType,objective,...(textSlots?{gradingUnit:'text_slots'}:{}),counts,
       errorRate:counts.graded ? counts.incorrect/counts.graded : null,
       choices:[...choices.values()].sort((a,b)=>b.incorrect-a.incorrect || b.count-a.count),students:studentResults};

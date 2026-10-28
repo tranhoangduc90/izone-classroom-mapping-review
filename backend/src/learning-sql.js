@@ -613,6 +613,14 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
     course.erp_class_name_snapshot AS class_name,
+    CASE WHEN EXISTS(SELECT 1 FROM mapping.erp_class_membership_snapshot WHERE erp_course_class_id=course.erp_course_class_id)
+      THEN (SELECT count(DISTINCT review.erp_student_contact_id)::integer FROM mapping.student_mapping_review AS review
+        WHERE review.erp_course_class_id=course.erp_course_class_id AND review.status<>'superseded'
+          AND EXISTS(SELECT 1 FROM mapping.erp_class_membership_snapshot AS membership
+            WHERE membership.erp_course_class_id=review.erp_course_class_id AND membership.erp_student_contact_id=review.erp_student_contact_id
+              AND COALESCE(to_jsonb(membership)->>'source_state','active')='active'
+              AND lower(trim(COALESCE(to_jsonb(membership)->>'registration_status',''))) NOT IN ('dropped','on_hold')))
+      ELSE NULL END AS student_count,
     grant_snapshot.value->>'class_status_snapshot' AS class_status,
     grant_snapshot.value->>'access_source' AS access_source
   FROM mapping.classroom_course_mapping AS course
@@ -1176,6 +1184,13 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
       OR session_numbers.session_number = ANY(plan.test_session_numbers)
       THEN 'test' ELSE 'lesson' END AS session_kind,
     assignment.status AS assignment_status,
+    CASE WHEN assignment.id IS NULL THEN NULL ELSE jsonb_build_object(
+      'status',assignment.status,'opens_at',assignment.opens_at,'closes_at',assignment.closes_at,
+      'extension_closes_at',assignment.extension_closes_at,'auto_submission_threshold_at',assignment.auto_submission_threshold_at,
+      'auto_submission_closes_at',assignment.auto_submission_closes_at,'server_now',clock_timestamp(),
+      'complete_students',(SELECT count(DISTINCT completed.student_ref) FROM learning.submission AS completed
+        WHERE completed.assignment_id=assignment.id AND completed.completeness='complete')
+    ) END AS submission_window_source,
     (SELECT date_item->>'date' FROM jsonb_array_elements(COALESCE(plan.session_dates, '[]'::jsonb)) AS date_item
       WHERE (date_item->>'sessionNumber')::integer = session_numbers.session_number
       LIMIT 1) AS session_date,
@@ -1300,6 +1315,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     'sessionKind', session_kind,
     'title', title,
     'assignmentStatus', assignment_status,
+    'submissionWindowSource',submission_window_source,
     'dataOrigin', data_origin,
     'attemptStatus', attempt_status,
     'completeness', completeness,
