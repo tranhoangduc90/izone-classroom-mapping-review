@@ -34,3 +34,30 @@ test('Một ô trống giữ đúng phần chữ trước/sau, không tự thêm
   {text:source,requestId,sourceHash:hash});
  const item=preview.payload.definition.blocks[0].items[0];assert.equal(item.interactionConfig.responseCount,1);assert.equal(item.graderType,'none');
 });
+
+test('Thẻ18 giữ hướng dẫn lời giải đáp án thay thế và thứ tự nguồn trong một nháp',()=>{
+ const source='Complete: The sky is [___].\nĐáp án: blue / azure\nGiải thích: Both words describe the sky.\n\n'+text;
+ const hash=createHash('sha256').update(source).digest('hex');
+ const gap={sourceQuote:source.split('\n\n')[0],type:'gapfill',prompt:'Complete:',before:'The sky is ',after:'.',
+  helpText:'Complete:',acceptedAnswers:['blue','azure'],answerQuote:'Đáp án: blue / azure',explanation:'Both words describe the sky.'};
+ const preview=validateAiImportResult({requestId,sourceHash:hash,questions:[question,gap]},{text:source,requestId,sourceHash:hash});
+ const items=preview.payload.definition.blocks.flatMap(b=>b.items),key=preview.payload.gradingKey;
+ assert.equal(items[0].prompt,'Complete:');assert.equal(items[0].helpText,'Complete:');
+ assert.deepEqual(key.items[items[0].itemVersionId].acceptedBySlot,[['blue','azure']]);
+ assert.equal(key.explanations[items[0].itemVersionId],'Both words describe the sky.');assert.equal(items[1].prompt,question.prompt);
+ assert.throws(()=>validateAiImportResult({requestId,sourceHash:hash,questions:[{...gap,explanation:'Invented explanation'}]},{text:source,requestId,sourceHash:hash}),e=>e.code==='AI_IMPORT_UNGROUNDED');
+ assert.throws(()=>validateAiImportResult({requestId,sourceHash:hash,questions:[{...gap,acceptedAnswers:['purple']}]},{text:source,requestId,sourceHash:hash}),e=>e.code==='AI_IMPORT_ANSWER_UNVERIFIED');
+});
+
+test('Thẻ18 cảnh báo thiếu key được giữ cùng câu khi lưu nháp',()=>{
+ const preview=validateAiImportResult({requestId,sourceHash,questions:[{...question,answer:'',answerQuote:''}]},context);
+ const item=preview.payload.definition.blocks[0].items[0],review=preview.payload.gradingKey.importReviews[item.itemVersionId];
+ assert.equal(review.keyStatus,'missing');assert.equal(review.sourceQuote,text);assert.equal(review.reviewedContent,undefined);
+});
+
+test('Thẻ18 key mâu thuẫn giữ cảnh báo và không chọn một đáp án để chấm',()=>{
+ const source=text+'\nĐáp án: A',hash=createHash('sha256').update(source).digest('hex');
+ const preview=validateAiImportResult({requestId,sourceHash:hash,questions:[{...question,sourceQuote:source}]},{text:source,requestId,sourceHash:hash});
+ const item=preview.payload.definition.blocks[0].items[0];assert.equal(preview.payload.gradingKey.items[item.itemVersionId],undefined);
+ assert.equal(preview.payload.gradingKey.importReviews[item.itemVersionId].keyStatus,'conflict');assert.ok(preview.warnings.length);
+});

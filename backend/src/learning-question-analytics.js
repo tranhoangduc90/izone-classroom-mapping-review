@@ -48,6 +48,9 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
       ||key?.accepted||key?.acceptedBySlot||null;
     return {itemVersionId:item.itemVersionId,position:item.position,prompt:item.prompt,
       options:(item.options||[]).map(option=>({...option})),correctAnswer,
+      correctOptionIds:key?.expectedOptionId?[key.expectedOptionId]:key?.expectedOptionIds||[],
+      referenceAnswer:gradingKey?.referenceAnswersBySlot?.[item.itemVersionId]||gradingKey?.referenceAnswers?.[item.itemVersionId]||null,
+      explanation:gradingKey?.explanations?.[item.itemVersionId]||'',
       interactionType:item.interactionType,objective,...(textSlots?{gradingUnit:'text_slots'}:{}),counts,
       errorRate:counts.graded ? counts.incorrect/counts.graded : null,
       choices:[...choices.values()].sort((a,b)=>b.incorrect-a.incorrect || b.count-a.count),students:studentResults};
