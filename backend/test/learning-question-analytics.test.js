@@ -10,6 +10,7 @@ test('R09: phiếu lịch sử không khai báo options vẫn thống kê đư�
   const teacher=buildQuestionAnalytics({assignmentId:'a',definition:{formVersionId:'v',blocks:[{items:[question]}]},
     gradingKey:{items:{legacy:{expectedOptionId:'A'}}},students:[]});
   assert.deepEqual(teacher.items[0].correctAnswer,['Đáp án nguồn']);
+  assert.deepEqual(teacher.items[0].correctOptionIds,['A']);
 });
 
 const objective={itemVersionId:'q1',position:1,prompt:'Chọn đáp án',interactionType:'single_choice',graderType:'exact_option',required:true,maxScore:1,
