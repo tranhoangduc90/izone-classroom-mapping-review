@@ -15,8 +15,10 @@ test('AI chỉ chuyển nội dung có sẵn; khóa đáp án ở payload nháp 
  const missing=validateAiImportResult({requestId,sourceHash,questions:[{...question,answer:'',answerQuote:''}]},context);
  assert.equal(missing.missingAnswers.length,1);assert.equal(missing.warnings.length,1);
 });
-test('AI chặn key đoán, phương án mới, quote trùng và kết quả lệch nguồn/yêu cầu',()=>{
- for(const mutation of [{answer:'A',answerQuote:'Đáp án: A'},{options:[{id:'A',label:'newly invented'}]},
+test('AI bỏ key đoán, chặn phương án mới, quote trùng và kết quả lệch nguồn/yêu cầu',()=>{
+ const guessed=validateAiImportResult({requestId,sourceHash,questions:[{...question,answer:'A',answerQuote:'Đáp án: A'}]},context);
+ const item=guessed.payload.definition.blocks[0].items[0];assert.equal(guessed.payload.gradingKey.items[item.itemVersionId],undefined);assert.ok(guessed.warnings.length);
+ for(const mutation of [{options:[{id:'A',label:'newly invented'}]},
   {sourceQuote:'Not present'}])assert.throws(()=>validateAiImportResult({requestId,sourceHash,questions:[{...question,...mutation}]},context));
  assert.throws(()=>validateAiImportResult({requestId:randomUUID(),sourceHash,questions:[question]},context),e=>e.code==='AI_IMPORT_SOURCE_MISMATCH');
  assert.throws(()=>validateAiImportResult({requestId,sourceHash,questions:[question,question]},context),e=>e.code==='AI_IMPORT_UNGROUNDED');
@@ -46,7 +48,8 @@ test('Thẻ18 giữ hướng dẫn lời giải đáp án thay thế và thứ t
  assert.deepEqual(key.items[items[0].itemVersionId].acceptedBySlot,[['blue','azure']]);
  assert.equal(key.explanations[items[0].itemVersionId],'Both words describe the sky.');assert.equal(items[1].prompt,question.prompt);
  assert.throws(()=>validateAiImportResult({requestId,sourceHash:hash,questions:[{...gap,explanation:'Invented explanation'}]},{text:source,requestId,sourceHash:hash}),e=>e.code==='AI_IMPORT_UNGROUNDED');
- assert.throws(()=>validateAiImportResult({requestId,sourceHash:hash,questions:[{...gap,acceptedAnswers:['purple']}]},{text:source,requestId,sourceHash:hash}),e=>e.code==='AI_IMPORT_ANSWER_UNVERIFIED');
+ const unsupported=validateAiImportResult({requestId,sourceHash:hash,questions:[{...gap,acceptedAnswers:['purple']}]},{text:source,requestId,sourceHash:hash});
+ const unkeyed=unsupported.payload.definition.blocks[0].items[0];assert.equal(unsupported.payload.gradingKey.items[unkeyed.itemVersionId],undefined);assert.ok(unsupported.warnings.length);
 });
 
 test('Thẻ18 cảnh báo thiếu key được giữ cùng câu khi lưu nháp',()=>{
