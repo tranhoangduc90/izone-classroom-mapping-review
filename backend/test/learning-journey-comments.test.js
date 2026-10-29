@@ -18,6 +18,8 @@ const operation=()=>crypto.randomUUID();
 test('Hành trình riêng và nhận xét: dữ liệu, quyền, phiên bản, retry và không ghi điểm danh',async t=>{
  const {database}=await setupDatabase();t.after(()=>database.close());
  await database.exec(await readFile(new URL('../ops/learning-migrations/202610070001_student_journey_comments.sql',import.meta.url),'utf8'));
+ // Fixture nhận xét cũng cần các cột gia hạn/thu hồi mà truy vấn Journey hiện hành đã đọc.
+ await database.exec(await readFile(new URL('../ops/learning-migrations/202610220001_assignment_management.sql',import.meta.url),'utf8'));
  await database.exec(`INSERT INTO learning.class_journey_plan (erp_course_class_id,total_sessions,test_session_numbers,
    revision,confirmed_by_email,confirmed_at) VALUES (2139,3,ARRAY[2],1,'teacher@example.test',now())`);
  const pool=poolFrom(database),cipher=createProgressLinkCipher({keys}),

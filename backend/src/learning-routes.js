@@ -646,7 +646,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     keyGenerator:req=>req.reviewer.email,message:{ok:false,error:'AI_IMPORT_RATE_LIMIT',message:'Tối đa ba lượt nhập AI mỗi phút; hãy chờ rồi thử lại.'}});
   router.post('/teacher/form-drafts/:id/ai-import-preview',authenticate,aiImportLimiter,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
-    const input=parseOrReply(z.object({text:z.string().min(1).max(20000),expectedRevision:z.number().int().positive()}).strict(),req.body,res,'INVALID_AI_IMPORT');if(!input)return;
+    const input=parseOrReply(z.object({text:z.string().min(1).max(60000),expectedRevision:z.number().int().positive()}).strict(),req.body,res,'INVALID_AI_IMPORT');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,preview:await drafts.previewAiImport({...path,...input,reviewer:req.reviewer})});
   }));
   router.post('/teacher/form-drafts/:id/import-preview',authenticate,asyncRoute(async(req,res)=>{
