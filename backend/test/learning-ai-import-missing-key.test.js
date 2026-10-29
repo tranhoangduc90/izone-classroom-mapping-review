@@ -6,7 +6,7 @@ import {validateAiImportResult,previewAiImport} from '../src/learning-ai-import.
 const digest=text=>createHash('sha256').update(text).digest('hex');
 test('thiếu key vẫn chuyển câu và bỏ đáp án/lời giải AI không xác minh được',()=>{
  const text='Chọn từ phù hợp\nA. apple\nB. book',requestId=randomUUID(),sourceHash=digest(text);
- const preview=validateAiImportResult({requestId,sourceHash,questions:[{sourceQuote:text,type:'mcq',prompt:'Chọn từ phù hợp',options:[{id:'A',label:'apple'},{id:'B',label:'book'}],answer:'B',answerQuote:'Đáp án: B',explanation:'AI đoán lời giải không có trong nguồn'}]},{text,requestId,sourceHash});
+ const preview=validateAiImportResult({requestId,sourceHash,questions:[{sourceQuote:text,kind:'exercise',type:'mcq',prompt:'Chọn từ phù hợp',options:[{id:'A',label:'apple'},{id:'B',label:'book'}],answer:'B',answerQuote:'Đáp án: B',explanation:'AI đoán lời giải không có trong nguồn'}]},{text,requestId,sourceHash});
  const item=preview.payload.definition.blocks[0].items[0],key=preview.payload.gradingKey;
  assert.equal(item.prompt,'Chọn từ phù hợp');assert.deepEqual(item.options.map(o=>o.label),['apple','book']);
  assert.equal(key.items[item.itemVersionId],undefined);assert.equal(key.explanations?.[item.itemVersionId],undefined);
@@ -14,15 +14,15 @@ test('thiếu key vẫn chuyển câu và bỏ đáp án/lời giải AI không 
 });
 test('ô điền thiếu key giữ câu và ô, đáp án thay thế/lời giải để trống',()=>{
  const text='Complete: The sky is [___].',requestId=randomUUID(),sourceHash=digest(text);
- const preview=validateAiImportResult({requestId,sourceHash,questions:[{sourceQuote:text,type:'gapfill',prompt:'Complete:',before:'The sky is ',after:'.',acceptedAnswers:['blue'],answerQuote:'Đáp án: blue',explanation:'Invented explanation'}]},{text,requestId,sourceHash});
+ const preview=validateAiImportResult({requestId,sourceHash,questions:[{sourceQuote:text,kind:'exercise',type:'gapfill',prompt:'Complete:',before:'The sky is ',after:'.',acceptedAnswers:['blue'],answerQuote:'Đáp án: blue',explanation:'Invented explanation'}]},{text,requestId,sourceHash});
  const item=preview.payload.definition.blocks[0].items[0],key=preview.payload.gradingKey;
- assert.equal(item.interactionConfig.responseCount,1);assert.equal(item.graderType,'none');
+ assert.equal(item.interactionConfig.responseCount,1);assert.equal(item.graderType,'accepted_text_sequence');
  assert.equal(key.items[item.itemVersionId],undefined);assert.equal(key.explanations?.[item.itemVersionId],undefined);
  assert.equal(key.importReviews[item.itemVersionId].keyStatus,'missing');
 });
 function responseFor(text,request){
  const body=JSON.parse(request.body),requestId=body.prompt.match(/requestId=([0-9a-f-]+)/u)[1];
- return {requestId,sourceHash:digest(text),questions:[{sourceQuote:text,type:'reflection',prompt:text}]};
+ return {requestId,sourceHash:digest(text),questions:[{sourceQuote:text,kind:'survey',type:'reflection',prompt:text}]};
 }
 test('nhập AI yêu cầu đúng Gemini 3.8 Flash và trả model đã dùng',async()=>{
  const text='Em thấy nội dung nào hữu ích nhất?',requests=[];
