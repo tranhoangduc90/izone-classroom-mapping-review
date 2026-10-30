@@ -17,9 +17,11 @@ let inFlight=0;
 const AI_IMPORT_MODEL_ID='gemini-3.8-flash';
 const quote=value=>'"'+String(value??'').replaceAll('"','""')+'"';
 const choiceIds=value=>value.split(/\s*[,;/|]\s*/u).map(id=>id.trim()).filter(Boolean);
+const keyLine=/^(?:đáp án(?: tham khảo)?|answer|key)\s*[:：]\s*(.+)$/iu;
 function verifiedKey(q){
- const line=q.answerQuote.match(/^(?:đáp án|answer|key)\s*[:：]\s*(.+)$/iu)?.[1];
+ const line=q.answerQuote.match(keyLine)?.[1];
  if(!line||!q.sourceQuote.includes(q.answerQuote))return false;
+ if(q.kind==='survey'&&['reflection','self_reported_score'].includes(q.type))return q.answer===line.trim();
  if(['short_answer','gapfill'].includes(q.type))return q.acceptedAnswers.length>0&&JSON.stringify(line.split(/\s*(?:\/|\||;)\s*/u).map(v=>v.trim()))===JSON.stringify(q.acceptedAnswers);
  const ids=choiceIds(line),answer=choiceIds(q.answer);
  return answer.length>0&&new Set(answer).size===answer.length&&JSON.stringify(ids)===JSON.stringify(answer)&&answer.every(id=>q.options.some(o=>o.id===id))&&(['multi','speaking_checklist'].includes(q.type)||answer.length===1);
@@ -55,7 +57,7 @@ export function validateAiImportResult(raw,{text,requestId,sourceHash,definition
    config={responseCount:1,sentenceLines:[{parts:[q.before,q.after]}]};
   }
   if(q.acceptedAnswers.length){
-   const match=q.answerQuote.match(/^(?:đáp án|answer|key)\s*[:：]\s*(.+)$/iu);
+   const match=q.answerQuote.match(keyLine);
    const accepted=match?.[1].split(/\s*(?:\/|\||;)\s*/u).map(s=>s.trim());
    if(!['gapfill','short_answer'].includes(q.type)||!q.sourceQuote.includes(q.answerQuote)||JSON.stringify(accepted)!==JSON.stringify(q.acceptedAnswers))
     throw fail('AI_IMPORT_ANSWER_UNVERIFIED','Đáp án thay thế phải khớp nguyên dòng key nguồn của câu điền từ.',502);
@@ -81,9 +83,10 @@ export function validateAiImportResult(raw,{text,requestId,sourceHash,definition
   if(multi&&!objective)delete item.interactionConfig.maxSelections;
   if(source.type==='short_answer'){item.interactionType='short_text';item.layoutType='plain_prompt';item.pedagogicalTypeCode='sentence_completion';}
   item.graderType=objective?(choice?(multi?'exact_option_set':'exact_option'):source.type==='gapfill'?'accepted_text_sequence':'accepted_text'):'none';item.maxScore=objective?1:0;
-  const sourceKeys=[...source.sourceQuote.matchAll(/^(?:đáp án|answer|key)\s*[:：]\s*(.+)$/gimu)].map(match=>match[1].trim()),conflicting=new Set(sourceKeys).size>1;
+  const sourceKeys=[...source.sourceQuote.matchAll(new RegExp(keyLine.source,'gimu'))].map(match=>match[1].trim()),conflicting=new Set(sourceKeys).size>1;
   if(source.explanation){key.explanations??={};key.explanations[item.itemVersionId]=source.explanation;}
   if(source.answer&&choice){if(objective)key.items[item.itemVersionId]=multi?{graderType:'exact_option_set',expectedOptionIds:choiceIds(source.answer)}:{graderType:'exact_option',expectedOptionId:source.answer};else{key.referenceAnswers??={};key.referenceAnswers[item.itemVersionId]=choiceIds(source.answer);}}
+  if(!objective&&!choice&&source.answer){key.referenceAnswers??={};key.referenceAnswers[item.itemVersionId]=[source.answer];}
   if(source.acceptedAnswers.length){
    if(objective)key.items[item.itemVersionId]={graderType:item.graderType,...(source.type==='gapfill'?{acceptedBySlot:[source.acceptedAnswers]}:{accepted:source.acceptedAnswers}),normalization:{caseInsensitive:true,collapseWhitespace:true}};
    else if(source.type==='gapfill'){key.referenceAnswersBySlot??={};key.referenceAnswersBySlot[item.itemVersionId]=[source.acceptedAnswers];}
@@ -118,7 +121,8 @@ export async function previewAiImport({text,definition,gradingKey,fetchImpl=fetc
   'Phân loại RIÊNG TỪNG CÂU: kind=exercise nếu kiểm tra kiến thức/khả năng làm bài; kind=survey nếu hỏi cảm nhận, sở thích, tự đánh giá hoặc phản hồi cá nhân. Thiếu key KHÔNG biến Bài tập thành Khảo sát. Không tự lấy mode của câu trước hoặc mode chung của phiếu.',
   'type chỉ một trong reflection,short_answer,mcq,multi,dropdown,gapfill,self_reported_score. Nhận dạng tương tác từ yêu cầu câu: mcq chọn một, multi chọn nhiều, dropdown chỉ khi đề cần danh sách xổ xuống; short_answer câu trả lời bằng chữ kiểm tra kiến thức, reflection chia sẻ cá nhân bằng lời, gapfill ô trống nằm trong câu. Không mặc định mọi trắc nghiệm là chọn một; dùng multi nếu đề cho phép/yêu cầu nhiều phương án. Khảo sát multi không tự giới hạn 2 lựa chọn. Dạng gạch chân từ khóa đã bị gỡ; giữ nguyên đoạn đó ngoài questions. Không thể hiện được dạng bài thì để nguyên đoạn đó ngoài questions, không chuyển sai ý.',
   'Không bỏ câu hỏi chỉ vì thiếu key. Khi câu có các dòng phương án liên tiếp nhưng chưa ghi A/B/C, vẫn nhận là mcq, giữ nguyên từng dòng làm option.label và gán id A, B, C theo thứ tự. Chỉ phần đáp án/giải thích thiếu mới để trống; không bỏ cả câu hoặc tự chọn đáp án.',
-  'Câu chia sẻ cảm nhận cá nhân là survey/reflection; câu yêu cầu giải thích hoặc liệt kê kiến thức là exercise/short_answer. Những dòng chấm, dòng kẻ và các nhãn Kỹ thuật 1/Kỹ thuật 2 dưới một câu trả lời mở chỉ là khung để viết; giữ chúng trong prompt, không coi là bài gapfill nhiều ô và không bỏ câu chỉ vì thiếu đáp án mẫu.',
+  'kind và type là hai trục độc lập: câu cảm nhận cá nhân là survey, nhưng nếu yêu cầu điền một từ/cụm từ ngắn thì type=short_answer; nếu ô trống nằm trong câu thì type=gapfill. Chỉ dùng survey/reflection khi cần trả lời mở, chia sẻ bằng đoạn văn. Câu yêu cầu giải thích hoặc liệt kê kiến thức là exercise/short_answer. Những dòng chấm, dòng kẻ và các nhãn Kỹ thuật 1/Kỹ thuật 2 dưới một câu trả lời mở chỉ là khung để viết; giữ chúng trong prompt, không coi là bài gapfill nhiều ô và không bỏ câu chỉ vì thiếu đáp án mẫu.',
+  'Khảo sát có thể có dòng Đáp án tham khảo: đây chỉ là nội dung mẫu do giảng viên đưa, KHÔNG làm câu thành Bài tập. Nhận dòng Đáp án tham khảo như Đáp án/Answer/Key cho mọi dạng. Với survey/reflection hoặc survey/self_reported_score, chép nguyên phần sau dấu hai chấm vào answer (kể cả dấu /, ví dụ 7/10 hay trao đổi / thảo luận), answerQuote là nguyên dòng, acceptedAnswers=[]; không tách dấu / của văn xuôi hoặc phân số. Với các lựa chọn vẫn trả id; với điền từ vẫn dùng acceptedAnswers. Giữ lời giải nguyên văn khi có key tham khảo rõ; thiếu thì để trống.',
   'mcq/dropdown chỉ lấy answer khi trong sourceQuote có dòng key tường minh như "Đáp án: B", "Answer: B" hoặc "Key: B"; answerQuote chép đúng dòng đó, answer đúng id lựa chọn. Thiếu key hoặc không xác minh được cách gắn key cuối tài liệu thì vẫn trả câu hỏi; answer, answerQuote và explanation để chuỗi rỗng. Tuyệt đối không suy luận đáp án.',
   'gapfill chỉ hỗ trợ một ô mỗi câu trong lượt nhập này: before/after là nguyên văn hai phía ô trống, không chứa key. sourceQuote vẫn giữ nguyên. Không tự tách câu nhiều ô làm mất ngữ cảnh; để đoạn đó ngoài questions nếu chưa biểu diễn được.',
   'multi: answer là các id đúng phân cách bằng dấu phẩy, ví dụ A, C; chỉ lấy từ dòng key nguyên văn trong sourceQuote, không tự chọn. answerQuote chép nguyên dòng key. Thiếu key để answer và answerQuote rỗng. Không chuyển nhiều đáp án thành nhiều câu chọn một.',
