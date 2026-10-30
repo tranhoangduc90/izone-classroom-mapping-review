@@ -203,21 +203,21 @@ export function createLearningTestResultReader({ pool }) {
   };
   // Đọc toàn lớp bằng một round trip. LATERAL dùng cùng phép nối định danh của Journey cá nhân,
   // nên không nối theo tên và không mở một request DB riêng cho mỗi học viên.
-  reader.readClass = async ({ classId, studentRefs, testSlugs }) => {
+  reader.readClass = async ({ classId, studentRefs, testSlugs=null }) => {
     if (!/^\d{1,19}$/u.test(String(classId)) || !Array.isArray(studentRefs) || studentRefs.length > 500
       || new Set(studentRefs).size !== studentRefs.length
       || studentRefs.some(ref => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(ref))
-      || !Array.isArray(testSlugs) || testSlugs.length > 100
-      || testSlugs.some(slug => !/^(?:term-test-[1-9]\d*|mini-test-[a-z0-9-]+)$/u.test(slug))) {
+      || testSlugs!==null&&(!Array.isArray(testSlugs) || testSlugs.length > 100
+      || testSlugs.some(slug => !/^(?:term-test-[1-9]\d*|mini-test-[a-z0-9-]+)$/u.test(slug)))) {
       throw new Error('TEST_RESULT_INPUT_INVALID');
     }
-    if (!studentRefs.length || !testSlugs.length) return [];
+    if (!studentRefs.length || testSlugs?.length===0) return [];
     // Chỉ thay biểu thức cố định trong SQL của hệ thống; mọi dữ liệu vẫn là tham số.
     const scopedSql = resultSql.replaceAll('$2::uuid', 'requested_student.student_ref').replace(/;\s*$/u, '');
     const response = await pool.query(`SELECT requested_student.student_ref::text, result.*
       FROM unnest($2::uuid[]) AS requested_student(student_ref)
       CROSS JOIN LATERAL (${scopedSql}) AS result;`, [String(classId), studentRefs, testSlugs]);
-    if (!Array.isArray(response.rows) || response.rows.length > studentRefs.length * testSlugs.length) {
+    if (!Array.isArray(response.rows) || response.rows.length > studentRefs.length * (testSlugs?.length??100)) {
       throw new Error('TEST_RESULT_RESPONSE_INVALID');
     }
     const allowed = new Set(studentRefs), seen = new Set();
@@ -226,10 +226,12 @@ export function createLearningTestResultReader({ pool }) {
       const identity = `${row.student_ref}:${row.test_slug}`;
       if (!allowed.has(row.student_ref) || seen.has(identity)) throw new Error('TEST_RESULT_ROW_INVALID');
       seen.add(identity);
-      results.push({ studentRef: row.student_ref, result: decodeTestResult(row, new Set(testSlugs)) });
+      const slugs=testSlugs||response.rows.map(r=>r.test_slug).filter(slug=>/^(?:term-test-[1-9]\d*|mini-test-[a-z0-9-]+)$/u.test(slug));
+      results.push({ studentRef: row.student_ref, result: decodeTestResult(row, new Set(slugs)) });
     }
     return results;
   };
+  reader.readAllClass=input=>reader.readClass({...input,testSlugs:null});
   return reader;
 }
 const isUuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);

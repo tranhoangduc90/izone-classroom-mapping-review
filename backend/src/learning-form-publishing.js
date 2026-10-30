@@ -79,14 +79,14 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
         return dto(result.rows[0]);
       });
     },
-    async approve({id,expectedRevision,expectedHash,reviewer}) {
+    async approve({id,expectedRevision,expectedHash,reviewer,libraryOnly=false}) {
       return withTransaction(pool,async client=>{
         const row=await reviewable(client,id,reviewer,{lock:true});
         if(Number(row.revision)!==expectedRevision||row.content_hash!==expectedHash) throw fail('DRAFT_STALE','Nháp đã đổi sau khi mở bản duyệt.');
         if(row.status==='published') throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
         validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,requireAnswers:true});
         if(!await authority(client,reviewer.email,row.public_definition,row.owner_email)) throw fail('DRAFT_APPROVAL_DENIED','Bạn chưa có quyền duyệt nội dung có điểm của đúng khóa.',403);
-        await assertCourse(client,row);
+        if(!libraryOnly)await assertCourse(client,row);
         const result=await client.query(`UPDATE learning.form_draft SET status='approved',approved_hash=content_hash,
           approved_revision=revision,approved_by_email=$2,approved_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *;`,[id,reviewer.email.toLowerCase()]);
         return dto(result.rows[0]);
