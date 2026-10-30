@@ -11,8 +11,10 @@ import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 import {createProgressLinkCipher} from './learning-journey-comments.js';
 import {createLearningAssignmentManagement} from './learning-assignment-management.js';
 import {createLearningFormLibrary} from './learning-form-library.js';
+import {withAssignmentOrigins} from './learning-assignment-origin.js';
 import {createLearningPortalTestReader} from './learning-portal-tests.js';
 import {createLearningLiveUpdates} from './learning-realtime.js';
+import {registerTeacherWritingResultRoutes} from './learning-teacher-writing.js';
 import {registerStudentPortalRoutes} from './learning-student-portal.js';
 
 const uuidSchema = z.string().uuid();
@@ -407,6 +409,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   registerStudentPortalRoutes(router,{pool,service,testResultReader,limiter:journeyLimiter});
+  registerTeacherWritingResultRoutes(router,{authenticate,service,testResultReader});
   router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
     if (!input) return;
@@ -459,7 +462,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, reviewer: req.reviewer, ...options,
-      assignments:options.assignments.map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
+      assignments:(req.query.includeOrigins==='1'?await withAssignmentOrigins(pool,options.assignments):options.assignments).map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
       capabilities:{liveUpdates:realtimeEnabled} });
   }));
 
@@ -551,7 +554,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
   router.get('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({scope:z.enum(['personal','izone']).default('personal'),skill:z.enum(['','listening','reading','speaking','writing']).default('')}).strict(),req.query,res,'INVALID_LIBRARY_QUERY');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,entries:await formLibrary.list({...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
   }));
   router.get('/teacher/form-library/:id',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!input)return;
@@ -582,12 +585,22 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
   router.post('/teacher/form-publications/:id/assign',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_PUBLICATION_ID');if(!path)return;
-    const input=parseOrReply(z.object({operationId:uuidSchema,targets:z.array(z.object({
+    const input=parseOrReply(z.object({operationId:uuidSchema,origin:z.object({source:z.enum(['draft','library']),id:uuidSchema}).strict().optional(),targets:z.array(z.object({
       classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100)
     }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_DELIVERY');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer})});
   }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
+  router.post('/teacher/form-drafts/from-assignment/:id/edit',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_EDIT');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.editAssignedWorksheet({assignmentId:path.id,...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-drafts/:id/edit',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_EDIT');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.editWorksheet({...path,...input,reviewer:req.reviewer})});
+  }));
   router.post('/teacher/form-drafts/:id/copy',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_COPY');if(!input)return;
@@ -604,7 +617,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   for(const action of ['request-review','approve','publish','publish-library','preview-grant']) router.post('/teacher/form-drafts/:id/'+action,authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
     const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),
-      ...(action==='approve'?{expectedHash:z.string().regex(/^[0-9a-f]{64}$/)}:{}),
+      ...(action==='approve'?{expectedHash:z.string().regex(/^[0-9a-f]{64}$/),libraryOnly:z.boolean().optional()}:{}),
       ...(['publish','publish-library'].includes(action)?{operationId:uuidSchema}:{})}).strict(),req.body,res,'INVALID_DRAFT_ACTION');if(!input)return;
     res.set('Cache-Control','no-store');
     const args={...path,...input,reviewer:req.reviewer};
@@ -620,7 +633,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.get('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');
     if(!input) return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.list({...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
   }));
   router.get('/teacher/form-drafts/:id',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!input) return;

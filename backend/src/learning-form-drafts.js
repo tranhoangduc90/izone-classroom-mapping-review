@@ -9,6 +9,7 @@ import {previewFormImport} from './learning-form-import.js';
 import {createLearningFormPublishingService} from './learning-form-publishing.js';
 import {previewAiImport} from './learning-ai-import.js';
 import {parseFormDefinition} from './learning-contracts.js';
+import {createWorksheetEditing} from './learning-worksheet-editing.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
@@ -51,8 +52,22 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
       return {...dto(row),missingAnswers:checked.missingAnswers,replayed:row.id!==id};
     });
   }
+  const editWorksheet=createWorksheetEditing({pool,owned,dto});
   return {
     ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader}),
+    editWorksheet,
+    async editAssignedWorksheet({assignmentId,operationId,reviewer}){
+      const access=await pool.query(authorizeLearningJourneyPlanAssignmentSql,[assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
+      if(access.rowCount!==1)throw error('DRAFT_CLASS_ACCESS_DENIED','Bạn chưa được cấp quyền mở phiếu của lớp này.',403);
+      const row=(await pool.query(`SELECT draft.id FROM learning.form_delivery delivery
+        JOIN learning.form_publication p ON p.id=delivery.publication_id
+        LEFT JOIN learning.form_library_entry e ON e.id=p.source_library_id
+        JOIN learning.form_draft draft ON draft.id=COALESCE(p.source_draft_id,e.source_draft_id)
+        WHERE delivery.assignment_id=$1::uuid AND lower(draft.owner_email)=lower($2)
+        UNION ALL SELECT id FROM learning.form_draft WHERE published_assignment_id=$1::uuid AND lower(owner_email)=lower($2) LIMIT 1`,[assignmentId,reviewer.email])).rows[0];
+      if(!row)throw error('WORKSHEET_SOURCE_NOT_OWNED','Phiếu nguồn thuộc người khác; chỉ có thể tạo bản riêng để chỉnh sửa.');
+      return editWorksheet({id:row.id,operationId,reviewer});
+    },
     create,
     async copyDraft({id,classId,sessionNumber,operationId,reviewer}){
       const source=await owned(pool,id,reviewer);
@@ -84,13 +99,15 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
         sessionNumber:Number(row.session_number),title:checked.definition.title,definitionHash:sha256(stableStringify(checked.definition)),
         definition:checked.definition,gradingKey:checked.gradingKey,blockReleases:[],answerReleaseOverride:null};
     },
-    async list({classId,reviewer}) {
+    async list({classId,reviewer,worksheetHeads=false}) {
       await authorizeClass(pool,classId,reviewer);
-      const result=await pool.query(`SELECT id,erp_course_class_id,session_number,revision,status,content_hash,
-        public_definition->>'title' AS title,updated_at FROM learning.form_draft
-        WHERE erp_course_class_id=$1::bigint AND lower(owner_email)=lower($2) ORDER BY updated_at DESC,id LIMIT 100;`,[classId,reviewer.email]);
+      const result=await pool.query(`SELECT d.id,d.erp_course_class_id,d.session_number,d.revision,d.status,d.content_hash,
+        d.public_definition->>'title' AS title,d.updated_at${worksheetHeads?',COALESCE(r.worksheet_id,d.id) AS worksheet_id':''} FROM learning.form_draft d
+        ${worksheetHeads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=d.id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id':''}
+        WHERE d.erp_course_class_id=$1::bigint AND lower(d.owner_email)=lower($2)
+        ${worksheetHeads?'AND (w.id IS NULL OR w.current_draft_id=d.id)':''} ORDER BY d.updated_at DESC,d.id LIMIT 100;`,[classId,reviewer.email]);
       return result.rows.map(row=>({id:row.id,classId:String(row.erp_course_class_id),sessionNumber:Number(row.session_number),
-        revision:Number(row.revision),status:row.status,title:row.title,updatedAt:row.updated_at}));
+        revision:Number(row.revision),status:row.status,title:row.title,updatedAt:row.updated_at,...(worksheetHeads?{worksheetId:row.worksheet_id}:{})}));
     },
     async get({id,reviewer}) {
       const row=await owned(pool,id,reviewer),value=dto(row);
