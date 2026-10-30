@@ -7,7 +7,7 @@ const identity=[z.object({accessToken:z.string().regex(/^[A-Za-z0-9_-]{32,200}$/
 const writingSchema=z.union(identity.map(schema=>schema.extend({testSlug:z.string().regex(/^term-test-[1-9]\d*$/u),
   resultRef:z.string().regex(/^[0-9a-f]{64}$/u)}).strict()));
 const contextSchema=z.object({classId:z.string().regex(/^[1-9]\d{0,18}$/u)}).strict();
-const eligible=`assignment.status IN ('published','closed') AND assignment.course_code ~ '^[0-9]{2,3}$'
+const eligible=`assignment.status IN ('published','closed') AND assignment.erp_course_class_id>0
   AND EXISTS(SELECT 1 FROM learning.form_assignment_roster r WHERE r.assignment_id=assignment.id)`;
 export const portalClassesSql=`SELECT assignment.erp_course_class_id::text AS class_id,
   (array_agg(assignment.class_name_snapshot ORDER BY assignment.session_number DESC,assignment.created_at DESC))[1] AS class_name
