@@ -78,6 +78,12 @@ test('Thẻ 20 HTTP cổng lớp/tên và Writing chỉ đọc, kiểm Journey v
   const list=await request(app).get('/student/portal-classes').expect(200);assert.deepEqual(list.body.classes,[{classId:'1294',name:'IC_TEST20'}]);
   const context=await request(app).post('/student/portal-context').send({classId:'1294'}).expect(200);assert.equal(context.body.students.length,2);assert.equal(context.body.students[0].publicToken,token);
   await request(app).post('/student/portal-context').send({classId:'9999'}).expect(404);
+  // Mã khóa lịch sử hoặc chưa ghi mã khóa không được làm biến mất lớp đã phát hành.
+  for(const courseCode of ['IC2174',null]){
+    await db.query(`UPDATE learning.form_assignment SET course_code=$1 WHERE id=$2::uuid`,[courseCode,token]);
+    const legacy=await request(app).get('/student/portal-classes').expect(200);assert.equal(legacy.body.classes[0].classId,'1294');
+    const legacyContext=await request(app).post('/student/portal-context').send({classId:'1294'}).expect(200);assert.equal(legacyContext.body.students.length,2);
+  }
   const input={publicToken:token,studentRef:a,identityConfirmed:true,testSlug:source.testSlug,resultRef:source.resultRef};
   const ready=await request(app).post('/student/writing-test-result').send(input).expect(200);assert.equal(ready.body.result.readOnly,true);assert.equal(ready.headers['cache-control'],'no-store');
   await request(app).post('/student/writing-test-result').send({...input,classId:'9999'}).expect(400);
