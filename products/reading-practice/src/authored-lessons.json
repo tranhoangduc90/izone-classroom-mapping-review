@@ -538,5 +538,223 @@
         "Loại phương án sai hoặc thiếu căn cứ; chọn đúng số đáp án yêu cầu."
       ]
     }
+  },
+  {
+    "code": "67-practice-reading_c21_t3_full_test",
+    "lesson": 18,
+    "title": "Cambridge 21 Test 3 · Reading",
+    "sourceLabel": "Cambridge 21 · Test 3 · Reading",
+    "passages": [
+      {
+        "id": "p1",
+        "label": "Passage 1",
+        "title": "Saving the saiga",
+        "start": 1,
+        "end": 13,
+        "paragraphs": [
+          "p1_1",
+          "p1_2",
+          "p1_3",
+          "p1_4",
+          "p1_5",
+          "p1_6",
+          "p1_7",
+          "p1_8",
+          "p1_9"
+        ],
+        "labels": {
+          "p1_1": "1",
+          "p1_2": "2",
+          "p1_3": "3",
+          "p1_4": "4",
+          "p1_5": "5",
+          "p1_6": "6",
+          "p1_7": "7",
+          "p1_8": "8",
+          "p1_9": "9"
+        }
+      },
+      {
+        "id": "p2",
+        "label": "Passage 2",
+        "title": "The problems of getting around the city of Dar es Salaam",
+        "start": 14,
+        "end": 26,
+        "paragraphs": [
+          "p2_1",
+          "p2_2",
+          "p2_3",
+          "p2_4",
+          "p2_5",
+          "p2_6",
+          "p2_7",
+          "p2_8",
+          "p2_9",
+          "p2_10"
+        ],
+        "labels": {
+          "p2_1": "1",
+          "p2_2": "2",
+          "p2_3": "3",
+          "p2_4": "4",
+          "p2_5": "5",
+          "p2_6": "6",
+          "p2_7": "7",
+          "p2_8": "8",
+          "p2_9": "9",
+          "p2_10": "10"
+        }
+      },
+      {
+        "id": "p3",
+        "label": "Passage 3",
+        "title": "Rethinking the Past",
+        "start": 27,
+        "end": 40,
+        "paragraphs": [
+          "p3_1",
+          "p3_2",
+          "p3_3",
+          "p3_4",
+          "p3_5",
+          "p3_6",
+          "p3_7",
+          "p3_8",
+          "p3_9"
+        ],
+        "labels": {
+          "p3_1": "1",
+          "p3_2": "2",
+          "p3_3": "3",
+          "p3_4": "4",
+          "p3_5": "5",
+          "p3_6": "6",
+          "p3_7": "7",
+          "p3_8": "8",
+          "p3_9": "9"
+        }
+      }
+    ],
+    "paragraphs": [
+      "p1_1",
+      "p1_2",
+      "p1_3",
+      "p1_4",
+      "p1_5",
+      "p1_6",
+      "p1_7",
+      "p1_8",
+      "p1_9",
+      "p2_1",
+      "p2_2",
+      "p2_3",
+      "p2_4",
+      "p2_5",
+      "p2_6",
+      "p2_7",
+      "p2_8",
+      "p2_9",
+      "p2_10",
+      "p3_1",
+      "p3_2",
+      "p3_3",
+      "p3_4",
+      "p3_5",
+      "p3_6",
+      "p3_7",
+      "p3_8",
+      "p3_9"
+    ],
+    "groups": [
+      {
+        "id": "p1_g1",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 1,
+        "end": 7
+      },
+      {
+        "id": "p1_g2",
+        "kind": "tfng",
+        "label": "True / False / Not Given",
+        "start": 8,
+        "end": 13
+      },
+      {
+        "id": "p2_g1",
+        "kind": "tfng",
+        "label": "True / False / Not Given",
+        "start": 14,
+        "end": 18
+      },
+      {
+        "id": "p2_g2",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 19,
+        "end": 26
+      },
+      {
+        "id": "p3_g1",
+        "kind": "mcq",
+        "label": "Multiple choice",
+        "start": 27,
+        "end": 30
+      },
+      {
+        "id": "p3_g2",
+        "kind": "endings",
+        "label": "Matching Sentence Endings",
+        "start": 31,
+        "end": 34
+      },
+      {
+        "id": "p3_g3",
+        "kind": "ynng",
+        "label": "Yes / No / Not Given",
+        "start": 35,
+        "end": 40
+      }
+    ],
+    "preparationMethods": {
+      "p1_g1": [
+        "Khoanh giới hạn từ hoặc số được phép điền.",
+        "Đọc ngữ cảnh và dự đoán loại từ cho mỗi ô trống.",
+        "Định vị thông tin, điền theo đề rồi kiểm nghĩa và ngữ pháp."
+      ],
+      "p1_g2": [
+        "Đọc nhận định, chú ý từ khóa và từ giới hạn.",
+        "Tìm đủ thông tin tương ứng; thiếu thông tin thì NOT GIVEN.",
+        "Cùng nghĩa chọn TRUE; trái nghĩa chọn FALSE."
+      ],
+      "p2_g1": [
+        "Đọc nhận định, chú ý từ khóa và từ giới hạn.",
+        "Tìm đủ thông tin tương ứng; thiếu thông tin thì NOT GIVEN.",
+        "Cùng nghĩa chọn TRUE; trái nghĩa chọn FALSE."
+      ],
+      "p2_g2": [
+        "Khoanh giới hạn từ hoặc số được phép điền.",
+        "Đọc ngữ cảnh và dự đoán loại từ cho mỗi ô trống.",
+        "Định vị thông tin, điền theo đề rồi kiểm nghĩa và ngữ pháp."
+      ],
+      "p3_g1": [
+        "Đọc câu hỏi, định vị; chưa nhìn lựa chọn.",
+        "Tự nén ý cần tìm rồi mới đối chiếu từng phương án.",
+        "Loại ý sai đối tượng, sai quan hệ hoặc thiếu căn cứ."
+      ],
+      "p3_g2": [
+        "Đọc đầu câu và xác định quan hệ ý cần hoàn thành.",
+        "Định vị đủ thông tin liên quan trước khi chọn vế cuối.",
+        "Đọc lại câu hoàn chỉnh để kiểm nghĩa và ngữ pháp."
+      ],
+      "p3_g3": [
+        "Đọc nhận định và chú ý từ giới hạn.",
+        "Đối chiếu quan điểm tác giả; thiếu ý tương ứng thì NOT GIVEN.",
+        "Đồng ý chọn YES; trái quan điểm chọn NO."
+      ]
+    },
+    "totalMs": 3600000,
+    "book": 21,
+    "test": 3
   }
 ]
