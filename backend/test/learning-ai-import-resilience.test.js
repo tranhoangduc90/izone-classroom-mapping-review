@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import * as importer from '../src/learning-ai-import.js';
+import {parseFormDefinition} from '../src/learning-contracts.js';
 const {validateAiImportResult,previewAiImport,aiImportAttemptTimeouts}=importer;
 const digest=text=>createHash('sha256').update(text).digest('hex');
 function validate(questions){const text=questions.map(q=>q.sourceQuote).join('\n\n'),requestId=randomUUID(),sourceHash=digest(text);return validateAiImportResult({requestId,sourceHash,questions},{text,requestId,sourceHash});}
@@ -14,7 +15,8 @@ test('chế độ từng câu độc lập với key: bài tập thiếu key v�
  ]);
  const [exercise,survey,open]=result.payload.definition.blocks[0].items,key=result.payload.gradingKey;
  assert.equal(exercise.kind,'exercise');assert.equal(exercise.graderType,'exact_option_set');assert.equal(key.items[exercise.itemVersionId],undefined);
- assert.equal(survey.kind,'survey');assert.equal(survey.layoutType,'multiple_choice_cards');assert.equal(survey.interactionConfig.maxSelections,4);assert.equal(survey.graderType,'none');assert.equal(key.importReviews?.[survey.itemVersionId],undefined);
+ assert.equal(survey.kind,'survey');assert.equal(survey.layoutType,'multiple_choice_cards');assert.equal(survey.interactionConfig.maxSelections,undefined);assert.equal(survey.graderType,'none');assert.equal(key.importReviews?.[survey.itemVersionId],undefined);
+ assert.doesNotThrow(()=>parseFormDefinition(result.payload.definition),'Câu mới phải qua schema chạy thật, kể cả khi key còn thiếu.');
  assert.equal(open.kind,'exercise');assert.equal(open.graderType,'accepted_text');assert.equal(result.warnings.length,2);
 });
 test('nhiều đáp án lấy đúng tập key nguồn; khóa chọn bằng số key, câu một chọn không đổi',()=>{

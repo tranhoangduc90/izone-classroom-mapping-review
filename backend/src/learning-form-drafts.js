@@ -8,6 +8,7 @@ import {validateAuthoringPayload,copyAuthoringPayload,FormAuthoringError} from '
 import {previewFormImport} from './learning-form-import.js';
 import {createLearningFormPublishingService} from './learning-form-publishing.js';
 import {previewAiImport} from './learning-ai-import.js';
+import {parseFormDefinition} from './learning-contracts.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
@@ -73,7 +74,10 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
         account.role==='admin'||account.can_access_all_classes===true||account.progress_log_admin===true};
       const row=await owned(pool,grant.draftId,reviewer);
       if(Number(row.revision)!==grant.revision||row.content_hash!==grant.contentHash) throw error('DRAFT_PREVIEW_STALE','Nháp đã đổi; hãy mở lại bản xem thử.');
-      const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
+      const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,allowIncomplete:true});
+      // Xem thử cho phép key/ô đáp án còn trống; nội dung và cấu trúc câu vẫn phải hợp lệ.
+      try{checked.definition=parseFormDefinition(checked.definition);}
+      catch{throw error('DRAFT_PREVIEW_INCOMPLETE','Hãy hoàn thiện nội dung và cấu trúc câu hỏi trước khi xem thử; đáp án có thể bổ sung sau.');}
       const target=await authorizeClass(pool,row.erp_course_class_id,reviewer);
       return {sourceDraftId:row.id,sourceRevision:Number(row.revision),contentHash:row.content_hash,
         sourceAssignmentId:null,className:target.class_name,courseCode:checked.definition.courseCode||null,

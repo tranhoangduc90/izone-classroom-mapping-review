@@ -4,6 +4,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {z} from 'zod';
 import {previewFormImport} from './learning-form-import.js';
 import {FormAuthoringError,validateAuthoringPayload} from './learning-form-authoring.js';
+import {parseFormDefinition} from './learning-contracts.js';
 const fail=(code,message,status=400)=>new FormAuthoringError(code,message,[],status);
 const schema=z.object({requestId:z.string().uuid(),sourceHash:z.string(),questions:z.array(z.object({
  sourceQuote:z.string().min(1),kind:z.enum(['exercise','survey']),type:z.enum(['reflection','short_answer','mcq','multi','dropdown','gapfill','speaking_checklist','self_reported_score']),
@@ -77,6 +78,7 @@ export function validateAiImportResult(raw,{text,requestId,sourceHash,definition
   const source=questions[index];item.helpText=source.helpText;item.kind=source.kind;
   const choice=['mcq','dropdown','multi','speaking_checklist'].includes(source.type),multi=['multi','speaking_checklist'].includes(source.type),objective=source.kind==='exercise';
   if(multi){item.layoutType='multiple_choice_cards';item.pedagogicalTypeCode='multiple_choice';}
+  if(multi&&!objective)delete item.interactionConfig.maxSelections;
   if(source.type==='short_answer'){item.interactionType='short_text';item.layoutType='plain_prompt';item.pedagogicalTypeCode='sentence_completion';}
   item.graderType=objective?(choice?(multi?'exact_option_set':'exact_option'):source.type==='gapfill'?'accepted_text_sequence':'accepted_text'):'none';item.maxScore=objective?1:0;
   const sourceKeys=[...source.sourceQuote.matchAll(/^(?:đáp án|answer|key)\s*[:：]\s*(.+)$/gimu)].map(match=>match[1].trim()),conflicting=new Set(sourceKeys).size>1;
@@ -96,6 +98,9 @@ export function validateAiImportResult(raw,{text,requestId,sourceHash,definition
   }
   preview.rows[index].type=source.type;preview.rows[index].kind=source.kind;preview.rows[index].graderType=item.graderType;
  }
+ // Câu mới phải chạy được trên schema runtime; nháp cũ còn trống vẫn được giữ nguyên.
+ try{parseFormDefinition({...preview.payload.definition,title:preview.payload.definition.title||'Kiểm câu nhập',blocks:preview.payload.definition.blocks.map(b=>({...b,items:b.items.filter(i=>!existing.has(i.itemVersionId))})).filter(b=>b.items.length)});}
+ catch{throw fail('AI_IMPORT_VALIDATION_FAILED','Dạng câu AI nhận diện chưa khớp bản chạy; chưa thêm câu nào.',502);}
  const checked=validateAuthoringPayload({...preview.payload,allowIncomplete:true});
  return {...preview,payload:{definition:checked.definition,gradingKey:checked.gradingKey},missingAnswers:checked.missingAnswers,contentHash:checked.contentHash,warnings,unmappedText,sourceHash,requestId,engine:'ai',requiresTeacherReview:true};
 }

@@ -11,6 +11,29 @@ import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningDraftDemoGrant,verifyLearningDemoGrant} from '../src/learning-demo-grant.js';
 
+test('xem thử nháp thiếu key/ô đáp án trống vẫn mở được; nội dung câu hỏi trống vẫn bị chặn',async()=>{
+ const sourceDb=new PGlite(),demoDb=new PGlite(),secret='test-incomplete-preview-01234567890123456789',origin='https://tranhoangduc90.github.io';
+ try{
+  await initializeLearningDemoDatabase(sourceDb);await initializeLearningDemoDatabase(demoDb);
+  await sourceDb.exec("ALTER TABLE mapping.reviewer_account ADD COLUMN role TEXT DEFAULT 'teacher', ADD COLUMN can_access_all_classes BOOLEAN DEFAULT false;");
+  await sourceDb.exec(await readFile(new URL('../ops/learning-migrations/202610010001_progress_log_form_drafts.sql',import.meta.url),'utf8'));
+  await sourceDb.exec("INSERT INTO mapping.classroom_course_mapping VALUES(1294,'Lớp thật fixture','approved',NULL,NULL);INSERT INTO mapping.reviewer_account(email,status) VALUES('owner@example.test','active');INSERT INTO mapping.reviewer_class_access VALUES('owner@example.test',1294);");
+  const reviewer={email:'owner@example.test',canAccessAllClasses:false},drafts=createLearningFormDraftService({pool:createPGlitePool(sourceDb)}),payload=previewFormImport('type,prompt\nreflection,Complete the sentence.').payload,item=payload.definition.blocks[0].items[0],blankId=crypto.randomUUID();
+  Object.assign(item,{kind:'exercise',interactionType:'short_text',layoutType:'numbered_short_texts',pedagogicalTypeCode:'sentence_completion',graderType:'accepted_text_sequence',maxScore:1,skillCodes:['general'],interactionConfig:{responseCount:1,blankIds:[blankId],sentenceLines:[{parts:['The sky is ','.']}]}});
+  payload.gradingKey.authoringState={[item.itemVersionId]:{answerRows:{[blankId]:[{id:crypto.randomUUID(),value:''}]}}};
+  const draft=await drafts.create({classId:'1294',sessionNumber:1,operationId:crypto.randomUUID(),...payload,reviewer}),grant=createLearningDraftDemoGrant({draft,reviewer,secret});
+  const source=await drafts.demoSource({grant:verifyLearningDemoGrant(grant,secret)});
+  assert.equal(source.gradingKey.items[item.itemVersionId],undefined);assert.equal(source.definition.blocks[0].items[0].graderType,'accepted_text_sequence');
+  const app=createLearningDemoApp({pool:createPGlitePool(demoDb),allowedOrigin:origin,grantSecret:secret,fetchSource:async()=>source});
+  const result=await request(app).post('/api/demo/runs').set({origin,'x-progress-log-demo':'1'}).send({grant}).expect(201);
+  const opened=await request(app).post('/api/learning/assignments/open').set({origin,'x-progress-log-demo':'1'}).send({publicToken:result.body.run.publicToken}).expect(200);assert.equal(opened.body.assignment.definition.blocks[0].items.length,1);
+  assert.deepEqual((await drafts.get({id:draft.id,reviewer})).gradingKey,draft.gradingKey,'Xem thử không sửa key hoặc ô đáp án của nháp gốc.');
+  assert.equal((await sourceDb.query('SELECT count(*)::int AS n FROM learning.form_assignment')).rows[0].n,0);
+  const changed=structuredClone(draft.definition);changed.blocks[0].items[0].prompt='';const incomplete=await drafts.save({id:draft.id,expectedRevision:draft.revision,sessionNumber:1,definition:changed,gradingKey:draft.gradingKey,reviewer});
+  await assert.rejects(()=>drafts.demoSource({grant:verifyLearningDemoGrant(createLearningDraftDemoGrant({draft:incomplete,reviewer,secret}),secret)}),e=>e.code==='DRAFT_PREVIEW_INCOMPLETE');
+ }finally{await sourceDb.close();await demoDb.close();}
+});
+
 test('D06/P04: nháp xem thử/nộp/reset ở DB riêng; grant hết hạn/đổi revision bị chặn, lớp thật không đổi',async()=>{
   const sourceDb=new PGlite(),demoDb=new PGlite(),secret='test-draft-preview-secret-01234567890123456789';
   const origin='https://tranhoangduc90.github.io',headers={origin,'x-progress-log-demo':'1'};
