@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import {createLearningTestSources} from './learning-test-current-sources.js';
 import { loadConfig } from './config.js';
 import { createDatabasePool, createLearningDatabasePool, createSpeakingHomeworkDatabasePool } from './db.js';
 import { createErpGradeSync } from './erp-sync.js';
@@ -19,6 +20,7 @@ import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 const config = loadConfig();
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
+const learningTestSources = config.learningEnabled ? createLearningTestSources({config,legacyPool:pool}) : null;
 const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
 const progressGateway=process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE}):null;
 const speakingProgressWorker=startSpeakingProgressDocsWorker({pool:speakingHomeworkPool,schema:'speaking_homework',gateway:speakingHomeworkPool?progressGateway:null});
@@ -50,6 +52,7 @@ const app = createApp({
   config,
   pool,
   learningPool,
+  learningTestResultReader: learningTestSources?.reader,
   speakingHomeworkPool,
   syncErpGrades,
   termTestAssetService,
@@ -99,7 +102,7 @@ async function shutdown(signal) {
     await speakingDoctorWorker.stop();
     await speakingPracticeWorker.stop();
     await speakingProgressWorker.stop();
-    await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end()]);
+    await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end(), learningTestSources?.close()]);
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

@@ -255,7 +255,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     if(!portalTestReader)return view;
     try{const response=await portalTestReader({classId,studentRefs:studentRef?[studentRef]:view.students.map(s=>s.studentRef)});
       const byStudent=new Map();for(const row of response.results){const list=byStudent.get(row.studentRef)||[];list.push(row.result);byStudent.set(row.studentRef,list);}
-      return studentRef?{...view,externalTests:byStudent.get(studentRef)||[],coverage:{...view.coverage,portalTests:response.coverage}}
+      return studentRef?{...view,externalTests:[...(view.externalTests||[]),...(byStudent.get(studentRef)||[])],coverage:{...view.coverage,portalTests:response.coverage}}
         :{...view,portalTestCoverage:response.coverage,students:view.students.map(s=>({...s,externalTests:byStudent.get(s.studentRef)||[]}))};
     }catch{return studentRef?{...view,coverage:{...view.coverage,portalTests:'temporarily_unavailable'}}:{...view,portalTestCoverage:'temporarily_unavailable'};}
   }
@@ -779,13 +779,14 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       );
       const journey = buildStudentCourseJourney(row);
       const mapped = normalizeJourneyTestSources(row.test_sources);
-      if (mapped.length) {
+      if (mapped.length||testResultReader?.readStudent) {
         if (!testResultReader) {
           journey.coverage.testResults = 'temporarily_unavailable';
         } else {
           try {
-            const results = await testResultReader({ classId: row.class_id,
-              studentRef: row.student_ref, testSlugs: mapped.map(item => item.testSlug) });
+            const results = testResultReader.readStudent?await testResultReader.readStudent({classId:row.class_id,studentRef:row.student_ref})
+              :await testResultReader({ classId: row.class_id,studentRef: row.student_ref,testSlugs: mapped.map(item => item.testSlug) });
+            journey.externalTests=results;
             const bySlug = new Map(results.map(item => [item.testSlug, item]));
             const byNumber = new Map(mapped.map(item => [item.sessionNumber, bySlug.get(item.testSlug)]));
             journey.sessions = journey.sessions.map(session => ({ ...session,

@@ -408,6 +408,7 @@ export function createApp({
   config,
   pool,
   learningPool = null,
+  learningTestResultReader = null,
   learningErpScheduleReader = null,
   speakingHomeworkPool = null,
   verifyGoogleToken,
@@ -1369,7 +1370,7 @@ export function createApp({
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
       testSourceReader: createLearningTestSourceReader({ pool }),
-      testResultReader: createLearningTestResultReader({ pool })
+      testResultReader: learningTestResultReader ?? createLearningTestResultReader({ pool })
     });
     app.locals.learningLiveUpdates=learningRouter.liveUpdates;
     app.use('/api/learning',learningRouter);
