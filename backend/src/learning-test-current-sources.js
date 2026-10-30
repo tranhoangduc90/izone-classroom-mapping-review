@@ -20,6 +20,7 @@ export function combineLearningTestReaders(readers){
   const read=async input=>merge(await Promise.all(readers.map(reader=>reader(input))));
   read.readStudent=async input=>merge(await Promise.all(readers.map(reader=>reader.readStudent(input))));
   read.readClass=async input=>merge(await Promise.all(readers.map(reader=>reader.readClass(input))),true);
+  if(readers.every(reader=>reader.readAllClass))read.readAllClass=async input=>merge(await Promise.all(readers.map(reader=>reader.readAllClass(input))),true);
   read.readWriting=async input=>{
     const current=await read.readStudent(input);
     if(!current.some(row=>row.testSlug===input.testSlug&&row.resultRef===input.resultRef&&row.writing?.status==='ready'))return null;

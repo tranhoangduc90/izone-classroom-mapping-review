@@ -46,6 +46,7 @@ async function fixture(){
 test('Thẻ 20 SQL lấy đủ bài đúng chủ và phân tích riêng kỹ năng; điểm 0 khác thiếu; không trả khóa/token',async()=>{
  const db=await fixture();try{
   const reader=createLearningTestResultReader({pool:db}),rows=await reader.readStudent({classId:'1294',studentRef:a});
+  const all=await reader.readAllClass({classId:'1294',studentRefs:[a,b]});assert.deepEqual(all.filter(r=>r.studentRef===a).map(r=>r.result),rows);assert.ok(all.some(r=>r.studentRef===b));
   assert.equal(rows.length,2);const one=rows.find(r=>r.testSlug==='term-test-1'),two=rows.find(r=>r.testSlug==='term-test-2');
   assert.equal(one.listening.correct,1);assert.equal(one.reading.correct,0);assert.equal(two.listening,null);
   assert.deepEqual(one.listening.analysis.needsImprovement,[{type:'Gap fill',correct:0,total:2}]);

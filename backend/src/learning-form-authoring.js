@@ -76,11 +76,11 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
     if(!AUTHORING_CATALOG[kind].includes(type)) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
       'Câu '+item.position+' không thuộc danh mục '+(kind==='survey'?'Khảo sát':'Bài tập')+'. Giữ nội dung và chọn chế độ phù hợp.');
     if(!item.skillCodes.length || item.skillCodes.some(code=>!['general','listening','reading','speaking','writing'].includes(code)))
-      throw new FormAuthoringError('DRAFT_SKILL_REQUIRED','Câu '+item.position+': hãy chọn Kỹ năng, hoặc chủ động chọn Chung.');
+      throw new FormAuthoringError('DRAFT_SKILL_REQUIRED','Câu '+item.position+': hãy chọn Kỹ năng, hoặc chủ động chọn Chung.',[{itemVersionId:item.itemVersionId,field:'skillCodes',message:'Cần bổ sung thông tin này'}]);
     if(kind==='survey'&&(item.graderType!=='none'||item.maxScore!==0||rawKey.items?.[item.itemVersionId]))
       throw new FormAuthoringError('DRAFT_SURVEY_NOT_SCORED','Khảo sát chỉ ghi nhận thông tin; chuyển đáp án sang đáp án tham khảo trước khi lưu.');
     if(kind==='exercise'&&item.graderType==='none')
-      throw new FormAuthoringError('DRAFT_EXERCISE_GRADER_REQUIRED','Câu '+item.position+' trong Bài tập cần luật chấm.');
+      throw new FormAuthoringError('DRAFT_EXERCISE_GRADER_REQUIRED','Câu '+item.position+' trong Bài tập cần luật chấm.',[{itemVersionId:item.itemVersionId,field:'kind',message:'Chọn chế độ và luật chấm phù hợp cho câu hỏi.'}]);
     if(kind==='exercise'&&type==='multi') {
       const count=gradingKey.items[item.itemVersionId]?.expectedOptionIds?.length;
       if(count&&item.interactionConfig.maxSelections!==count) throw new FormAuthoringError('DRAFT_SELECTION_LIMIT_MISMATCH',
@@ -112,7 +112,7 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
             ||(item.graderType==='exact_sequence'&&key.expectedOptionIds.length!==item.interactionConfig.matchingPrompts.length)))
         ||(item.graderType==='accepted_text'&&key.accepted.some(value=>!value.trim()))
         ||(item.graderType==='accepted_text_sequence'&&(key.acceptedBySlot.length!==item.interactionConfig.responseCount||key.acceptedBySlot.some(accepted=>!accepted.length)))) {
-        throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Đáp án câu '+item.position+' không khớp phương án.');
+        throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Đáp án câu '+item.position+' không khớp phương án.',[{itemVersionId:item.itemVersionId,field:'answer',message:'Đáp án không khớp các phương án của câu hỏi.'}]);
       }
     } else if(key) throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Câu không chấm không được có khóa chấm.');
   }
@@ -129,7 +129,7 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
       if(item.interactionType!=='short_text')throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án chỉ dành cho câu điền từ.');
       if(!blankIds.has(blankId)&&!(blankId==='answer'&&!item.interactionConfig.responseCount))throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án không khớp mã ô trống.');
       if(new Set(rows.map(row=>row.id)).size!==rows.length)throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Mã hàng đáp án bị trùng.');
-      if(!savingDraft&&rows.some(row=>!row.value.trim()))throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Câu '+item.position+': hãy nhập đáp án hoặc bỏ ô đáp án còn trống.');
+      if(!savingDraft&&rows.some(row=>!row.value.trim()))throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Câu '+item.position+': hãy nhập đáp án hoặc bỏ ô đáp án còn trống.',rows.filter(row=>!row.value.trim()).map(row=>({itemVersionId:id,field:'answer',rowId:row.id,blankId,message:'Cần bổ sung thông tin này'})));
       const block=definition.blocks.find(block=>block.items.some(value=>value.itemVersionId===id)),kind=effectiveItemKind(item,block),survey=kind==='survey'||kind===null&&item.graderType==='none',slot=(item.interactionConfig.blankIds||[]).indexOf(blankId);
       const canonical=item.interactionConfig.responseCount?(survey?gradingKey.referenceAnswersBySlot?.[id]?.[slot]??(gradingKey.referenceAnswers?.[id]?.[slot]?[gradingKey.referenceAnswers[id][slot]]:[]):gradingKey.items[id]?.acceptedBySlot?.[slot]||[]):survey?gradingKey.referenceAnswers?.[id]||[]:gradingKey.items[id]?.accepted||[];
       if(JSON.stringify(rows.map(row=>row.value.trim()).filter(Boolean))!==JSON.stringify(canonical.map(value=>value.trim())))throw new FormAuthoringError('DRAFT_ANSWER_INVALID','Hàng đáp án câu '+item.position+' chưa khớp khóa chấm. Hãy mở lại và kiểm đáp án.');
@@ -140,9 +140,9 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   for(const [id,review]of Object.entries(gradingKey.importReviews||{})){
     if(!byId.has(id))throw new FormAuthoringError('DRAFT_IMPORT_REVIEW_INVALID','Cảnh báo nhập nguồn không thuộc câu hiện có.');
     if(requireAnswers&&review.reviewedContent!==importReviewContent(byId.get(id),gradingKey))
-      throw new FormAuthoringError('DRAFT_IMPORT_REVIEW_REQUIRED',review.sourceLabel+': còn cảnh báo key cần giảng viên xử lý và xác nhận.');
+      throw new FormAuthoringError('DRAFT_IMPORT_REVIEW_REQUIRED',review.sourceLabel+': còn cảnh báo key cần giảng viên xử lý và xác nhận.',[{itemVersionId:id,field:'importReview',message:'Cần kiểm và xác nhận cảnh báo đáp án của câu này.'}]);
   }
-  if(requireAnswers&&missing.length) throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Còn '+missing.length+' câu cần chọn đáp án trước khi duyệt.');
+  if(requireAnswers&&missing.length) throw new FormAuthoringError('DRAFT_ANSWER_REQUIRED','Còn '+missing.length+' câu cần chọn đáp án trước khi duyệt.',missing.map(id=>({itemVersionId:id,field:'answer',message:'Cần bổ sung thông tin này'})));
   return {definition,gradingKey,missingAnswers:missing,contentHash:sha256(stableStringify({definition,gradingKey}))};
 }
 

@@ -256,7 +256,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     try{const response=await portalTestReader({classId,studentRefs:studentRef?[studentRef]:view.students.map(s=>s.studentRef)});
       const byStudent=new Map();for(const row of response.results){const list=byStudent.get(row.studentRef)||[];list.push(row.result);byStudent.set(row.studentRef,list);}
       return studentRef?{...view,externalTests:[...(view.externalTests||[]),...(byStudent.get(studentRef)||[])],coverage:{...view.coverage,portalTests:response.coverage}}
-        :{...view,portalTestCoverage:response.coverage,students:view.students.map(s=>({...s,externalTests:byStudent.get(s.studentRef)||[]}))};
+        :{...view,portalTestCoverage:response.coverage,students:view.students.map(s=>({...s,externalTests:[...(s.externalTests||[]),...(byStudent.get(s.studentRef)||[])]}))};
     }catch{return studentRef?{...view,coverage:{...view.coverage,portalTests:'temporarily_unavailable'}}:{...view,portalTestCoverage:'temporarily_unavailable'};}
   }
   async function attachComments(view,classId,studentRef=null) {
@@ -1305,16 +1305,17 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const overview=buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
         currentRoster:roster.rows,rows:status.rows});
       const mapped=normalizeJourneyTestSources(plan.rows[0]?.test_sources);
-      if (mapped.length) {
+      if (mapped.length||testResultReader?.readAllClass) {
         overview.testCoverage='temporarily_unavailable';
         if (testResultReader?.readClass) {
           try {
-            const results=await testResultReader.readClass({classId,studentRefs:overview.students.map(s=>s.studentRef),
-              testSlugs:mapped.map(source=>source.testSlug)});
+            const results=testResultReader.readAllClass?await testResultReader.readAllClass({classId,studentRefs:overview.students.map(s=>s.studentRef)}):await testResultReader.readClass({classId,studentRefs:overview.students.map(s=>s.studentRef),testSlugs:mapped.map(source=>source.testSlug)});
             const bySlug=new Map(mapped.map(source=>[source.testSlug,source.sessionNumber]));
-            return attachComments(await attachPortalTests(await attachCurrentSchedule(buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
+            const model=buildCourseOverview({classId:target.class_id,className:target.class_name,plan:plan.rows[0],
               currentRoster:roster.rows,rows:status.rows,testCoverage:'connected',
-              testResults:results.map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))}),classId),classId),target.class_id);
+              testResults:results.filter(item=>bySlug.has(item.result.testSlug)).map(item=>({...item,sessionNumber:bySlug.get(item.result.testSlug)}))});
+            if(testResultReader.readAllClass)for(const student of model.students)student.externalTests=results.filter(item=>item.studentRef===student.studentRef).map(item=>item.result);
+            return attachComments(await attachPortalTests(await attachCurrentSchedule(model,classId),classId),target.class_id);
           } catch { /* Nguồn Test lỗi không chặn xem dữ liệu Progress Log của lớp. */ }
         }
       }

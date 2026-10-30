@@ -9,7 +9,10 @@ const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],sta
 const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.sharing_scope,createdAt:row.created_at,
   sourceDraftId:row.source_draft_id,
   sourceRevision:Number(row.source_revision),skills:[...new Set(row.public_definition.blocks.flatMap(b=>b.items.flatMap(i=>i.skillCodes||[])))],
-  itemCount:row.public_definition.blocks.reduce((n,b)=>n+b.items.length,0)});
+  itemCount:row.public_definition.blocks.reduce((n,b)=>n+b.items.length,0),
+  ...(row.worksheet_id?{worksheetId:row.worksheet_id}:{}),
+  ...(row.current_draft_id?{editableDraftId:row.current_draft_id,editableDraftRevision:Number(row.current_revision),editableDraftStatus:row.current_status}:{}),
+  ...(row.current_title?{title:row.current_title}:{})});
 export function createLearningFormLibrary({pool,drafts}){
  async function get(id,reviewer){
   const row=(await pool.query(`SELECT * FROM learning.form_library_entry WHERE id=$1::uuid
@@ -35,10 +38,12 @@ export function createLearningFormLibrary({pool,drafts}){
     definitionHash:sha256(stableStringify(checked.definition)),definition:checked.definition,gradingKey:checked.gradingKey,
     blockReleases:[],answerReleaseOverride:null};
   },
-  async list({scope='personal',skill='',reviewer}){
+  async list({scope='personal',skill='',reviewer,worksheetHeads=false}){
    if(!['personal','izone'].includes(scope))throw fail('LIBRARY_SCOPE_INVALID','Nguồn kho chưa hợp lệ.',400);
-   const rows=(await pool.query(`SELECT * FROM learning.form_library_entry WHERE sharing_scope=$1
-     AND ($1='izone' OR lower(owner_email)=lower($2)) ORDER BY created_at DESC,id LIMIT 200`,[scope,reviewer.email])).rows;
+   const heads=worksheetHeads&&scope==='personal';
+   const rows=(await pool.query(`SELECT e.*${heads?',w.id AS worksheet_id,w.current_draft_id,d.revision AS current_revision,d.status AS current_status,d.public_definition->>\'title\' AS current_title':''}
+     FROM learning.form_library_entry e ${heads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=e.source_draft_id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id AND lower(w.owner_email)=lower(e.owner_email) LEFT JOIN learning.form_draft d ON d.id=w.current_draft_id':''}
+     WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
    return rows.map(dto).filter(r=>!skill||r.skills.includes(skill));
   },
   async get({id,reviewer}){const row=await get(id,reviewer);return {...dto(row),definition:row.public_definition};},

@@ -1,6 +1,7 @@
 // Nhận nháp đã duyệt hoặc bản xuất bản; không tạo bài nộp/điểm danh khi xuất bản hay giao.
 // Mỗi đích giao có transaction và mã retry riêng; lỗi một đích không nhân các đích đã thành công.
 import {withTransaction} from './db.js';
+import {assignmentOrigin} from './learning-assignment-origin.js';
 import crypto from 'node:crypto';
 import {validateAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {sha256,stableStringify,gradeLearningSubmission} from './learning-domain.js';
@@ -209,7 +210,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         return {...publicationDto(saved),replayed:false};
       });
     },
-    async assignPublication({id,targets,operationId,reviewer}){
+    async assignPublication({id,targets,operationId,reviewer,origin}){
       const unique=new Set(targets.map(t=>String(t.classId)+':'+t.sessionNumber));
       if(unique.size!==targets.length)throw fail('DELIVERY_DUPLICATE_TARGET','Không chọn trùng một lớp và buổi.',400);
       const results=[];
@@ -220,6 +221,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         try{
           const delivered=await withTransaction(pool,async database=>{
             const source=await publication(database,id,reviewer),classInfo=await authorizeClass(database,target.classId,reviewer);
+            const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
             await database.query('INSERT INTO learning.form_draft_class_lock VALUES($1::bigint) ON CONFLICT DO NOTHING',[target.classId]);
             await database.query('SELECT erp_course_class_id FROM learning.form_draft_class_lock WHERE erp_course_class_id=$1::bigint FOR UPDATE',[target.classId]);
             const prior=(await database.query('SELECT * FROM learning.form_delivery WHERE operation_id=$1::uuid',[operation])).rows[0];
@@ -243,6 +245,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             for(const block of definition.blocks)await database.query(insertLearningAssignmentBlockReleaseSql,[assignment.assignment_id,block.blockId,block.checkpoint,block.checkpoint===first?'open':'locked',reviewer.email]);
             const delivery=(await database.query(`INSERT INTO learning.form_delivery(operation_id,publication_id,owner_email,erp_course_class_id,session_number,assignment_id)
               VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid) RETURNING *`,[operation,id,reviewer.email,target.classId,target.sessionNumber,assignment.assignment_id])).rows[0];
+            if(selectedOrigin)await database.query('INSERT INTO learning.form_assignment_origin(assignment_id,source_scope,source_library_id) VALUES($1::uuid,$2,$3::uuid)',[assignment.assignment_id,selectedOrigin.scope,selectedOrigin.libraryId]);
             const result=await readDelivery(database,delivery);
             if(result.formVersionId!==source.form_version_id||result.blockCount!==definition.blocks.length)
               throw fail('DELIVERY_READBACK_MISMATCH','Phiên bản hoặc các phần vừa giao chưa khớp.',500);
