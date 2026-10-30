@@ -693,6 +693,7 @@ test('O01/O03/E07: lớp chưa có phiếu vẫn đọc/chốt kế hoạch đú
       CREATE TABLE assessment.term_test_attempt (id uuid PRIMARY KEY,test_slug text,erp_course_class_id bigint,erp_student_contact_id bigint,
         completed_at timestamptz,writing_submitted_at timestamptz,combined_result jsonb);
       CREATE TABLE assessment.term_test_writing_grading_final (attempt_id uuid,status text,writing_score numeric);
+      CREATE TABLE assessment.term_test_writing_grading_run (attempt_id uuid,task_number integer,status text,grading_version integer);
       CREATE TABLE assessment.mini_test_result (test_slug text,erp_course_class_id bigint,erp_student_contact_id bigint,result jsonb,updated_at timestamptz);
       INSERT INTO assessment.test_definition VALUES ('term-test-2','Term Test giả');
       INSERT INTO assessment.term_test_attempt VALUES

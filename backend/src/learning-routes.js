@@ -13,6 +13,7 @@ import {createLearningAssignmentManagement} from './learning-assignment-manageme
 import {createLearningFormLibrary} from './learning-form-library.js';
 import {createLearningPortalTestReader} from './learning-portal-tests.js';
 import {createLearningLiveUpdates} from './learning-realtime.js';
+import {registerStudentPortalRoutes} from './learning-student-portal.js';
 
 const uuidSchema = z.string().uuid();
 const publicAssignmentSchema = z.object({ publicToken: uuidSchema }).strict();
@@ -405,6 +406,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     return res.json({ ok: true, ...result });
   }));
 
+  registerStudentPortalRoutes(router,{pool,service,testResultReader,limiter:journeyLimiter});
   router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
     if (!input) return;

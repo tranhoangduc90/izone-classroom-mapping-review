@@ -28,6 +28,9 @@ test('đọc điểm Test đúng học viên/lớp và bổ sung Writing khi b�
       CREATE TABLE assessment.term_test_writing_grading_final (
         attempt_id uuid, status text, writing_score numeric
       );
+      CREATE TABLE assessment.term_test_writing_grading_run (
+        attempt_id uuid, task_number integer, grading_version integer, status text
+      );
       CREATE TABLE assessment.mini_test_result (
         test_slug text, erp_course_class_id bigint,
         erp_student_contact_id bigint, result jsonb, updated_at timestamptz
