@@ -33,3 +33,19 @@ export async function readOwnerSource({url,key,fetcher=fetch,clock=Date.now},inp
   fail('OWNER_MISMATCH','Lớp, UUID và nguồn Classroom không khớp.',403);
  return source;
 }
+
+export function createOwnerResolver({url,key,fetcher=fetch,clock=Date.now}){
+ const schema=z.object({apiVersion:z.literal(1),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid(),courseId:z.string(),googleUserId:z.string(),capturedAt:z.iso.datetime(),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+ return async({courseId,googleUserId})=>{
+  let response;
+  try{response=await fetcher(`${url.replace(/\/$/,'')}/v1/owner-by-classroom?courseId=${encodeURIComponent(courseId)}&googleUserId=${encodeURIComponent(googleUserId)}`,{headers:{'x-reading-owner-key':key},signal:AbortSignal.timeout(5000)});}catch{fail('OWNER_SOURCE_UNAVAILABLE','Chưa đối chiếu được chủ bài.',503);}
+  if(!response.ok)fail('OWNER_SOURCE_UNAVAILABLE','Không có đúng một mapping đã duyệt cho học viên/lớp.',503);
+  const parsed=schema.safeParse(await response.json());if(!parsed.success)fail('OWNER_SOURCE_INVALID','Nguồn mapping trả sai cấu trúc.',503);
+  const {capturedAt,sourceRevision,...payload}=parsed.data,age=clock()-Date.parse(capturedAt);
+  if(age < -5000||age>120000||hash(JSON.stringify(payload))!==sourceRevision||payload.courseId!==courseId||payload.googleUserId!==googleUserId)
+   fail('OWNER_MISMATCH','Định danh Classroom không khớp mapping.',403);
+  return payload;
+ };
+}
+
+// UUID/Google user lấy từ mapping đã duyệt; bản Docs lấy từ đúng submission Classroom. Không nối bằng tên.

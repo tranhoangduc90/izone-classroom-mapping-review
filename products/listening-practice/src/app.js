@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
 import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
-import {ListeningError,uuid} from './domain.js';
+import {CODE,ListeningError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
 import {matchingReview} from './review.js';
@@ -19,7 +19,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const origin=req.headers.origin;
   if(origin&&!origins.includes(origin))return res.status(403).json({error:{code:'ORIGIN_DENIED',message:'Trang gọi API không được phép.'}});
   if(origin){res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');res.set('Access-Control-Allow-Credentials','true');}
-  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Izone-Document, X-Izone-Assignment, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   if(req.method==='OPTIONS')return res.sendStatus(204);next();
  });
  app.use(express.json({limit:'512kb'}));
@@ -63,8 +63,17 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  }));
  app.post('/api/shared-login',wrap(async(req,res)=>{
   const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
-  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:lessonFor(input.code).code}));
+  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:lessonFor(input.code).code,...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}));
  }));
+ const documentContext=req=>({documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document']),code:z.string().min(1).max(100).parse(req.headers['x-izone-assignment'])});
+ app.get('/api/entry-context',wrap(async(req,res)=>{
+  const input=z.object({documentId:z.string().regex(/^[\w-]{20,150}$/),code:z.string().min(1).max(100)}).strict().parse(req.query);
+  res.set('Cache-Control','no-store');res.json(await service.entryContext({...input,code:input.code===CODE?CODE:lessonFor(input.code).code}));
+ }));
+ app.use('/api',(req,res,next)=>{
+  if(!req.headers['x-izone-document']||!/^\/(?:open|login|state|result(?:\/|$)|begin|resume|activate|pulse|pause|reset|submit|audio(?:\/|$))/.test(req.path))return next();
+  Promise.resolve().then(()=>service.guardEntry({...documentContext(req),token:token(req),entryToken:req.body?.entryToken})).then(()=>next(),next);
+ });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
   res.json(await service[action]({...input,token:token(req)}));
