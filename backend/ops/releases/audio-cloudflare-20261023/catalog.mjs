@@ -2025,5 +2025,66 @@ export const ASSETS = {
       }
     ],
     "key": "cf-chunks-lab/07ae42b9617bf4e2885f54fddd2b681b890e83db46a909d958b2f349c6069476.mp3"
+  },
+  "homework-listening-horton-castle": {
+    "id": "homework-listening-horton-castle",
+    "sha256": "c6cf44e8675f37dc919758a5db95b46fddb46f95d591ec4c690bc45fb2856057",
+    "byteLength": 6447623,
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-homework/audio-assets/horton-castle-c6cf44e8675f37dc.mp3",
+    "chunks": [
+      {
+        "byteLength": 524288,
+        "sha256": "0cd000f1000f1709c6f973b581c934d0165d0801d46bece29c30ea036c375e47"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "618ed7056da20332a49f546616160751934c7e843dd2d53312b43f2444544d58"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "e0704ef212bb902edf903a08326ee5fb6f769fc842a3f40f2128f494a39794a7"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "83a8a136d4be54fe263098d88ff0e2f2fa62e14a42fa9ec00986a495423053fd"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "a9b23556fa3930fd59d1be6d38de935eec123a2826fce888f5165937cebc64e2"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "d08facf857dfdf6c61aec23884ca99ea4d28531674175c2adec39abad71be9f7"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "95831bddbdc0ea63a47990589ffc8bd8dd40598fd565427c6d060c93dcab41a1"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "49a0ab8a66a4760fceb171f4d48e08d4be8e41b197c59275b752d2de1e714f5b"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "2044f13357dd1bfe52be51858decc00c5c8b93e2098f3e8c1d1530fbb896f798"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "01d7e45637236a39df488636013556d17e41495b8b50268360f0eed9e15d8f3e"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "0824266eeec431c724671f4cbfac162111953ac73c6b588985b05e574325339d"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "a295d477a5a863bee75bed7479a9ebe07e562ba2149ae38a8c1508ba18741fe8"
+      },
+      {
+        "byteLength": 156167,
+        "sha256": "0e7e189286cc69db00fd713a8c0ac9d8b776b709783561469ee67c6823b315e3"
+      }
+    ],
+    "key": "public-audio/c6cf44e8675f37dc919758a5db95b46fddb46f95d591ec4c690bc45fb2856057.mp3"
   }
 };
