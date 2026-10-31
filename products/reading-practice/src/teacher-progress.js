@@ -63,10 +63,12 @@ export function createTeacherProgress({ pool, context }) {
       savedAt: row.updated_at, definition, questionIds: row.question_ids, attempts,
       documentUrl: row.document_id ? `https://docs.google.com/document/d/${row.document_id}/edit?tab=${encodeURIComponent(row.tab_id)}` : null };
   }
-  async function entry({ entryToken }, identity) {
-    const row = (await pool.query(`SELECT b.id,b.student_ref,a.class_id,c.code
+  async function entry({ entryToken, documentId, code }, identity) {
+    const rows = (await pool.query(`SELECT b.id,b.student_ref,a.class_id,c.code
       FROM ${schema}.binding b JOIN ${schema}.assignment a ON a.id=b.assignment_id
-      JOIN ${schema}.content c ON c.id=a.content_id WHERE b.entry_hash=$1`, [hash(entryToken)])).rows[0];
+      JOIN ${schema}.content c ON c.id=a.content_id WHERE ${entryToken?'b.entry_hash=$1':"c.code=$2 AND (b.document_id=$1 OR b.owner_proof->'homework'->>'documentId'=$1)"}`, entryToken?[hash(entryToken)]:[documentId,code])).rows;
+    if(rows.length!==1)fail('RESULT_NOT_FOUND','Link bài chưa có duy nhất chủ đã đăng ký.',404);
+    const row=rows[0];
     if (!row) fail('RESULT_NOT_FOUND', 'Link bài chưa hợp lệ.', 404);
     await authorize(row.class_id, identity);
     return { id: row.id, studentRef: row.student_ref, classId: row.class_id, code: row.code };
@@ -80,7 +82,7 @@ export function mountTeacherProgress(app, { service, teacherSessions, z, wrap })
     ['get', '/api/teacher/progress/classes', z.object({ code: code.optional() }).strict(), 'classes'],
     ['get', '/api/teacher/progress/students', z.object({ code: code.optional(), classId: z.string().regex(/^-?\d{1,19}$/) }).strict(), 'students'],
     ['get', '/api/teacher/progress/units/:id', z.object({ id: z.uuid() }).strict(), 'detail'],
-    ['post', '/api/teacher/progress/entry', z.object({ entryToken: z.string().regex(/^[\w-]{43}$/) }).strict(), 'entry']
+    ['post', '/api/teacher/progress/entry', z.union([z.object({ entryToken: z.string().regex(/^[\w-]{43}$/) }).strict(), z.object({ documentId:z.string().regex(/^[\w-]{20,150}$/),code }).strict()]), 'entry']
   ];
   for (const [method, path, schema, action] of routes) app[method](path, wrap(async (req, res) => {
     const identity = await teacherSessions.read(req);

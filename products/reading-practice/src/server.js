@@ -5,7 +5,8 @@ import {createContext} from './context.js';
 import {createReadingService} from './service.js';
 import {createApp} from './app.js';
 import {createDocsAdapter,createDocsWorker} from './docs.js';
-import {createOwnerVerifier} from './owner.js';
+import {createOwnerVerifier,createOwnerResolver,readOwnerSource} from './owner.js';
+import {createCtaRegistrar} from './cta-registration.js';
 import {createSharedHomeworkResolver} from './shared-homework.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
@@ -21,9 +22,10 @@ if(c.GOOGLE_APPLICATION_CREDENTIALS)auth=await new GoogleAuth({scopes:['https://
 else{auth=new OAuth2Client(c.READING_DOCS_CLIENT_ID,c.READING_DOCS_CLIENT_SECRET);auth.setCredentials({refresh_token:c.READING_DOCS_REFRESH_TOKEN});}
 const docs=createDocsAdapter(auth);
 const verifyBinding=createOwnerVerifier({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
-const service=createReadingService({pool,context,pageBase:c.READING_PAGE_BASE,verifyBinding});
+const service=createReadingService({pool,context,pageBase:c.READING_PAGE_BASE,resolveCurrentOwner:input=>readOwnerSource({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY},input),verifyBinding});
+const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.READING_ADMIN_KEY,resolveOwner:createOwnerResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY}),contentVersion:'legacy-unused'});
 const verifier=new OAuth2Client(c.READING_GOOGLE_CLIENT_ID);
-const app=createApp({pool,service,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,
+const app=createApp({pool,service,registerCta,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.READING_GOOGLE_CLIENT_ID})).getPayload()});
 const resolveSharedHomework=createSharedHomeworkResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
 const worker=createDocsWorker({pool,docs,resolveSharedHomework});

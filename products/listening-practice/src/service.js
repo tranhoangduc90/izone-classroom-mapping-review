@@ -4,6 +4,7 @@ import {timingFor} from './domain.js';
 import {authoredLesson} from './authored-content.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
+import {createEntryContext} from './entry-context.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
 export async function transaction(pool,fn){
@@ -12,7 +13,13 @@ export async function transaction(pool,fn){
  catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 }
 const initialState=()=>({attempts:[],events:[],firstCompleted:null,sequence:0});
-export function createListeningService({pool,context,clock=Date.now,pageBase,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
+export function createListeningService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
+ const entryContext=createEntryContext({pool,context,schema:'listening_practice',fail,lessonFor:code=>authoredLesson(code),resolveCurrentOwner});
+ async function guardEntry({documentId,code,token,entryToken}){
+  const expected=await entryContext.resolve({documentId,code}),b=await binding(pool,{token,entryToken});
+  if(b.id!==expected.bindingId)fail('ENTRY_OWNER_MISMATCH','Phiên đã lưu khác chủ link. Hãy xác nhận đúng người học.',403);
+  return expected;
+ }
  const teacherUrl=id=>`${pageBase}teacher.html#submission=${id}`;
  async function binding(db,{token,entryToken,bindingId,history=false}){
   const params=[token?hash(token):entryToken?hash(entryToken):bindingId];
@@ -190,14 +197,24 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
    const conflict=(await db.query("SELECT id FROM listening_practice.binding WHERE id<>$1 AND (document_id=$2 OR owner_proof->'homework'->>'documentId'=$2) LIMIT 1",[bound.id,input.documentId])).rows[0];
    if(conflict)fail('DOC_IDENTITY_MISMATCH','Docs đã được gắn với hồ sơ khác.');
    await db.query("UPDATE listening_practice.binding SET owner_proof=jsonb_set(owner_proof,'{homework}',$2::jsonb) WHERE id=$1",[bound.id,JSON.stringify(target)]);
-   const url=new URL(pageBase);url.searchParams.set('lesson',input.code);
+   const generic=new URL(pageBase);generic.searchParams.set('lesson',input.code);
+   const url=new URL(generic);url.searchParams.set('mode','student');url.searchParams.set('class',input.classCode);url.searchParams.set('documentId',input.documentId);
+   const previous=(await db.query("SELECT payload FROM listening_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta' FOR UPDATE",[bound.id])).rows[0];
+   if(previous&&previous.payload.url!==url.href){
+    if(previous.payload.url!==generic.href)fail('CTA_STORED_LINK_INVALID','Link đã lưu không phải đường chung được phép nâng cấp.');
+    await db.query("UPDATE listening_practice.doc_job SET payload=$2,status='pending',available_at=now(),attempts=0,verified_at=null WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id,{url:url.href}]);
+   }
    await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),bound.id,{url:url.href}]);
    const stored=(await db.query("SELECT payload FROM listening_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id])).rows[0];
    if(stored?.payload.url!==url.href)fail('CTA_STORED_LINK_INVALID','Link chung đã lưu không khớp bài.');
    return{bindingId:bound.id,assignmentId:assignment.id,entryUrl:url.href};
   });
  }
- async function sharedLogin({code,classId,studentRef}){
+ async function sharedLogin({code,classId,studentRef,documentId}){
+  if(documentId){const expected=await entryContext.resolve({documentId,code});
+   if(expected.entryMode!=='shared'||expected.classId!==classId||expected.selectedStudentRef!==studentRef)
+    fail('ENTRY_OWNER_MISMATCH','Người hoặc lớp được chọn khác chủ link cá nhân.',403);
+  }
   const selected=(await context.classes()).find(c=>c.id===classId);
   if(!selected||!await context.student(classId,studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc danh sách hợp lệ của lớp đã chọn.',403);
   return transaction(pool,async db=>{
@@ -302,6 +319,6 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,ver
   const row=(await pool.query("UPDATE listening_practice.doc_job SET status='pending',available_at=now(),attempts=0,lease_id=null,lease_until=null,error_code=null WHERE id=$1 AND status='blocked' RETURNING id",[jobId])).rows[0];
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);return{jobId,status:'pending'};
  }
- return{audioAccess,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
+ return{entryContext:entryContext.resolve,guardEntry,audioAccess,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
   teacherProgress:createTeacherProgress({pool,context})};
 }

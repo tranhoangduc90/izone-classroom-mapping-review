@@ -9,7 +9,7 @@ import {mountTeacherProgress} from './teacher-progress.js';
 import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,staticRoot,teacherCookiePath='/reading-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,teacherCookiePath='/reading-practice-api/api'}){
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
@@ -17,7 +17,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const origin=req.headers.origin;
   if(origin&&!origins.includes(origin))return res.status(403).json({error:{code:'ORIGIN_DENIED',message:'Trang gọi API không được phép.'}});
   if(origin){res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');res.set('Access-Control-Allow-Credentials','true');}
-  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Reading-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Izone-Document, X-Izone-Assignment, X-Reading-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   if(req.method==='OPTIONS')return res.sendStatus(204);next();
  });
  app.use(express.json({limit:'512kb'}));
@@ -46,8 +46,17 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  }));
  app.post('/api/shared-login',wrap(async(req,res)=>{
   const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
-  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:libraryCode(input.code)}));
+  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:libraryCode(input.code),...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}));
  }));
+ const documentContext=req=>({documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document']),code:z.string().min(1).max(100).parse(req.headers['x-izone-assignment'])});
+ app.get('/api/entry-context',wrap(async(req,res)=>{
+  const input=z.object({documentId:z.string().regex(/^[\w-]{20,150}$/),code:z.string().min(1).max(100)}).strict().parse(req.query);
+  res.set('Cache-Control','no-store');res.json(await service.entryContext({...input,code:libraryCode(input.code)}));
+ }));
+ app.use('/api',(req,res,next)=>{
+  if(!req.headers['x-izone-document']||!/^\/(?:open|login|state|result(?:\/|$)|begin|resume|activate|pulse|pause|reset|submit|audio(?:\/|$))/.test(req.path))return next();
+  Promise.resolve().then(()=>service.guardEntry({...documentContext(req),token:token(req),entryToken:req.body?.entryToken})).then(()=>next(),next);
+ });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
   res.json(await service[action]({...input,token:token(req)}));
@@ -84,6 +93,13 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');next();
  });
  app.get('/api/admin/status',wrap(async(req,res)=>res.json(await service.operationsStatus())));
+ app.post('/api/admin/register-cta',wrap(async(req,res)=>{
+  if(!registerCta)throw new ReadingError('CTA_UNAVAILABLE','Chưa cấu hình đăng ký CTA.',503);
+  const input=z.object({schema_version:z.enum(['course67_cta_registration_v1','course67_cta_registration_v2']),course:z.literal(67),
+   doc_id:z.string().regex(/^[\w-]{20,150}$/),submission_id:z.string().min(1).max(200),
+   classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80)}).parse(req.body);
+  res.json(await registerCta(input));
+ }));
  app.post('/api/admin/shared-lesson',wrap(async(req,res)=>res.json(await service.configureSharedLesson(z.object({code:z.string().min(1).max(100),contentVersion:z.string().min(1).max(80),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/assignment',wrap(async(req,res)=>res.json(await service.configureAssignment(z.object({assignmentId:z.uuid(),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
  app.post('/api/admin/retry-docs',wrap(async(req,res)=>res.json(await service.retryDocJob(z.object({jobId:z.uuid()}).strict().parse(req.body)))));

@@ -51,8 +51,7 @@ test('Buổi 10 qua cùng API giao Homework: link chung, đúng hai Docs và ret
  await f.pool.query("UPDATE listening_practice.doc_job SET available_at=now()+interval '1 day' WHERE kind='status'");
  const first=await f.register(a.event);assert.equal(first.status,'verified');assert.equal(first.bindingId,before.identity.bindingId);
  const second=await f.register(b.event);assert.equal(second.status,'verified');assert.notEqual(first.bindingId,second.bindingId);
- const expected='https://example.test/listening-practice/?lesson='+code;
- for(const row of f.records){assert.equal(f.documents.get(row.id).link,expected);assert.equal(f.documents.get(row.id).writes,1);assert.equal(f.documents.get(row.id).value,'Nhận xét tay giữ nguyên.');}
+ for(const row of f.records){const expected=new URL('https://example.test/listening-practice/');expected.search=new URLSearchParams({lesson:code,mode:'student',class:'FIXTURE 67',documentId:row.id});assert.equal(f.documents.get(row.id).link,expected.href);assert.equal(f.documents.get(row.id).writes,1);assert.equal(f.documents.get(row.id).value,'Nhận xét tay giữ nguyên.');}
  const repeat=await Promise.all([f.register(b.event),f.register(a.event),f.register(a.event)]);assert.ok(repeat.every(r=>r.status==='verified'));
  assert.equal(f.documents.get(a.id).writes,1);assert.equal(f.documents.get(b.id).writes,1);
  const reopened=await f.service.sharedLogin({code,classId:'1124',studentRef:a.member.studentRef});

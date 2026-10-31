@@ -8,7 +8,7 @@ import {createContext} from './context.js';
 import {createListeningService} from './service.js';
 import {createApp} from './app.js';
 import {createDocsAdapter,createDocsWorker} from './docs.js';
-import {createOwnerVerifier,createOwnerResolver} from './owner.js';
+import {createOwnerVerifier,createOwnerResolver,readOwnerSource} from './owner.js';
 import {createCtaRegistrar} from './cta-registration.js';
 import {loadReview} from './review.js';
 import {loadMediaCatalog} from './media-catalog.js';
@@ -27,7 +27,7 @@ if(c.GOOGLE_APPLICATION_CREDENTIALS)auth=await new GoogleAuth({scopes:['https://
 else{auth=new OAuth2Client(c.LISTENING_DOCS_CLIENT_ID,c.LISTENING_DOCS_CLIENT_SECRET);auth.setCredentials({refresh_token:c.LISTENING_DOCS_REFRESH_TOKEN});}
 const docs=createDocsAdapter(auth);
 const verifyBinding=createOwnerVerifier({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY,auth,docs});
-const service=createListeningService({pool,context,pageBase:c.LISTENING_PAGE_BASE,verifyBinding});
+const service=createListeningService({pool,context,pageBase:c.LISTENING_PAGE_BASE,resolveCurrentOwner:input=>readOwnerSource({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY},input),verifyBinding});
 const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.LISTENING_ADMIN_KEY,
  resolveOwner:createOwnerResolver({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY}),
  contentVersion:'cam19-t3-p3-approved-20261014-v1'});
