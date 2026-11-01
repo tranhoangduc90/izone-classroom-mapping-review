@@ -3,6 +3,7 @@ import {CODE,fail,hash} from './domain.js';
 import {CTA,planDocWrite} from './docs.js';
 import {authoredLesson} from './authored-content.js';
 import {lessonFor,ROBOTS_CODE} from './lessons.js';
+import {announceCommittedWork} from './test-work-runtime.js';
 
 // Đọc đủ tab và bảng lồng; chỉ nhận một CTA Reading đi cùng đúng mã ngay phía dưới.
 function documentParagraphs(document){
@@ -47,8 +48,8 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,entry
    const registered=await service.registerSharedHomework({code:selectedCode,classId:owner.classId,classCode:event.class_name,studentRef:owner.studentRef,
     documentId:event.doc_id,tabId:target.tabId,courseId:event.classroom_course_id,courseWorkId:event.coursework_id,submissionId:event.submission_id});
    const binding={document_id:event.doc_id,tab_id:target.tabId,code:selectedCode},job={kind:'cta',payload:{url:registered.entryUrl}};
-   if(!planDocWrite(document,binding,job).verified)await pool.query(`UPDATE reading_practice.doc_job SET status='pending',available_at=now(),attempts=0,verified_at=null
-    WHERE binding_id=$1 AND kind='cta' AND sequence=0 AND status='verified'`,[registered.bindingId]);
+   if(!planDocWrite(document,binding,job).verified){const updated=await pool.query(`UPDATE reading_practice.doc_job SET status='pending',available_at=now(),attempts=0,verified_at=null
+    WHERE binding_id=$1 AND kind='cta' AND sequence=0 AND status='verified' RETURNING id`,[registered.bindingId]);if(updated.rows.length)announceCommittedWork(pool);}
    const deadline=Date.now()+waitMs;
    do{
     const state=(await pool.query("SELECT status,error_code FROM reading_practice.doc_job WHERE binding_id=$1 AND kind='cta' AND sequence=0",[registered.bindingId])).rows[0];
@@ -77,8 +78,8 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,entry
    courseId:event.classroom_course_id,courseWorkId:event.coursework_id,submissionId:event.submission_id});
   const binding={document_id:event.doc_id,tab_id:target.tabId,code},job={kind:'cta',payload:{url:registered.entryUrl}};
   const initial=planDocWrite(document,binding,job);
-  if(!initial.verified)await pool.query(`UPDATE reading_practice.doc_job SET status='pending',available_at=now(),attempts=0,verified_at=null
-   WHERE binding_id=$1 AND kind='cta' AND sequence=0 AND status='verified'`,[registered.bindingId]);
+  if(!initial.verified){const updated=await pool.query(`UPDATE reading_practice.doc_job SET status='pending',available_at=now(),attempts=0,verified_at=null
+   WHERE binding_id=$1 AND kind='cta' AND sequence=0 AND status='verified' RETURNING id`,[registered.bindingId]);if(updated.rows.length)announceCommittedWork(pool);}
   const deadline=Date.now()+waitMs;
   do{
    const state=(await pool.query("SELECT status,error_code FROM reading_practice.doc_job WHERE binding_id=$1 AND kind='cta' AND sequence=0",[registered.bindingId])).rows[0];

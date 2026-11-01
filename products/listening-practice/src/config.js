@@ -9,6 +9,7 @@ export function readConfig(env=process.env){
   LISTENING_ADMIN_KEY:z.string().min(43),LISTENING_GOOGLE_CLIENT_ID:z.string().min(10),
   LISTENING_PAGE_BASE:z.url().refine(v=>v.endsWith('/')),
   LISTENING_ALLOWED_ORIGINS:z.string().min(1),LISTENING_PORT:z.coerce.number().int().min(1024).max(65535).default(8818),
+  LISTENING_WORKERS_ENABLED:z.enum(['true','false']).default('true'),LISTENING_WORK_COORDINATOR_ENABLED:z.enum(['true','false']).default('false'),
   LISTENING_DOCS_CLIENT_ID:z.string().optional(),LISTENING_DOCS_REFRESH_TOKEN:z.string().optional(),LISTENING_DOCS_CLIENT_SECRET:z.string().optional(),
   LISTENING_AUDIO_FILE:z.string().min(1),
   LISTENING_REVIEW_FILE:z.string().min(1).optional(),

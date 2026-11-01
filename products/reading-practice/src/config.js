@@ -9,6 +9,7 @@ export function readConfig(env=process.env){
   READING_ADMIN_KEY:z.string().min(43),READING_GOOGLE_CLIENT_ID:z.string().min(10),
   READING_PAGE_BASE:z.url().refine(v=>v.endsWith('/')),
   READING_ALLOWED_ORIGINS:z.string().min(1),READING_PORT:z.coerce.number().int().min(1024).max(65535).default(8808),
+  READING_WORKERS_ENABLED:z.enum(['true','false']).default('true'),READING_WORK_COORDINATOR_ENABLED:z.enum(['true','false']).default('false'),
   READING_DOCS_CLIENT_ID:z.string().optional(),READING_DOCS_REFRESH_TOKEN:z.string().optional(),READING_DOCS_CLIENT_SECRET:z.string().optional(),
   GOOGLE_APPLICATION_CREDENTIALS:z.string().optional()
  });

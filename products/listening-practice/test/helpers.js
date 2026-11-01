@@ -1,4 +1,4 @@
-import {localPool} from '../tools/local-pool.mjs';
+const localPool=(...args)=>import('../tools/local-pool.mjs').then(module=>module.localPool(...args));
 import {createListeningService} from '../src/service.js';
 import {CODE,secret,uuid,emptyDraft} from '../src/domain.js';
 

@@ -1,5 +1,6 @@
 import {CODE,fail,uuid} from './domain.js';
 import {transaction} from './service.js';
+import {markWorkReady,announceCommittedWork} from './test-work-runtime.js';
 import {authoredLesson} from './authored-content.js';
 
 export const STATUS_HEADING='TÌNH TRẠNG NỘP BÀI THỰC CHIẾN';
@@ -101,17 +102,18 @@ export function createDocsAdapter(auth){
 }
 // Hàng xử lý có thứ tự theo học viên. Ghi xong phải đọc lại chữ và link trước khi báo verified.
 export function createDocsWorker({pool,docs,resolveSharedHomework}){
- async function once(){
-  const job=await transaction(pool,async db=>{
-   const row=(await db.query(`SELECT j.* FROM listening_practice.doc_job j WHERE
+ async function claim(limit=1){
+  if(!Number.isInteger(limit)||limit<1||limit>16)throw Error('DOC_CLAIM_LIMIT_INVALID');
+  const rows=(await pool.query(`WITH ready AS MATERIALIZED (SELECT j.id FROM listening_practice.doc_job j WHERE
     ((j.status='pending' AND j.available_at<=now()) OR (j.status='processing' AND j.lease_until<now()))
     AND NOT EXISTS(SELECT 1 FROM listening_practice.doc_job old WHERE old.binding_id=j.binding_id AND old.sequence<j.sequence AND old.status<>'verified')
-    ORDER BY j.created_at,j.sequence LIMIT 1 FOR UPDATE OF j SKIP LOCKED`)).rows[0];
-   if(!row)return null;
-   const leaseId=uuid();await db.query("UPDATE listening_practice.doc_job SET status='processing',lease_id=$2,lease_until=now()+interval '180 seconds',attempts=attempts+1 WHERE id=$1",[row.id,leaseId]);
-   return{...row,leaseId,attempts:row.attempts+1};
-  });
-  if(!job)return false;
+    ORDER BY j.created_at,j.sequence LIMIT $1 FOR UPDATE OF j SKIP LOCKED)
+    UPDATE listening_practice.doc_job j SET status='processing',lease_id=gen_random_uuid(),lease_until=now()+interval '180 seconds',attempts=j.attempts+1
+    FROM ready WHERE j.id=ready.id RETURNING j.*`,[limit])).rows;
+  return rows.map(row=>({...row,leaseId:row.lease_id}));
+ }
+ async function run(job){
+  if(!job?.id||!job.leaseId)throw Error('DOC_CLAIM_REQUIRED');
   try{
    let b=(await pool.query('SELECT b.*,a.class_id,c.code FROM listening_practice.binding b JOIN listening_practice.assignment a ON a.id=b.assignment_id JOIN listening_practice.content c ON c.id=a.content_id WHERE b.id=$1',[job.binding_id])).rows[0];
    if(!b.document_id){
@@ -127,6 +129,7 @@ export function createDocsWorker({pool,docs,resolveSharedHomework}){
    await transaction(pool,async db=>{
     const verified=(await db.query("UPDATE listening_practice.doc_job SET status='verified',verified_at=now(),error_code=NULL,lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId])).rows.length;
     if(!verified)return;
+    markWorkReady(db,'state');
     if(job.kind==='cta')await db.query('UPDATE listening_practice.binding SET cta_verified_at=now() WHERE id=$1',[b.id]);
     else await db.query('UPDATE listening_practice.binding SET last_doc_sequence=$2,last_doc_text=$3,last_doc_link=$4 WHERE id=$1 AND last_doc_sequence<$2',[b.id,job.sequence,job.payload.text,job.payload.link]);
    });
@@ -136,9 +139,11 @@ export function createDocsWorker({pool,docs,resolveSharedHomework}){
    const code=error.code||'DOC_RETRY',waitingForHomework=code==='HOMEWORK_NOT_FOUND';
    const blocked=!waitingForHomework&&(/^DOC_(IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_)/.test(code)||job.attempts>=8);
    const delay=waitingForHomework?300:Math.min(300,2**Math.min(job.attempts,9));
-   await pool.query("UPDATE listening_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing'",[job.id,job.leaseId,blocked?'blocked':'pending',code,delay]);
+   const updated=await pool.query("UPDATE listening_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId,blocked?'blocked':'pending',code,delay]);
+   if(updated.rows.length)announceCommittedWork(pool,'state');
   }
   return true;
  }
- return{once};
+ async function once(){const [job]=await claim(1);return job?run(job):false;}
+ return{claim,run,once};
 }

@@ -13,6 +13,7 @@ import {createCtaRegistrar} from './cta-registration.js';
 import {loadReview} from './review.js';
 import {loadMediaCatalog} from './media-catalog.js';
 import {createSharedHomeworkResolver} from './shared-homework.js';
+import {startCoordinatedDocs} from './test-work-runtime.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -40,8 +41,12 @@ const app=createApp({pool,service,registerCta,review,mediaCatalog,audioFile:c.LI
 const resolveSharedHomework=createSharedHomeworkResolver({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY,auth,docs});
 const worker=createDocsWorker({pool,docs,resolveSharedHomework});
 let stopping=false;
+const onWorkerError=error=>console.error(JSON.stringify({event:'listening_docs_worker_error',type:error.name}));
+const coordinated=c.LISTENING_WORKERS_ENABLED==='true'&&c.LISTENING_WORK_COORDINATOR_ENABLED==='true'
+ ?startCoordinatedDocs({pool,worker,channel:'listening_practice_work_v1',onError:onWorkerError,
+  createClient:()=>new pg.Client({connectionString:c.LISTENING_DATABASE_URL,connectionTimeoutMillis:5000,statement_timeout:5000})}):null;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
-const workerDone=workerLoop();
+const workerDone=c.LISTENING_WORKERS_ENABLED==='true'&&!coordinated?workerLoop():Promise.resolve();
 const server=app.listen(c.LISTENING_PORT,'0.0.0.0',()=>console.log(JSON.stringify({event:'reading_started',port:c.LISTENING_PORT})));
-async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await pool.end();}
+async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await coordinated?.stop();await pool.end();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

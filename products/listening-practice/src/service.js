@@ -5,12 +5,13 @@ import {authoredLesson} from './authored-content.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
+import {markWorkReady,finishWorkTransaction,announceCommittedWork} from './test-work-runtime.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
 export async function transaction(pool,fn){
  const client=await pool.connect();
- try{await client.query('BEGIN');const result=await fn(client);await client.query('COMMIT');return result;}
- catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+ try{await client.query('BEGIN');const result=await fn(client);await client.query('COMMIT');finishWorkTransaction(pool,client,true);return result;}
+ catch(e){await client.query('ROLLBACK');throw e;}finally{finishWorkTransaction(pool,client,false);client.release();}
 }
 const initialState=()=>({attempts:[],events:[],firstCompleted:null,sequence:0});
 export function createListeningService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
@@ -58,6 +59,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   state.events.push({type:a.status==='submitted'?'completed':'started',attempt:a.no,message,at:new Date(clock()).toISOString(),sequence});
   await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,$3,'status',$4)`,
    [uuid(),b.id,sequence,{text:message,link:a.submissionId?teacherUrl(a.submissionId):'',attemptId:a.id,attemptNo:a.no}]);
+  markWorkReady(db);
  }
  async function operation(input,kind,fn){
   if(!/^[0-9a-f-]{36}$/i.test(input.operationId||''))fail('OPERATION_REQUIRED','Thao tác thiếu mã chống gửi lặp.',400);
@@ -125,7 +127,8 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
    if(!b)fail('DOCUMENT_BINDING_CONFLICT','Docs đã gắn với học viên/bài khác hoặc mã link khác.');
    const url=new URL(pageBase);url.searchParams.set('assignmentCode',input.code||CODE);url.searchParams.set('documentId',input.documentId);
    url.hash=`login?entry=${encodeURIComponent(token)}`;
-   await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),b.id,{url:url.href}]);
+   const queued=await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING RETURNING id`,[uuid(),b.id,{url:url.href}]);
+   if(queued.rows.length)markWorkReady(db);
    return{bindingId:b.id,assignmentId:assignment.id,entryUrl:url.href};
   });
  }
@@ -208,8 +211,10 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
    if(previous&&previous.payload.url!==url.href){
     if(previous.payload.url!==generic.href)fail('CTA_STORED_LINK_INVALID','Link đã lưu không phải đường chung được phép nâng cấp.');
     await db.query("UPDATE listening_practice.doc_job SET payload=$2,status='pending',available_at=now(),attempts=0,verified_at=null WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id,{url:url.href}]);
+    markWorkReady(db);
    }
-   await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),bound.id,{url:url.href}]);
+   const queued=await db.query(`INSERT INTO listening_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING RETURNING id`,[uuid(),bound.id,{url:url.href}]);
+   if(queued.rows.length)markWorkReady(db);
    const stored=(await db.query("SELECT payload FROM listening_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id])).rows[0];
    if(stored?.payload.url!==url.href)fail('CTA_STORED_LINK_INVALID','Link chung đã lưu không khớp bài.');
    return{bindingId:bound.id,assignmentId:assignment.id,entryUrl:url.href};
@@ -325,7 +330,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
  }
  async function retryDocJob({jobId}){
   const row=(await pool.query("UPDATE listening_practice.doc_job SET status='pending',available_at=now(),attempts=0,lease_id=null,lease_until=null,error_code=null WHERE id=$1 AND status='blocked' RETURNING id",[jobId])).rows[0];
-  if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);return{jobId,status:'pending'};
+  if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);announceCommittedWork(pool);return{jobId,status:'pending'};
  }
  return{entryContext:entryContext.resolve,guardEntry,audioAccess,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
   teacherProgress:createTeacherProgress({pool,context})};

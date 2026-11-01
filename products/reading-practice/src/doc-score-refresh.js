@@ -1,6 +1,7 @@
 import {canonical,fail,hash,resultSummary,statusMessage} from './domain.js';
 import {ROBOTS_CODE} from './lessons.js';
 import {transaction} from './service.js';
+import {markWorkReady} from './test-work-runtime.js';
 
 const VERSION='cam20-t3-p3-robots-and-us-v1';
 const select=`SELECT b.*,a.class_id,a.class_code,c.code,c.version,w.state
@@ -60,6 +61,7 @@ export async function queueLesson9ScoreRefresh({pool,pageBase,expected}){
   const payload={...job.payload,text:current.newText,scoreRefresh:{version:1,sequence:current.sequence,previousText:current.oldText}};
   await db.query(`UPDATE reading_practice.doc_job SET payload=$2,status='pending',available_at=now(),
    attempts=0,error_code=NULL,lease_id=NULL,lease_until=NULL,verified_at=NULL WHERE id=$1`,[current.jobId,payload]);
+  markWorkReady(db);
   return {bindingId:b.id,outcome:'queued'};
  });
 }
