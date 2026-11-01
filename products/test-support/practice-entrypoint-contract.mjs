@@ -8,7 +8,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createHash} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check,label){const deadline=Date.now()+10000;while(Date.now()<deadline){if(await check())return;await sleep(25);}throw Error('ENTRYPOINT_TIMEOUT:'+label);}
@@ -29,12 +29,15 @@ export function entrypointContract({product,fixture,poolUrl,uuid}){
    snapshotRequests++;
    const payload={apiVersion:1,productId:'PRODUCT-TERM-MINI-K67',classes:[{erp_course_class_id:'1124',erp_class_name_snapshot:'FIXTURE 67'}],
     students:[{public_id:f.studentRef,erp_course_class_id:'1124',erp_student_contact_id:'1',erp_student_name_snapshot:'Synthetic entrypoint learner',status:'approved'}],
-    memberships:[{erp_course_class_id:'1124',erp_student_contact_id:'1',erp_student_name_snapshot:'Synthetic entrypoint learner',source_state:'active'}],accounts:[],access:[]};
+    memberships:[{erp_course_class_id:'1124',erp_student_contact_id:'1',erp_student_name_snapshot:'Synthetic entrypoint learner',source_state:'active'}],
+    accounts:[{email:'teacher@example.test',google_subject:'google-fixture',display_name:'Synthetic teacher',role:'teacher',status:'active',can_access_all_classes:false}],access:[{reviewer_email:'teacher@example.test',erp_course_class_id:'1124'}]};
    res.setHeader('content-type','application/json');res.end(JSON.stringify({...payload,capturedAt:new Date().toISOString(),sourceRevision:createHash('sha256').update(JSON.stringify(payload)).digest('hex')}));
   });
   authority.listen(0,'127.0.0.1');await once(authority,'listening');
   try{
    await writeFile(audio,Buffer.from('Synthetic fixture asset; not an audio-quality test.'));
+   const teacherToken=randomBytes(32).toString('base64url');await f.pool.query(`INSERT INTO ${schema}.teacher_session(token_hash,email,google_subject,expires_at,absolute_expires_at,remembered)
+    VALUES($1,'teacher@example.test','google-fixture',now()+interval '1 day',now()+interval '2 days',false)`,[createHash('sha256').update(teacherToken).digest('hex')]);
    let lease,attemptId;const snapshot=f.draft();snapshot.notes='Synthetic running draft survives actual process replacement.';
    const artifactBefore=JSON.stringify((await f.pool.query(`SELECT id,binding_id,sequence,payload FROM ${schema}.doc_job ORDER BY id`)).rows);
    for(const mode of ['disabled','coordinated','legacy']){
@@ -46,12 +49,13 @@ export function entrypointContract({product,fixture,poolUrl,uuid}){
     const env={PATH:process.env.PATH,...Object.fromEntries(Object.entries(settings).map(([key,value])=>[prefix+'_'+key,value]))};
     stdout='';stderr='';child=spawn(process.execPath,['src/server.js'],{cwd:fileURLToPath(new URL('../'+product+'-practice/',import.meta.url)),env,stdio:['ignore','pipe','pipe']});
     ended=once(child,'exit');child.stdout.on('data',value=>stdout+=value);child.stderr.on('data',value=>stderr+=value);
-    const send=async(route,body,authorized=true,origin='https://page.test')=>{
-     const response=await fetch(`http://127.0.0.1:${port}/api/${route}`,{method:body===undefined?'GET':'POST',headers:{Origin:origin,...(authorized?{Authorization:'Bearer '+f.token}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
+    const send=async(route,body,authorized=true,origin='https://page.test',bearer=f.token)=>{
+     const response=await fetch(`http://127.0.0.1:${port}/api/${route}`,{method:body===undefined?'GET':'POST',headers:{Origin:origin,...(authorized?{Authorization:'Bearer '+bearer}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
      return{status:response.status,body:await response.json()};
     };
     await until(()=>{if(child.exitCode!==null)throw Error('ENTRYPOINT_EXITED:'+stderr);return stdout.includes('"port":'+port);},mode+' started');
     assert.equal((await send('health')).status,200);assert.equal((await send('state',undefined,false)).status,401);assert.equal((await send('state',undefined,true,'https://denied.test')).status,403);
+    const classes=await send('teacher/progress/classes?code='+f.content.code,undefined,true,'https://page.test',teacherToken);assert.equal(classes.status,200);assert.equal(classes.body.capabilities?.teacherStateStream,mode==='legacy'?undefined:true);
     if(mode==='disabled'){
      const begun=await send('begin',{operationId:uuid(),owner:'native-entry-device'});assert.equal(begun.status,200);lease=begun.body.lease;attemptId=begun.body.attempts.at(-1).id;
      assert.equal((await send('activate',{attemptId,lease})).status,200);
@@ -65,7 +69,14 @@ export function entrypointContract({product,fixture,poolUrl,uuid}){
     await until(async()=>Number((await f.pool.query("SELECT count(*) AS n FROM pg_stat_activity WHERE datname=current_database() AND usename=current_user AND query=$1",['LISTEN '+channel])).rows[0].n)===expected,'listener count');
     const state=(await f.pool.query(`SELECT state FROM ${schema}.work WHERE binding_id=$1`,[f.registered.bindingId])).rows[0].state;
     assert.equal(state.attempts.length,1);assert.equal(state.attempts[0].status,'running');assert.equal(state.attempts[0].draft.notes,snapshot.notes);
+    let reader;
+    if(mode!=='legacy'){
+     const query=new URLSearchParams({classId:'1124',code:f.content.code,unitId:f.registered.bindingId}),status=await send('teacher/progress/status?'+query,undefined,true,'https://page.test',teacherToken);assert.equal(status.status,200);assert.equal(status.body.unitId,f.registered.bindingId);
+     const response=await fetch(`http://127.0.0.1:${port}/api/teacher/progress/events?`+query,{headers:{Origin:'https://page.test',Authorization:'Bearer '+teacherToken},signal:AbortSignal.timeout(10000)});assert.equal(response.status,200);reader=response.body.getReader();let frame='';
+     while(!frame.includes('\n\n')){const value=await reader.read();assert.equal(value.done,false);frame+=new TextDecoder().decode(value.value);}assert.match(frame,/event: state/);
+    }
     await stopChild(child,ended);child=null;
+    if(reader){while(!(await reader.read()).done){}await reader.cancel();}
     assert.equal(stderr,'');
     await until(async()=>Number((await f.pool.query("SELECT count(*) AS n FROM pg_stat_activity WHERE datname=current_database() AND usename=current_user AND query=$1",['LISTEN '+channel])).rows[0].n)===0,'listener drained');
    }

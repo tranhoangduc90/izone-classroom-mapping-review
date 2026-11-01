@@ -6,14 +6,17 @@ import {timingSafeEqual} from 'node:crypto';
 import {CODE,ListeningError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
+import {createTestObservationHub} from './test-state-runtime.js';
 import {matchingReview} from './review.js';
 import {lessonFor} from './lessons.js';
 import {sendPublicAudioMetadata} from './public-audio.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api',stateStreamEnabled=false}){
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
+ const observationHub=stateStreamEnabled?createTestObservationHub({read:service.teacherProgress.readObservations}):null;
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
+ app.locals.practiceObservation=observationHub;
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
   const origin=req.headers.origin;
@@ -88,7 +91,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   sendReviewAudio(result,res,req);
  }));
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
- mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap});
+ mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap,observationHub});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
   const {credential,remember}=z.object({credential:z.string().min(10).max(10000),remember:z.boolean().default(true)}).strict().parse(req.body);
   let identity;

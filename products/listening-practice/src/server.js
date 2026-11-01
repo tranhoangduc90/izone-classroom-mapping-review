@@ -37,16 +37,17 @@ const audioHash=crypto.createHash('sha256').update(await readFile(c.LISTENING_AU
 const review=await loadReview(c.LISTENING_REVIEW_FILE,audioHash);
 const mediaCatalog=await loadMediaCatalog(c.LISTENING_MEDIA_CATALOG);
 const app=createApp({pool,service,registerCta,review,mediaCatalog,audioFile:c.LISTENING_AUDIO_FILE,audioHash,origins:c.origins,googleClientId:c.LISTENING_GOOGLE_CLIENT_ID,adminKey:c.LISTENING_ADMIN_KEY,
+ stateStreamEnabled:c.LISTENING_WORK_COORDINATOR_ENABLED==='true',
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.LISTENING_GOOGLE_CLIENT_ID})).getPayload()});
 const resolveSharedHomework=createSharedHomeworkResolver({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY,auth,docs});
 const worker=createDocsWorker({pool,docs,resolveSharedHomework});
 let stopping=false;
 const onWorkerError=error=>console.error(JSON.stringify({event:'listening_docs_worker_error',type:error.name}));
 const coordinated=c.LISTENING_WORKERS_ENABLED==='true'&&c.LISTENING_WORK_COORDINATOR_ENABLED==='true'
- ?startCoordinatedDocs({pool,worker,channel:'listening_practice_work_v1',onError:onWorkerError,
+ ?startCoordinatedDocs({pool,worker,channel:'listening_practice_work_v1',onError:onWorkerError,onState:()=>app.locals.practiceObservation?.wake(),
   createClient:()=>new pg.Client({connectionString:c.LISTENING_DATABASE_URL,connectionTimeoutMillis:5000,statement_timeout:5000})}):null;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
 const workerDone=c.LISTENING_WORKERS_ENABLED==='true'&&!coordinated?workerLoop():Promise.resolve();
 const server=app.listen(c.LISTENING_PORT,'0.0.0.0',()=>console.log(JSON.stringify({event:'reading_started',port:c.LISTENING_PORT})));
-async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await coordinated?.stop();await pool.end();}
+async function stop(){if(stopping)return;stopping=true;await app.locals.practiceObservation?.close();await new Promise(resolve=>server.close(resolve));await workerDone;await coordinated?.stop();await pool.end();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

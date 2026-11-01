@@ -115,10 +115,10 @@ export function createWorkSignals({query,createClient,onWake,channel,lanes=['doc
  };
 }
 
-export function startCoordinatedDocs({pool,worker,createClient,channel,onError=()=>{}}) {
+export function startCoordinatedDocs({pool,worker,createClient,channel,onError=()=>{},onState=()=>{}}) {
  if(publishers.has(pool))throw Error('WORK_PUBLISHER_ALREADY_REGISTERED');
  const loop=createDurableWorkLoop({claim:n=>worker.claim(n),run:job=>worker.run(job),capacity:1,scanMs:1000,cooldownMs:1000,onError});
- const signals=createWorkSignals({query:(...args)=>pool.query(...args),createClient,channel,onError,onWake:lane=>{if(!lane||lane==='docs')loop.wake();}});
+ const signals=createWorkSignals({query:(...args)=>pool.query(...args),createClient,channel,onError,onWake:lane=>{if(!lane||lane==='docs')loop.wake();onState();}});
  const detach=registerWorkPublisher(pool,lane=>signals.publish(lane));let closing;
  return{snapshot:()=>({loop:loop.snapshot(),signals:signals.snapshot()}),
   stop(){if(!closing)closing=(async()=>{await loop.close();detach();await signals.close();})();return closing;}};

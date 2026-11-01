@@ -27,16 +27,17 @@ const service=createReadingService({pool,context,pageBase:c.READING_PAGE_BASE,re
 const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.READING_ADMIN_KEY,resolveOwner:createOwnerResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY}),contentVersion:'legacy-unused'});
 const verifier=new OAuth2Client(c.READING_GOOGLE_CLIENT_ID);
 const app=createApp({pool,service,registerCta,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,
+ stateStreamEnabled:c.READING_WORK_COORDINATOR_ENABLED==='true',
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.READING_GOOGLE_CLIENT_ID})).getPayload()});
 const resolveSharedHomework=createSharedHomeworkResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
 const worker=createDocsWorker({pool,docs,resolveSharedHomework});
 let stopping=false;
 const onWorkerError=error=>console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));
 const coordinated=c.READING_WORKERS_ENABLED==='true'&&c.READING_WORK_COORDINATOR_ENABLED==='true'
- ?startCoordinatedDocs({pool,worker,channel:'reading_practice_work_v1',onError:onWorkerError,
+ ?startCoordinatedDocs({pool,worker,channel:'reading_practice_work_v1',onError:onWorkerError,onState:()=>app.locals.practiceObservation?.wake(),
   createClient:()=>new pg.Client({connectionString:c.READING_DATABASE_URL,connectionTimeoutMillis:5000,statement_timeout:5000})}):null;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
 const workerDone=c.READING_WORKERS_ENABLED==='true'&&!coordinated?workerLoop():Promise.resolve();
 const server=app.listen(c.READING_PORT,'0.0.0.0',()=>console.log(JSON.stringify({event:'reading_started',port:c.READING_PORT})));
-async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await coordinated?.stop();await pool.end();}
+async function stop(){if(stopping)return;stopping=true;await app.locals.practiceObservation?.close();await new Promise(resolve=>server.close(resolve));await workerDone;await coordinated?.stop();await pool.end();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);
