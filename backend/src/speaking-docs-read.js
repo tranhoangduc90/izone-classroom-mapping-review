@@ -18,7 +18,7 @@ export function loadDocsReadCredentials(file) {
 // Đầu vào: Docs ID và cấu hình Google chỉ ở máy chủ. Chỉ đọc Docs, không ghi Google.
 // Gộp lượt đang chờ, giới hạn tải và toàn thời gian chờ; lỗi không trả nội dung cũ.
 export function createDirectDocsReader({ credentials, call = fetch, now = Date.now,
-  timeoutMs = 7500, tokenTimeoutMs = 3000, concurrency = 6, maxPending = 30 } = {}) {
+  timeoutMs = 7500, tokenTimeoutMs = 3000, concurrency = 6, maxPending = 30, allowReadOnly = false } = {}) {
   if (!credentials || ['clientId', 'clientSecret', 'refreshToken'].some(key => !credentials[key]))
     throw new Error('DOCS_READ_CONFIG_INVALID');
   if (![timeoutMs, tokenTimeoutMs, concurrency, maxPending].every(Number.isSafeInteger)
@@ -97,7 +97,7 @@ export function createDirectDocsReader({ credentials, call = fetch, now = Date.n
         if (response.status === 404) throw failure('DOC_READ_NOT_FOUND', 'Không tìm thấy bản Homework hoặc tài khoản hệ thống chưa được chia sẻ file.', 404);
         if (!response.ok) throw unavailable();
         const document = await within(response.json(), signal);
-        if (document?.documentId !== documentId || !document.revisionId || !Array.isArray(document.tabs)) throw unavailable();
+        if (document?.documentId !== documentId || (!document.revisionId && !allowReadOnly) || !Array.isArray(document.tabs)) throw unavailable();
         return document;
       }
       throw unavailable();
@@ -121,6 +121,6 @@ export function createDirectDocsReader({ credentials, call = fetch, now = Date.n
 // Đường mở bài dùng đọc trực tiếp khi đã bật; đường ghi biên nhận vẫn giữ gateway cũ.
 export function createOpeningDocsGateway({ gateway, credentialFile, readCredentials = loadDocsReadCredentials, call = fetch }) {
   if (!gateway || !credentialFile) return gateway;
-  const reader = createDirectDocsReader({ credentials: readCredentials(credentialFile), call });
+  const reader = createDirectDocsReader({ credentials: readCredentials(credentialFile), call, allowReadOnly: true });
   return { get: reader.get, write: gateway.write };
 }

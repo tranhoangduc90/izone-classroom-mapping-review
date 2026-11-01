@@ -12,8 +12,8 @@ function allText(value) {
   if(value?.textRun) return value.textRun.content||'';
   return value&&typeof value==='object'?Object.values(value).map(allText).join(''):'';
 }
-export function validateIndependentDocument(document,{documentId,assignmentCode}) {
-  if(document.documentId!==documentId||!document.revisionId) error('DOCUMENT_IDENTITY_MISMATCH','Nội dung Docs chưa khớp file đang mở.');
+export function validateIndependentDocument(document,{documentId,assignmentCode,allowReadOnly=false}) {
+  if(document.documentId!==documentId||(!document.revisionId&&!allowReadOnly)) error('DOCUMENT_IDENTITY_MISMATCH','Nội dung Docs chưa khớp file đang mở.');
   const found=[];
   for(const tab of document.tabs||[]) {
     const text=allText(tab.documentTab?.body).normalize('NFKC');
@@ -32,13 +32,22 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
   async function ensure({documentId,assignmentCode}) {
     const {template}=await source.context({assignmentCode});
     const document=await gateway.get(documentId);
-    const verified=validateIndependentDocument(document,{documentId,assignmentCode});
+    const verified=validateIndependentDocument(document,{documentId,assignmentCode,allowReadOnly:true});
     const prepared=await withTransaction(pool,async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`document:${documentId}:${verified.tabId}`]);
       let u=(await db.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_id,p.class_code,p.student_ref,p.course_id
         FROM speaking_independent.document_binding b JOIN speaking_independent.work_unit u ON u.id=b.work_unit_id
         JOIN speaking_independent.profile p ON p.id=u.profile_id
         WHERE b.document_id=$1 AND b.tab_id=$2 AND b.assignment_code=$3`,[documentId,verified.tabId,assignmentCode])).rows[0];
+      // A read-only Google document can resume only its already verified Classroom work.
+      // Never invent a Docs revision, create a new binding or relax the write/CTA guards.
+      if(!verified.revision) {
+        if(!u?.course_id||!u.student_ref||u.revoked_at) error('DOCUMENT_REVISION_REQUIRED','Docs chỉ xem chưa có bài cá nhân đã xác minh để tiếp tục.');
+        const b=await binding(documentId,db);
+        if(b.status!=='linked'||!b.cta_verified_at||b.work_unit_id!==u.id||b.assignment_code!==assignmentCode
+          ||b.student_ref!==u.student_ref||b.course_id!==u.course_id||String(b.class_id)!==String(u.class_id))
+          error('DOCUMENT_REVISION_REQUIRED','Docs chỉ xem chưa khớp chủ bài Classroom đã xác minh.');
+      }
       if(!u) {
         const {rows:[p]}=await db.query(`INSERT INTO speaking_independent.profile(identity_ref,profile_key,kind,student_name)
           VALUES($1,$2,'document',$3) ON CONFLICT(profile_key) DO UPDATE SET profile_key=EXCLUDED.profile_key RETURNING *`,
@@ -52,7 +61,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
         await db.query(`INSERT INTO speaking_independent.document_binding(document_id,tab_id,assignment_code,work_unit_id,verified_revision,template_digest)
           VALUES($1,$2,$3,$4,$5,$6)`,[documentId,verified.tabId,assignmentCode,u.id,verified.revision,template.digest]);
       }
-      return {u,template};
+      return {u,template,documentReadOnly:!verified.revision};
     });
     const known=(await pool.query(`SELECT 1 FROM speaking_independent.source_binding WHERE document_id=$1
       AND assignment_code=$2 AND cta_verified_at IS NOT NULL AND status='pending'`,[documentId,assignmentCode])).rows;
@@ -61,10 +70,15 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
       prepared.u=(await pool.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_id,p.class_code,p.student_ref,p.course_id
         FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[prepared.u.id])).rows[0];
     }
+    if(prepared.documentReadOnly) {
+      const u=prepared.u,c=await source.context({assignmentCode,classCode:u.class_code,studentRef:u.student_ref});
+      if(c.member?.student_ref!==u.student_ref||String(c.scope?.class_id)!==String(u.class_id)||c.scope?.course_id!==u.course_id)
+        error('DOCUMENT_PROFILE_MISMATCH','Chủ bài Classroom không còn khớp nguồn hiện hành.');
+    }
     return prepared;
   }
   async function open(input) {
-    const {u,template}=await ensure(input);
+    const {u,template,documentReadOnly}=await ensure(input);
     if(!u.course_id && (u.class_code||(input.classCode && input.classCode!=='DOCS'))) {
       if(u.class_code && input.classCode && u.class_code!==input.classCode)
         error('CLASS_MISMATCH','Lớp đã chọn chưa khớp bản Docs này.');
@@ -74,7 +88,8 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     }
     if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
     return {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
-      students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}]};
+      students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}],selectedStudentRef:u.student_ref||u.identity_ref,
+      ...(documentReadOnly?{documentReadOnly:true}:{} )};
   }
   async function start(input) {
     let {u}=await ensure(input);
