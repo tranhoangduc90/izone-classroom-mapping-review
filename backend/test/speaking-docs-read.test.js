@@ -110,6 +110,15 @@ test('Docs sai ID, thiếu revision hoặc tabs đều bị từ chối', async 
   }
 });
 
+test('opening reader can return a current read-only document for the existing-owner guard without inventing a revision',async()=>{
+  const value={documentId:'canary_document_1',tabs:[]};
+  const f=fixture({docs:()=>json(value)});
+  const opening=createOpeningDocsGateway({gateway:{get(){throw Error('not used');}},credentialFile:'fixture',readCredentials:()=>credentials,call:f.call});
+  const result=await opening.get('canary_document_1');
+  assert.deepEqual(result,value);assert.equal(result.revisionId,undefined);
+  await assert.rejects(f.reader.get('canary_document_1'),{code:'DOC_READ_UNAVAILABLE'});
+});
+
 test('mã Docs chứa đường dẫn/URL bị từ chối trước khi gọi Google', async () => {
   const f = fixture();
   for (const id of ['', '../other', 'https://other.test/id', 'id%2Fbad']) await assert.rejects(f.reader.get(id), { code: 'INVALID_DOCUMENT_ID' });

@@ -520,5 +520,19 @@ test('Nguồn xác nhận cùng tên chuyển về một học viên và từ ch
     assert.equal((await docs.start(input)).workUnitId,s.workUnitId);
     await assert.rejects(docs.start({...input,studentRef:exercise(88)}),{code:'DOCUMENT_PROFILE_MISMATCH'});
     await assert.rejects(docs.start({...input,classCode:'OTHER'}),{code:'CLASS_MISMATCH'});
+    const before=(await f.pool.query('SELECT * FROM speaking_independent.work_unit WHERE id=$1',[s.workUnitId])).rows[0];
+    delete doc.revisionId;
+    const readOnly=await docs.open(input);
+    assert.equal(readOnly.documentReadOnly,true);assert.equal(readOnly.selectedStudentRef,ref);
+    assert.equal((await docs.start(input)).workUnitId,s.workUnitId);
+    await assert.rejects(docs.start({...input,studentRef:exercise(88)}),{code:'DOCUMENT_PROFILE_MISMATCH'});
+    await assert.rejects(docs.plan({documentId:doc.documentId,document:doc}),{code:'DOCUMENT_IDENTITY_MISMATCH'});
+    assert.deepEqual((await f.pool.query('SELECT * FROM speaking_independent.work_unit WHERE id=$1',[s.workUnitId])).rows[0],before);
+    await f.pool.query("UPDATE speaking_independent.source_binding SET status='review' WHERE document_id=$1",[doc.documentId]);
+    await assert.rejects(docs.open(input),{code:'DOCUMENT_REVISION_REQUIRED'});
+    await f.pool.query("UPDATE speaking_independent.source_binding SET status='linked' WHERE document_id=$1",[doc.documentId]);
+    f.drop();await assert.rejects(docs.open(input),{code:'STUDENT_NOT_ACTIVE'});
+    const unknown=documentFixture('unknown-readonly-document');delete unknown.revisionId;doc=unknown;
+    await assert.rejects(docs.open({...input,documentId:unknown.documentId}),{code:'DOCUMENT_REVISION_REQUIRED'});
   }finally{await f.db.close();}
 });

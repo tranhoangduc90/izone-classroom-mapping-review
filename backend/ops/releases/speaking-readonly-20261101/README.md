@@ -1,0 +1,13 @@
+# Resume verified Speaking work when Google Docs becomes read-only
+
+Google Docs can return current content without `revisionId` while the document is read-only, even when Drive's `canEdit` capability is true. The production Google account and Chrome both reproduced the file-level restriction. The previous opening reader rejected that response before checking the already verified Classroom owner, blocking entry to existing web work.
+
+The opening-only reader now accepts a current read-only response. The service may use it only when the document already has an exact work-unit binding and one published, CTA-verified, linked Classroom source matching the existing course, class and student. It rechecks current membership before returning or resuming the work. Unknown documents, reviewed/conflicting/revoked bindings and wrong owners remain blocked. No revision is invented and no new profile/work/binding is created for a read-only document.
+
+CTA planning, source verification and Google writes continue to require a real Docs revision. This restores access to existing web work; it does not claim to restore Google's editing permission or successful Docs synchronization. No Classroom submission state, student answer, grade, receipt or ownership is changed.
+
+Validation: two regression cases fail on the previous implementation; targeted and adjacent Speaking coverage passes 256 tests, with two native PostgreSQL concurrency cases not run. Generic fixtures cover missing revisions, unknown Docs, source review, revoked membership, wrong owner and preservation of the existing work unit. Production canaries resolve all three affected contexts. Public browser checks use no student login, answer edits, submit, AI or audio calls. Exact private before/after digests and live readbacks are kept separately.
+
+Release overlays only `speaking-docs-read.js` and `speaking-independent-documents.js` onto live image `sha256:ace91bf985dd544271c70abf32f978c056d9a11a0f0ef350ce7dab996de2efb6`, preserving the earlier owner response fix and all other runtime source, environment, bind mounts, host configuration and networks. Production image: `sha256:d1b87d15c77fde8f9caf91539e215873bbbc720f538fd1d765608e11354454e5`.
+
+Private evidence and database backup: `/opt/izone-speaking-readonly-20261101/` on VPS1 and `E:/Codex-Data/qa/speaking-readonly-20261101/` locally. Retained pre-release container: `speaking67-independent-api-before-readonly-20261101`. Roll back application code using that container after checking current deployment; preserve the current database and all new student work. Do not restore an old database to roll back code.
