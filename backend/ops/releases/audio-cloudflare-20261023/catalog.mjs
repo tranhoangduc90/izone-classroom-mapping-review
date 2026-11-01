@@ -2086,5 +2086,18 @@ export const ASSETS = {
       }
     ],
     "key": "public-audio/c6cf44e8675f37dc919758a5db95b46fddb46f95d591ec4c690bc45fb2856057.mp3"
+  },
+  "homework-listening-origami": {
+    "id": "homework-listening-origami",
+    "sha256": "bdd06499e2b11bff03535ae6a4db53baa31d8a1debe6fae14273ca8c3105dd10",
+    "byteLength": 1696463,
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-homework/audio-assets/origami-bdd06499e2b11bff.mp3",
+    "chunks": [
+      {"byteLength": 524288, "sha256": "79200f0b212659a85764f9de6519e0537f4249c2c8fdbba72b2f38403b56a599"},
+      {"byteLength": 524288, "sha256": "cba3bcf35957e60781fb459ea8fbc1d3b6d12fee702e6303d2607f30a401b6af"},
+      {"byteLength": 524288, "sha256": "97920c162987c186d240fdbcca9dd256c78f593dc8f1a58282db124c8e527d33"},
+      {"byteLength": 123599, "sha256": "baa3866f3397b20b7c2d7ea7747d07f14153c21e56721fc587bb7d2e6630d148"}
+    ],
+    "key": "public-audio/bdd06499e2b11bff03535ae6a4db53baa31d8a1debe6fae14273ca8c3105dd10.mp3"
   }
 };
