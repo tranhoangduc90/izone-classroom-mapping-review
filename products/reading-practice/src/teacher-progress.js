@@ -1,6 +1,7 @@
 import { CODE, fail, hash } from './domain.js';
 import {createPracticeObservation} from './test-practice-observation.js';
 import {openTestObservationStream} from './test-state-runtime.js';
+import {projectPracticeHistory,PRACTICE_HISTORY_MODE} from './test-practice-history.js';
 
 // Đọc bản học viên đã lưu, độc lập với đường mở bài/đồng hồ/nộp bài.
 // Mỗi sản phẩm giữ module và quyền dữ liệu riêng; không gọi AI, Docs hoặc audio.
@@ -99,10 +100,12 @@ export function mountTeacherProgress(app, { service, teacherSessions, z, wrap, o
   ];
   for (const [method, path, schema, action] of routes) app[method](path, wrap(async (req, res) => {
     const identity = await teacherSessions.read(req);
+    const history=action==='detail'&&req.query.history!==undefined?z.object({history:z.literal(PRACTICE_HISTORY_MODE),attemptId:z.uuid().optional()}).strict().parse(req.query):null;
     const input = schema.parse(action === 'detail' ? req.params : method === 'get' ? req.query : req.body);
     const result = await service[action](input, identity);
+    if(history?.attemptId&&!result.attempts.some(attempt=>attempt.id===history.attemptId))fail('RESULT_NOT_FOUND','Không tìm thấy lần làm bài được chọn.',404);
     if(action==='classes'&&observationHub)result.capabilities={teacherStateStream:true,teacherStateIntervalMs:30000};
     await teacherSessions.refresh(req, res, identity);
-    res.set('Cache-Control', 'private, no-store');res.json(result);
+    res.set('Cache-Control', 'private, no-store');res.json(projectPracticeHistory(result,{enabled:Boolean(history),selectedAttemptId:history?.attemptId}));
   }));
 }

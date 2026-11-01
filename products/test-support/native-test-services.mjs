@@ -9,6 +9,7 @@ import {workDispatchContract} from './work-dispatch-contract.mjs';
 import {request,closeNativeHttp} from './native-http.mjs';
 import {entrypointContract} from './practice-entrypoint-contract.mjs';
 import {practiceObservationContract} from './practice-observation-contract.mjs';
+import {practiceHistoryContract} from './practice-history-contract.mjs';
 const require=createRequire(import.meta.url),pg=require('pg');
 const nativeFetch=globalThis.fetch;let externalAttempts=0;
 globalThis.fetch=(input,options)=>{const target=new URL(typeof input==='string'?input:input.url||input.href);if(!['127.0.0.1','localhost'].includes(target.hostname)){externalAttempts++;throw Error('EXTERNAL_FIXTURE_REQUEST_DENIED');}return nativeFetch(input,options);};
@@ -41,6 +42,7 @@ for(const product of ['reading','listening']){
  compactPulseContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,secret:domain.secret,uuid:domain.uuid});
  workDispatchContract({product:label,schema:product+'_practice',fixture,createDocsWorker:docs.createDocsWorker,registerWorkPublisher:runtime.registerWorkPublisher,readConfig:config.readConfig,uuid:domain.uuid,secret:domain.secret});
  practiceObservationContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,createHub:stateRuntime.createTestObservationHub,uuid:domain.uuid,secret:domain.secret});
+ practiceHistoryContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,uuid:domain.uuid,secret:domain.secret});
  const entryFixture=product==='reading'?()=>helpers.fixture(undefined,{poolFactory:()=>nativePool(product,{entrypoint:true})}):()=>helpers.fixture({poolFactory:()=>nativePool(product,{entrypoint:true})});
  entrypointContract({product,fixture:entryFixture,poolUrl:pool=>poolUrls.get(pool),uuid:domain.uuid});
 }

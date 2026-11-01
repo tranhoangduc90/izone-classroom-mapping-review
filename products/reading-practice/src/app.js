@@ -7,6 +7,7 @@ import {ReadingError,uuid} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
 import {createTestObservationHub} from './test-state-runtime.js';
+import {projectPracticeHistory,PRACTICE_HISTORY_MODE} from './test-practice-history.js';
 import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
@@ -26,6 +27,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.use(express.json({limit:'512kb'}));
  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+ const historyRequested=req=>req.query.history===undefined?false:z.literal(PRACTICE_HISTORY_MODE).parse(req.query.history)===PRACTICE_HISTORY_MODE;
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
  const session=z.object({attemptId:z.uuid()});
@@ -48,8 +50,9 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');res.json(await service.lessonRoster({code:libraryCode(req.params.lessonId),classId:z.string().regex(/^-?\d{1,19}$/).parse(req.params.classId)}));
  }));
  app.post('/api/shared-login',wrap(async(req,res)=>{
+  const history=historyRequested(req);
   const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
-  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:libraryCode(input.code),...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}));
+  res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.sharedLogin({...input,code:libraryCode(input.code),...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}),{enabled:history}));
  }));
  const documentContext=req=>({documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document']),code:z.string().min(1).max(100).parse(req.headers['x-izone-assignment'])});
  app.get('/api/entry-context',wrap(async(req,res)=>{
@@ -61,11 +64,11 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   Promise.resolve().then(()=>service.guardEntry({...documentContext(req),token:token(req),entryToken:req.body?.entryToken})).then(()=>next(),next);
  });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
-  const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
-  res.json(await service[action]({...input,token:token(req),...(action==='pulse'&&req.query.ack==='compact-v1'?{compactAck:true}:{})}));
+  const history=historyRequested(req),input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
+  res.json(projectPracticeHistory(await service[action]({...input,token:token(req),...(action==='pulse'&&req.query.ack==='compact-v1'?{compactAck:true}:{})}),{enabled:history}));
  }));
- app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
- app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
+ app.get('/api/state',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.read({token:token(req)}),{enabled:history}));}));
+ app.get('/api/result/:attemptId',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}),{enabled:history}));}));
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap,observationHub});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
