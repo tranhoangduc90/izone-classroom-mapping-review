@@ -2099,5 +2099,34 @@ export const ASSETS = {
       {"byteLength": 123599, "sha256": "baa3866f3397b20b7c2d7ea7747d07f14153c21e56721fc587bb7d2e6630d148"}
     ],
     "key": "public-audio/bdd06499e2b11bff03535ae6a4db53baa31d8a1debe6fae14273ca8c3105dd10.mp3"
+  },
+  "homework-listening-natural-dyes": {
+    "id": "homework-listening-natural-dyes",
+    "sha256": "9fe9bc88076d5273e2420962a1dd65512312a142e08c5209a8d707e3a6c67b21",
+    "byteLength": 2147465,
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-homework/audio-assets/natural-dyes-9fe9bc88076d5273.mp3",
+    "chunks": [
+      {
+        "byteLength": 524288,
+        "sha256": "f884f1dc57e4a65218fa161f42c3b348d361381238ca49e1162d223218a9cd2e"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "1273fb3782e4e231e6a891478bad6c715373a1142b30c342c08cdccf8b9d175a"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "bfe695bb4361e93c95914f7a21c025a4e1f9e02769235f9feddb755565d5fd3e"
+      },
+      {
+        "byteLength": 524288,
+        "sha256": "4d3adb2a7fc5e2fc3989d9b308fe7a403f1fd02bd70567f724411c28e3594fbe"
+      },
+      {
+        "byteLength": 50313,
+        "sha256": "501cff06beb6248ab3fa89dcc76582234f793a305892546ad996ced3088b5af6"
+      }
+    ],
+    "key": "public-audio/9fe9bc88076d5273e2420962a1dd65512312a142e08c5209a8d707e3a6c67b21.mp3"
   }
 };
