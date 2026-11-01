@@ -74,7 +74,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     }
     if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
     return {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
-      students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}]};
+      students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}],selectedStudentRef:u.student_ref||u.identity_ref};
   }
   async function start(input) {
     let {u}=await ensure(input);

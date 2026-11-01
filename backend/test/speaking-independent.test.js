@@ -321,6 +321,7 @@ test('Docs ngoài Classroom được nhận theo nội dung thật, có hồ sơ
     const assignment=await docs.open({documentId:document.documentId,assignmentCode:code});
     assert.equal(assignment.classCode,'DOCS');assert.equal(assignment.intakeMode,'document');
     assert.notEqual(assignment.students[0].student_ref,ref);
+    assert.equal(assignment.selectedStudentRef,assignment.students[0].student_ref);
     const session=await docs.start({documentId:document.documentId,assignmentCode:code,classCode:'DOCS',studentRef:assignment.students[0].student_ref});
     assert.equal(session.documentId,document.documentId);
     assert.equal((await f.service.open({accessToken:session.accessToken,studentRef:session.studentRef})).status,'draft');
@@ -513,6 +514,9 @@ test('Nguồn xác nhận cùng tên chuyển về một học viên và từ ch
     const plan=await docs.plan({documentId:doc.documentId,document:doc});doc=documentFixture(doc.documentId,plan.url);
     assert.equal((await docs.verify({documentId:doc.documentId,document:doc})).status,'linked');
     const a=await docs.open(input);assert.equal(a.intakeMode,'linked');assert.deepEqual(a.students,[{student_ref:ref,name:'Học viên fixture'}]);
+    assert.equal(a.selectedStudentRef,ref);
+    assert.equal(a.students.filter(s=>s.student_ref===a.selectedStudentRef).length,1);
+    await assert.rejects(docs.open({...input,classCode:'OTHER'}),{code:'CLASS_MISMATCH'});
     assert.equal((await docs.start(input)).workUnitId,s.workUnitId);
     await assert.rejects(docs.start({...input,studentRef:exercise(88)}),{code:'DOCUMENT_PROFILE_MISMATCH'});
     await assert.rejects(docs.start({...input,classCode:'OTHER'}),{code:'CLASS_MISMATCH'});
