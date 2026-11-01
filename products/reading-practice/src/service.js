@@ -3,6 +3,7 @@ import {CODE,TOTAL_MS,ReadingError,fail,hash,secret,uuid,emptyDraft,validateCont
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
+import {createPracticeObservation} from './test-practice-observation.js';
 import {markWorkReady,finishWorkTransaction,announceCommittedWork} from './test-work-runtime.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
@@ -15,6 +16,7 @@ const initialState=()=>({attempts:[],events:[],firstCompleted:null,sequence:0});
 const syncsHomework=b=>Boolean(b.document_id||b.owner_proof?.mode==='shared');
 export function createReadingService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
  const entryContext=createEntryContext({pool,context,schema:'reading_practice',fail,lessonFor,resolveCurrentOwner});
+ const observation=createPracticeObservation({pool,context,schema:'reading_practice',fail});
  async function guardEntry({documentId,code,token,entryToken}){
   const expected=await entryContext.resolve({documentId,code}),b=await binding(pool,{token,entryToken});
   if(b.id!==expected.bindingId)fail('ENTRY_OWNER_MISMATCH','Phiên đã lưu khác chủ link. Hãy xác nhận đúng người học.',403);
@@ -328,5 +330,5 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);announceCommittedWork(pool);return{jobId,status:'pending'};
  }
  return{entryContext:entryContext.resolve,guardEntry,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
-  teacherProgress:createTeacherProgress({pool,context})};
+  observation,teacherProgress:createTeacherProgress({pool,context,observation})};
 }

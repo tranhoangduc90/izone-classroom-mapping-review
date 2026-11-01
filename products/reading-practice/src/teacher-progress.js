@@ -5,9 +5,9 @@ import {projectPracticeHistory,PRACTICE_HISTORY_MODE} from './test-practice-hist
 
 // Đọc bản học viên đã lưu, độc lập với đường mở bài/đồng hồ/nộp bài.
 // Mỗi sản phẩm giữ module và quyền dữ liệu riêng; không gọi AI, Docs hoặc audio.
-export function createTeacherProgress({ pool, context }) {
+export function createTeacherProgress({ pool, context, observation:sharedObservation }) {
   const schema = 'reading_practice';
-  const observation=createPracticeObservation({pool,context,schema,fail});
+  const observation=sharedObservation||createPracticeObservation({pool,context,schema,fail});
   async function authorize(classId, identity) {
     if (!await context.teacher(classId, identity.email, identity.google_subject)) {
       fail('ACCESS_DENIED', 'Tài khoản này chưa có quyền lớp.', 403);

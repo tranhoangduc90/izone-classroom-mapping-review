@@ -5,6 +5,7 @@ import {authoredLesson} from './authored-content.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
+import {createPracticeObservation} from './test-practice-observation.js';
 import {markWorkReady,finishWorkTransaction,announceCommittedWork} from './test-work-runtime.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
@@ -16,6 +17,7 @@ export async function transaction(pool,fn){
 const initialState=()=>({attempts:[],events:[],firstCompleted:null,sequence:0});
 export function createListeningService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
  const entryContext=createEntryContext({pool,context,schema:'listening_practice',fail,lessonFor:code=>authoredLesson(code),resolveCurrentOwner});
+ const observation=createPracticeObservation({pool,context,schema:'listening_practice',fail});
  async function guardEntry({documentId,code,token,entryToken}){
   const expected=await entryContext.resolve({documentId,code}),b=await binding(pool,{token,entryToken});
   if(b.id!==expected.bindingId)fail('ENTRY_OWNER_MISMATCH','Phiên đã lưu khác chủ link. Hãy xác nhận đúng người học.',403);
@@ -333,5 +335,5 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   if(!row)fail('JOB_NOT_BLOCKED','Chỉ gửi lại công việc đã bị chặn.',409);announceCommittedWork(pool);return{jobId,status:'pending'};
  }
  return{entryContext:entryContext.resolve,guardEntry,audioAccess,seedContent,register,registerSharedHomework,open,login,read,begin,resume,activate,pulse,pause:input=>pulse(input,true),reset,submit,result,teacherResult,configureAssignment,operationsStatus,retryDocJob,configureSharedLesson,lessonCatalog,lessonRoster,sharedLogin,
-  teacherProgress:createTeacherProgress({pool,context})};
+  observation,teacherProgress:createTeacherProgress({pool,context,observation})};
 }

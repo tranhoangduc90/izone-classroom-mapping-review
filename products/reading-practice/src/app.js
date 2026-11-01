@@ -3,18 +3,20 @@ import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
 import {z} from 'zod';
 import {timingSafeEqual} from 'node:crypto';
-import {ReadingError,uuid} from './domain.js';
+import {ReadingError,uuid,fail} from './domain.js';
 import {createTeacherSessions} from './teacher-session.js';
 import {mountTeacherProgress} from './teacher-progress.js';
 import {createTestObservationHub} from './test-state-runtime.js';
-import {projectPracticeHistory,PRACTICE_HISTORY_MODE} from './test-practice-history.js';
+import {projectPracticeHistory as projectHistory,PRACTICE_HISTORY_MODE} from './test-practice-history.js';
+import {mountPracticeStudentProgress,withStudentStateCapabilities} from './test-practice-student-progress.js';
 import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
 export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,teacherCookiePath='/reading-practice-api/api',stateStreamEnabled=false}){
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
- const observationHub=stateStreamEnabled?createTestObservationHub({read:service.teacherProgress.readObservations}):null;
+ const observationHub=stateStreamEnabled?createTestObservationHub({read:service.observation?.read||service.teacherProgress.readObservations}):null;
+ const projectPracticeHistory=(value,options)=>projectHistory(withStudentStateCapabilities(value,Boolean(observationHub)),options);
  app.locals.practiceObservation=observationHub;
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
@@ -60,7 +62,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   res.set('Cache-Control','no-store');res.json(await service.entryContext({...input,code:libraryCode(input.code)}));
  }));
  app.use('/api',(req,res,next)=>{
-  if(!req.headers['x-izone-document']||!/^\/(?:open|login|state|result(?:\/|$)|begin|resume|activate|pulse|pause|reset|submit|audio(?:\/|$))/.test(req.path))return next();
+  if(!req.headers['x-izone-document']||!/^\/(?:open|login|state|result(?:\/|$)|student-progress(?:\/|$)|begin|resume|activate|pulse|pause|reset|submit|audio(?:\/|$))/.test(req.path))return next();
   Promise.resolve().then(()=>service.guardEntry({...documentContext(req),token:token(req),entryToken:req.body?.entryToken})).then(()=>next(),next);
  });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
@@ -69,6 +71,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  }));
  app.get('/api/state',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.read({token:token(req)}),{enabled:history}));}));
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}),{enabled:history}));}));
+ mountPracticeStudentProgress(app,{observation:service.observation,hub:observationHub,token,z,wrap,fail});
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap,observationHub});
  app.post('/api/teacher/login',wrap(async(req,res)=>{
