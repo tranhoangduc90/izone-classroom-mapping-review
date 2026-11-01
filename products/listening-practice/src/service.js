@@ -35,12 +35,17 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   b.member??={name:'Học viên không còn trong danh sách đang học'};
   return b;
  }
- async function view(db,b,state,{lease,definition=false}={}){
+ async function view(db,b,state,{lease,definition=false,compactAttempt}={}){
   const jobs=(await db.query('SELECT sequence,status,error_code FROM listening_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[b.id])).rows;
   const events=state.events.map(e=>({...e,docs:jobs.find(j=>j.sequence===e.sequence)?.status||'pending'}));
-  return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
-   bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id||b.owner_proof?.homework?.documentId||null,documentUrl:(b.document_id||b.owner_proof?.homework?.documentId)?`https://docs.google.com/document/d/${b.document_id||b.owner_proof.homework.documentId}/edit?tab=${encodeURIComponent(b.tab_id||b.owner_proof.homework.tabId)}`:null},
-   lesson:authoredLesson(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
+  const identity={studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
+   bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id||b.owner_proof?.homework?.documentId||null,documentUrl:(b.document_id||b.owner_proof?.homework?.documentId)?`https://docs.google.com/document/d/${b.document_id||b.owner_proof.homework.documentId}/edit?tab=${encodeURIComponent(b.tab_id||b.owner_proof.homework.tabId)}`:null};
+  if(compactAttempt){
+   const value=publicAttempt(compactAttempt),fields=['id','no','status','usedMs','remainingMs','sequence','leaseId','phase','audioPosition','reviewRemainingMs'];
+   return{ack:'practice-pulse-v1',bindingId:b.id,identity,events,firstCompleted:state.firstCompleted,attempt:Object.fromEntries(fields.map(key=>[key,value[key]]))};
+  }
+  return{identity,
+   lesson:authoredLesson(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,capabilities:{compactPulseAck:true},
    ...(lease?{lease}:{}),...(definition?{definition:b.definition}:{})};
  }
  async function work(db,b){
@@ -261,7 +266,10 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
    else checkpoint(a,input.snapshot,input.lease,clock());
    if(a.usedMs>=timingFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
-   await save(db,b,state);return view(db,b,state);
+   await save(db,b,state);
+   // Listening timing/audio remain authoritative; recovery, pause and timeout keep the full native response.
+   if(input.compactAck&&!pause&&a.status==='running')return view(db,b,state,{compactAttempt:a});
+   return view(db,b,state);
   });
  }
  const reset=input=>operation(input,'reset',async(db,b,state)=>{

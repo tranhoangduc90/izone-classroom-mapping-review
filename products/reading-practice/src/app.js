@@ -59,7 +59,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
-  res.json(await service[action]({...input,token:token(req)}));
+  res.json(await service[action]({...input,token:token(req),...(action==='pulse'&&req.query.ack==='compact-v1'?{compactAck:true}:{})}));
  }));
  app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));

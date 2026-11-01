@@ -34,12 +34,17 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   b.member??={name:'Học viên không còn trong danh sách đang học'};
   return b;
  }
- async function view(db,b,state,{lease,definition=false}={}){
+ async function view(db,b,state,{lease,definition=false,compactAttempt}={}){
   const jobs=(await db.query('SELECT sequence,status,error_code FROM reading_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[b.id])).rows;
   const events=state.events.map(e=>({...e,docs:syncsHomework(b)?jobs.find(j=>j.sequence===e.sequence)?.status||'pending':'not_applicable'}));
-  return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
-   bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id,documentUrl:b.document_id?`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`:null},
-   lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
+  const identity={studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
+   bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id,documentUrl:b.document_id?`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`:null};
+  if(compactAttempt){
+   const value=publicAttempt(compactAttempt),fields=['id','no','status','usedMs','remainingMs','sequence','leaseId'];
+   return{ack:'practice-pulse-v1',bindingId:b.id,identity,events,firstCompleted:state.firstCompleted,attempt:Object.fromEntries(fields.map(key=>[key,value[key]]))};
+  }
+  return{identity,
+   lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,capabilities:{compactPulseAck:true},
    ...(lease?{lease}:{}),...(definition?{definition:b.definition}:{})};
  }
  async function work(db,b){
@@ -259,7 +264,10 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause,code:b.code});
    if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
-   await save(db,b,state);return view(db,b,state);
+   await save(db,b,state);
+   // Only an ordinary running checkpoint can omit history/content; pause/timeout keep the full native response.
+   if(input.compactAck&&!pause&&a.status==='running')return view(db,b,state,{compactAttempt:a});
+   return view(db,b,state);
   });
  }
  const reset=input=>operation(input,'reset',async(db,b,state)=>{
