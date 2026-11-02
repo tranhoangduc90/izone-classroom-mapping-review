@@ -58,7 +58,7 @@ function shouldPrioritizeRecommendation(row, occurredAt) {
   return lastTimes.length === 0 || eventTime - Math.max(...lastTimes) > 5 * 86400000;
 }
 
-export function createSpeakingHomeworkService({ pool, accessSecret = '', progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true' }) {
+export function createSpeakingHomeworkService({ pool, accessSecret = '', progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true',coordinated=process.env.TEST_SERVICES_COORDINATOR_ENABLED==='true' }) {
   const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
   const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
   const progressClaimGuard=`AND (o.kind <> 'write_doc' OR NOT EXISTS (
@@ -726,7 +726,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
       // Tín hiệu nằm trong cùng transaction; PostgreSQL chỉ phát sau commit.
       // Mất tín hiệu không làm mất việc vì hàng vẫn được lưu và quét bù.
       if (kinds.includes('write_doc')) {
-        await client.query("SELECT pg_notify('speaking_homework_write_doc_ready', '')");
+        if(coordinated)markWorkReady(client,'docs');
+        else await client.query("SELECT pg_notify('speaking_homework_write_doc_ready', '')");
       }
       await enqueueSpeakingProgress(client,'speaking_homework',grant.grant_id);
       return receipt.rows[0];

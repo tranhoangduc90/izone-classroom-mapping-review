@@ -15,18 +15,23 @@ import { createSpeakingDocsNotifier } from './speaking-docs-notifier.js';
 import { startSpeakingPracticeWorker } from './speaking-practice-worker.js';
 import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
 import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
+import pg from 'pg';
+import {startSpeakingLegacyWorker} from './speaking-legacy-work.js';
+import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
+const workersEnabled=process.env.WORKER_ENABLED!=='false';
 const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
 const learningTestSources = config.learningEnabled ? createLearningTestSources({config,legacyPool:pool}) : null;
 const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
+const speakingCoordinated=process.env.TEST_SERVICES_COORDINATOR_ENABLED==='true';
 const progressGateway=process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE}):null;
-const speakingProgressWorker=startSpeakingProgressDocsWorker({pool:speakingHomeworkPool,schema:'speaking_homework',gateway:speakingHomeworkPool?progressGateway:null});
+const speakingProgressWorker=startSpeakingProgressDocsWorker({pool:speakingHomeworkPool,schema:'speaking_homework',gateway:speakingHomeworkPool&&workersEnabled?progressGateway:null,coordinated:speakingCoordinated});
 const speakingDocsNotifier = createSpeakingDocsNotifier({
   pool: speakingHomeworkPool,
-  url: process.env.SPEAKING_DOCS_NOTIFY_URL || '',
+  url: workersEnabled?process.env.SPEAKING_DOCS_NOTIFY_URL||'':'',
   secret: process.env.SPEAKING_DOCS_NOTIFY_SECRET || ''
 });
 const syncErpGrades = createErpGradeSync({ config });
@@ -38,7 +43,7 @@ const termTestAssetService = config.termTestAssetDir
   : null;
 const writingNotifier = createTermTestWritingNotifier({
   pool,
-  url: process.env.TERM_TEST_NOTIFY_URL || '',
+  url: workersEnabled?process.env.TERM_TEST_NOTIFY_URL||'':'',
   secret: process.env.TERM_TEST_NOTIFY_SECRET || ''
 });
 const termTestWritingGradingService = withTermTestWritingNotifications(
@@ -65,47 +70,54 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   void speakingDocsNotifier.start();
 });
 const learningAttendanceWorker = startLearningAttendanceWorker({
-  pool: learningPool,
+  pool: workersEnabled?learningPool:null,
   handler: learningAttendanceSync,
   pollMs: config.learningAttendancePollMs
 });
 const speakingCheckWorker = startSpeakingCheckWorker({
   pool: speakingHomeworkPool,
-  enabled: config.speakingHomeworkEnabled
+  enabled: config.speakingHomeworkEnabled&&workersEnabled&&!speakingCoordinated
 });
 const speakingGradeWorker = startSpeakingGradeWorker({
   pool: speakingHomeworkPool,
-  enabled: config.speakingHomeworkEnabled
+  enabled: config.speakingHomeworkEnabled&&workersEnabled&&!speakingCoordinated
 });
 const speakingDoctorWorker = startSpeakingDoctorWorker({
   pool: speakingHomeworkPool,
-  enabled: config.speakingHomeworkEnabled
+  enabled: config.speakingHomeworkEnabled&&workersEnabled&&!speakingCoordinated
 });
 const speakingPracticeWorker = startSpeakingPracticeWorker({
   pool: speakingHomeworkPool,
-  enabled: config.speakingHomeworkEnabled
+  enabled: config.speakingHomeworkEnabled&&workersEnabled&&!speakingCoordinated
 });
+const speakingLegacyWorker=startSpeakingLegacyWorker({pool:speakingHomeworkPool,enabled:config.speakingHomeworkEnabled&&workersEnabled&&speakingCoordinated,
+  onError:error=>console.error('Hàng Speaking cũ lỗi:',String(error.code||'SPEAKING_WORKER_ERROR'))});
+const speakingCoordinator=speakingHomeworkPool&&speakingCoordinated?startSpeakingWorkCoordinator({pool:speakingHomeworkPool,schema:'speaking_homework',worker:speakingLegacyWorker,
+  createClient:()=>new pg.Client({connectionString:config.speakingHomeworkDatabaseUrl,connectionTimeoutMillis:5000,application_name:'speaking_homework_work_listener'}),
+  onDocs:()=>{speakingProgressWorker.wake?.();speakingDocsNotifier.kick();},
+  onError:error=>console.error('Tín hiệu Speaking cũ lỗi:',String(error.code||'SPEAKING_SIGNAL_ERROR'))}):null;
 
 server.requestTimeout = 15_000;
 server.headersTimeout = 16_000;
 server.keepAliveTimeout = 5_000;
 
-async function shutdown(signal) {
+let shuttingDown;
+function shutdown(signal) {
+  if(shuttingDown)return shuttingDown;
+  const deadline=setTimeout(()=>process.exit(1),240_000).unref();
+  return shuttingDown=(async()=>{
   await app.locals.learningLiveUpdates?.close();
   writingNotifier.close();
-  await speakingDocsNotifier.close();
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
-  server.close(async () => {
-    await learningAttendanceWorker.stop();
-    await speakingCheckWorker.stop();
-    await speakingGradeWorker.stop();
-    await speakingDoctorWorker.stop();
-    await speakingPracticeWorker.stop();
-    await speakingProgressWorker.stop();
+  await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+    await Promise.all([learningAttendanceWorker.stop(),speakingCheckWorker.stop(),speakingGradeWorker.stop(),
+      speakingDoctorWorker.stop(),speakingPracticeWorker.stop(),speakingLegacyWorker.stop(),speakingProgressWorker.stop()]);
+    await speakingCoordinator?.stop();
+    await speakingDocsNotifier.close();
     await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end(), learningTestSources?.close()]);
+    clearTimeout(deadline);
     process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10_000).unref();
+  })().catch(error=>{console.error('Đóng API chưa hoàn tất:',String(error.code||'SHUTDOWN_FAILED'));process.exit(1);});
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -6,6 +6,7 @@ import pg from 'pg';
 import {pathToFileURL} from 'node:url';
 import {startSpeakingLegacyWorker} from '../src/speaking-legacy-work.js';
 import {startSpeakingWorkCoordinator} from '../src/speaking-work-runtime.js';
+import {registerWorkPublisher} from '../src/test-work-runtime.js';
 import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
@@ -235,6 +236,39 @@ test('Native PostgreSQL: a committed legacy producer wakes the shared dispatcher
     try{const second=await f.service.requestCheck({accessToken,studentRef,part:'speaking',rawUrl:share('c')});await until(()=>coordinator.snapshot().errors>0);await until(async()=>(await query('SELECT check_status FROM speaking_homework.submission_link WHERE id=$1',[second.linkId])).rows[0].check_status==='accepted');}finally{f.pool.query=query;}
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.submission_link')).rows[0].n,2);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,0);
   }finally{await worker?.stop();await coordinator?.stop();await f.db.close();}
+});
+
+async function acceptLegacyChecks(f){
+  await seedLegacyChecks(f);
+  for(const job of await f.service.claimCheckJobs(16))await f.service.completeCheck({checkJobId:job.job_id,fingerprint:crypto.createHash('sha256').update(job.job_id).digest('hex'),questionCount:Number(job.min_questions),qualityPassed:true,evidence:{coveredCategories:['noun','verb','adjective']}});
+}
+
+test('Coordinated legacy final Docs notification follows commit and a failed publisher cannot reject the saved receipt',async()=>{
+  const f=await fixture({progressDocsEnabled:true});let detach;
+  try{
+    await acceptLegacyChecks(f);const queries=[],published=[],pool=measuredLegacyPool(f.pool,queries,sql=>sql.includes('pg_notify'));
+    detach=registerWorkPublisher(pool,lane=>{published.push({lane,lastSql:queries.at(-1)});throw Error('SYNTHETIC_FINAL_NOTIFY_FAILURE');});
+    const service=createSpeakingHomeworkService({pool,progressDocsEnabled:true,coordinated:true}),receipt=await service.finish({accessToken,studentRef});assert.ok(receipt.id);assert.ok(published.some(row=>row.lane==='docs'));assert.ok(published.every(row=>row.lastSql==='COMMIT'));assert.ok(!queries.some(sql=>sql.includes('pg_notify')));assert.equal((await f.pool.query('SELECT id FROM speaking_homework.receipt')).rows[0].id,receipt.id);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.outbox WHERE receipt_id=$1',[receipt.id])).rows[0].n,3);
+    const before=published.length;assert.equal((await service.finish({accessToken,studentRef})).id,receipt.id);assert.equal(published.length,before);detach();detach=null;
+    const nativeQueries=[],old=createSpeakingHomeworkService({pool:measuredLegacyPool(f.pool,nativeQueries),progressDocsEnabled:true,coordinated:false});await old.finish({accessToken:secondToken,studentRef:secondStudentRef});assert.equal(nativeQueries.filter(sql=>sql.includes("pg_notify('speaking_homework_write_doc_ready'")).length,1);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,2);
+  }finally{detach?.();await f.db.close();}
+});
+
+test('A failed coordinated final commit publishes no Docs hint and retry preserves exactly one receipt',async()=>{
+  const f=await fixture({progressDocsEnabled:true});let detach;
+  try{
+    await acceptLegacyChecks(f);const before=(await f.pool.query('SELECT * FROM speaking_homework.doc_progress ORDER BY unit_id')).rows,queries=[],pool=measuredLegacyPool(f.pool,queries,sql=>sql==='COMMIT'),published=[];detach=registerWorkPublisher(pool,lane=>published.push(lane));
+    const service=createSpeakingHomeworkService({pool,progressDocsEnabled:true,coordinated:true});await assert.rejects(service.finish({accessToken,studentRef}),/SYNTHETIC_LEGACY_METADATA_FAILURE/);assert.equal(queries.at(-1),'ROLLBACK');assert.deepEqual(published,[]);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,0);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.outbox')).rows[0].n,0);assert.deepEqual((await f.pool.query('SELECT * FROM speaking_homework.doc_progress ORDER BY unit_id')).rows,before);detach();detach=null;
+    const retry=createSpeakingHomeworkService({pool:f.pool,progressDocsEnabled:true,coordinated:true}),receipt=await retry.finish({accessToken,studentRef});assert.equal((await retry.finish({accessToken,studentRef})).id,receipt.id);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,1);
+  }finally{detach?.();await f.db.close();}
+});
+
+test('Native PostgreSQL: the actual shared entrypoint preserves disabled queues, drains Speaking and carries20 blank checkpoints through Portal',{skip:!process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL||process.platform!=='linux',timeout:180000},async()=>{
+  const {sharedSpeakingEntrypointContract}=await import('../../products/test-support/shared-speaking-entrypoint-contract.mjs');
+  const f=await fixture({progressDocsEnabled:true});try{
+    await f.pool.query('UPDATE speaking_homework.assignment SET doctor_course_key=NULL');await acceptLegacyChecks(f);await f.service.finish({accessToken,studentRef});
+    await sharedSpeakingEntrypointContract({speakingPool:f.pool,speakingDatabaseUrl:process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,finishSecond:()=>f.service.finish({accessToken:secondToken,studentRef:secondStudentRef})});
+  }finally{await f.db.close();}
 });
 
 test('legacy practice reports exhausted technical checks and allows one new revision of the same link',async()=>{

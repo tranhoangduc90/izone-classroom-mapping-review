@@ -6,14 +6,16 @@ import { createLearningService } from '../src/learning-service.js';
 // Chỉ tạo database ngắn hạn trên loopback dành riêng cho ca kiểm, không nhận URL production.
 export async function postgresFixture({ clock = null, asApplication = false, deadlineGrant = true, studentCount = 18 } = {}) {
   const url = new URL(process.env.PROGRESS_LOG_FIXTURE_URL || 'postgresql://missing');
-  if (url.hostname !== '127.0.0.1' || url.port !== '16547' || url.pathname !== '/progress_log_fixture') {
+  const taskOwned=process.env.PRACTICE_FIXTURE_CONFIRM==='test-services-optimization-20261101'
+    && /^tsto-practice-pg-[a-z0-9]+$/.test(url.hostname)&&url.username==='fixture'&&url.pathname==='/postgres';
+  if (!taskOwned&&(url.hostname !== '127.0.0.1' || url.port !== '16547' || url.pathname !== '/progress_log_fixture')) {
     throw new Error('Cần PostgreSQL fixture riêng trên 127.0.0.1:16547.');
   }
   const admin = new pg.Pool({ connectionString: url.toString() });
   const name = `pl_fixture_${crypto.randomBytes(8).toString('hex')}`;
   await admin.query(`CREATE DATABASE ${name}`);
   url.pathname = `/${name}`;
-  const pool = new pg.Pool({ connectionString: url.toString(), max: 24 });
+  const pool = new pg.Pool({ connectionString: url.toString(), max: taskOwned?8:24 });
   try {
   await pool.query(await readFile(new URL('../ops/learning-demo/mapping-fixture.sql', import.meta.url), 'utf8'));
   await pool.query(`INSERT INTO mapping.classroom_course_mapping VALUES (2139, 'Lớp kiểm PostgreSQL');
@@ -50,7 +52,7 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
   const sqlFor = sql => clock ? sql.replaceAll('clock_timestamp()', `'${new Date(clock.value).toISOString()}'::timestamptz`) : sql;
   // Mỗi connection của service phải dùng quyền learning_api khi kiểm role production.
   // Pool quản trị chỉ seed/đọc đối soát; không được dùng nó để chứng nhận nộp bài của ứng dụng.
-  const applicationPool = new pg.Pool({ connectionString: url.toString(), max: 24 });
+  const applicationPool = new pg.Pool({ connectionString: url.toString(), max: taskOwned?8:24 });
   async function connectService() {
     const client = await (asApplication ? applicationPool : pool).connect();
     if (asApplication) {
@@ -67,7 +69,7 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
     const client = await connectService();
     return { query: (sql, params) => client.query(sqlFor(sql), params), release: () => client.release() };
   } };
-  return { pool, clockPool, service: createLearningService({ pool: clockPool }), async close() {
+  return { pool, clockPool,databaseUrl:url.href, service: createLearningService({ pool: clockPool }), async close() {
     await applicationPool.end();
     await pool.end();
     // Pool.end() có thể kết thúc trước khi PostgreSQL nhận hết FIN của nhiều socket.
