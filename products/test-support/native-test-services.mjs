@@ -11,6 +11,7 @@ import {entrypointContract} from './practice-entrypoint-contract.mjs';
 import {practiceObservationContract} from './practice-observation-contract.mjs';
 import {practiceHistoryContract} from './practice-history-contract.mjs';
 import {practiceStudentObservationContract} from './practice-student-observation-contract.mjs';
+import {practiceFixtureModule} from './practice-fixture-source.mjs';
 const require=createRequire(import.meta.url),pg=require('pg');
 const nativeFetch=globalThis.fetch;let externalAttempts=0;
 globalThis.fetch=(input,options)=>{const target=new URL(typeof input==='string'?input:input.url||input.href);if(!['127.0.0.1','localhost'].includes(target.hostname)){externalAttempts++;throw Error('EXTERNAL_FIXTURE_REQUEST_DENIED');}return nativeFetch(input,options);};
@@ -19,25 +20,40 @@ assert.equal(process.env.PRACTICE_FIXTURE_CONFIRM,task);assert.match(url.hostnam
 const endStates=[],poolUrls=new WeakMap();
 async function nativePool(product,{entrypoint=false}={}){
  const schema=product+'_practice',name=entrypoint?schema+'_db':'tsto_practice_'+product+'_'+randomBytes(6).toString('hex'),role=schema+(entrypoint?'_app':'_fixture_app');
- const admin=new pg.Pool({connectionString:url.href,max:1});const version=await admin.query('SHOW server_version_num');assert.ok(Number(version.rows[0].server_version_num)>=170000&&Number(version.rows[0].server_version_num)<180000);
- await admin.query('CREATE DATABASE '+name);const ownerUrl=new URL(url);ownerUrl.pathname='/'+name;const owner=new pg.Pool({connectionString:ownerUrl.href,max:1});
  const migrations=product==='reading'?['001-schema.sql','003-teacher-session.sql','004-shared-entry.sql','005-authored-time.sql']:['001-schema.sql','003-teacher-session.sql','004-authored-time.sql','005-shared-entry.sql'];
- for(const file of migrations)await owner.query(await readFile(new URL('../'+product+'-practice/db/'+file,import.meta.url),'utf8'));
+ // Validate all fixture DDL before opening a connection. Runtime images need not package migration tools.
+ const migrationSql=await Promise.all(migrations.map(file=>readFile(new URL('../../fixtures/practice-migrations/'+product+'/'+file,import.meta.url),'utf8')));
+ const admin=new pg.Pool({connectionString:url.href,max:1});let owner,app,created=false;
+ try{
+ const version=await admin.query('SHOW server_version_num');assert.ok(Number(version.rows[0].server_version_num)>=170000&&Number(version.rows[0].server_version_num)<180000);
+ await admin.query('CREATE DATABASE '+name);created=true;const ownerUrl=new URL(url);ownerUrl.pathname='/'+name;owner=new pg.Pool({connectionString:ownerUrl.href,max:1});
+ for(const sql of migrationSql)await owner.query(sql);
  await owner.query(`DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='${role}') THEN CREATE ROLE ${role} LOGIN; END IF; END $$;
   REVOKE ALL ON DATABASE ${name} FROM PUBLIC;GRANT CONNECT ON DATABASE ${name} TO ${role};GRANT USAGE ON SCHEMA ${schema} TO ${role};
   GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role};GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role};`);
- const appUrl=new URL(ownerUrl);appUrl.username=role;const app=new pg.Pool({connectionString:appUrl.href,max:8,connectionTimeoutMillis:5000,statement_timeout:5000});
+ const appUrl=new URL(ownerUrl);appUrl.username=role;app=new pg.Pool({connectionString:appUrl.href,max:8,connectionTimeoutMillis:5000,statement_timeout:5000});
  const identity=(await app.query('SELECT current_user AS role,rolsuper,rolcreatedb FROM pg_roles WHERE rolname=current_user')).rows[0];assert.deepEqual(identity,{role,rolsuper:false,rolcreatedb:false});
  await assert.rejects(app.query(`CREATE TABLE ${schema}.forbidden_fixture(id integer)`),e=>e.code==='42501');
  let ended=false;const pool={query:(...args)=>app.query(...args),async connect(){const c=await app.connect();return{query:(...args)=>c.query(...args),release:()=>c.release()};},
   async end(){if(ended)return;ended=true;await app.end();await owner.end();if(entrypoint)assert.equal(name,product+'_practice_db');else assert.match(name,/^tsto_practice_(reading|listening)_[a-f0-9]{12}$/);await admin.query('DROP DATABASE '+name);await admin.end();endStates.push({database:name,role,closed:true});}};
  poolUrls.set(pool,appUrl.href);return pool;
+ }catch(error){
+  await app?.end();await owner?.end();
+  try{if(created)await admin.query('DROP DATABASE '+name);}finally{await admin.end();}
+  throw error;
+ }
 }
 const modules={};
 for(const product of ['reading','listening']){
- const helpers=await import('../'+product+'-practice/test/helpers.js'),docs=await import('../'+product+'-practice/src/docs.js'),app=await import('../'+product+'-practice/src/app.js'),config=await import('../'+product+'-practice/src/config.js'),domain=await import('../'+product+'-practice/src/domain.js'),runtime=await import('../'+product+'-practice/src/test-work-runtime.js');
- const stateRuntime=await import('../'+product+'-practice/src/test-state-runtime.js');
- const fixture=product==='reading'?()=>helpers.fixture(undefined,{poolFactory:()=>nativePool(product)}):()=>helpers.fixture({poolFactory:()=>nativePool(product)});
+ const module=name=>practiceFixtureModule(product,name,import.meta.url);
+ const helpers=await import('../'+product+'-practice/test/helpers.js'),docs=await import(module('docs.js')),app=await import(module('app.js')),config=await import(module('config.js')),domain=await import(module('domain.js')),runtime=await import(module('test-work-runtime.js'));
+ const stateRuntime=await import(module('test-state-runtime.js'));
+ const fixtureFor=entrypoint=>async()=>{
+  let allocated;const poolFactory=async()=>allocated=await nativePool(product,{entrypoint});
+  try{return await(product==='reading'?helpers.fixture(undefined,{poolFactory}):helpers.fixture({poolFactory}));}
+  catch(error){await allocated?.end();throw error;}
+ };
+ const fixture=fixtureFor(false);
  modules[product]={fixture,docs,runtime,domain};
  const label=product==='reading'?'Reading':'Listening';
  compactPulseContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,secret:domain.secret,uuid:domain.uuid});
@@ -45,7 +61,7 @@ for(const product of ['reading','listening']){
  practiceObservationContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,createHub:stateRuntime.createTestObservationHub,uuid:domain.uuid,secret:domain.secret});
  practiceHistoryContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,uuid:domain.uuid,secret:domain.secret});
  practiceStudentObservationContract({product:label,schema:product+'_practice',fixture,createApp:app.createApp,request,createHub:stateRuntime.createTestObservationHub,uuid:domain.uuid,secret:domain.secret,fail:domain.fail});
- const entryFixture=product==='reading'?()=>helpers.fixture(undefined,{poolFactory:()=>nativePool(product,{entrypoint:true})}):()=>helpers.fixture({poolFactory:()=>nativePool(product,{entrypoint:true})});
+ const entryFixture=fixtureFor(true);
  entrypointContract({product,fixture:entryFixture,poolUrl:pool=>poolUrls.get(pool),uuid:domain.uuid});
 }
 const until=async fn=>{const end=Date.now()+10000;while(Date.now()<end){if(await fn())return;await new Promise(r=>setTimeout(r,20));}throw Error('NATIVE_PEER_TIMEOUT');};

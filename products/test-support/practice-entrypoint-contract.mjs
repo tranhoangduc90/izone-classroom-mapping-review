@@ -9,6 +9,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomBytes} from 'node:crypto';
+import {practiceFixtureEntrypoint} from './practice-fixture-source.mjs';
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check,label){const deadline=Date.now()+10000;while(Date.now()<deadline){if(await check())return;await sleep(25);}throw Error('ENTRYPOINT_TIMEOUT:'+label);}
@@ -46,9 +47,10 @@ export function entrypointContract({product,fixture,poolUrl,uuid}){
      ADMIN_KEY:'a'.repeat(43),GOOGLE_CLIENT_ID:'synthetic-google-client',PAGE_BASE:'https://page.test/'+product+'/',ALLOWED_ORIGINS:'https://page.test',PORT:String(port),
      DOCS_CLIENT_ID:'synthetic-docs-client',DOCS_CLIENT_SECRET:'synthetic-secret',DOCS_REFRESH_TOKEN:'synthetic-refresh',WORKERS_ENABLED:mode==='disabled'?'false':'true',WORK_COORDINATOR_ENABLED:mode==='legacy'?'false':'true'};
     if(product==='listening')settings.AUDIO_FILE=audio;
-    const env={PATH:process.env.PATH,...Object.fromEntries(Object.entries(settings).map(([key,value])=>[prefix+'_'+key,value]))};
-    stdout='';stderr='';child=spawn(process.execPath,['src/server.js'],{cwd:fileURLToPath(new URL('../'+product+'-practice/',import.meta.url)),env,stdio:['ignore','pipe','pipe']});
-    ended=once(child,'exit');child.stdout.on('data',value=>stdout+=value);child.stderr.on('data',value=>stderr+=value);
+    const env={PATH:process.env.PATH,NODE_OPTIONS:'--import='+new URL('./shared-speaking-entrypoint-net-guard.mjs',import.meta.url).href,...Object.fromEntries(Object.entries(settings).map(([key,value])=>[prefix+'_'+key,value]))};
+    const entry=practiceFixtureEntrypoint(product,import.meta.url);
+    stdout='';stderr='';child=spawn(process.execPath,[entry.entrypoint],{cwd:entry.cwd,env,stdio:['ignore','pipe','pipe']});
+    ended=once(child,'close');child.stdout.on('data',value=>stdout+=value);child.stderr.on('data',value=>stderr+=value);
     const send=async(route,body,authorized=true,origin='https://page.test',bearer=f.token)=>{
      const response=await fetch(`http://127.0.0.1:${port}/api/${route}`,{method:body===undefined?'GET':'POST',headers:{Origin:origin,...(authorized?{Authorization:'Bearer '+bearer}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
      return{status:response.status,body:await response.json()};
@@ -78,11 +80,13 @@ export function entrypointContract({product,fixture,poolUrl,uuid}){
     await stopChild(child,ended);child=null;
     if(reader){while(!(await reader.read()).done){}await reader.cancel();}
     assert.equal(stderr,'');
+    const guards=stdout.split('\n').filter(line=>line.includes('"event":"shared_entrypoint_net_guard"')).map(line=>JSON.parse(line));
+    assert.equal(guards.length,1);assert.equal(guards[0].externalAttempts,0);
     await until(async()=>Number((await f.pool.query("SELECT count(*) AS n FROM pg_stat_activity WHERE datname=current_database() AND usename=current_user AND query=$1",['LISTEN '+channel])).rows[0].n)===0,'listener drained');
    }
    const jobs=(await f.pool.query(`SELECT id,binding_id,sequence,payload FROM ${schema}.doc_job ORDER BY id`)).rows;
    assert.equal(jobs.length,2);assert.ok(jobs.some(job=>JSON.stringify([job])===artifactBefore));assert.equal(snapshotRequests,3);assert.equal(unexpected,0);
-   console.log(JSON.stringify({event:'practice_actual_entrypoint',product,modes:3,gracefulRestarts:3,snapshotRequests,queuedJobs:jobs.length,externalCredentials:false}));
+   console.log(JSON.stringify({event:'practice_actual_entrypoint',product,entrypointSource:practiceFixtureEntrypoint(product,import.meta.url).source,modes:3,gracefulRestarts:3,snapshotRequests,queuedJobs:jobs.length,externalCredentials:false}));
   }finally{
    if(child)await stopChild(child,ended);
    authority.closeAllConnections();await new Promise(r=>authority.close(r));await f.close();await rm(directory,{recursive:true,force:true});
