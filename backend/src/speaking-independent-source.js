@@ -30,7 +30,7 @@ export function createIndependentSource({ pool, independentBase='', workerSecret
       WHERE s.course_key='67' AND s.active ORDER BY s.class_code`);
     return rows;
   }
-  async function context({ assignmentCode, classCode, studentRef }) {
+  async function context({ assignmentCode, classCode, studentRef, webEntry=false }) {
     let t = await template(assignmentCode);
     // Mẫu đã được kiểm ở trên; dùng lại trong yêu cầu này, không giữ quyền sang yêu cầu sau.
     const all = await classes();
@@ -54,16 +54,27 @@ export function createIndependentSource({ pool, independentBase='', workerSecret
         delete value.digest;t={...value,assignmentStatus:assigned[0].status||'open',digest:createHash('sha256').update(JSON.stringify(value)).digest('hex')};
       }
     }
+    // Hai lớp được duyệt dùng ERP cho web; ghép Google vẫn phải approved cho Docs.
+    // Giữ UUID có sẵn, lấy tên ERP và kiểm on_going ở nguồn mỗi lần cấp/đọc phiên.
+    const erpClass=['1333','1345'].includes(String(scope.class_id));
+    const erpWeb=webEntry && erpClass;
+    const studentName=erpClass?`(SELECT e.erp_student_name_snapshot FROM mapping.erp_class_membership_snapshot e
+      WHERE e.erp_course_class_id=m.erp_course_class_id AND e.erp_student_contact_id=m.erp_student_contact_id)`:'m.erp_student_name_snapshot';
+    const eligibility=erpWeb ? `m.status IN ('approved','pending_review') AND EXISTS
+      (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+       WHERE e.erp_course_class_id=m.erp_course_class_id AND e.erp_student_contact_id=m.erp_student_contact_id
+         AND e.source_state='active' AND e.registration_status='on_going')` : active;
     const { rows:students } = await pool.query(`SELECT m.public_id AS student_ref,
-      m.erp_student_name_snapshot AS name,m.classroom_user_id AS google_user_id
-      FROM mapping.student_mapping_review m WHERE m.erp_course_class_id=$1 AND ${active}
+      ${studentName} AS name,
+      CASE WHEN m.status='approved' THEN m.classroom_user_id ELSE NULL END AS google_user_id
+      FROM mapping.student_mapping_review m WHERE m.erp_course_class_id=$1 AND ${eligibility}
       ORDER BY m.erp_student_name_snapshot,m.public_id`,[scope.class_id]);
     const member = studentRef ? students.find(s => s.student_ref === studentRef) : null;
     if (studentRef && !member) throw new SpeakingHomeworkError('STUDENT_NOT_ACTIVE','Hồ sơ này chưa có đăng ký hợp lệ trong lớp.',403);
     // Danh sách tự chọn lấy tên ERP của lớp đang học, kể cả tài khoản chưa duyệt.
     // Giữ students/member ở trên chỉ gồm mapping approved cho luồng xác nhận nguồn.
     const selectionStudents = studentRef ? [] : (await pool.query(`SELECT m.public_id AS student_ref,
-      m.erp_student_name_snapshot AS name FROM mapping.student_mapping_review m
+      ${studentName} AS name FROM mapping.student_mapping_review m
       WHERE m.erp_course_class_id=$1 AND EXISTS
         (SELECT 1 FROM mapping.erp_class_membership_snapshot e
          WHERE e.erp_course_class_id=m.erp_course_class_id AND e.erp_student_contact_id=m.erp_student_contact_id

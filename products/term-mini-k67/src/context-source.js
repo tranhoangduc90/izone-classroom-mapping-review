@@ -32,6 +32,18 @@ export function createContextSourceApp({ pool, secret }) {
   const app = express();
   app.disable('x-powered-by');
   app.get('/health', (_req, res) => res.json({ ok: true, product: 'K67-context-v1' }));
+  // Nguồn Homework riêng: chỉ UUID/ERP đang học, không đổi snapshot của bài thi.
+  app.get('/v1/homework/erp-students', async (req,res) => {
+    const supplied=Buffer.from(req.get('x-k67-context-key')||'');
+    if(supplied.length!==expected.length||!crypto.timingSafeEqual(supplied,expected))
+      return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+    res.set('Cache-Control','no-store');
+    try {
+      const {rows}=await pool.query(`SELECT * FROM k67_context_api_v1.homework_erp_students
+        ORDER BY erp_course_class_id,erp_student_contact_id`);
+      return res.json({ok:true,capturedAt:new Date().toISOString(),students:rows});
+    } catch {return res.status(503).json({ok:false,error:'HOMEWORK_ERP_SOURCE_UNAVAILABLE'});}
+  });
   app.get('/v1/snapshot', async (req, res) => {
     const supplied = Buffer.from(req.get('x-k67-context-key') || '');
     if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {

@@ -115,7 +115,7 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
   const legacyCodes=new Set(['67-speaking-paraphrase','67-speaking-lam_ro','67-speaking-diem_giua','67-speaking-on_tap_lam_ro_diem_giua']);
   const pendingContexts=new Map();
   async function context(input){
-    const body={assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{})};
+    const body={assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{}),...(input.webEntry===true?{webEntry:true}:{})};
     // Chỉ gộp lượt đọc đang chờ của đúng bài/lớp/học viên; không giữ quyền sau phản hồi.
     const key=JSON.stringify(body);
     if(pendingContexts.has(key))return pendingContexts.get(key);

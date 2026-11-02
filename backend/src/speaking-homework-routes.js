@@ -274,7 +274,7 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   }));
   router.post('/internal/independent/context', asyncRoute(async (req, res) => {
     const input = parseOrReply(directOpen.partial({ classCode:true }).extend({
-      studentRef:z.string().uuid().optional() }).strict(),req.body,res);
+      studentRef:z.string().uuid().optional(),webEntry:z.boolean().optional() }).strict(),req.body,res);
     if (input) res.json({ok:true,...await independentSource.context(input)});
   }));
   const legacyBridge=createSpeakingLegacyBridge({pool,source:independentSource,catalog,service});
