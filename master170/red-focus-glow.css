@@ -1,0 +1,6 @@
+/* Only nodes whose existing focused indicator was red receive these markers. */
+[data-iz-red-focus-indicator]{outline:none!important;box-shadow:none!important;border-radius:12px!important}
+body>.iz-red-focus-glow{position:fixed;inset:auto;box-sizing:border-box;pointer-events:none;z-index:2147483646;border:2px solid #db0829;border-radius:12px;box-shadow:0 0 0 3px rgba(219,8,41,.12),0 0 16px rgba(219,8,41,.24);margin:0;padding:0;background:transparent}
+body>.iz-red-focus-glow::backdrop{pointer-events:none;background:transparent}
+body>.iz-red-focus-glow[hidden]{display:none!important}
+@media(forced-colors:active){body>.iz-red-focus-glow{display:none!important}[data-iz-red-focus-indicator]{outline:2px solid Highlight!important;outline-offset:2px;box-shadow:none!important}}
