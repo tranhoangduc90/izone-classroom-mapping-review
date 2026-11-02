@@ -411,6 +411,7 @@ export function createApp({
   learningTestResultReader = null,
   learningErpScheduleReader = null,
   speakingHomeworkPool = null,
+  speakingObservationEnabled = false,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   writingTestService,
@@ -1379,13 +1380,16 @@ export function createApp({
     throw new Error('SPEAKING_HOMEWORK_ENABLED cần database pool riêng.');
   }
   if (config.speakingHomeworkEnabled) {
-    app.use('/api/speaking-homework', createSpeakingHomeworkRouter({
+    const speakingRouter=createSpeakingHomeworkRouter({
       pool: speakingHomeworkPool,
       workerSecret: config.speakingHomeworkWorkerSecret,
       accessSecret: config.speakingHomeworkAccessSecret,
       authenticate,
-      observeTeacherAccess:auth.observeTeacherAccess
-    }));
+      observeTeacherAccess:auth.observeTeacherAccess,
+      observationEnabled:speakingObservationEnabled
+    });
+    app.locals.speakingObservation=speakingRouter.speakingObservation;
+    app.use('/api/speaking-homework',speakingRouter);
   }
   app.get('/api/auth/me', authenticate, (req, res) => {
     res.json({ ok: true, reviewer: req.reviewer });

@@ -21,3 +21,5 @@ test.after(async()=>{
  console.log(JSON.stringify({event:'speaking_state_native_cleanup',fixtureDatabases:0,externalAttempts,closed:true,readerRole:'speaking_state_reader'}));
 });
 await import('../../backend/test/speaking-observation-data.test.js');
+await import('../../backend/test/speaking-observation.test.js');
+await import('../../backend/test/speaking-observation-http.test.js');

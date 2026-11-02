@@ -59,6 +59,7 @@ const app = createApp({
   learningPool,
   learningTestResultReader: learningTestSources?.reader,
   speakingHomeworkPool,
+  speakingObservationEnabled:process.env.TEST_SERVICES_OBSERVATION_ENABLED==='true',
   syncErpGrades,
   termTestAssetService,
   termTestWritingGradingService
@@ -95,6 +96,7 @@ const speakingLegacyWorker=startSpeakingLegacyWorker({pool:speakingHomeworkPool,
 const speakingCoordinator=speakingHomeworkPool&&speakingCoordinated?startSpeakingWorkCoordinator({pool:speakingHomeworkPool,schema:'speaking_homework',worker:speakingLegacyWorker,
   createClient:()=>new pg.Client({connectionString:config.speakingHomeworkDatabaseUrl,connectionTimeoutMillis:5000,application_name:'speaking_homework_work_listener'}),
   onDocs:()=>{speakingProgressWorker.wake?.();speakingDocsNotifier.kick();},
+  onState:()=>app.locals.speakingObservation?.wake(),
   onError:error=>console.error('Tín hiệu Speaking cũ lỗi:',String(error.code||'SPEAKING_SIGNAL_ERROR'))}):null;
 
 server.requestTimeout = 15_000;
@@ -107,6 +109,7 @@ function shutdown(signal) {
   const deadline=setTimeout(()=>process.exit(1),240_000).unref();
   return shuttingDown=(async()=>{
   await app.locals.learningLiveUpdates?.close();
+  await app.locals.speakingObservation?.close();
   writingNotifier.close();
   console.log(`Nhận ${signal}; đang đóng API an toàn.`);
   await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));

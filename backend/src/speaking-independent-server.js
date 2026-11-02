@@ -19,12 +19,15 @@ import {createDurableWorkLoop} from './test-work-runtime.js';
 import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
 import {speakingSourceScopes,expandSpeakingSourceBatch} from './speaking-source-batch.js';
 import {teacherObservationActors,expandTeacherObservation} from './teacher-observation-contract.js';
+import {createSpeakingObservation} from './speaking-observation.js';
+import {createSpeakingObservationData} from './speaking-observation-data.js';
+import {mountSpeakingObservationRoutes} from './speaking-observation-routes.js';
 const speakingWebOrigin='https://tranhoangduc90.github.io';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
 // Không khởi động các worker Writing, Progress Log hoặc Speaking bài cũ.
-export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued'}) {
+export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued',observation=null,teacherAdmission}) {
   const app=express();
   app.set('trust proxy',1);
   app.use(helmet());app.use(express.json({limit:'2mb'}));
@@ -53,6 +56,7 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
       return 'guest:'+ipKeyGenerator(req.ip);
     }}));
   if(teacher) mountSpeakingTeacherProgress(router,{teacher,z});
+  mountSpeakingObservationRoutes(router,{observation,z,teacherAdmission});
   const code=z.string().trim().min(3).max(100);
   const selected=z.object({assignmentCode:code,classCode:z.string().regex(/^[A-Za-z0-9_-]{2,32}$/),documentId:z.string().regex(/^[A-Za-z0-9_-]{5,120}$/).optional()}).strict();
   const identity=z.object({accessToken:z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),studentRef:z.string().uuid()}).strict();
@@ -232,13 +236,16 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true'});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
+  const observation=env.TEST_SERVICES_OBSERVATION_ENABLED==='true'?createSpeakingObservation({schema:'speaking_independent',
+    data:createSpeakingObservationData({pool,schema:'speaking_independent'}),source,observeTeachers:actors=>source.observeTeachers(actors)}):null;
   const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
   const coordinator=env.TEST_SERVICES_COORDINATOR_ENABLED==='true'?startSpeakingWorkCoordinator({pool,schema:'speaking_independent',worker,
     createClient:()=>new pg.Client({connectionString:env.INDEPENDENT_DATABASE_URL,connectionTimeoutMillis:5000,application_name:'speaking_independent_work_listener'}),
-    onDocs:()=>progressWorker.wake?.(),onError:error=>console.error('Tín hiệu Speaking độc lập lỗi:',String(error.code||'WORK_SIGNAL_ERROR'))}):null;
+    onDocs:()=>progressWorker.wake?.(),onState:()=>observation?.wake(),onError:error=>console.error('Tín hiệu Speaking độc lập lỗi:',String(error.code||'WORK_SIGNAL_ERROR'))}):null;
   const teacher=createSpeakingTeacherProgress({pool,source});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
+    observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
-  let closing;const stop=()=>closing??=(async()=>{await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await pool.end();})();
+  let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await pool.end();})();
   for(const signal of ['SIGTERM','SIGINT']) process.on(signal,()=>void stop());
 }

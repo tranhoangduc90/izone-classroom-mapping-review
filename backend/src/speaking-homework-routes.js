@@ -10,6 +10,10 @@ import { createSpeakingCatalog } from './speaking-catalog.js';
 import { createSpeakingLegacyBridge } from './speaking-legacy-bridge.js';
 import { createIndependentSource } from './speaking-independent-source.js';
 import { createLegacySpeakingTeacherProgress } from './speaking-legacy-teacher-progress.js';
+import {createSpeakingObservation} from './speaking-observation.js';
+import {createSpeakingObservationData} from './speaking-observation-data.js';
+import {mountSpeakingObservationRoutes} from './speaking-observation-routes.js';
+import {expandSpeakingSourceBatch} from './speaking-source-batch.js';
 
 const identity = z.object({
   accessToken: z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),
@@ -151,7 +155,7 @@ function workerAuth(secret) {
 }
 
 // API chỉ mở khi có database pool và secret riêng. Hai đường nội bộ dành cho worker n8n.
-export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate, observeTeacherAccess }) {
+export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate, observeTeacherAccess, observationEnabled=false }) {
   const router = express.Router();
   const service = createSpeakingHomeworkService({ pool, accessSecret });
   const docsJobs = createSpeakingDocsJobs({ pool });
@@ -258,6 +262,10 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   router.use('/internal', workerAuth(workerSecret));
   const independentSource = createIndependentSource({ pool,workerSecret,
     independentBase:process.env.SPEAKING_INDEPENDENT_API_URL||'http://speaking67-independent-api:4338/api/speaking-homework-independent' });
+  const observation=observationEnabled?createSpeakingObservation({schema:'speaking_homework',data:createSpeakingObservationData({pool,schema:'speaking_homework'}),
+    source:{contexts:async scopes=>expandSpeakingSourceBatch(scopes,await independentSource.contexts(scopes))},observeTeachers:observeTeacherAccess}):null;
+  router.speakingObservation=observation;
+  mountSpeakingObservationRoutes(router,{observation,z,authenticate});
   const legacyTeacher=createLegacySpeakingTeacherProgress({pool,source:independentSource});
   router.get('/internal/independent/teacher-progress/entry',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(assignmentOpen.omit({classCode:true}),req.query,res);if(!input)return;
