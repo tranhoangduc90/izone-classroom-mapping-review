@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import pg from 'pg';
+import {pathToFileURL} from 'node:url';
+import {startSpeakingLegacyWorker} from '../src/speaking-legacy-work.js';
+import {startSpeakingWorkCoordinator} from '../src/speaking-work-runtime.js';
 import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
@@ -31,7 +35,15 @@ function poolFrom(db) {
 }
 
 async function fixture({progressDocsEnabled=false}={}) {
-  const db = new PGlite();
+  let db,nativePool,ownerPool,ready=false;
+  try{
+  if(process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL){
+    const app=new URL(process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL),owner=new URL(process.env.SPEAKING_LEGACY_NATIVE_ADMIN_URL);
+    assert.equal(process.env.SPEAKING_NATIVE_TEST_CONFIRM,'test-services-optimization-20261101');assert.match(app.hostname,/^tsto-practice-pg-[a-z0-9]+$/);assert.match(app.pathname,/^\/speaking_legacy_fixture_[a-z0-9_]+$/);assert.equal(app.username,'speaking_fixture_api');assert.equal(owner.hostname,app.hostname);assert.equal(owner.pathname,app.pathname);assert.equal(owner.username,'fixture');
+    nativePool=new pg.Pool({connectionString:app.href,max:8});ownerPool=new pg.Pool({connectionString:owner.href,max:1});
+    await ownerPool.query('DROP SCHEMA IF EXISTS speaking_homework CASCADE;DROP SCHEMA IF EXISTS mapping CASCADE');
+    db={async exec(sql){try{return await ownerPool.query(sql);}catch(error){await ownerPool.query('ROLLBACK');throw error;}},query:(...args)=>nativePool.query(...args),async close(){await nativePool.end();await ownerPool.end();}};
+  }else db = new PGlite();
   await db.exec(`
     CREATE SCHEMA mapping;
     CREATE TABLE mapping.classroom_course_mapping (
@@ -73,7 +85,7 @@ async function fixture({progressDocsEnabled=false}={}) {
     CREATE UNIQUE INDEX speaking_document_classroom_submission_once
     ON speaking_homework.assignment_document(assignment_id, classroom_submission_id)
     WHERE classroom_submission_id IS NOT NULL;`);
-  const pool = poolFrom(db);
+  const pool = nativePool?{query:(...args)=>(ready?nativePool:ownerPool).query(...args),connect:()=>(ready?nativePool:ownerPool).connect()}:poolFrom(db);
   const first = await pool.query(`INSERT INTO speaking_homework.assignment
     (class_id, course_id, course_work_id, assignment_code, doctor_course_key, title, status)
     VALUES (2304, 'course-2304', 'lesson-2', '67-speaking-lesson-2', '67', 'Homework Lesson 2', 'open') RETURNING id`);
@@ -118,8 +130,112 @@ async function fixture({progressDocsEnabled=false}={}) {
     await db.exec("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='speaking_homework_api') THEN CREATE ROLE speaking_homework_api; END IF; END $$;");
     await db.exec(await readFile(new URL('../ops/migrations/202610250930_speaking_progress_docs.sql',import.meta.url),'utf8'));
   }
+  if(nativePool){
+    await ownerPool.query('GRANT USAGE ON SCHEMA mapping,speaking_homework TO speaking_fixture_api;GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA mapping,speaking_homework TO speaking_fixture_api;GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA mapping,speaking_homework TO speaking_fixture_api;GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA speaking_homework TO speaking_fixture_api');ready=true;
+    assert.deepEqual((await pool.query('SELECT current_user AS role,rolsuper,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname=current_user')).rows[0],{role:'speaking_fixture_api',rolsuper:false,rolcreatedb:false,rolcreaterole:false});await assert.rejects(pool.query('CREATE TABLE speaking_homework.forbidden_fixture(id integer)'),error=>error.code==='42501');
+  }
   return { db, pool, service: createSpeakingHomeworkService({ pool,progressDocsEnabled }) };
+  }catch(error){if(db)await db.close();else{await nativePool?.end();await ownerPool?.end();}throw error;}
 }
+
+async function seedLegacyChecks(f){
+  const people=[{accessToken,studentRef},{accessToken:secondToken,studentRef:secondStudentRef}];let index=0;
+  await f.pool.query("UPDATE mapping.student_mapping_review SET erp_student_name_snapshot='Tên trùng fixture'");
+  for(const person of people){
+    const grant=await f.service.resolveGrant(person.accessToken,person.studentRef);
+    const parts=(await f.pool.query('SELECT part_key FROM speaking_homework.assignment_part WHERE assignment_id=$1 ORDER BY position',[grant.assignment_id])).rows;
+    for(const part of parts)await f.service.requestCheck({...person,part:part.part_key,rawUrl:share('0123456789abcdef'[++index])});
+  }
+  return(await f.pool.query(`SELECT j.id AS job_id,l.id AS link_id,l.share_url,l.part,g.student_ref,a.course_id,a.course_work_id,a.class_id,p.min_questions
+    FROM speaking_homework.check_job j JOIN speaking_homework.submission_link l ON l.id=j.link_id
+    JOIN speaking_homework.submission s ON s.id=l.submission_id JOIN speaking_homework.access_grant g ON g.id=s.access_grant_id
+    JOIN speaking_homework.assignment a ON a.id=g.assignment_id JOIN speaking_homework.assignment_part p ON p.assignment_id=a.id AND p.part_key=l.part ORDER BY j.created_at,j.id`)).rows;
+}
+function measuredLegacyPool(pool,queries,fail=()=>false){return{query:(...args)=>pool.query(...args),async connect(){const db=await pool.connect();return{async query(sql,params){queries.push(sql);if(fail(sql,params))throw Error('SYNTHETIC_LEGACY_METADATA_FAILURE');return db.query(sql,params);},release:value=>db.release(value)};}};}
+
+test('Legacy batch main admission keeps distinct student/link identities with duplicate names and partial outcomes',async()=>{
+  const f=await fixture();try{
+    const expected=await seedLegacyChecks(f),queries=[],service=createSpeakingHomeworkService({pool:measuredLegacyPool(f.pool,queries)}),jobs=await service.claimCheckJobs(4);
+    assert.equal(jobs.length,4);assert.equal(queries.length,3);assert.deepEqual(jobs.map(job=>job.job_id),expected.slice(0,4).map(job=>job.job_id));
+    for(const [i,job]of [...jobs].reverse().entries()){
+      assert.deepEqual(job,expected.find(row=>row.job_id===job.job_id));
+      const passed=i!==1;await service.completeCheck({checkJobId:job.job_id,fingerprint:crypto.createHash('sha256').update(job.job_id).digest('hex'),questionCount:Number(job.min_questions),qualityPassed:passed,evidence:{coveredCategories:['noun','verb','adjective']}});
+      assert.equal((await f.pool.query('SELECT check_status FROM speaking_homework.submission_link WHERE id=$1',[job.link_id])).rows[0].check_status,passed?'accepted':'rejected');
+    }
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
+test('Legacy mixed empty admission uses one transaction and validates every native lane limit',async()=>{
+  const f=await fixture();try{
+    const queries=[],service=createSpeakingHomeworkService({pool:measuredLegacyPool(f.pool,queries)});
+    assert.deepEqual(await service.claimWorkerJobs({check:4,doctor:2,practice:1,grade:1}),[]);assert.equal(queries.length,8);assert.equal(queries.filter(sql=>sql==='BEGIN').length,1);assert.equal(queries.filter(sql=>sql==='COMMIT').length,1);
+    queries.length=0;assert.deepEqual(await service.claimWorkerJobs({check:0,doctor:0,practice:0,grade:0}),[]);assert.equal(queries.length,0);
+    for(const free of [{check:5},{doctor:3},{practice:2},{grade:2},{another_product:1},{check:-1},{check:1.5},{toString:1}])await assert.rejects(service.claimWorkerJobs(free),/SPEAKING_WORK_CAPACITY_INVALID/);
+    for(const limit of [0,17,1.5])for(const method of [service.claimCheckJobs,service.claimPracticeCheckJobs,service.claimPracticeAnalysisJobs])await assert.rejects(method(limit),/SPEAKING_CLAIM_LIMIT_INVALID/);
+  }finally{await f.db.close();}
+});
+
+test('A later legacy lane failure rolls back earlier claims and their retry counters in the same admission',async()=>{
+  const f=await fixture();try{
+    await seedLegacyChecks(f);const before=(await f.pool.query('SELECT * FROM speaking_homework.check_job ORDER BY id')).rows,queries=[];
+    const service=createSpeakingHomeworkService({pool:measuredLegacyPool(f.pool,queries,(_sql,params)=>params?.[0]==='doctor_analyze')});
+    await assert.rejects(service.claimWorkerJobs({check:4,doctor:2}),/SYNTHETIC_LEGACY_METADATA_FAILURE/);assert.equal(queries.at(-1),'ROLLBACK');assert.deepEqual((await f.pool.query('SELECT * FROM speaking_homework.check_job ORDER BY id')).rows,before);assert.equal((await f.service.claimWorkerJobs({check:4})).length,4);
+  }finally{await f.db.close();}
+});
+
+test('Legacy mixed Doctor and grade admission preserves each receipt/current link and leaves Docs jobs in their own lane',async()=>{
+  const f=await fixture();try{
+    await f.pool.query("UPDATE speaking_homework.assignment SET doctor_course_key='67'");await seedLegacyChecks(f);
+    for(const job of await f.service.claimCheckJobs(16))await f.service.completeCheck({checkJobId:job.job_id,fingerprint:crypto.createHash('sha256').update(job.job_id).digest('hex'),questionCount:Number(job.min_questions),qualityPassed:true,evidence:{coveredCategories:['noun','verb','adjective']}});
+    await f.service.finish({accessToken,studentRef});await f.service.finish({accessToken:secondToken,studentRef:secondStudentRef});
+    const expected=(await f.pool.query(`SELECT o.id AS job_id,o.kind,r.id AS receipt_id,g.document_id,g.student_ref FROM speaking_homework.outbox o JOIN speaking_homework.receipt r ON r.id=o.receipt_id JOIN speaking_homework.submission s ON s.id=r.submission_id JOIN speaking_homework.access_grant g ON g.id=s.access_grant_id`)).rows;
+    const jobs=await f.service.claimWorkerJobs({doctor:2,grade:1});assert.equal(jobs.length,3);assert.equal(jobs.filter(job=>job.lane==='doctor').length,2);assert.equal(jobs.filter(job=>job.lane==='grade').length,1);
+    for(const job of jobs){const row=expected.find(row=>row.job_id===job.job_id);assert.equal(job.receipt_id,row.receipt_id);assert.equal(job.document_id,row.document_id);assert.equal(job.student_ref,row.student_ref);assert.equal(job.attempts,0);for(const [part,link]of Object.entries(job.links)){const native=(await f.pool.query('SELECT part,share_url FROM speaking_homework.submission_link WHERE id=$1',[link.linkId])).rows[0];assert.equal(native.part,part);assert.equal(native.share_url,link.url);}}
+    const docs=(await f.pool.query("SELECT status,attempts FROM speaking_homework.outbox WHERE kind='write_doc'")).rows;assert.equal(docs.length,2);assert.ok(docs.every(row=>row.status==='pending'&&row.attempts===0));assert.equal((await f.service.claimOutboxJobs('grade_speaking',1)).length,1);
+  }finally{await f.db.close();}
+});
+
+test('Legacy practice batch admission keeps exercise/slot identity and only accepted links enter analysis',async()=>{
+  const f=await fixture();try{
+    await f.pool.query("UPDATE speaking_homework.assignment SET required_practice_count=2 WHERE assignment_code='67-speaking-lesson-2'");
+    const exercises=(await f.pool.query("INSERT INTO speaking_homework.doctor_exercise(course_key,source_record_id,title,exercise_url) VALUES('67','batch-a','Bài A','https://example.test/a'),('67','batch-b','Bài B','https://example.test/b') RETURNING id,title")).rows;
+    for(const [n,exercise]of exercises.entries())await f.service.requestPracticeCheck({accessToken,studentRef,slot:n+1,exerciseId:exercise.id,rawUrl:share(n?'e':'f')});
+    const jobs=await f.service.claimPracticeCheckJobs(2);assert.equal(jobs.length,2);for(const job of jobs){const exercise=exercises.find(row=>row.id===job.exercise_id);assert.equal(job.exercise_title,exercise.title);await f.service.completePracticeCheck({checkJobId:job.job_id,fingerprint:crypto.createHash('sha256').update(job.job_id).digest('hex'),questionCount:2,qualityPassed:true,matchedExerciseId:job.exercise_id});}
+    const analyses=await f.service.claimPracticeAnalysisJobs(2);assert.equal(analyses.length,2);for(const job of analyses){assert.equal(job.student_ref,studentRef);const link=(await f.pool.query('SELECT status,exercise_id,share_url FROM speaking_homework.practice_link WHERE id=$1',[job.link_id])).rows[0];assert.equal(link.status,'accepted');assert.equal(link.exercise_id,job.exercise_id);assert.equal(link.share_url,job.share_url);}assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
+test('Native PostgreSQL: competing legacy batches never share a main job',{skip:!process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,timeout:30000},async()=>{
+  const f=await fixture();try{const expected=await seedLegacyChecks(f),jobs=(await Promise.all([f.service.claimWorkerJobs({check:4}),f.service.claimWorkerJobs({check:4})])).flat();assert.equal(jobs.length,expected.length);assert.equal(new Set(jobs.map(job=>job.job_id)).size,jobs.length);assert.deepEqual(await f.service.claimWorkerJobs({check:4}),[]);for(const row of(await f.pool.query('SELECT status,attempts FROM speaking_homework.check_job')).rows){assert.equal(row.status,'processing');assert.equal(row.attempts,1);}}finally{await f.db.close();}
+});
+
+test('Native PostgreSQL: legacy mixed empty admission compares five live queue probes with one transaction',{skip:!process.env.SPEAKING_LEGACY_CLAIM_BASE_FILE,timeout:30000},async t=>{
+  const {createSpeakingHomeworkService:baselineFactory}=await import(pathToFileURL(process.env.SPEAKING_LEGACY_CLAIM_BASE_FILE));
+  async function measure(baseline){const f=await fixture();try{const queries=[],service=(baseline?baselineFactory:createSpeakingHomeworkService)({pool:measuredLegacyPool(f.pool,queries),progressDocsEnabled:false});if(baseline){assert.equal(await service.claimCheckJob(),null);assert.equal(await service.claimOutboxJob('doctor_analyze'),null);assert.equal(await service.claimPracticeCheckJob(),null);assert.equal(await service.claimPracticeAnalysisJob(),null);assert.equal(await service.claimOutboxJob('grade_speaking'),null);}else assert.deepEqual(await service.claimWorkerJobs({check:4,doctor:2,practice:1,grade:1}),[]);return queries.length;}finally{await f.db.close();}}
+  const singleQueries=await measure(true),combinedQueries=await measure(false);assert.equal(singleQueries,17);assert.equal(combinedQueries,8);t.diagnostic(JSON.stringify({event:'speaking_legacy_native_empty_queries',singleQueries,combinedQueries,includesBeginCommit:true,progressTableAbsent:true,cpuOrSaveLatencyClaim:false}));
+});
+
+test('Native PostgreSQL: legacy main batch compares four live single claims without changing job identities',{skip:!process.env.SPEAKING_LEGACY_CLAIM_BASE_FILE,timeout:30000},async t=>{
+  const {createSpeakingHomeworkService:baselineFactory}=await import(pathToFileURL(process.env.SPEAKING_LEGACY_CLAIM_BASE_FILE));
+  async function measure(baseline){const f=await fixture();try{await seedLegacyChecks(f);const queries=[],service=(baseline?baselineFactory:createSpeakingHomeworkService)({pool:measuredLegacyPool(f.pool,queries)}),jobs=baseline?await(async()=>{const rows=[];for(let n=0;n<4;n++)rows.push(await service.claimCheckJob());return rows;})():await service.claimCheckJobs(4);assert.equal(jobs.length,4);assert.equal(new Set(jobs.map(job=>job.job_id)).size,4);assert.ok(jobs.every(job=>job.link_id&&job.student_ref&&job.min_questions));return queries.length;}finally{await f.db.close();}}
+  const singleQueries=await measure(true),batchQueries=await measure(false);assert.equal(singleQueries,16);assert.equal(batchQueries,3);t.diagnostic(JSON.stringify({event:'speaking_legacy_native_main_queries',admitted:4,singleQueries,batchQueries,includesBeginCommit:true,cpuOrSaveLatencyClaim:false}));
+});
+
+test('Native PostgreSQL: a committed legacy producer wakes the shared dispatcher and failed notification cannot lose saved links',{skip:!process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,timeout:30000},async()=>{
+  const f=await fixture();let worker,coordinator;
+  async function until(check){const end=performance.now()+10000;while(performance.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('LEGACY_COMMITTED_WAKE_TIMEOUT');}
+  try{
+    worker=startSpeakingLegacyWorker({pool:f.pool,service:f.service,pollMs:60000,dependencies:{handlers:{check:async(service,job)=>service.completeCheck({checkJobId:job.job_id,fingerprint:crypto.createHash('sha256').update(job.job_id).digest('hex'),questionCount:Number(job.min_questions),qualityPassed:true,evidence:{coveredCategories:['noun','verb','adjective']}})}}});
+    coordinator=startSpeakingWorkCoordinator({pool:f.pool,schema:'speaking_homework',worker,createClient:()=>new pg.Client({connectionString:process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL})});await until(()=>coordinator.snapshot().connected);await new Promise(resolve=>setTimeout(resolve,40));
+    const first=await f.service.requestCheck({accessToken,studentRef,part:'paraphrase',rawUrl:share('a')});await until(async()=>(await f.pool.query('SELECT check_status FROM speaking_homework.submission_link WHERE id=$1',[first.linkId])).rows[0].check_status==='accepted');assert.equal(worker.snapshot().completed,1);
+    const connect=f.pool.connect;let fail=true;f.pool.connect=async()=>{const db=await connect();let producer=false;return{query:async(sql,params)=>{if(sql.includes('INSERT INTO speaking_homework.check_job'))producer=true;if(sql==='COMMIT'&&producer&&fail){fail=false;throw Error('SYNTHETIC_LEGACY_COMMIT_FAILURE');}return db.query(sql,params);},release:value=>db.release(value)};};
+    try{await assert.rejects(f.service.requestCheck({accessToken,studentRef,part:'speaking',rawUrl:share('b')}),/SYNTHETIC_LEGACY_COMMIT_FAILURE/);}finally{f.pool.connect=connect;}await new Promise(resolve=>setTimeout(resolve,60));assert.equal(worker.snapshot().started,1);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.submission_link')).rows[0].n,1);
+    const query=f.pool.query;f.pool.query=(...args)=>{if(args[0]==='SELECT pg_notify($1,$2)')throw Error('SYNTHETIC_LEGACY_NOTIFY_FAILURE');return query(...args);};
+    try{const second=await f.service.requestCheck({accessToken,studentRef,part:'speaking',rawUrl:share('c')});await until(()=>coordinator.snapshot().errors>0);await until(async()=>(await query('SELECT check_status FROM speaking_homework.submission_link WHERE id=$1',[second.linkId])).rows[0].check_status==='accepted');}finally{f.pool.query=query;}
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.submission_link')).rows[0].n,2);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_homework.receipt')).rows[0].n,0);
+  }finally{await worker?.stop();await coordinator?.stop();await f.db.close();}
+});
 
 test('legacy practice reports exhausted technical checks and allows one new revision of the same link',async()=>{
   const f=await fixture();try{

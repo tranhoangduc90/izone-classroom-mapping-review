@@ -1,0 +1,18 @@
+// Task-owned PostgreSQL only; no production credentials, network calls or embedded fallback.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import {fileURLToPath} from 'node:url';
+import {closeNativeHttp} from './native-http.mjs';
+const task='test-services-optimization-20261101',url=new URL(process.env.PRACTICE_FIXTURE_DATABASE_URL||'');
+assert.equal(process.env.PRACTICE_FIXTURE_CONFIRM,task);assert.match(url.hostname,/^tsto-practice-pg-[a-z0-9]+$/);assert.equal(url.username,'fixture');assert.equal(url.pathname,'/postgres');
+const suffix=url.hostname.replace('tsto-practice-pg-',''),name='speaking_legacy_fixture_'+suffix,admin=new pg.Client({connectionString:url.href});await admin.connect();
+await admin.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='speaking_fixture_api') THEN CREATE ROLE speaking_fixture_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;END IF;END $$");await admin.query('CREATE DATABASE '+name);
+const owner=new URL(url);owner.pathname='/'+name;const app=new URL(owner);app.username='speaking_fixture_api';
+process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL=app.href;process.env.SPEAKING_LEGACY_NATIVE_ADMIN_URL=owner.href;process.env.SPEAKING_NATIVE_TEST_CONFIRM=task;
+process.env.SPEAKING_LEGACY_CLAIM_BASE_FILE=fileURLToPath(new URL('../../backend/src/speaking-homework.baseline.js',import.meta.url));
+const fetch=globalThis.fetch;let externalAttempts=0;
+globalThis.fetch=(input,options)=>{const target=new URL(typeof input==='string'?input:input.url||input.href);if(!['127.0.0.1','localhost'].includes(target.hostname)){externalAttempts++;throw Error('EXTERNAL_FIXTURE_REQUEST_DENIED');}return fetch(input,options);};
+test.after(async()=>{await closeNativeHttp();assert.equal(externalAttempts,0);await admin.query('DROP DATABASE '+name);await admin.end();console.log(JSON.stringify({event:'speaking_legacy_native_cleanup',database:name,closed:true,role:'speaking_fixture_api',externalAttempts}));});
+await import('../../backend/test/speaking-homework.native.test.js');
+await import('../../backend/test/speaking-legacy-work.test.js');
