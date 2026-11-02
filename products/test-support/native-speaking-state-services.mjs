@@ -25,3 +25,6 @@ await import('../../backend/test/speaking-observation.test.js');
 await import('../../backend/test/speaking-observation-http.test.js');
 await import('../../backend/test/speaking-observation-docs.test.js');
 await import('../../backend/test/speaking-teacher-capabilities.test.js');
+await import('../../backend/test/speaking-observation-admission.test.js');
+await import('../../backend/test/speaking-admission-queue.test.js');
+await import('../../backend/test/speaking-admission-budgets.test.js');

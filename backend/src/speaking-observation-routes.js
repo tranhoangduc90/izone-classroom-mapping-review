@@ -21,7 +21,7 @@ export function mountSpeakingObservationRoutes(router,{observation,z,authenticat
   try{
    const value=await observation.hub.readOnce(pair.scope,pair.guard,{signal:controller.signal});
    if(controller.signal.aborted||res.destroyed)return;
-   if(events)openTestObservationStream({response:res,hub:observation.hub,...pair});
+   if(events){openTestObservationStream({response:res,hub:observation.hub,...pair});req.speakingObservationAdmitted?.();}
    else{res.set('Cache-Control','private, no-store');res.json({ok:true,[field]:value});}
   }finally{req.removeListener('aborted',abort);res.removeListener('close',abort);}
  }

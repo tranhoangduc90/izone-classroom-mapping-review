@@ -37,7 +37,7 @@ export async function httpFixture({enabled=true,parentEnabled=enabled,nativeOpen
   observation=enabled?createSpeakingObservation({schema:'speaking_independent',data:f.data('speaking_independent'),source,
    observeTeachers:actors=>source.observeTeachers(actors)}):null;
   const teacher=nativeTeacher?createSpeakingTeacherProgress({pool:f.pool,source,observationEnabled:Boolean(observation)}):null;
-  independent=await listen(createIndependentApp({service:f.independent,observation,teacher,
+  independent=await listen(createIndependentApp({service:f.independent,observation,teacher,teacherSessionCookieName:'observe_teacher',
    teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers)}));
   const close=async()=>{await observation?.close();await parentApp.locals.speakingObservation?.close();
    for(const item of [independent,parent])if(item){item.server.closeAllConnections();await new Promise(resolve=>item.server.close(resolve));}await f.close();};

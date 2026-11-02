@@ -22,15 +22,17 @@ import {teacherObservationActors,expandTeacherObservation} from './teacher-obser
 import {createSpeakingObservation} from './speaking-observation.js';
 import {createSpeakingObservationData} from './speaking-observation-data.js';
 import {mountSpeakingObservationRoutes} from './speaking-observation-routes.js';
+import {createSpeakingAdmission} from './speaking-admission.js';
 const speakingWebOrigin='https://tranhoangduc90.github.io';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
 // Không khởi động các worker Writing, Progress Log hoặc Speaking bài cũ.
-export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued',observation=null,teacherAdmission}) {
+export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued',observation=null,teacherAdmission,teacherSessionCookieName='izone_teacher_session'}) {
+  if(!/^[A-Za-z0-9_]+$/.test(teacherSessionCookieName))throw Error('TEACHER_SESSION_COOKIE_NAME_INVALID');
   const app=express();
   app.set('trust proxy',1);
-  app.use(helmet());app.use(express.json({limit:'2mb'}));
+  app.use(helmet());
   app.use((req,res,next)=>{
     if(req.headers.origin===origin) {
       res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');
@@ -45,14 +47,28 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
   const router=express.Router();
   const quotaMessage={ok:false,error:'RATE_LIMITED',message:'Bạn đã gửi quá nhiều yêu cầu. Hãy chờ một phút rồi thử lại.'};
   // Giữ ngân sách thử sai theo mạng; token tự bịa không tạo đường né giới hạn này.
-  router.use(rateLimit({windowMs:60000,limit:180,skipSuccessfulRequests:true,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage}));
-  // Tối đa 30 người chung mạng: mỗi người có ngân sách riêng, kèm trần tổng của mạng.
+  const admission=createSpeakingAdmission({message:quotaMessage});
+  app.locals.speakingAdmission=admission;
+  router.use(admission);
+  // Xếp lượt trước khi đọc body: request đang chờ không giữ một JSON2MiB đã parse.
+  router.use(express.json({limit:'2mb'}));
+  // Giữ trần tổng5400/IP/phút; mỗi người vẫn có ngân sách riêng180/phút.
   router.use(rateLimit({windowMs:60000,limit:180*30,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage}));
   router.use(rateLimit({windowMs:60000,limit:180,standardHeaders:'draft-8',legacyHeaders:false,message:quotaMessage,
     keyGenerator:req=>{
       const {accessToken,studentRef}=req.body||{};
       if(typeof accessToken==='string'&&/^[A-Za-z0-9_-]{43}$/.test(accessToken)&&typeof studentRef==='string'&&/^[0-9a-f-]{36}$/i.test(studentRef))
         return 'student:'+createHash('sha256').update(accessToken+':'+studentRef).digest('hex');
+      // Cookie chỉ chia ngân sách, không cấp quyền; route vẫn xác thực native và
+      // mọi cookie tự bịa vẫn chịu chung ngân sách thử sai180/IP phía trên.
+      if(req.method==='GET'&&req.path.startsWith('/teacher/')){
+        let session='';
+        for(const part of String(req.get('cookie')||'').split(';')){
+          const split=part.indexOf('=');if(split<0||part.slice(0,split).trim()!==teacherSessionCookieName)continue;
+          try{session=decodeURIComponent(part.slice(split+1).trim());}catch{}break;
+        }
+        if(/^[A-Za-z0-9_-]{43}$/.test(session))return 'teacher:'+createHash('sha256').update(session).digest('hex');
+      }
       return 'guest:'+ipKeyGenerator(req.ip);
     }}));
   if(teacher) mountSpeakingTeacherProgress(router,{teacher,z});
@@ -248,6 +264,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
     onDocs:()=>progressWorker.wake?.(),onState:()=>observation?.wake(),onError:error=>console.error('Tín hiệu Speaking độc lập lỗi:',String(error.code||'WORK_SIGNAL_ERROR'))}):null;
   const teacher=createSpeakingTeacherProgress({pool,source,observationEnabled:Boolean(observation)});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
+    teacherSessionCookieName:env.TEACHER_SESSION_COOKIE_NAME||'izone_teacher_session',
     observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
   let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await pool.end();})();
