@@ -26,6 +26,7 @@ import { registerTermTestResultStream } from './term-test-result-stream.js';
 import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
+import {mountTermTeacherObservation} from './term-test-teacher-observation.js';
 import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql } from './sql.js';
@@ -1372,6 +1373,7 @@ export function createApp({
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
   mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
+  app.locals.termTeacherObservation=mountTermTeacherObservation(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
   mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});

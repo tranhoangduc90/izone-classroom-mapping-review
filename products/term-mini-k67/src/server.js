@@ -37,6 +37,7 @@ async function shutdown(signal) {
   stopping = true;
   notifier.close();
   await app.locals.termTestResultStream.close();
+  await app.locals.termTeacherObservation.close();
   console.log(`Nhận ${signal}; đang đóng backend K67 an toàn.`);
   server.close(async () => { await pool.end(); process.exit(0); });
   setTimeout(() => process.exit(1), 10000).unref();
