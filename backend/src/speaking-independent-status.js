@@ -38,7 +38,10 @@ function statusCell(document, tabId) {
 // Việc chính: chỉ nhắm ô vàng dưới heading, gắn link lên đúng hai từ, khóa revision.
 // Kết quả: batchUpdate có thể chạy một lần; khi đã ghi đúng thì trả no-op.
 export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', receiptId, teacherBaseUrl, progress }) {
-  if (document.documentId !== documentId || !document.revisionId) throw new Error('DOC_IDENTITY_MISMATCH');
+  if (document.documentId !== documentId) throw new Error('DOC_IDENTITY_MISMATCH');
+  // A readable Doc can omit its revision when Google does not allow this caller to edit it.
+  // Keep the real revision guard: Drive writer permissions alone do not prove Docs is writable.
+  if (!document.revisionId) throw new Error('DOC_WRITE_UNAVAILABLE');
   if (progress) return planProgressCell(document,tabId,progress);
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(receiptId)) throw new Error('RECEIPT_ID_INVALID');
   const teacherUrl = new URL(teacherBaseUrl);

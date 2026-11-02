@@ -201,6 +201,36 @@ test('independent syncs an accepted part before submission and recovers lost Goo
   }finally{await f.db.close();}
 });
 
+test('read-only progress is blocked accurately without a write or acknowledgement and can recover after edit access returns',async()=>{
+  const f=await fixture();try{
+    const id=f.session.workUnitId,documentId='read-only-progress-doc';
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id=$2,tab_id='t.0' WHERE id=$1",[id,documentId]);
+    await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(701)});
+    const before=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0];
+    let writable=false,writes=0,text='',link='';
+    const get=async()=>({documentId,...(writable?{revisionId:'current-revision'}:{}),tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[
+      {paragraph:{elements:[{textRun:{content:code+'\n'}}]}},
+      {table:{tableRows:[{tableCells:[{content:[{paragraph:{elements:[{textRun:{content:'TÌNH TRẠNG NỘP BÀI SPEAKING\n'}}]}}]}]},
+        {tableCells:[{content:[{paragraph:{elements:[{startIndex:100,endIndex:101+text.length,textRun:{content:text+'\n',textStyle:{link:{url:link}}}}]}}]}]}]}}
+    ]}}}]});
+    const worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:{get,async write(_id,body){
+      writes++;assert.equal(body.writeControl.requiredRevisionId,'current-revision');
+      text=body.requests.find(r=>r.insertText).insertText.text;
+      link=body.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url;
+    }}});
+    await worker.once(id);
+    const blocked=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0];
+    assert.equal(blocked.status,'blocked');assert.equal(blocked.error_code,'DOC_WRITE_UNAVAILABLE');assert.equal(writes,0);
+    for(const key of ['sequence','applied_sequence','last_text','last_link','attempt_text','attempt_link','payload'])assert.deepEqual(blocked[key],before[key]);
+    writable=true;
+    await f.pool.query("UPDATE speaking_independent.doc_progress SET status='pending',available_at=now() WHERE unit_id=$1",[id]);
+    await worker.once(id);
+    const synced=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0];
+    assert.equal(synced.status,'verified');assert.equal(synced.error_code,null);assert.equal(synced.applied_sequence,before.sequence);assert.equal(writes,1);
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});
+
 test('final Docs jobs wait without consuming retries, including when new enrollment is disabled',async()=>{
   const f=await fixture();try{
     const id=f.session.workUnitId;
