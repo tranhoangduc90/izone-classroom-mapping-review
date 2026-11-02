@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
+import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
+import { teacherObservationActors } from './teacher-observation-contract.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -223,7 +225,59 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
     const raw=readCookie(req,settings.cookieName);
     return raw?(await accountFromSession(raw))?.reviewer||null:null;
   }
-  return { authenticate, login, logout, revalidate };
+  return { authenticate, login, logout, revalidate, observeTeacherAccess:createTeacherAccessObserver({config,pool}) };
+}
+
+// Snapshot chỉ đọc cho các kết nối theo dõi; HTTP authenticate gốc vẫn gia hạn
+// cookie/idle khi mở kết nối. Không dùng kết quả này làm cache quyền sang lượt sau.
+export function createTeacherAccessObserver({config,pool}) {
+  const settings=sessionSettings(config);
+  const allowed=buildTeacherClassAccessPredicate({reviewerEmailSql:'l.email',classIdSql:'c.erp_course_class_id'});
+  return async function observeTeacherAccess(inputs) {
+    const result=new Map(),wanted=new Map();
+    for(const input of teacherObservationActors(inputs)){
+      const {classIds}=input;
+      result.set(input.key,{ok:false,error:'UNAUTHORIZED',status:401});
+      if(config.authMode!=='google'){
+        result.set(input.key,{ok:false,error:'STATE_AUTH_MODE_UNSUPPORTED',status:409});continue;
+      }
+      const raw=readCookie({get:name=>name==='cookie'?input.cookie:''},settings.cookieName);
+      if(!/^[A-Za-z0-9_-]{43}$/.test(raw)){
+        // Client Bearer cũ giữ đường đọc HTTP hiện hành, không bị ép đăng nhập lại.
+        result.set(input.key,{ok:false,error:'STATE_AUTH_COOKIE_REQUIRED',status:409});continue;
+      }
+      wanted.set(input.key,{key:input.key,token_hash:tokenHash(raw).toString('hex'),class_ids:classIds});
+    }
+    if(!wanted.size)return result;
+    const {rows}=await pool.query(`WITH wanted AS(SELECT * FROM jsonb_to_recordset($1::jsonb)
+        AS w(key text,token_hash text,class_ids jsonb)), logged AS MATERIALIZED (
+      SELECT w.key,w.token_hash,w.class_ids,account.email,account.display_name,account.role,
+        account.can_access_all_classes,session.google_subject,session.idle_expires_at,session.absolute_expires_at
+      FROM wanted w JOIN mapping.reviewer_session session ON session.token_hash=decode(w.token_hash,'hex')
+      JOIN mapping.reviewer_account account ON account.email=session.reviewer_email AND account.google_subject=session.google_subject
+      WHERE session.revoked_at IS NULL AND session.idle_expires_at>now() AND session.absolute_expires_at>now()
+        AND account.status='active'
+    ), access AS (
+      SELECT l.key,ids.value AS class_id,count(c.erp_course_class_id) FILTER(WHERE ${allowed})::int AS matches
+      FROM logged l CROSS JOIN LATERAL jsonb_array_elements_text(l.class_ids) ids
+      LEFT JOIN mapping.classroom_course_mapping c ON c.erp_course_class_id=
+        CASE WHEN ids.value='unlinked' THEN NULL::bigint ELSE ids.value::bigint END
+      GROUP BY l.key,ids.value
+    ) SELECT l.*,(SELECT coalesce(jsonb_agg(jsonb_build_object('classId',a.class_id,'matches',a.matches)),'[]'::jsonb)
+      FROM access a WHERE a.key=l.key) AS class_access FROM logged l`,[JSON.stringify([...wanted.values()])]);
+    const seen=new Set();
+    for(const row of rows){
+      const request=wanted.get(row.key);
+      if(!request||seen.has(row.key)||row.token_hash!==request.token_hash||!Array.isArray(row.class_access))
+        throw Object.assign(new Error('AUTH_OBSERVATION_DATA_INVALID'),{code:'AUTH_OBSERVATION_DATA_INVALID',status:503});
+      seen.add(row.key);const reviewer=reviewerFromAccount(row);
+      const matched=new Set(row.class_access.filter(value=>value.matches===1).map(value=>value.classId));
+      result.set(row.key,{ok:true,authSource:'session',reviewer,googleSubject:row.google_subject,sessionHash:row.token_hash,
+        idleExpiresAt:row.idle_expires_at,absoluteExpiresAt:row.absolute_expires_at,
+        allowedClassIds:reviewer.canAccessAllClasses?request.class_ids:request.class_ids.filter(id=>matched.has(id))});
+    }
+    return result;
+  };
 }
 
 // Export cũ được giữ để test hoặc module ngoài repo chưa cần đổi đồng thời.

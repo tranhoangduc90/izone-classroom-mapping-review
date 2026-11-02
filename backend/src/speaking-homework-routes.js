@@ -151,7 +151,7 @@ function workerAuth(secret) {
 }
 
 // API chỉ mở khi có database pool và secret riêng. Hai đường nội bộ dành cho worker n8n.
-export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate }) {
+export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate, observeTeacherAccess }) {
   const router = express.Router();
   const service = createSpeakingHomeworkService({ pool, accessSecret });
   const docsJobs = createSpeakingDocsJobs({ pool });
@@ -285,7 +285,23 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   router.post('/internal/independent/teacher-access',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({classIds:z.array(z.string().regex(/^(\d+|unlinked)$/)).max(1000)}).strict(),req.body,res);
     if(!input)return;
-    res.set('Cache-Control','private, no-store');res.json({ok:true,allowed:await independentSource.teachers({...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','private, no-store');res.json({ok:true,allowed:await independentSource.teachers({...input,reviewer:req.reviewer}),
+      authSource:req.authSource||null,reviewer:req.reviewer});
+  }));
+  // Chỉ snapshot quyền; worker secret đã kiểm bên trên. Không authenticate từng
+  // actor ở đây vì đường đó gia hạn/ghi phiên và không phải đọc theo nhóm.
+  router.post('/internal/independent/teacher-observation',asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({actors:z.array(z.unknown()).max(1000)}).strict(),req.body,res);if(!input)return;
+    if(typeof observeTeacherAccess!=='function')return res.status(409).json({ok:false,error:'STATE_AUTH_OBSERVER_UNAVAILABLE'});
+    let actors;
+    try{actors=await observeTeacherAccess(input.actors);}
+    catch(error){
+      // App chung chỉ giữ httpStatus cho lỗi nghiệp vụ native. Không để lỗi
+      // đầu vào của hợp đồng batch rơi thành500 qua middleware cuối của app.
+      if(error.code==='AUTH_OBSERVATION_INPUT_INVALID')throw new SpeakingHomeworkError(error.code,'Danh sách phiên theo dõi không hợp lệ.',400);
+      throw error;
+    }
+    res.set('Cache-Control','private, no-store');res.json({ok:true,actors:[...actors].map(([key,value])=>({key,...value}))});
   }));
   const legacyBridge=createSpeakingLegacyBridge({pool,source:independentSource,catalog,service});
   router.post('/internal/independent/legacy-open',asyncRoute(async(req,res)=>{

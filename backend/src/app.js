@@ -1383,7 +1383,8 @@ export function createApp({
       pool: speakingHomeworkPool,
       workerSecret: config.speakingHomeworkWorkerSecret,
       accessSecret: config.speakingHomeworkAccessSecret,
-      authenticate
+      authenticate,
+      observeTeacherAccess:auth.observeTeacherAccess
     }));
   }
   app.get('/api/auth/me', authenticate, (req, res) => {

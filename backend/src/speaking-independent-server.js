@@ -18,6 +18,7 @@ import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './sp
 import {createDurableWorkLoop} from './test-work-runtime.js';
 import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
 import {speakingSourceScopes,expandSpeakingSourceBatch} from './speaking-source-batch.js';
+import {teacherObservationActors,expandTeacherObservation} from './teacher-observation-contract.js';
 const speakingWebOrigin='https://tranhoangduc90.github.io';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
@@ -137,10 +138,10 @@ export function createIndependentSourceClient({base,secret,call=fetch,teacherOri
     if(!scopes.length)return new Map();
     return expandSpeakingSourceBatch(scopes,await request('/internal/independent/contexts',{scopes}));
   }
-  async function teachers(classIds,headers){
+  async function teacherAdmission(classIds,headers){
     if(!Array.isArray(classIds)||classIds.length>1000||classIds.some(id=>typeof id!=='string'||!/^(\d+|unlinked)$/.test(id)))
       throw new SpeakingHomeworkError('INVALID_CLASS','Danh sách lớp không hợp lệ.',400);
-    const requested=[...new Set(classIds)];if(!requested.length)return new Set();
+    const requested=[...new Set(classIds)];
     let data;
     // Đây là POST nội bộ chỉ đọc. Vẫn đáp ứng CSRF native cho cookie Google;
     // GET/CLI không có Origin dùng origin tin cậy của dịch vụ, origin lạ không được thay.
@@ -156,16 +157,25 @@ export function createIndependentSourceClient({base,secret,call=fetch,teacherOri
           if((await request(`/internal/independent/teacher-access/${classId}`,null,headers)).allowed===true)access.add(classId);
         }));
       }
-      return access;
+      return {allowed:access,authSource:null,reviewer:null};
     }
     const {allowed}=data;
     if(!Array.isArray(allowed)||new Set(allowed).size!==allowed.length||allowed.some(id=>!requested.includes(id)))
       throw new SpeakingHomeworkError('SOURCE_BATCH_INVALID','Chưa đối soát được quyền các lớp.',503);
-    return new Set(allowed);
+    return {allowed:new Set(allowed),authSource:data.authSource||null,reviewer:data.reviewer||null};
+  }
+  async function teachers(classIds,headers){
+    // Lối cũ trả Set và không gọi nguồn với danh sách rỗng.
+    if(Array.isArray(classIds)&&classIds.length===0)return new Set();
+    return (await teacherAdmission(classIds,headers)).allowed;
+  }
+  async function observeTeachers(inputs){
+    const actors=teacherObservationActors(inputs);if(!actors.length)return new Map();
+    return expandTeacherObservation(actors,await request('/internal/independent/teacher-observation',{actors}));
   }
   return {legacyOpen:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-open',input)).assignment:null,
     legacySession:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-session',input)).session:null,
-    context,contexts,teachers,
+    context,contexts,teachers,teacherAdmission,observeTeachers,
     legacyProgress:async(method,input,headers)=>['students','entry'].includes(method)
       ?request('/internal/independent/teacher-progress/'+method+'?'+new URLSearchParams(input),null,headers)
       :request('/internal/independent/teacher-progress/units/'+encodeURIComponent(input.id),null,headers),
