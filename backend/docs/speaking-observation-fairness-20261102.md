@@ -1,0 +1,13 @@
+# Cô lập nhóm đọc Speaking — nguồn đã kiểm, chưa phát T3
+
+Một lượt đọc chung trước đây đợi batch quyền/context giảng viên rồi mới đọc/phát trạng thái học viên. Hai ca RED giữ riêng authGV ở kho độc lập hoặc contextGV ở kho cũ: học viên không có frame cho đến khi thả dependency. Giữ snapshot module nguyênGit2e69db0 và hai oracle trước sửa.
+
+Mỗi runtime hiện có hai nhóm dùng cùng engine, một choHV và một choGV. Mỗi nhóm gộp toàn bộ scope đang được theo dõi; nhóm rỗng không chạy timer. Các chặng auth/source/data và guard hiện hành giữ nguyên, chỉ tách nhịp đọc để dependencyGV không giữ frameHV. Mẫu100HV+100teacherViews dùng hai lượt đọc metadata, một batch quyềnGV và hai batch nguồn/tổng hai scope. Đây không phải tổng hai câuSQL toàn hệ thống: authority và context có SQL riêng. Khi chỉ một vai trò đang theo dõi chỉ có một nhóm đọc hoạt động.
+
+Facade giữ tổng giới hạn kết nối cũ cho cả hai nhóm, gồm `subscribe` và `readOnce`; không nhân đôi ngân sách thành2.000. `wake` đánh thức cả hai nhóm, `close` đóng cả hai, cùng promise idempotent và đợi việc đang đọc; frame muộn sau đóng bị bỏ. Epoch ổn định trong mỗi role/store; snapshot chẩn đoán có `epoch` củaHV và `teacherEpoch` riêng, tổng counters và counters từng nhóm. Payload metadata/quyền/định danh theo API native không đổi.
+
+Sáu ca hồi quy gồm hai dependency bị giữ, giới hạn chung/giải phóng slot, đóng/drain/bỏ frame muộn và hai caHTTPnative qua hai app/auth/source/SQL thật trên dữ liệu tổng hợp. HTTP giữ riêng batch quan sát quyền hoặc SELECT template sau admission đã qua; studentSSE nhận headers/frame trước khi thả dependencyGV. Không dùng việc trì hoãn admission ngoài hub làm chứng cứ cô lập.
+
+Backend scope430ca:416đạt/14native-onlyskip, không full818. Native32 đạt45/45 trên PostgreSQL17 với fresh capture07, gồm39ca trước và6fairness; node/PG dừng0 khôngOOM, DB fixture0/externalAttempts0. Native31 bị guard chặn trước tạo fixture vì mapping-review-api đã đổi. Fresh capture cho thấy hai file Hành trình học tập mới; Speaking độc lập nguyên byte. Gói native là kiểm thành phần, chưa phải finalimage hoặc nghiệm thu các consumer Hành trình trên image cuối; phải giữ hai file live mới khi ghép overlay phát hành.
+
+Browser giảng viên9/9 và lỗi/race4/4 chạy lại, renderer thật/haiapp/Edge cách ly; Pages source không đổi so với checkpoint transport. Frontend60/60 và browser học viên11/11 trước đó giữ bằng chứng phần không đổi; native view parity/HTTP vừa kiểm trên gói mới. Quota5.400 trong native vẫn dùng đồng hồ kế toán cố định như tài liệu admission, không đo capacity. ActualCLI/workerflags/producer-after-commit→SSE/OSdrain, finaloverlay/image/GoogleSSO/canary/chuyển bản/metrics vàNATnative còn phải kiểm trước release; toànT4–T6 giữ nguyên.

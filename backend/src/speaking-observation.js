@@ -35,7 +35,7 @@ const summary=(row,context)=>({unitId:row.unit_id,studentRef:row.student_ref,sta
  contentRevision:speakingContentRevision(row,context),docsRevision:speakingDocsRevision(row)});
 const docs=row=>({docsProgress:row.docs_progress||null,docsJobs:row.docs_jobs});
 
-// Một hub/reader chung cho HV và GV của một kho native. Guard không gọi SQL/API:
+// Hai nhóm đọc HV/GV của một kho native, dùng chung giới hạn kết nối. Guard không gọi SQL/API:
 // toàn bộ quyền, metadata và nguồn được đọc theo nhóm trong read() của lượt hiện tại.
 // Không mở/nộp/chấm bài hoặc phục hồi Docs; body chỉ được chọn cho yêu cầu view rõ ràng.
 export function createSpeakingObservation({schema,data,source,observeTeachers,interval=15000,hubOptions={}}){
@@ -116,7 +116,24 @@ export function createSpeakingObservation({schema,data,source,observeTeachers,in
   }
   return{sessions,states};
  }
- const hub=createTestObservationHub({...hubOptions,read,interval});
+ // Mỗi nhóm vẫn đọc theo tập, không đọc theo từng kết nối. Chặng quyền/context
+ // của GV không được giữ frameHV; nhóm không có người theo dõi không chạy timer.
+ const studentHub=createTestObservationHub({...hubOptions,read,interval});
+ const teacherHub=createTestObservationHub({...hubOptions,read,interval});
+ const maxConnections=hubOptions.maxConnections??1000;let closing;
+ const select=scope=>scope?.kind==='student'?studentHub:scope?.kind==='teacher'?teacherHub:scopeError();
+ function capacity(){if(studentHub.snapshot().connections+teacherHub.snapshot().connections>=maxConnections)fail('STATE_CONNECTION_LIMIT');}
+ const hub={
+  subscribe(input){capacity();return select(input.scope).subscribe(input);},
+  readOnce(scope,guard,options){try{capacity();return select(scope).readOnce(scope,guard,options);}catch(error){return Promise.reject(error);}},
+  wake(){studentHub.wake();teacherHub.wake();},
+  close(){return closing??=(async()=>{await Promise.all([studentHub.close(),teacherHub.close()]);})();},
+  snapshot(){const student=studentHub.snapshot(),teacher=teacherHub.snapshot();return{
+   scans:student.scans+teacher.scans,emitted:student.emitted+teacher.emitted,errors:student.errors+teacher.errors,
+   epoch:student.epoch,teacherEpoch:teacher.epoch,closed:student.closed&&teacher.closed,connections:student.connections+teacher.connections,
+   cohorts:{student:{scans:student.scans,connections:student.connections},teacher:{scans:teacher.scans,connections:teacher.connections}}
+  };}
+ };
  function proof(guard,session,verified){
   guard.verify(session);
   if(verified&&session.authRevision!==verified.authRevision)fail('SPEAKING_STATE_AUTH_CHANGED');

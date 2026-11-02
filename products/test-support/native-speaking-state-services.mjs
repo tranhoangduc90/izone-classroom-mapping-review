@@ -28,3 +28,4 @@ await import('../../backend/test/speaking-teacher-capabilities.test.js');
 await import('../../backend/test/speaking-observation-admission.test.js');
 await import('../../backend/test/speaking-admission-queue.test.js');
 await import('../../backend/test/speaking-admission-budgets.test.js');
+await import('../../backend/test/speaking-observation-fairness.test.js');

@@ -37,16 +37,19 @@ test('Speaking teacher observation tracks current template labels even when save
  }finally{await f.close();}
 });
 
-test('Speaking observation:100 distinct students and100 teacher views share one hub/data read and grouped source scopes',async t=>{
+test('Speaking observation:100 students and100 teacher views use two isolated cohort reads with grouped source scopes',async t=>{
  const f=await fixture(),{stats,observation:o}=adapter(f);try{
   const owners=await seedBatch(f);
   const students=owners.map((owner,index)=>o.student({accessToken:Buffer.from(hash('state-bulk-token-'+(index+1)),'hex').toString('base64url'),studentRef:owner.student,unitId:owner.unit}));
   const teachers=Array.from({length:100},()=>o.teacher(teacherScope,principal));
   const values=await Promise.all([...students,...teachers].map(pair=>o.hub.readOnce(pair.scope,pair.guard)));
-  assert.equal(stats.data,1);assert.equal(stats.auth,1);assert.equal(stats.sources.length,1);
-  assert.equal(stats.sources[0].length,2);assert.deepEqual(new Set(stats.sources[0].map(scope=>scope.webEntry===true)),new Set([true,false]));
+  // Cố ý hai lượt theo vai trò: một batchGV bị giữ không được chặn100HV.
+  // Vẫn cố định hai lượt cho200subscriber, không trở lại read theo từng người.
+  assert.equal(stats.data,2);assert.equal(stats.auth,1);assert.equal(stats.sources.length,2);
+  assert.equal(stats.sources.flat().length,2);assert.deepEqual(new Set(stats.sources.flat().map(scope=>scope.webEntry===true)),new Set([true,false]));
   for(let n=0;n<100;n++){assert.equal(values[n].unitId,owners[n].unit);assert.equal(values[n].studentRef,owners[n].student);assert.equal(values[n].kind,'speaking-student-state-v1');}
-  assert.equal(new Set(values.slice(100).map(row=>row.classRevision)).size,1);assert.equal(o.hub.snapshot().scans,1);
+  assert.equal(new Set(values.slice(100).map(row=>row.classRevision)).size,1);assert.equal(o.hub.snapshot().scans,2);
+  assert.deepEqual(o.hub.snapshot().cohorts,{student:{scans:1,connections:0},teacher:{scans:1,connections:0}});
   const text=JSON.stringify(values);for(const forbidden of ['matched_sessions','token_hash','teacher_session',principal.cookie])assert.equal(text.includes(forbidden),false);
   assert.equal(values.filter(value=>Object.hasOwn(value,'open')).length,0);
   t.diagnostic(JSON.stringify({event:'speaking_observation_hub_shape',students:100,teacherViews:100,dataReads:stats.data,authBatches:stats.auth,sourceBatches:stats.sources.length,sourceScopes:2,
