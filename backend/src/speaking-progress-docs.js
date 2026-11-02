@@ -133,7 +133,7 @@ export function createSpeakingProgressDocsWorker({pool,schema,gateway}) {
         if(schema==='speaking_homework'&&current.payload.receiptId)await db.query("SELECT pg_notify('speaking_homework_write_doc_ready','')");
       }catch(error){
         const code=String(error.code||error.message||'DOC_RETRY').slice(0,90);
-        const blocked=/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8;
+        const blocked=/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|WRITE_UNAVAILABLE|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8;
         await db.query(`UPDATE ${target} SET status=CASE WHEN sequence<>$2 THEN 'pending' WHEN $3 THEN 'blocked' ELSE 'pending' END,
           error_code=$4,available_at=now()+$5*interval '1 second' WHERE unit_id=$1`,
           [current.unit_id,current.sequence,blocked,code,Math.min(300,2**current.attempts)]);

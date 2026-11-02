@@ -31,6 +31,13 @@ test('wrong document or a modified link cannot count as synchronized',()=>{
   assert.throws(()=>planProgressWrite({...document(),documentId:'another-doc'},row),/DOC_IDENTITY_MISMATCH/);
 });
 
+test('a matching read-only Doc reports unavailable writes without weakening the identity guard',()=>{
+  for(const revisionId of [undefined,null,'']){
+    assert.throws(()=>planProgressWrite({...document(),revisionId},row),/^Error: DOC_WRITE_UNAVAILABLE$/);
+    assert.throws(()=>planProgressWrite({...document(),documentId:'another-doc',revisionId},row),/^Error: DOC_IDENTITY_MISMATCH$/);
+  }
+});
+
 test('first synchronization can adopt an approved exact legacy status while keeping ordinary manual edits protected',()=>{
   for(const text of ['xong','đã hoàn thành đủ']){
     const approved={...row,last_text:text,last_link:'',applied_sequence:0};
