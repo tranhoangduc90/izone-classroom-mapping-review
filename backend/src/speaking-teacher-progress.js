@@ -38,6 +38,11 @@ export function createSpeakingTeacherProgress({ pool, source }) {
   async function classes({ assignmentCode }, headers) {
     const context = await source.context({ assignmentCode });
     const allowed = [];
+    if(source.teachers){
+      const access=await source.teachers(context.classes.map(row=>String(row.class_id)),headers);
+      allowed.push(...context.classes.filter(row=>access.has(String(row.class_id)))
+        .map(row=>({classId:String(row.class_id),classCode:row.class_code})));
+    }else{
     // Giới hạn số lượt đọc nguồn đồng thời; không giữ quyền trong bộ nhớ qua yêu cầu khác.
     for (let offset = 0; offset < context.classes.length; offset += 6) {
       const group = await Promise.all(context.classes.slice(offset, offset + 6).map(async row => {
@@ -45,6 +50,7 @@ export function createSpeakingTeacherProgress({ pool, source }) {
           ? { classId: String(row.class_id), classCode: row.class_code } : null;
       }));
       allowed.push(...group.filter(Boolean));
+    }
     }
     if (!allowed.length) fail('TEACHER_ACCESS_DENIED', 'Tài khoản chưa được cấp lớp nào cho bài này.');
     return { assignment: { code: assignmentCode, title: context.template.title }, classes: allowed };

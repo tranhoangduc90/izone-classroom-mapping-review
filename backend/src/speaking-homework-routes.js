@@ -274,8 +274,18 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   }));
   router.post('/internal/independent/context', asyncRoute(async (req, res) => {
     const input = parseOrReply(directOpen.partial({ classCode:true }).extend({
-      studentRef:z.string().uuid().optional() }).strict(),req.body,res);
+      studentRef:z.string().uuid().optional(),webEntry:z.boolean().optional() }).strict(),req.body,res);
     if (input) res.json({ok:true,...await independentSource.context(input)});
+  }));
+  router.post('/internal/independent/contexts',asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({scopes:z.array(directOpen.partial({classCode:true}).extend({webEntry:z.boolean().optional()})).max(1000)}).strict(),req.body,res);
+    if(!input)return;
+    res.set('Cache-Control','private, no-store');res.json({ok:true,...await independentSource.contexts(input.scopes)});
+  }));
+  router.post('/internal/independent/teacher-access',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classIds:z.array(z.string().regex(/^(\d+|unlinked)$/)).max(1000)}).strict(),req.body,res);
+    if(!input)return;
+    res.set('Cache-Control','private, no-store');res.json({ok:true,allowed:await independentSource.teachers({...input,reviewer:req.reviewer})});
   }));
   const legacyBridge=createSpeakingLegacyBridge({pool,source:independentSource,catalog,service});
   router.post('/internal/independent/legacy-open',asyncRoute(async(req,res)=>{

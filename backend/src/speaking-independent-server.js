@@ -17,6 +17,7 @@ import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
 import {createDurableWorkLoop} from './test-work-runtime.js';
 import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
+import {speakingSourceScopes,expandSpeakingSourceBatch} from './speaking-source-batch.js';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
@@ -110,14 +111,17 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
     const response=await call(base.replace(/\/$/,'')+path,{method:body?'POST':'GET',headers:{
       'content-type':'application/json','x-speaking-worker-secret':secret,...headers},
       ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
-    const data=await response.json();
+    let data;
+    try{data=await response.json();}catch{
+      throw new SpeakingHomeworkError('SOURCE_UNAVAILABLE','Chưa kiểm được nguồn lớp và mẫu bài.',response.ok||response.status>=500?503:response.status);
+    }
     if(!response.ok||data.ok!==true) throw new SpeakingHomeworkError(data.error||'SOURCE_UNAVAILABLE',data.message||'Chưa kiểm được nguồn lớp và mẫu bài.',response.status>=500?503:response.status);
     return data;
   }
   const legacyCodes=new Set(['67-speaking-paraphrase','67-speaking-lam_ro','67-speaking-diem_giua','67-speaking-on_tap_lam_ro_diem_giua']);
   const pendingContexts=new Map();
   async function context(input){
-    const body={assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{})};
+    const body={assignmentCode:input.assignmentCode,...(input.classCode?{classCode:input.classCode}:{}),...(input.studentRef?{studentRef:input.studentRef}:{}),...(input.webEntry?{webEntry:true}:{})};
     // Chỉ gộp lượt đọc đang chờ của đúng bài/lớp/học viên; không giữ quyền sau phản hồi.
     const key=JSON.stringify(body);
     if(pendingContexts.has(key))return pendingContexts.get(key);
@@ -125,9 +129,37 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
     pendingContexts.set(key,pending);
     try{return await pending;}finally{pendingContexts.delete(key);}
   }
+  async function contexts(inputs){
+    const scopes=speakingSourceScopes(inputs);
+    if(!scopes.length)return new Map();
+    return expandSpeakingSourceBatch(scopes,await request('/internal/independent/contexts',{scopes}));
+  }
+  async function teachers(classIds,headers){
+    if(!Array.isArray(classIds)||classIds.length>1000||classIds.some(id=>typeof id!=='string'||!/^(\d+|unlinked)$/.test(id)))
+      throw new SpeakingHomeworkError('INVALID_CLASS','Danh sách lớp không hợp lệ.',400);
+    const requested=[...new Set(classIds)];if(!requested.length)return new Set();
+    let data;
+    try{data=await request('/internal/independent/teacher-access',{classIds:requested},headers);}
+    catch(error){
+      // Chuyển từng runtime có thể gặp nguồn cũ chưa có đường batch. Chỉ 404/405
+      // mới dùng lại kiểm quyền native; 401/403/503 phải giữ nguyên lỗi.
+      if(!(error instanceof SpeakingHomeworkError)||![404,405].includes(error.httpStatus))throw error;
+      const access=new Set();
+      for(let offset=0;offset<requested.length;offset+=6){
+        await Promise.all(requested.slice(offset,offset+6).map(async classId=>{
+          if((await request(`/internal/independent/teacher-access/${classId}`,null,headers)).allowed===true)access.add(classId);
+        }));
+      }
+      return access;
+    }
+    const {allowed}=data;
+    if(!Array.isArray(allowed)||new Set(allowed).size!==allowed.length||allowed.some(id=>!requested.includes(id)))
+      throw new SpeakingHomeworkError('SOURCE_BATCH_INVALID','Chưa đối soát được quyền các lớp.',503);
+    return new Set(allowed);
+  }
   return {legacyOpen:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-open',input)).assignment:null,
     legacySession:async input=>legacyCodes.has(input.assignmentCode)?(await request('/internal/independent/legacy-session',input)).session:null,
-    context,
+    context,contexts,teachers,
     legacyProgress:async(method,input,headers)=>['students','entry'].includes(method)
       ?request('/internal/independent/teacher-progress/'+method+'?'+new URLSearchParams(input),null,headers)
       :request('/internal/independent/teacher-progress/units/'+encodeURIComponent(input.id),null,headers),
