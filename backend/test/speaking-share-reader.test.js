@@ -35,6 +35,7 @@ async function fixture(t, handler) {
   globalThis.fetch = (url, options) => {
     if (new URL(url).hostname === 'chatgpt.com') { calls.direct++; return realFetch(local, { ...options, redirect: 'manual' }); }
     calls.fallback++;
+    if(calls.fallbackReplies?.length){const reply=calls.fallbackReplies.shift();return Promise.resolve(Response.json(reply.body,{status:reply.status}));}
     return Promise.resolve(calls.fallbackHtml
       ? Response.json({ data: calls.fallbackHtml })
       : new Response('unavailable', { status: 502 }));
@@ -65,7 +66,23 @@ test('keeps permanent failure bounded and does not turn it into accepted content
   const calls = await fixture(t, (_req, res) => { res.end('<!DOCTYPE html><title>Unavailable</title>'); });
   await assert.rejects(readSpeakingShare('https://chatgpt.com/share/fixture-unavailable'), /Đọc trực tiếp lỗi/);
   assert.equal(calls.direct, 2);
-  assert.equal(calls.fallback, 1);
+  assert.equal(calls.fallback, 2);
+});
+
+test('retries one transient fallback failure and parses the recovered real HTML',async t=>{
+  const calls=await fixture(t,(_req,res)=>res.end('<!DOCTYPE html><title>Temporary failure</title>'));
+  calls.fallbackReplies=[{status:503,body:{error:{code:'chatgpt_share_network_error'}}},{status:200,body:{data:conversationHtml()}}];
+  const result=await readSpeakingShare('https://chatgpt.com/share/fixture-fallback-transient');
+  assert.equal(result.source,'n8n_fallback');assert.equal(result.messages.length,2);assert.equal(calls.fallback,2);
+});
+
+test('keeps fallback transport provenance instead of confusing it with Share permissions',async t=>{
+  const calls=await fixture(t,(_req,res)=>res.end('<!DOCTYPE html><title>Unavailable</title>'));
+  calls.fallbackReplies=[{status:401,body:{error:{code:'worker_authentication_failed'}}}];
+  await assert.rejects(readSpeakingShare('https://chatgpt.com/share/fixture-fallback-auth'),error=>{
+    assert.equal(error.code,'SHARE_FALLBACK_HTTP_401');assert.equal(error.stage,'read_share');return true;
+  });
+  assert.equal(calls.fallback,1);
 });
 
 test('rejects redirects outside the allowed Share hosts', async t => {

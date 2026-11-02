@@ -271,21 +271,36 @@ async function fetchDirectHtml(shareUrl, deadline, redirects = 0) {
   });
 }
 
-async function fetchViaN8n(shareUrl) {
+function shareReadError(code,message,details={},cause){
+  const error=new Error(message,{cause});error.code=code;error.stage='read_share';error.details=details;return error;
+}
+async function fetchViaN8n(shareUrl,deadline) {
   const endpoint = process.env.CODEX_CHATGPT_SHARE_ENDPOINT || DEFAULT_ENDPOINT;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ result: shareUrl }),
-    signal: AbortSignal.timeout(60_000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Webhook trả HTTP ${response.status}.`);
+  let lastError;
+  for(let attempt=0;attempt<2;attempt++){
+    const remaining=deadline-Date.now();
+    if(remaining<=0)throw shareReadError('SHARE_FALLBACK_TIMEOUT','Đường đọc dự phòng đã hết thời gian.',{},lastError);
+    try{
+      const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({result:shareUrl}),signal:AbortSignal.timeout(Math.min(20_000,remaining))});
+      if(!response.ok){
+        let body;try{body=await response.json();}catch{}
+        const code=response.status>=500?'SHARE_FALLBACK_UNAVAILABLE':`SHARE_FALLBACK_HTTP_${response.status}`;
+        const error=shareReadError(code,`Gateway đọc Share gặp lỗi (${response.status}).`,
+          {httpStatus:response.status,gatewayCode:body?.error?.code||null,operationId:body?.error?.operation_id||null,attempt:attempt+1});
+        error.permanent=response.status<500&&![408,409,429].includes(response.status);throw error;
+      }
+      let body;try{body=await response.json();}catch(cause){throw shareReadError('SHARE_FALLBACK_JSON_INVALID','Đường đọc dự phòng trả dữ liệu chưa hợp lệ.',{},cause);}
+      try{return pickHtml(body);}catch(cause){throw shareReadError('SHARE_FALLBACK_HTML_INVALID','Đường đọc dự phòng chưa trả HTML ChatGPT hợp lệ.',{},cause);}
+    }catch(error){
+      lastError=error.code?.startsWith('SHARE_')?error:shareReadError(
+        ['TimeoutError','AbortError'].includes(error.name)?'SHARE_FALLBACK_TIMEOUT':'SHARE_FALLBACK_NETWORK',
+        'Chưa kết nối được đường đọc Share dự phòng.',{},error);
+      if(error.permanent||attempt===1||Date.now()+250>=deadline)throw lastError;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
   }
-
-  const responseBody = await response.json();
-  return pickHtml(responseBody);
+  throw lastError;
 }
 
 function parseConversationHtml(html, source) {
@@ -342,23 +357,27 @@ function parseConversationHtml(html, source) {
 // Kết quả: các lượt user/assistant theo đúng thứ tự; lỗi được ném cho hàng việc thử lại.
 export async function readSpeakingShare(shareUrl, n8nOnly = false) {
   validateShareUrl(shareUrl);
+  // Đọc tối đa 70 giây; cùng AI chuẩn/sửa và hoàn tất vẫn dưới lease bốn phút.
+  const readDeadline=Date.now()+70_000;
   if (!n8nOnly) {
     let directError;
-    const deadline = Date.now() + 30_000;
+    const deadline = Math.min(readDeadline,Date.now() + 25_000);
     for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt++) {
       try {
-        const html = await fetchDirectHtml(shareUrl, Math.min(deadline, Date.now() + 15_000));
+        const html = await fetchDirectHtml(shareUrl, Math.min(deadline, Date.now() + 12_500));
         return parseConversationHtml(html, 'direct');
       } catch (error) { directError = error; }
     }
     try {
-      const html = await fetchViaN8n(shareUrl);
+      const html = await fetchViaN8n(shareUrl,readDeadline);
       return parseConversationHtml(html, 'n8n_fallback');
     } catch (n8nError) {
-      throw new Error(`Đọc trực tiếp lỗi: ${directError?.message || 'SHARE_READ_LIMIT'} n8n fallback lỗi: ${n8nError.message}`);
+      throw shareReadError(n8nError.code||'SHARE_READ_UNAVAILABLE',
+        `Đọc trực tiếp lỗi: ${directError?.message || 'SHARE_READ_LIMIT'} n8n fallback lỗi: ${n8nError.message}`,
+        {directCode:directError?.code||null,fallback:n8nError.details||{}},n8nError);
     }
   }
 
-  const html = await fetchViaN8n(shareUrl);
+  const html = await fetchViaN8n(shareUrl,readDeadline);
   return parseConversationHtml(html, 'n8n_only');
 }

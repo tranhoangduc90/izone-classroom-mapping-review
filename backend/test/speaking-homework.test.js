@@ -1092,5 +1092,5 @@ test('worker bài bổ trợ kiểm hội thoại và giữ lỗi AI để thử
     readShare: async () => { throw new Error('SHARE_DOWN'); }
   });
   assert.equal(retried.status, 'retry');
-  assert.equal(calls[1].errorCode, 'PRACTICE_CHECK_ERROR');
+  assert.equal(calls[1].errorCode, 'SHARE_DOWN');
 });
