@@ -17,6 +17,7 @@ import { createSpeakingClassroomCopies, planSpeakingCopyCta,
   verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
 import { validInsertionStages, checkSubmission } from '../src/speaking-checker.js';
+import {speakingObservationEntrypointContract} from '../../products/test-support/speaking-observation-entrypoint-contract.mjs';
 import { runPracticeCheckJob, runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
 
 const studentRef = '60000000-0000-4000-8000-000000000001';
@@ -138,6 +139,13 @@ async function fixture({progressDocsEnabled=false}={}) {
   return { db, pool, service: createSpeakingHomeworkService({ pool,progressDocsEnabled }) };
   }catch(error){if(db)await db.close();else{await nativePool?.end();await ownerPool?.end();}throw error;}
 }
+
+test('Native PostgreSQL: actual legacy Speaking observation entrypoint carries committed requests toSSE and drains restart',{skip:!process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL||process.platform!=='linux',timeout:180000},async()=>{
+ await speakingObservationEntrypointContract({service:'speaking-legacy',fixture:()=>fixture({progressDocsEnabled:true}),identity:()=>({accessToken,studentRef}),dbUrl:process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,
+  seedAccepted:async f=>{const value=await f.service.requestCheck({accessToken,studentRef,part:'paraphrase',rawUrl:share('a')}),job=await f.service.claimCheckJob();
+   await f.service.completeCheck({checkJobId:job.job_id,fingerprint:fingerprint('a'),questionCount:5,qualityPassed:true,evidence:{coveredCategories:['noun','verb','adjective']}});return value.linkId;},
+  mutation:{part:'speaking',url:share('b')}});
+});
 
 async function seedLegacyChecks(f){
   const people=[{accessToken,studentRef},{accessToken:secondToken,studentRef:secondStudentRef}];let index=0;
@@ -267,7 +275,7 @@ test('Native PostgreSQL: the actual shared entrypoint preserves disabled queues,
   const {sharedSpeakingEntrypointContract}=await import('../../products/test-support/shared-speaking-entrypoint-contract.mjs');
   const f=await fixture({progressDocsEnabled:true});try{
     await f.pool.query('UPDATE speaking_homework.assignment SET doctor_course_key=NULL');await acceptLegacyChecks(f);await f.service.finish({accessToken,studentRef});
-    await sharedSpeakingEntrypointContract({speakingPool:f.pool,speakingDatabaseUrl:process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,finishSecond:()=>f.service.finish({accessToken:secondToken,studentRef:secondStudentRef})});
+    await sharedSpeakingEntrypointContract({speakingPool:f.pool,speakingDatabaseUrl:process.env.SPEAKING_LEGACY_NATIVE_DATABASE_URL,identity:{accessToken,studentRef},finishSecond:()=>f.service.finish({accessToken:secondToken,studentRef:secondStudentRef})});
   }finally{await f.db.close();}
 });
 

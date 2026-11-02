@@ -54,7 +54,8 @@ test('phiên giảng viên production giữ 90 ngày khi hoạt động và tố
   const login = await request(app).post('/api/auth/session')
     .set('Origin', origin).send({ credential: 'google-credential-for-test-only' });
   assert.equal(login.status, 201);
-  const cookie = login.headers['set-cookie'][0];
+  const cookie = login.headers['set-cookie'].find(value => /Max-Age=[1-9]\d*/u.test(value));
+  assert.ok(cookie, 'Phản hồi phải có cookie phiên đang hoạt động sau cookie dọn bản cũ.');
   assert.match(cookie, /HttpOnly/u);
   assert.match(cookie, /Secure/u);
   assert.match(cookie, /SameSite=None/u);

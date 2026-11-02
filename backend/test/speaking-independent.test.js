@@ -18,6 +18,7 @@ import {runSpeakingDoctorJob} from '../src/speaking-doctor-worker.js';
 import {startSpeakingWorkCoordinator,withSpeakingTransaction} from '../src/speaking-work-runtime.js';
 import {createWorkSignals} from '../src/test-work-runtime.js';
 import {speakingEntrypointContract} from '../../products/test-support/speaking-entrypoint-contract.mjs';
+import {speakingObservationEntrypointContract} from '../../products/test-support/speaking-observation-entrypoint-contract.mjs';
 import {pathToFileURL} from 'node:url';
 
 const ref='60000000-0000-4000-8000-000000000006';
@@ -182,6 +183,12 @@ test('Native PostgreSQL: batch admission compares four jobs with the captured li
 
 test('Native PostgreSQL: the actual Speaking entrypoint preserves accepted work and drains disabled, coordinated and worker-enabled restarts',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:120000},async()=>{
  await speakingEntrypointContract({fixture,identity:f=>f.identity,dbUrl:process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,requestLinkOnly:f=>f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(401)})});
+});
+
+test('Native PostgreSQL: actual Speaking observation entrypoint carries committed requests toSSE and drains restart',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL||process.platform!=='linux',timeout:180000},async()=>{
+ await speakingObservationEntrypointContract({service:'speaking-independent',fixture,identity:f=>f.identity,dbUrl:process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,
+  seedAccepted:async f=>(await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(941)})).id,
+  mutation:{part:'reason_action',url:url(942)}});
 });
 
 test('Native PostgreSQL: committed Speaking work wakes its worker and a peer; rollback and failed notification preserve the durable result',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:30000},async()=>{

@@ -23,6 +23,7 @@ test.after(async()=>{
 await import('../../backend/test/speaking-source-batch.test.js');
 await import('../../backend/test/speaking-source-csrf.test.js');
 await import('../../backend/test/auth-observation.test.js');
+await import('../../backend/test/auth-cookie-migration.test.js');
 await import('../../backend/test/teacher-observation-contract.test.js');
 await import('../../backend/test/speaking-teacher-observation.test.js');
 await import('../../backend/test/learning-attendance-postgres.test.js');

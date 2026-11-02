@@ -59,6 +59,20 @@ function sessionCookie(settings, value, maxAgeSeconds) {
   return parts.join('; ');
 }
 
+function clearLegacySessionCookie(res, settings) {
+  if (!settings.cookiePartitioned) return;
+  // Xóa bản chưa phân vùng trước bản mới. Trình duyệt chưa hiểu Partitioned
+  // vẫn giữ cookie mới vì nó được ghi sau cùng, đúng tên/path của sản phẩm.
+  res.append('Set-Cookie', sessionCookie({ ...settings, cookiePartitioned: false }, '', 0));
+}
+
+function hasDuplicateCookie(req, name) {
+  return String(req.get('cookie') || '').split(';').filter(part => {
+    const split = part.indexOf('=');
+    return split >= 0 && part.slice(0, split).trim() === name;
+  }).length > 1;
+}
+
 function tokenHash(token) {
   return crypto.createHash('sha256').update(token).digest();
 }
@@ -135,7 +149,7 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
     return { reviewer: reviewerFromAccount(result.rows[0]), row: result.rows[0] };
   }
 
-  function refreshCookie(res, rawToken, row) {
+  function refreshCookie(res, rawToken, row, migrateLegacy = false) {
     const idleExpiry = new Date(row.idle_expires_at).getTime();
     const absoluteExpiry = new Date(row.absolute_expires_at).getTime();
     const fallbackMs = settings.idleDays * 86_400_000;
@@ -143,6 +157,7 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
       Number.isFinite(idleExpiry) ? idleExpiry - Date.now() : fallbackMs,
       Number.isFinite(absoluteExpiry) ? absoluteExpiry - Date.now() : fallbackMs
     );
+    if (migrateLegacy) clearLegacySessionCookie(res, settings);
     res.append('Set-Cookie', sessionCookie(settings, rawToken, Math.max(0, remainingMs / 1000)));
   }
 
@@ -161,7 +176,8 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
         req.reviewer = session.reviewer;
         req.authSource = 'session';
         req.teacherSessionToken = rawSession;
-        if (req.method !== 'DELETE') refreshCookie(res, rawSession, session.row);
+        if (req.method !== 'DELETE') refreshCookie(res, rawSession, session.row,
+          config.allowedOrigins?.has(req.get('origin') || '') && hasDuplicateCookie(req, settings.cookieName));
         if (!requireSessionCsrf(req, res, config)) return undefined;
         return next();
       }
@@ -200,7 +216,7 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
        RETURNING idle_expires_at, absolute_expires_at`,
       [tokenHash(rawSession), account.reviewer.email, account.googleSubject, settings.idleDays, settings.absoluteDays]
     );
-    refreshCookie(res, rawSession, inserted.rows[0] || {});
+    refreshCookie(res, rawSession, inserted.rows[0] || {}, true);
     return res.status(201).json({ ok: true, reviewer: account.reviewer });
   }
 
@@ -214,6 +230,7 @@ export function createAuthService({ config, pool, verifyGoogleToken }) {
         [tokenHash(rawSession)]
       );
     }
+    clearLegacySessionCookie(res, settings);
     res.append('Set-Cookie', sessionCookie(settings, '', 0));
     return res.json({ ok: true });
   }
