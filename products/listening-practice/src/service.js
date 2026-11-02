@@ -295,10 +295,11 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   submitted(a,b,state,a.usedMs>=timingFor(b.code).totalMs?'timeout':'manual');await enqueue(db,b,state,a);return view(db,b,state);
  });
  async function result({token,attemptId}){
-  const b=await binding(pool,{token}),state=(await pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state;
+  const b=await binding(pool,{token}),stored=(await pool.query(`SELECT state,(SELECT md5(jsonb_build_array(a,$2::jsonb,$3::jsonb,$4::jsonb)::text)
+   FROM jsonb_array_elements(state->'attempts') a WHERE a->>'id'=$5) AS result_revision FROM listening_practice.work WHERE binding_id=$1`,[b.id,b.definition,b.answer_key,b.explanations,attemptId])).rows[0],state=stored?.state;
   const a=state?.attempts.find(x=>x.id===attemptId&&x.status==='submitted');
   if(!a)fail('RESULT_NOT_AVAILABLE','Chỉ mở đáp án sau khi nộp bài.',404);
-  return{...await view(pool,b,state),attempt:publicAttempt(a),key:b.answer_key,explanations:b.explanations,definition:b.definition,contentVersion:b.version};
+  return{...await view(pool,b,state),attempt:publicAttempt(a),resultCode:b.code,resultRevision:stored.result_revision,key:b.answer_key,explanations:b.explanations,definition:b.definition,contentVersion:b.version};
  }
  async function teacherResult({submissionId,email,subject}){
   const rows=(await pool.query(`SELECT w.binding_id,w.state,a.class_id FROM listening_practice.work w

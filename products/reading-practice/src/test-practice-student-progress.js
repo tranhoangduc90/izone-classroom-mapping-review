@@ -1,6 +1,6 @@
 import {openTestObservationStream} from './test-state-runtime.js';
 export function withStudentStateCapabilities(value,enabled){
- return enabled&&value?.capabilities?{...value,capabilities:{...value.capabilities,studentStateStream:true,studentStateIntervalMs:30000}}:value;
+ return enabled&&value?.capabilities?{...value,capabilities:{...value.capabilities,studentStateStream:true,studentResultRevision:true,studentStateIntervalMs:30000}}:value;
 }
 export function mountPracticeStudentProgress(app,{observation,hub,token,z,wrap,fail}){
  if(!hub)return;
