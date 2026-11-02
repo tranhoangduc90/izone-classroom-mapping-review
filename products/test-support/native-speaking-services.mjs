@@ -12,8 +12,10 @@ await admin.query('CREATE ROLE speaking_fixture_api LOGIN NOSUPERUSER NOCREATEDB
 const ownerUrl=new URL(url);ownerUrl.pathname='/'+name;const appUrl=new URL(ownerUrl);appUrl.username='speaking_fixture_api';
 process.env.SPEAKING_NATIVE_TEST_DATABASE_URL=appUrl.href;process.env.SPEAKING_NATIVE_TEST_ADMIN_DATABASE_URL=ownerUrl.href;process.env.SPEAKING_NATIVE_TEST_CONFIRM=task;
 process.env.SPEAKING_CLAIM_BASE_FILE=fileURLToPath(new URL('../../backend/src/speaking-independent.baseline.js',import.meta.url));
+process.env.SPEAKING_DOCS_CLAIM_BASE_FILE=fileURLToPath(new URL('../../backend/src/speaking-progress-docs.baseline.js',import.meta.url));
 const fetch=globalThis.fetch;let externalAttempts=0;
 globalThis.fetch=(input,options)=>{const target=new URL(typeof input==='string'?input:input.url||input.href);if(!['127.0.0.1','localhost'].includes(target.hostname)){externalAttempts++;throw Error('EXTERNAL_FIXTURE_REQUEST_DENIED');}return fetch(input,options);};
 test.after(async()=>{await closeNativeHttp();assert.equal(externalAttempts,0);await admin.query('DROP DATABASE '+name);await admin.end();console.log(JSON.stringify({event:'speaking_native_cleanup',database:name,closed:true,role:'speaking_fixture_api',externalAttempts}));});
 await import('../../backend/test/speaking-independent.native.test.js');
 await import('../../backend/test/speaking-work-dispatch.test.js');
+await import('../../backend/test/speaking-progress-dispatch.test.js');

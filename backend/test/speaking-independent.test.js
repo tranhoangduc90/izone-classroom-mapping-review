@@ -12,10 +12,10 @@ import { createIndependentDocuments,validateIndependentDocument } from '../src/s
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
 import { performance } from 'node:perf_hooks';
-import {createSpeakingProgressDocsWorker} from '../src/speaking-progress-docs.js';
+import {createSpeakingProgressDocsWorker,startSpeakingProgressDocsWorker,enqueueSpeakingProgress} from '../src/speaking-progress-docs.js';
 import {conversationSnapshot} from '../src/speaking-conversation-snapshot.js';
 import {runSpeakingDoctorJob} from '../src/speaking-doctor-worker.js';
-import {startSpeakingWorkCoordinator} from '../src/speaking-work-runtime.js';
+import {startSpeakingWorkCoordinator,withSpeakingTransaction} from '../src/speaking-work-runtime.js';
 import {createWorkSignals} from '../src/test-work-runtime.js';
 import {speakingEntrypointContract} from '../../products/test-support/speaking-entrypoint-contract.mjs';
 import {pathToFileURL} from 'node:url';
@@ -35,6 +35,89 @@ async function batchFixture(){
  for(const member of members){const session=await f.service.startSelected({assignmentCode:code,classCode:'IC2304',studentRef:member.student_ref});const identity={accessToken:session.accessToken,studentRef:member.student_ref};for(const part of ['reason_action','freestyle'])await f.service.requestCheck({...identity,part,rawUrl:url(++n)});}
  return f;
 }
+
+async function progressFixture(){
+ const f=await batchFixture(),units=(await f.pool.query('SELECT id FROM speaking_independent.work_unit ORDER BY id')).rows;
+ for(const [n,unit]of units.entries()){
+  await f.pool.query("UPDATE speaking_independent.work_unit SET document_id=$2,tab_id='t.0' WHERE id=$1",[unit.id,'progress-fixture-'+n]);
+  await withSpeakingTransaction(f.pool,db=>enqueueSpeakingProgress(db,'speaking_independent',unit.id));
+ }
+ const progress=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress ORDER BY updated_at,unit_id')).rows;
+ return{...f,progress};
+}
+function progressStore(rows){
+ const states=new Map(rows.map(row=>[row.document_id,{text:'',link:'',revision:0,code:row.assignment_code}])),writes=[];
+ const gateway={async get(id){const s=states.get(id);assert.ok(s,id);return{documentId:id,revisionId:'revision-'+s.revision,tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[{paragraph:{elements:[{textRun:{content:s.code+'\n'}}]}},{table:{tableRows:[{tableCells:[{content:[{paragraph:{elements:[{textRun:{content:'TÌNH TRẠNG NỘP BÀI SPEAKING\n'}}]}}]}]},{tableCells:[{content:[{paragraph:{elements:[{startIndex:100,endIndex:101+s.text.length,textRun:{content:s.text+'\n',textStyle:{link:{url:s.link}}}}]}}]}]}]}}]}}}]};},
+  async write(id,body){const s=states.get(id);assert.equal(body.writeControl.requiredRevisionId,'revision-'+s.revision);writes.push(id);s.revision++;s.text=body.requests.find(r=>r.insertText).insertText.text;s.link=body.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url;}};
+ return{gateway,states,writes};
+}
+async function untilAsync(check){const end=performance.now()+10000;while(performance.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('SPEAKING_PROGRESS_TIMEOUT');}
+
+test('Speaking Docs preserves a newer committed sequence while an older claimed snapshot is being written',async()=>{
+ const f=await progressFixture();try{
+  const store=progressStore(f.progress),worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:store.gateway}),first=f.progress[0],[old]=await worker.claim(1,first.unit_id);
+  assert.equal(old.sequence,first.sequence);const beforeLinks=(await f.pool.query('SELECT * FROM speaking_independent.link ORDER BY id')).rows;
+  await withSpeakingTransaction(f.pool,async db=>{await db.query("UPDATE speaking_independent.link SET status='accepted',question_count=2 WHERE work_unit_id=$1 AND part='reason_action'",[first.unit_id]);await enqueueSpeakingProgress(db,'speaking_independent',first.unit_id);});
+  const expectedLinks=(await f.pool.query('SELECT * FROM speaking_independent.link ORDER BY id')).rows;assert.notDeepEqual(beforeLinks,expectedLinks);
+  await worker.run(old);let row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[first.unit_id])).rows[0];assert.equal(row.status,'pending');assert.equal(Number(row.applied_sequence),1);assert.equal(Number(row.sequence),2);assert.equal(store.states.get(first.document_id).text,first.payload.text);
+  assert.equal(await worker.once(first.unit_id),true);row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[first.unit_id])).rows[0];assert.equal(row.status,'verified');assert.equal(row.applied_sequence,row.sequence);assert.equal(store.states.get(first.document_id).text,row.payload.text);assert.equal(store.writes.length,2);assert.deepEqual((await f.pool.query('SELECT * FROM speaking_independent.link ORDER BY id')).rows,expectedLinks);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);await assert.rejects(worker.run(old),/DOC_PROGRESS_CLAIM_INVALID/);
+ }finally{await f.db.close();}
+});
+
+test('Speaking Docs recovers a lost write acknowledgement after newer accepted progress arrives',async()=>{
+ const f=await progressFixture();try{
+  const first=f.progress[0],store=progressStore(f.progress),write=store.gateway.write;let lose=true;
+  store.gateway.write=async(id,body)=>{await write(id,body);if(lose){lose=false;await withSpeakingTransaction(f.pool,async db=>{await db.query("UPDATE speaking_independent.link SET status='accepted',question_count=2 WHERE work_unit_id=$1 AND part='reason_action'",[first.unit_id]);await enqueueSpeakingProgress(db,'speaking_independent',first.unit_id);});throw Error('NETWORK_ACK_LOST');}};
+  const worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:store.gateway});await worker.once(first.unit_id);
+  let row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[first.unit_id])).rows[0];assert.equal(row.status,'pending');assert.equal(Number(row.sequence),2);assert.equal(Number(row.applied_sequence),0);assert.equal(row.attempt_text,first.payload.text);assert.equal(store.writes.length,1);
+  await f.pool.query('UPDATE speaking_independent.doc_progress SET available_at=now() WHERE unit_id=$1',[first.unit_id]);await worker.once(first.unit_id);row=(await f.pool.query('SELECT * FROM speaking_independent.doc_progress WHERE unit_id=$1',[first.unit_id])).rows[0];assert.equal(row.status,'verified');assert.equal(row.sequence,row.applied_sequence);assert.equal(row.attempt_text,null);assert.equal(store.states.get(first.document_id).text,row.payload.text);assert.equal(store.writes.length,2);assert.equal(await worker.once(first.unit_id),false);assert.equal(store.writes.length,2);
+ }finally{await f.db.close();}
+});
+
+test('Speaking Docs blocks a mismatched document and manual edit independently while valid progress continues',async()=>{
+ const f=await progressFixture();try{
+  const store=progressStore(f.progress),get=store.gateway.get;store.states.get(f.progress[1].document_id).text='Teacher manual note';store.gateway.get=async id=>id===f.progress[0].document_id?{...await get(id),documentId:'different-fixture-doc'}:get(id);
+  const before=(await f.pool.query('SELECT * FROM speaking_independent.link ORDER BY id')).rows,worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:store.gateway});
+  for(const row of f.progress)assert.equal(await worker.once(row.unit_id),true);
+  const rows=(await f.pool.query('SELECT unit_id,status,error_code FROM speaking_independent.doc_progress')).rows,byId=new Map(rows.map(row=>[row.unit_id,row]));assert.equal(byId.get(f.progress[0].unit_id).status,'blocked');assert.equal(byId.get(f.progress[0].unit_id).error_code,'DOC_IDENTITY_MISMATCH');assert.equal(byId.get(f.progress[1].unit_id).status,'blocked');assert.match(byId.get(f.progress[1].unit_id).error_code,/DOC_MANUAL_CONFLICT/);assert.equal(byId.get(f.progress[2].unit_id).status,'verified');assert.deepEqual(store.writes,[f.progress[2].document_id]);assert.deepEqual((await f.pool.query('SELECT * FROM speaking_independent.link ORDER BY id')).rows,before);
+ }finally{await f.db.close();}
+});
+
+test('Native PostgreSQL: Speaking Docs skips a locked head document, excludes competing claims and holds no SQL transaction across Google',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:30000},async()=>{
+ const f=await progressFixture(),external=await f.pool.connect(),first=f.progress[0],claims=[];let worker;
+ try{
+  await external.query('SELECT pg_advisory_lock(hashtext($1))',['speaking-doc:'+first.document_id]);const store=progressStore(f.progress);worker=createSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:store.gateway});
+  const [a]=await worker.claim(),[b]=await worker.claim();claims.push(a,b);assert.ok(a&&b);assert.notEqual(a.unit_id,b.unit_id);assert.ok(claims.every(row=>row.unit_id!==first.unit_id));assert.deepEqual(await worker.claim(),[]);
+  const active=(await f.pool.query("SELECT state,xact_start FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND usename=current_user")).rows;assert.ok(active.length>=3);assert.ok(active.every(row=>row.state==='idle'&&row.xact_start===null));
+  await withSpeakingTransaction(f.pool,db=>db.query('UPDATE speaking_independent.doc_progress SET sequence=sequence+1 WHERE unit_id=$1',[a.unit_id]));
+  while(claims.length)await worker.run(claims.shift());
+  await external.query('SELECT pg_advisory_unlock(hashtext($1))',['speaking-doc:'+first.document_id]);const [head]=await worker.claim(1,first.unit_id);claims.push(head);assert.equal(head.unit_id,first.unit_id);await worker.run(claims.pop());assert.equal((await f.pool.query('SELECT status FROM speaking_independent.doc_progress WHERE unit_id=$1',[a.unit_id])).rows[0].status,'pending');
+  assert.equal((await f.pool.query("SELECT count(*)::int n FROM pg_locks WHERE locktype='advisory' AND pid IN (SELECT pid FROM pg_stat_activity WHERE datname=current_database())")).rows[0].n,0);
+ }finally{for(const row of claims)await worker?.run(row);await external.query('SELECT pg_advisory_unlock_all()');external.release();await f.db.close();}
+});
+
+test('Native PostgreSQL: committed Docs progress wakes its serial writer; no-op, rollback and notification failure preserve the saved work',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:30000},async()=>{
+ const f=await fixture(),id=f.session.workUnitId,documentId='progress-notification-fixture',store=progressStore([{document_id:documentId,assignment_code:code}]);let worker,coordinator;
+ try{
+  await f.pool.query("UPDATE speaking_independent.work_unit SET document_id=$2,tab_id='t.0' WHERE id=$1",[id,documentId]);
+  worker=startSpeakingProgressDocsWorker({pool:f.pool,schema:'speaking_independent',gateway:store.gateway,coordinated:true,loopOptions:{pollMs:60000}});
+  coordinator=startSpeakingWorkCoordinator({pool:f.pool,schema:'speaking_independent',worker:{},onDocs:()=>worker.wake(),createClient:()=>new pg.Client({connectionString:process.env.SPEAKING_NATIVE_TEST_DATABASE_URL})});
+  await untilAsync(()=>coordinator.snapshot().connected);await new Promise(resolve=>setTimeout(resolve,40));const first=await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(911)});await untilAsync(async()=>(await f.pool.query('SELECT status FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0]?.status==='verified');assert.equal(store.writes.length,1);
+  await new Promise(resolve=>setTimeout(resolve,80));const sent=coordinator.snapshot().sent;await withSpeakingTransaction(f.pool,db=>enqueueSpeakingProgress(db,'speaking_independent',id));await new Promise(resolve=>setTimeout(resolve,80));assert.equal(coordinator.snapshot().sent,sent);
+  await assert.rejects(withSpeakingTransaction(f.pool,async db=>{await db.query("UPDATE speaking_independent.link SET status='rejected' WHERE id=$1",[first.id]);await enqueueSpeakingProgress(db,'speaking_independent',id);throw Error('SYNTHETIC_PROGRESS_ROLLBACK');}),/SYNTHETIC_PROGRESS_ROLLBACK/);await new Promise(resolve=>setTimeout(resolve,80));assert.equal(coordinator.snapshot().sent,sent);assert.equal((await f.pool.query('SELECT status FROM speaking_independent.link WHERE id=$1',[first.id])).rows[0].status,'accepted');
+  const query=f.pool.query.bind(f.pool);f.pool.query=(...args)=>{if(args[0]==='SELECT pg_notify($1,$2)')throw Error('SYNTHETIC_PROGRESS_NOTIFY_FAILURE');return query(...args);};
+  try{await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(912)});await untilAsync(()=>coordinator.snapshot().errors>0);await untilAsync(async()=>(await query('SELECT status FROM speaking_independent.doc_progress WHERE unit_id=$1',[id])).rows[0]?.status==='verified');}finally{f.pool.query=query;}
+  assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.link')).rows[0].n,2);assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n,0);assert.equal(store.writes.length,2);
+ }finally{await worker?.stop();await coordinator?.stop();await f.db.close();}
+});
+
+test('Native PostgreSQL: Speaking Docs admission compares its single statement with the captured live writer',{skip:!process.env.SPEAKING_DOCS_CLAIM_BASE_FILE,timeout:30000},async t=>{
+ const {createSpeakingProgressDocsWorker:baselineFactory}=await import(pathToFileURL(process.env.SPEAKING_DOCS_CLAIM_BASE_FILE));
+ async function measure(baseline){const f=await progressFixture(),first=f.progress[0],store=progressStore(f.progress);let queries=0,admission;
+  const measured={query:(...args)=>{queries++;return f.pool.query(...args);},async connect(){const db=await f.pool.connect();return{query:(...args)=>{queries++;return db.query(...args);},release:value=>db.release(value)};}};
+  try{const get=store.gateway.get;store.gateway.get=async id=>{admission??=queries;return get(id);};const worker=(baseline?baselineFactory:createSpeakingProgressDocsWorker)({pool:measured,schema:'speaking_independent',gateway:store.gateway});assert.equal(await worker.once(first.unit_id),true);assert.equal(store.writes.length,1);assert.equal((await f.pool.query('SELECT status FROM speaking_independent.doc_progress WHERE unit_id=$1',[first.unit_id])).rows[0].status,'verified');return admission;}finally{await f.db.close();}}
+ const singleQueries=await measure(true),coordinatedQueries=await measure(false);assert.equal(singleQueries,4);assert.equal(coordinatedQueries,2);t.diagnostic(JSON.stringify({event:'speaking_native_docs_admission_queries',admitted:1,singleQueries,coordinatedQueries,includesSchemaPresenceCheck:true,googleWritesEach:1,cpuOrSaveLatencyClaim:false}));
+});
 
 test('A bounded batch keeps student/link/current-main identity even when metadata rows return in reverse order',async()=>{
  const f=await batchFixture();try{

@@ -1,5 +1,6 @@
 import { planSpeakingStatusWrite, verifySpeakingStatusWrite } from './speaking-independent-status.js';
-import {withTransaction} from './db.js';
+import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
+import {markWorkReady,announceCommittedWork} from './test-work-runtime.js';
 
 const schemas = new Set(['speaking_independent','speaking_homework']);
 function table(schema) { if(!schemas.has(schema))throw new Error('DOC_PROGRESS_SCOPE_INVALID');return schema+'.doc_progress'; }
@@ -52,11 +53,12 @@ export async function enqueueSpeakingProgress(db,schema,unitId) {
   if(!links.length&&!row.receipt_id)return;
   const previous=(await db.query(`SELECT document_id,tab_id FROM ${target} WHERE unit_id=$1`,[unitId])).rows[0];
   if(previous&&(previous.document_id!==row.document_id||previous.tab_id!==row.tab_id))throw new Error('DOC_IDENTITY_MISMATCH');
-  await db.query(`INSERT INTO ${target}(unit_id,document_id,tab_id,assignment_code,payload)
+  const changed=await db.query(`INSERT INTO ${target}(unit_id,document_id,tab_id,assignment_code,payload)
     VALUES($1,$2,$3,$4,$5) ON CONFLICT(unit_id) DO UPDATE SET payload=EXCLUDED.payload,
     sequence=${target}.sequence+1,status='pending',attempts=0,error_code=NULL,available_at=now(),updated_at=now()
-    WHERE ${target}.document_id=EXCLUDED.document_id AND ${target}.tab_id=EXCLUDED.tab_id AND ${target}.payload IS DISTINCT FROM EXCLUDED.payload`,
+    WHERE ${target}.document_id=EXCLUDED.document_id AND ${target}.tab_id=EXCLUDED.tab_id AND ${target}.payload IS DISTINCT FROM EXCLUDED.payload RETURNING unit_id`,
     [unitId,row.document_id,row.tab_id,row.assignment_code,JSON.stringify(payload)]);
+  if(changed.rows.length){markWorkReady(db,'docs');markWorkReady(db,'state');}
 }
 
 export async function readSpeakingDocsProgress(db,schema,unitId) {
@@ -102,21 +104,47 @@ function checkProgressDocument(document,row){
 }
 
 export function createSpeakingProgressDocsWorker({pool,schema,gateway}) {
-  const target=table(schema);let initialized=false;
-  async function once(unitId) {
-    if(!gateway)return false;
-    if(!initialized){initialized=(await pool.query('SELECT to_regclass($1) IS NOT NULL AS present',[target])).rows[0]?.present===true;if(!initialized)return false;}
-    const db=await pool.connect();let lock;
+  const target=table(schema),handles=new WeakMap();let initialized=false;
+  async function release(handle){
+    if(handle.released)return;handle.released=true;
+    try{await handle.db.query('SELECT pg_advisory_unlock(hashtext($1))',[handle.lock]);handle.db.release();}
+    catch(error){handle.db.release(true);throw error;}
+  }
+  async function claim(limit=1,unitId) {
+    if(limit!==1)throw new Error('DOC_PROGRESS_CAPACITY_INVALID');
+    if(!gateway)return[];
+    if(!initialized){initialized=(await pool.query('SELECT to_regclass($1) IS NOT NULL AS present',[target])).rows[0]?.present===true;if(!initialized)return[];}
+    const db=await pool.connect(),excluded=[];
     try{
-      const row=(await db.query(`SELECT * FROM ${target} WHERE ${unitId?'unit_id=$1 AND ':''}status IN ('pending','processing')
-        AND available_at<=now() ORDER BY updated_at LIMIT 1`,unitId?[unitId]:[])).rows[0];
-      if(!row)return false;
-      lock='speaking-doc:'+row.document_id;
-      if(!(await db.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',[lock])).rows[0].locked){lock=null;return false;}
-      // Refetch after locking: another writer may have already applied this version.
-      const current=(await db.query(`UPDATE ${target} SET status='processing',attempts=attempts+1 WHERE unit_id=$1
-        AND status IN ('pending','processing') AND available_at<=now() RETURNING *`,[row.unit_id])).rows[0];
-      if(!current)return false;
+      // Materialize exactly one candidate before evaluating the session-lock function.
+      // No SQL transaction remains open during Google I/O; producers can enqueue a newer sequence.
+      for(let n=0;n<4;n++){
+        const selected=(await db.query(`WITH candidate AS MATERIALIZED (
+          SELECT unit_id,document_id FROM ${target} WHERE ($1::uuid IS NULL OR unit_id=$1)
+          AND NOT(document_id=ANY($2::text[])) AND status IN ('pending','processing') AND available_at<=now()
+          ORDER BY updated_at,unit_id LIMIT 1), locked AS MATERIALIZED (
+          SELECT *,pg_try_advisory_lock(hashtext('speaking-doc:'||document_id)) AS acquired FROM candidate), changed AS (
+          UPDATE ${target} d SET status='processing',attempts=d.attempts+1 FROM locked
+          WHERE locked.acquired AND d.unit_id=locked.unit_id AND d.document_id=locked.document_id
+          AND d.status IN ('pending','processing') AND d.available_at<=now() RETURNING d.*)
+          SELECT changed.*,locked.document_id AS locked_document_id,locked.acquired AS lock_acquired
+          FROM locked LEFT JOIN changed ON changed.unit_id=locked.unit_id`,[unitId||null,excluded])).rows[0];
+        if(!selected){db.release();return[];}
+        const {locked_document_id:documentId,lock_acquired:acquired,...current}=selected;
+        excluded.push(documentId);
+        if(!acquired)continue;
+        const handle={db,lock:'speaking-doc:'+documentId,released:false,running:false};
+        if(!current.unit_id){await db.query('SELECT pg_advisory_unlock(hashtext($1))',[handle.lock]);continue;}
+        handles.set(current,handle);return[current];
+      }
+      db.release();return[];
+    }catch(error){db.release(true);throw error;}
+  }
+  async function run(current){
+    const handle=handles.get(current);
+    if(!handle||handle.released||handle.running)throw new Error('DOC_PROGRESS_CLAIM_INVALID');
+    handle.running=true;const db=handle.db;
+    try{
       try{
         const document=await gateway.get(current.document_id);
         const plan=planProgressWrite(document,current);
@@ -127,25 +155,57 @@ export function createSpeakingProgressDocsWorker({pool,schema,gateway}) {
         }
         const readback=plan.requests.length?await gateway.get(current.document_id):document;
         if(!verifyProgressWrite(readback,current))throw new Error('DOC_READBACK_MISMATCH');
-        await db.query(`UPDATE ${target} SET last_text=$2,last_link=$3,attempt_text=NULL,attempt_link=NULL,applied_sequence=$4,
+        const {rows:[saved]}=await db.query(`UPDATE ${target} SET last_text=$2,last_link=$3,attempt_text=NULL,attempt_link=NULL,applied_sequence=$4,
           status=CASE WHEN sequence=$4 THEN 'verified' ELSE 'pending' END,error_code=NULL,attempts=0,available_at=now(),verified_at=now()
-          WHERE unit_id=$1`,[current.unit_id,current.payload.text,current.payload.link,current.sequence]);
-        if(schema==='speaking_homework'&&current.payload.receiptId)await db.query("SELECT pg_notify('speaking_homework_write_doc_ready','')");
+          WHERE unit_id=$1 RETURNING status`,[current.unit_id,current.payload.text,current.payload.link,current.sequence]);
+        announceCommittedWork(pool,'state');
+        if(saved?.status==='pending')announceCommittedWork(pool,'docs');
+        if(current.payload.receiptId){
+          announceCommittedWork(pool,'ai');
+          if(schema==='speaking_homework')try{await db.query("SELECT pg_notify('speaking_homework_write_doc_ready','')");}catch{/* Native fallback retains the committed verified result. */}
+        }
       }catch(error){
         const code=String(error.code||error.message||'DOC_RETRY').slice(0,90);
         const blocked=/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8;
         await db.query(`UPDATE ${target} SET status=CASE WHEN sequence<>$2 THEN 'pending' WHEN $3 THEN 'blocked' ELSE 'pending' END,
           error_code=$4,available_at=now()+$5*interval '1 second' WHERE unit_id=$1`,
           [current.unit_id,current.sequence,blocked,code,Math.min(300,2**current.attempts)]);
+        announceCommittedWork(pool,'state');
       }
       return true;
-    }finally{if(lock)await db.query('SELECT pg_advisory_unlock(hashtext($1))',[lock]);db.release();}
+    }finally{await release(handle);}
   }
-  return {once};
+  async function once(unitId){const [job]=await claim(1,unitId);return job?run(job):false;}
+  return {claim,run,once};
+}
+
+// Keep the native one-writer/four-item burst and two-second provider gap.
+// Hints may bypass an empty scan delay, never the saturated-burst cooldown.
+export function createSpeakingProgressDispatcher({worker,enabled=true,pollMs=2000,clock=Date.now,setTimer=setTimeout,clearTimer=clearTimeout,onError=()=>{}}){
+  if(!worker||typeof worker.once!=='function'||!Number.isFinite(pollMs)||pollMs<1)throw new Error('DOC_PROGRESS_DISPATCH_INVALID');
+  let stopped=!enabled,running=null,timer=null,due=Infinity,notBefore=0,used=0,hinted=false,closing;
+  const stats={started:0,errors:0};
+  function schedule(delay){
+    if(stopped)return;const at=Math.max(clock()+delay,notBefore);
+    if(timer&&due<=at)return;clearTimer(timer);due=at;
+    timer=setTimer(()=>{timer=null;due=Infinity;tick();},Math.max(0,at-clock()));timer?.unref?.();
+  }
+  function tick(){
+    if(stopped||running)return;
+    running=(async()=>{try{while(!stopped&&used<4){if(!await worker.once())break;used++;stats.started++;}
+      if(used===4){used=0;notBefore=clock()+pollMs;}}
+      catch(error){stats.errors++;try{onError(error);}catch{}}})();
+    void running.finally(()=>{running=null;const wake=hinted;hinted=false;schedule(wake?0:pollMs);});
+  }
+  schedule(0);
+  return{wake(){if(stopped)return;if(running)hinted=true;else schedule(0);},snapshot:()=>({...stats,running:Boolean(running),closed:stopped,notBefore}),
+    stop(){return closing??=(async()=>{stopped=true;clearTimer(timer);await running;})();}};
 }
 
 export function startSpeakingProgressDocsWorker(options) {
   const worker=createSpeakingProgressDocsWorker(options);let stopped=false,running=false,timer;
+  if(options.coordinated)return createSpeakingProgressDispatcher({...options.loopOptions,worker,enabled:Boolean(options.gateway),
+    onError:error=>console.error('Speaking Docs progress:',String(error.code||'PROGRESS_WORKER_ERROR'))});
   async function tick(){if(stopped||running)return;running=true;try{for(let n=0;n<4;n++)if(!await worker.once())break;}
     catch(error){console.error('Speaking Docs progress:',String(error.code||'PROGRESS_WORKER_ERROR'));}
     finally{running=false;if(!stopped)timer=setTimeout(tick,2000).unref();}}

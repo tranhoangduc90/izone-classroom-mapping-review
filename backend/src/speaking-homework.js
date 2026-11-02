@@ -2,7 +2,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
 import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
 import { saveConversationSnapshot, readConversationSnapshot } from './speaking-conversation-snapshot.js';
-import { withTransaction } from './db.js';
+import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
 import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
 import { isDoctorText } from './speaking-doctor-text.js';
 import { hasChatbotCompletion } from './speaking-completion-policy.js';

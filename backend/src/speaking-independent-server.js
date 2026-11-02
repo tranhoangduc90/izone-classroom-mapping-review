@@ -181,7 +181,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const gateway=env.SPEAKING_DOCS_GATEWAY_URL?createDocsGateway({url:env.SPEAKING_DOCS_GATEWAY_URL,secret:env.SPEAKING_DOCS_GATEWAY_SECRET}):null;
   const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
   const progressGateway=env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE}):null;
-  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway});
+  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true'});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
   const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});

@@ -1,5 +1,5 @@
 import { createHash,createHmac,randomUUID } from 'node:crypto';
-import { withTransaction } from './db.js';
+import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
 import { SpeakingHomeworkError } from './speaking-homework.js';
 import { planSpeakingCopyCta,verifySpeakingCopyCta } from './speaking-classroom-copies.js';
 import { planSpeakingStatusWrite,verifySpeakingStatusWrite } from './speaking-independent-status.js';
@@ -315,7 +315,7 @@ export async function writeIndependentDocument(service,job,gateway) {
       await service.mutateJob(job,db=>db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL WHERE id=$1",[job.job_id,JSON.stringify({documentId:job.u.document_id,revisionId:readback.revisionId})]));
       return;
     }
-    await enqueueSpeakingProgress(service.pool,'speaking_independent',job.u.id);
+    await withTransaction(service.pool,db=>enqueueSpeakingProgress(db,'speaking_independent',job.u.id));
     await createSpeakingProgressDocsWorker({pool:service.pool,schema:'speaking_independent',gateway}).once(job.u.id);
     const state=await readSpeakingDocsProgress(service.pool,'speaking_independent',job.u.id);
     if(state?.status!=='verified')throw new Error('DOC_PROGRESS_PENDING');
