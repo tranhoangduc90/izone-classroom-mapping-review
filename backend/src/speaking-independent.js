@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { withTransaction } from './db.js';
+import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
+import {markWorkReady} from './test-work-runtime.js';
 import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
 import { createPendingRoster } from './pending-roster.js';
 import { hasChatbotCompletion } from './speaking-completion-policy.js';
@@ -127,8 +128,9 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
   }
   async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows.map(l=>({...l,linkId:l.id})); }
   async function queue(db,u,kind,key,link=null) {
-    await db.query(`INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key,link_id)
-      VALUES($1,$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING`,[u,kind,key,link]);
+    const {rows}=await db.query(`INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key,link_id)
+      VALUES($1,$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,[u,kind,key,link]);
+    if(rows.length)markWorkReady(db,'ai');
   }
   async function open(identity) {
     const u=await grant(identity);
@@ -177,6 +179,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
         (work_unit_id,kind,part,slot,exercise_id,exercise_title,revision,share_url,share_id,status,fingerprint,question_count,checked_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $10='accepted' THEN now() END) RETURNING *`,
       [u.id,kind,part,slot,exerciseId,title,(old?.revision||0)+1,share.url,share.shareId,linkOnly?'accepted':'pending',linkOnly?hash(`link-only:${share.shareId}`):null,linkOnly?0:null]);
+      markWorkReady(db,'state');
       if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
       await enqueueSpeakingProgress(db,'speaking_independent',u.id);
       return {id:l.id,status:l.status};
@@ -222,37 +225,52 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
     return {needed:needed.slice(0,5),allNeeded:needed,neededCount:needed.length,practiced:personal.filter(r=>!r.waiting),personalCount:personal.length,
       sharedCatalog:c.exercises.filter(e=>!personal.some(r=>r.exercise_id===e.id)).map(e=>({...e,exercise_id:e.id}))};
   }
-  async function claimJob() {
+  async function claimJobs(limit=4) {
+    if(!Number.isInteger(limit)||limit<1||limit>4)throw new Error('SPEAKING_CLAIM_LIMIT_INVALID');
     return withTransaction(pool,async db=>{
       const managed=progressDocsEnabled||(await db.query("SELECT to_regclass('speaking_independent.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true;
       // Giữ job bốn phút, dài hơn ngân sách đọc/AI tối đa 165 giây; quá năm lượt chuyển kiểm lại.
       await db.query(`UPDATE speaking_independent.job SET status='review',last_error=coalesce(last_error,'RETRY_EXHAUSTED')
         WHERE attempts>=5 AND (status='failed' OR (status='processing' AND lease_until<now()))`);
-      const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE attempts<5 AND available_at<=now()
+      const {rows:jobs}=await db.query(`WITH ready AS MATERIALIZED (SELECT * FROM speaking_independent.job WHERE attempts<5 AND available_at<=now()
         AND (status IN ('pending','failed') OR (status='processing' AND lease_until<now()))
         ${managed?`AND (kind<>'write_doc' OR NOT EXISTS(SELECT 1 FROM speaking_independent.doc_progress d
           WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
-        ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`);
-      if (!j) return null;
-      const owner=randomUUID();
-      await db.query(`UPDATE speaking_independent.job SET status='processing',owner=$2,lease_until=now()+interval '4 minutes',
-        attempts=attempts+1,updated_at=now() WHERE id=$1`,[j.id,owner]);
-      const {rows:[u]}=await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id FROM speaking_independent.work_unit u
-        JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[j.work_unit_id]);
-      const l=j.link_id?(await db.query('SELECT * FROM speaking_independent.link WHERE id=$1',[j.link_id])).rows[0]:null;
-      const r=(await db.query('SELECT id FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id])).rows[0];
-      return {...j,...l,kind:j.kind,link_kind:l?.kind,id:j.id,job_id:j.id,link_id:j.link_id,owner,u,receipt_id:r?.id,
-        min_questions:u.template.parts.find(p=>p.part_key===l?.part)?.min_questions,
-        class_id:u.class_id,student_ref:u.student_ref,
-        links:Object.fromEntries((await links(u.id,db)).filter(l=>l.kind==='main').map(l=>[l.part,{url:l.share_url,fingerprint:l.fingerprint}]))};
+        ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1), claimed AS (
+        UPDATE speaking_independent.job j SET status='processing',owner=gen_random_uuid(),lease_until=now()+interval '4 minutes',
+          attempts=j.attempts+1,updated_at=now() FROM ready WHERE j.id=ready.id RETURNING j.id,j.owner)
+        SELECT ready.*,claimed.owner AS claim_owner FROM ready JOIN claimed ON claimed.id=ready.id ORDER BY ready.created_at,ready.id`,[limit]);
+      if(!jobs.length)return[];
+      const unitIds=[...new Set(jobs.map(j=>j.work_unit_id))],linkIds=[...new Set(jobs.map(j=>j.link_id).filter(Boolean))];
+      const units=new Map((await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id FROM speaking_independent.work_unit u
+        JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=ANY($1::uuid[])`,[unitIds])).rows.map(u=>[u.id,u]));
+      const selectedLinks=new Map((linkIds.length?(await db.query('SELECT * FROM speaking_independent.link WHERE id=ANY($1::uuid[])',[linkIds])).rows:[]).map(l=>[l.id,l]));
+      const receipts=new Map((await db.query('SELECT id,work_unit_id FROM speaking_independent.receipt WHERE work_unit_id=ANY($1::uuid[])',[unitIds])).rows.map(r=>[r.work_unit_id,r]));
+      const latest=(await db.query(`SELECT DISTINCT ON(work_unit_id,kind,part) * FROM speaking_independent.link
+        WHERE work_unit_id=ANY($1::uuid[]) ORDER BY work_unit_id,kind,part,revision DESC`,[unitIds])).rows;
+      const admitted=[],invalid=[];
+      for(const {claim_owner:owner,...j} of jobs){
+        const u=units.get(j.work_unit_id),l=selectedLinks.get(j.link_id);
+        if(!u||(j.link_id&&(!l||l.work_unit_id!==u.id))){invalid.push(j.id);continue;}
+        admitted.push({...j,...l,kind:j.kind,link_kind:l?.kind,id:j.id,job_id:j.id,link_id:j.link_id,owner,u,receipt_id:receipts.get(u.id)?.id,
+          min_questions:u.template.parts.find(p=>p.part_key===l?.part)?.min_questions,
+          class_id:u.class_id,student_ref:u.student_ref,
+          links:Object.fromEntries(latest.filter(l=>l.work_unit_id===u.id&&l.kind==='main').map(l=>[l.part,{url:l.share_url,fingerprint:l.fingerprint,linkId:l.id}]))});
+      }
+      if(invalid.length){
+        await db.query("UPDATE speaking_independent.job SET status='review',last_error='WORK_ITEM_INVALID',lease_until=NULL,updated_at=now() WHERE id=ANY($1::uuid[])",[invalid]);
+        markWorkReady(db,'ai');markWorkReady(db,'state');
+      }
+      return admitted;
     });
   }
+  async function claimJob(){return(await claimJobs(1))[0]||null;}
   async function mutateJob(job,fn) {
     return withTransaction(pool,async db=>{
       const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE id=$1 AND owner=$2
         AND status='processing' AND lease_until>now() FOR UPDATE`,[job.job_id,job.owner]);
       if (!j) fail('STALE_JOB','Lượt xử lý đã hết hạn; kết quả cũ không được ghi.');
-      return fn(db,j);
+      const result=await fn(db,j);markWorkReady(db,'state');return result;
     });
   }
   async function failJob(job,code) {
@@ -355,7 +373,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
       processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
       grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
   }
-  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,workerService,failJob,
+  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
     requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
     pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
 }

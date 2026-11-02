@@ -15,6 +15,8 @@ import { createOpeningDocsGateway } from './speaking-docs-read.js';
 import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
 import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
+import {createDurableWorkLoop} from './test-work-runtime.js';
+import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
@@ -132,7 +134,21 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
     teacher:async(classId,headers)=>(await request(`/internal/independent/teacher-access/${classId||'unlinked'}`,null,headers)).allowed===true};
 }
 
-export function startIndependentWorker({service,enabled=true,pollMs=2000,dependencies={}}) {
+export function startIndependentWorker({service,enabled=true,pollMs=2000,dependencies={},coordinated=false,loopOptions={}}) {
+  if(coordinated&&enabled){
+    const run=async job=>{
+      const adapter=service.workerService(job);
+      if(job.kind==='check_main')return runSpeakingCheckJob(adapter,job,dependencies.check);
+      if(job.kind==='check_practice')return runPracticeCheckJob(adapter,job,dependencies.practice);
+      if(job.kind==='analyze_practice')return runPracticeAnalysisJob(adapter,job,dependencies.doctor);
+      if(job.kind==='analyze_homework')return runSpeakingDoctorJob(adapter,job,dependencies.doctor);
+      if(job.kind==='write_doc'&&dependencies.writeDocument)return dependencies.writeDocument(service,job);
+      await service.failJob(job,'DOCUMENT_WRITER_UNAVAILABLE');
+    };
+    const loop=createDurableWorkLoop({...loopOptions,claim:n=>service.claimJobs(n),run,capacity:4,scanMs:pollMs,
+      onError:error=>console.error('Hàng Speaking độc lập lỗi:',String(error.code||'WORKER_ERROR'))});
+    return{stop:()=>loop.close(),wake:()=>loop.wake(),snapshot:()=>loop.snapshot()};
+  }
   let stopped=!enabled,running=false,timer;
   async function tick() {
     if(stopped||running) return;
@@ -168,9 +184,13 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
-  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
+  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
+  const coordinator=env.TEST_SERVICES_COORDINATOR_ENABLED==='true'?startSpeakingWorkCoordinator({pool,schema:'speaking_independent',worker,
+    createClient:()=>new pg.Client({connectionString:env.INDEPENDENT_DATABASE_URL,connectionTimeoutMillis:5000,application_name:'speaking_independent_work_listener'}),
+    onDocs:()=>progressWorker.wake?.(),onError:error=>console.error('Tín hiệu Speaking độc lập lỗi:',String(error.code||'WORK_SIGNAL_ERROR'))}):null;
   const teacher=createSpeakingTeacherProgress({pool,source});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
-  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await pool.end();});
+  let closing;const stop=()=>closing??=(async()=>{await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await pool.end();})();
+  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,()=>void stop());
 }

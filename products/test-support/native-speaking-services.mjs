@@ -1,0 +1,19 @@
+// Private task-owned PG17 only. Source tests use their real service/SQL and built-in HTTP transport.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import {fileURLToPath} from 'node:url';
+import {closeNativeHttp} from './native-http.mjs';
+const task='test-services-optimization-20261101',url=new URL(process.env.PRACTICE_FIXTURE_DATABASE_URL||'http://invalid');
+assert.equal(process.env.PRACTICE_FIXTURE_CONFIRM,task);assert.match(url.hostname,/^tsto-practice-pg-[a-z0-9]+$/);assert.equal(url.username,'fixture');assert.equal(url.pathname,'/postgres');
+const run=url.hostname.replace('tsto-practice-pg-',''),name='speaking_independent_fixture_'+run,admin=new pg.Pool({connectionString:url.href,max:1});
+const version=(await admin.query('SHOW server_version_num')).rows[0].server_version_num;assert.ok(Number(version)>=170000&&Number(version)<180000);
+await admin.query('CREATE ROLE speaking_fixture_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT');await admin.query('CREATE DATABASE '+name);await admin.query('REVOKE ALL ON DATABASE '+name+' FROM PUBLIC');await admin.query('GRANT CONNECT ON DATABASE '+name+' TO speaking_fixture_api');
+const ownerUrl=new URL(url);ownerUrl.pathname='/'+name;const appUrl=new URL(ownerUrl);appUrl.username='speaking_fixture_api';
+process.env.SPEAKING_NATIVE_TEST_DATABASE_URL=appUrl.href;process.env.SPEAKING_NATIVE_TEST_ADMIN_DATABASE_URL=ownerUrl.href;process.env.SPEAKING_NATIVE_TEST_CONFIRM=task;
+process.env.SPEAKING_CLAIM_BASE_FILE=fileURLToPath(new URL('../../backend/src/speaking-independent.baseline.js',import.meta.url));
+const fetch=globalThis.fetch;let externalAttempts=0;
+globalThis.fetch=(input,options)=>{const target=new URL(typeof input==='string'?input:input.url||input.href);if(!['127.0.0.1','localhost'].includes(target.hostname)){externalAttempts++;throw Error('EXTERNAL_FIXTURE_REQUEST_DENIED');}return fetch(input,options);};
+test.after(async()=>{await closeNativeHttp();assert.equal(externalAttempts,0);await admin.query('DROP DATABASE '+name);await admin.end();console.log(JSON.stringify({event:'speaking_native_cleanup',database:name,closed:true,role:'speaking_fixture_api',externalAttempts}));});
+await import('../../backend/test/speaking-independent.native.test.js');
+await import('../../backend/test/speaking-work-dispatch.test.js');

@@ -13,6 +13,12 @@ import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
 import { performance } from 'node:perf_hooks';
 import {createSpeakingProgressDocsWorker} from '../src/speaking-progress-docs.js';
+import {conversationSnapshot} from '../src/speaking-conversation-snapshot.js';
+import {runSpeakingDoctorJob} from '../src/speaking-doctor-worker.js';
+import {startSpeakingWorkCoordinator} from '../src/speaking-work-runtime.js';
+import {createWorkSignals} from '../src/test-work-runtime.js';
+import {speakingEntrypointContract} from '../../products/test-support/speaking-entrypoint-contract.mjs';
+import {pathToFileURL} from 'node:url';
 
 const ref='60000000-0000-4000-8000-000000000006';
 const code='67-speaking-ly_do_hanh_vi';
@@ -21,6 +27,116 @@ const url=n=>`https://chatgpt.com/share/${String(n).padStart(32,'0')}`;
 const fingerprint=n=>String(n).repeat(64).slice(0,64);
 const template={assignmentCode:code,title:'Lesson 6',lesson:6,requiredPracticeCount:2,doctorEnabled:true,digest:'a'.repeat(64),
   parts:[{part_key:'benefit_harm',min_questions:0},{part_key:'reason_action',min_questions:2},{part_key:'freestyle',min_questions:1}]};
+
+async function batchFixture(){
+ const f=await fixture({start:false}),members=Array.from({length:3},(_,n)=>({student_ref:exercise(900+n),name:'Cùng tên fixture'})),original=f.source.context;
+ f.source.context=async input=>{const member=members.find(value=>value.student_ref===input.studentRef);const context=await original({...input,studentRef:input.studentRef?ref:undefined});return{...context,students:members,selectionStudents:members,member:input.studentRef?member:null};};
+ let n=100;
+ for(const member of members){const session=await f.service.startSelected({assignmentCode:code,classCode:'IC2304',studentRef:member.student_ref});const identity={accessToken:session.accessToken,studentRef:member.student_ref};for(const part of ['reason_action','freestyle'])await f.service.requestCheck({...identity,part,rawUrl:url(++n)});}
+ return f;
+}
+
+test('A bounded batch keeps student/link/current-main identity even when metadata rows return in reverse order',async()=>{
+ const f=await batchFixture();try{
+  const expected=(await f.pool.query(`SELECT j.id,j.work_unit_id,j.link_id,l.part,l.share_url,p.student_ref FROM speaking_independent.job j JOIN speaking_independent.link l ON l.id=j.link_id JOIN speaking_independent.work_unit u ON u.id=j.work_unit_id JOIN speaking_independent.profile p ON p.id=u.profile_id ORDER BY j.created_at,j.id`)).rows;
+  const connect=f.pool.connect.bind(f.pool),queries=[];
+  f.pool.connect=async()=>{const db=await connect();return{query:async(sql,params)=>{queries.push(sql);const result=await db.query(sql,params);return /ANY\(\$1::uuid\[\]\)/.test(sql)?{...result,rows:[...result.rows].reverse()}:result;},release:()=>db.release()};};
+  const jobs=await f.service.claimJobs(4);f.pool.connect=connect;assert.equal(jobs.length,4);assert.equal(queries.length,8);assert.deepEqual(jobs.map(job=>job.job_id),expected.slice(0,4).map(row=>row.id));assert.equal(new Set(jobs.map(job=>job.owner)).size,4);
+  for(const job of [...jobs].reverse()){
+   const row=expected.find(row=>row.id===job.job_id);assert.equal(job.u.id,row.work_unit_id);assert.equal(job.link_id,row.link_id);assert.equal(job.student_ref,row.student_ref);assert.equal(job.share_url,row.share_url);assert.equal(job.links[job.part].url,row.share_url);
+   const pass=job.job_id!==jobs[1].job_id;await f.service.workerService(job).completeCheck({qualityPassed:pass,questionCount:pass?2:0,fingerprint:String(expected.indexOf(row)+1).repeat(64)});
+  }
+  const readback=(await f.pool.query('SELECT j.id,j.status,j.attempts,l.status AS link_status FROM speaking_independent.job j JOIN speaking_independent.link l ON l.id=j.link_id')).rows;
+  for(const row of readback){const selected=jobs.some(job=>job.job_id===row.id);assert.equal(row.status,selected?'done':'pending');assert.equal(row.attempts,selected?1:0);assert.equal(row.link_status,!selected?'pending':row.id===jobs[1].job_id?'rejected':'accepted');}
+  assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+ }finally{await f.db.close();}
+});
+
+test('Batch admission validates capacity, returns an empty batch, and reclaims only eligible expired leases',async()=>{
+ const f=await fixture();try{
+  assert.deepEqual(await f.service.claimJobs(4),[]);assert.equal(await f.service.claimJob(),null);
+  for(const limit of [0,5,1.5,null])await assert.rejects(f.service.claimJobs(limit),/SPEAKING_CLAIM_LIMIT_INVALID/);
+  const a=await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(61)}),b=await f.service.requestCheck({...f.identity,part:'freestyle',rawUrl:url(62)});
+  await f.pool.query("UPDATE speaking_independent.job SET status='processing',attempts=4,lease_until=now()-interval '1 second',owner=gen_random_uuid() WHERE link_id=$1",[a.id]);
+  await f.pool.query("UPDATE speaking_independent.job SET status='processing',attempts=5,lease_until=now()-interval '1 second',owner=gen_random_uuid() WHERE link_id=$1",[b.id]);
+  const [job]=await f.service.claimJobs(4);assert.equal(job.link_id,a.id);assert.equal(job.attempts,4);
+  assert.equal((await f.pool.query('SELECT attempts FROM speaking_independent.job WHERE id=$1',[job.job_id])).rows[0].attempts,5);
+  assert.equal((await f.pool.query('SELECT status FROM speaking_independent.job WHERE link_id=$1',[b.id])).rows[0].status,'review');
+  await f.service.failJob(job,'SYNTHETIC_FAILURE');assert.equal((await f.pool.query('SELECT status FROM speaking_independent.job WHERE id=$1',[job.job_id])).rows[0].status,'review');
+  assert.deepEqual(await f.service.claimJobs(4),[]);
+ }finally{await f.db.close();}
+});
+
+test('A metadata failure rolls back the entire admission; no job loses its original retry budget',async()=>{
+ const f=await batchFixture();try{
+  const before=(await f.pool.query('SELECT * FROM speaking_independent.job ORDER BY id')).rows,connect=f.pool.connect.bind(f.pool);
+  f.pool.connect=async()=>{const db=await connect();return{query:async(sql,params)=>{if(sql.includes('WHERE u.id=ANY'))throw Error('SYNTHETIC_METADATA_FAILURE');return db.query(sql,params);},release:()=>db.release()};};
+  await assert.rejects(f.service.claimJobs(4),/SYNTHETIC_METADATA_FAILURE/);f.pool.connect=connect;
+  assert.deepEqual((await f.pool.query('SELECT * FROM speaking_independent.job ORDER BY id')).rows,before);assert.equal((await f.service.claimJobs(2)).length,2);
+ }finally{await f.db.close();}
+});
+
+test('A malformed cross-student job is retained for review without admitting it or starving valid peers',async()=>{
+ const f=await batchFixture();try{
+  const jobs=(await f.pool.query('SELECT id,work_unit_id,link_id FROM speaking_independent.job ORDER BY created_at,id')).rows,other=jobs.find(job=>job.work_unit_id!==jobs[0].work_unit_id);await f.pool.query('UPDATE speaking_independent.job SET link_id=$2 WHERE id=$1',[jobs[0].id,other.link_id]);
+  const first=await f.service.claimJobs(4);assert.equal(first.length,3);assert.ok(first.every(job=>job.job_id!==jobs[0].id));const invalid=(await f.pool.query('SELECT status,last_error,lease_until FROM speaking_independent.job WHERE id=$1',[jobs[0].id])).rows[0];assert.deepEqual(invalid,{status:'review',last_error:'WORK_ITEM_INVALID',lease_until:null});
+  const next=await f.service.claimJobs(4);assert.equal(next.length,2);assert.equal(new Set([...first,...next].map(job=>job.job_id)).size,5);assert.ok([...first,...next].every(job=>job.job_id!==jobs[0].id));assert.ok((await f.pool.query('SELECT status FROM speaking_independent.link')).rows.every(row=>row.status==='pending'));assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+ }finally{await f.db.close();}
+});
+
+test('Native PostgreSQL: two concurrent batch admissions never share a job or owner',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL},async()=>{
+ const f=await batchFixture();try{const batches=await Promise.all([f.service.claimJobs(4),f.service.claimJobs(4)]),jobs=batches.flat();assert.equal(jobs.length,6);assert.equal(new Set(jobs.map(job=>job.job_id)).size,6);assert.equal(new Set(jobs.map(job=>job.owner)).size,6);assert.deepEqual(await f.service.claimJobs(4),[]);}finally{await f.db.close();}
+});
+
+test('Native PostgreSQL: batch admission compares four jobs with the captured live single-job implementation',{skip:!process.env.SPEAKING_CLAIM_BASE_FILE,timeout:30000},async t=>{
+ const {createIndependentSpeaking:baselineFactory}=await import(pathToFileURL(process.env.SPEAKING_CLAIM_BASE_FILE));
+ async function measure(baseline){
+  const f=await batchFixture(),service=baseline?baselineFactory({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',progressDocsEnabled:true}):f.service,connect=f.pool.connect.bind(f.pool);let queries=0;
+  try{f.pool.connect=async()=>{const db=await connect();return{query:(...args)=>{queries++;return db.query(...args);},release:()=>db.release()};};const jobs=baseline?await(async()=>{const selected=[];for(let n=0;n<4;n++)selected.push(await service.claimJob());return selected;})():await service.claimJobs(4);f.pool.connect=connect;assert.equal(jobs.length,4);assert.equal(new Set(jobs.map(job=>job.job_id)).size,4);assert.ok(jobs.every(job=>job.owner&&job.link_id&&job.student_ref));return queries;}finally{f.pool.connect=connect;await f.db.close();}
+ }
+ const singleQueries=await measure(true),batchQueries=await measure(false);assert.equal(singleQueries,36);assert.equal(batchQueries,8);t.diagnostic(JSON.stringify({event:'speaking_native_admission_queries',admitted:4,singleQueries,batchQueries,includesBeginCommit:true,externalCalls:0,cpuOrSaveLatencyClaim:false}));
+});
+
+test('Native PostgreSQL: the actual Speaking entrypoint preserves accepted work and drains disabled, coordinated and worker-enabled restarts',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:120000},async()=>{
+ await speakingEntrypointContract({fixture,identity:f=>f.identity,dbUrl:process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,requestLinkOnly:f=>f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(401)})});
+});
+
+test('Native PostgreSQL: committed Speaking work wakes its worker and a peer; rollback and failed notification preserve the durable result',{skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:30000},async()=>{
+ const f=await fixture(),until=async check=>{const end=performance.now()+10000;while(performance.now()<end){if(check())return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('SPEAKING_SIGNAL_TIMEOUT');};
+ const received=[];let local=0,coordinator,peer;
+ try{
+  const createClient=()=>new pg.Client({connectionString:process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,connectionTimeoutMillis:5000});
+  coordinator=startSpeakingWorkCoordinator({pool:f.pool,schema:'speaking_independent',worker:{wake(){local++;}},createClient});
+  peer=createWorkSignals({query:(...args)=>f.pool.query(...args),createClient,channel:'speaking_independent_work_v1',lanes:['ai','docs','state'],onWake:lane=>received.push(lane)});
+  await until(()=>coordinator.snapshot().connected&&peer.snapshot().connected);const initial=local;
+  const first=await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:url(301)});assert.ok(first.id);assert.equal(local,initial+1);await until(()=>received.includes('ai'));assert.ok(received.includes('state'));
+  const count=local,peerCount=peer.snapshot().received,connect=f.pool.connect.bind(f.pool);let fail=true;
+  f.pool.connect=async()=>{const db=await connect();return{query:async(sql,params)=>{if(sql==='COMMIT'&&fail){fail=false;throw Error('SYNTHETIC_COMMIT_FAILURE');}return db.query(sql,params);},release:()=>db.release()};};
+  try{await assert.rejects(f.service.requestCheck({...f.identity,part:'freestyle',rawUrl:url(302)}),/SYNTHETIC_COMMIT_FAILURE/);}finally{f.pool.connect=connect;}
+  await new Promise(resolve=>setTimeout(resolve,60));assert.equal(local,count);assert.equal(peer.snapshot().received,peerCount);assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.job')).rows[0].n,1);
+  const query=f.pool.query.bind(f.pool);f.pool.query=(...args)=>{if(args[0]==='SELECT pg_notify($1,$2)')throw Error('SYNTHETIC_NOTIFY_FAILURE');return query(...args);};
+  const second=await f.service.requestCheck({...f.identity,part:'freestyle',rawUrl:url(303)});assert.ok(second.id);await until(()=>coordinator.snapshot().errors>0);f.pool.query=query;
+  assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.job')).rows[0].n,2);assert.equal(local,count+1);assert.equal((await f.service.open(f.identity)).links.length,2);
+ }finally{await coordinator?.stop();await peer?.close();await f.db.close();}
+});
+
+test('A claimed Doctor job reuses each accepted main snapshot without reading the Share again',async()=>{
+ const f=await fixture();try{
+  await f.service.requestCheck({...f.identity,part:'benefit_harm',rawUrl:url(201)});const snapshots=new Map();
+  for(const [index,part]of ['reason_action','freestyle'].entries()){
+   await f.service.requestCheck({...f.identity,part,rawUrl:url(202+index)});const job=await f.service.claimJob(),snapshot=conversationSnapshot({messages:[{role:'user',text:'Synthetic source '+part},{role:'assistant',text:'Synthetic confirmed feedback '+part}]});snapshots.set(part,snapshot.messages);
+   await f.service.workerService(job).completeCheck({qualityPassed:true,questionCount:2,fingerprint:snapshot.fingerprint,snapshot});
+  }
+  for(let slot=1;slot<=2;slot++){
+   await f.service.requestPracticeCheck({...f.identity,slot,exerciseId:exercise(slot),rawUrl:url(203+slot)});let job=await f.service.claimJob();if(job.kind==='analyze_practice'){await f.service.failJob(job,'SYNTHETIC_ANALYSIS_PENDING');job=await f.service.claimJob();}
+   await f.service.workerService(job).completePracticeCheck({qualityPassed:true,questionCount:1,fingerprint:String(7+slot).repeat(64),matchedExerciseId:exercise(slot)});
+  }
+  const receipt=await f.service.finish(f.identity),before=(await f.pool.query('SELECT id,status,fingerprint FROM speaking_independent.link ORDER BY id')).rows;
+  let job=await f.service.claimJob();if(job.kind==='analyze_practice'){await f.service.failJob(job,'SYNTHETIC_ANALYSIS_PENDING');job=await f.service.claimJob();}assert.equal(job.kind,'analyze_homework');let reads=0,analyses=0;
+  const result=await runSpeakingDoctorJob(f.service.workerService(job),job,{readShare:async()=>{reads++;throw Error('ACCEPTED_SHARE_MUST_NOT_BE_READ_AGAIN');},analyze:async(part,conversation)=>{analyses++;assert.deepEqual(conversation.messages,snapshots.get(part));return[];}});
+  assert.equal(result.status,'done');assert.equal(reads,0);assert.equal(analyses,2);assert.equal((await f.service.open(f.identity)).receipt.id,receipt.id);assert.deepEqual((await f.pool.query('SELECT id,status,fingerprint FROM speaking_independent.link ORDER BY id')).rows,before);
+ }finally{await f.db.close();}
+});
 
 test('100 HV gửi link trước nộp và 10 cửa sổ GV trên PostgreSQL native, không gọi AI',
  {skip:!process.env.SPEAKING_NATIVE_TEST_DATABASE_URL,timeout:60000},async t=>{
@@ -68,13 +184,19 @@ test('100 HV gửi link trước nộp và 10 cửa sổ GV trên PostgreSQL nat
 });
 
 async function fixture({start=true,recommendations=[],unapproved=false}={}) {
-  let db,nativePool;
+  let db,nativePool,ownerPool;
+  try{
   if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) {
     const url=new URL(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL);
     assert.match(url.pathname,/^\/speaking_independent_fixture_[a-z0-9_]+$/);
     nativePool=new pg.Pool({connectionString:url.href,max:8});
-    await nativePool.query('DROP SCHEMA IF EXISTS speaking_independent CASCADE; DROP SCHEMA IF EXISTS speaking_homework CASCADE; DROP SCHEMA IF EXISTS mapping CASCADE');
-    db={exec:sql=>nativePool.query(sql),query:(sql,params)=>nativePool.query(sql,params),close:()=>nativePool.end()};
+    if(process.env.SPEAKING_NATIVE_TEST_ADMIN_DATABASE_URL){
+      const ownerUrl=new URL(process.env.SPEAKING_NATIVE_TEST_ADMIN_DATABASE_URL);assert.equal(process.env.SPEAKING_NATIVE_TEST_CONFIRM,'test-services-optimization-20261101');assert.match(url.hostname,/^tsto-practice-pg-[a-z0-9]+$/);assert.equal(url.username,'speaking_fixture_api');assert.equal(ownerUrl.hostname,url.hostname);assert.equal(ownerUrl.pathname,url.pathname);assert.equal(ownerUrl.username,'fixture');
+      ownerPool=new pg.Pool({connectionString:ownerUrl.href,max:1});
+    }
+    const setup=ownerPool||nativePool;
+    await setup.query('DROP SCHEMA IF EXISTS speaking_independent CASCADE; DROP SCHEMA IF EXISTS speaking_homework CASCADE; DROP SCHEMA IF EXISTS mapping CASCADE');
+    db={exec:sql=>setup.query(sql),query:(sql,params)=>nativePool.query(sql,params),async close(){await nativePool.end();await ownerPool?.end();}};
   }else db=new PGlite();
   await db.exec(`CREATE SCHEMA mapping;
     CREATE TABLE mapping.classroom_course_mapping(erp_course_class_id bigint PRIMARY KEY);
@@ -90,6 +212,10 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   for(const name of ['202610250930_speaking_progress_docs.sql','202610250931_speaking_independent_progress_docs.sql'])
     await db.exec(await readFile(new URL('../ops/migrations/'+name,import.meta.url),'utf8'));
   await db.exec(`CREATE TABLE speaking_independent.conversation_snapshot(link_id uuid PRIMARY KEY,original_fingerprint text,fingerprint text,messages jsonb,source text DEFAULT 'accepted',recovery_job_id uuid)`);
+  if(ownerPool){
+    await db.exec('GRANT USAGE ON SCHEMA mapping,speaking_homework,speaking_independent TO speaking_fixture_api;GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA mapping,speaking_homework,speaking_independent TO speaking_fixture_api;GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA mapping,speaking_homework,speaking_independent TO speaking_fixture_api;GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA speaking_homework,speaking_independent TO speaking_fixture_api');
+    const role=(await nativePool.query('SELECT current_user AS role,rolsuper,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname=current_user')).rows[0];assert.deepEqual(role,{role:'speaking_fixture_api',rolsuper:false,rolcreatedb:false,rolcreaterole:false});await assert.rejects(nativePool.query('CREATE TABLE speaking_independent.forbidden_fixture(id integer)'),e=>e.code==='42501');
+  }
   const query=async(sql,params)=>{const r=await db.query(sql,params);return {...r,rowCount:r.rowCount??r.rows.length};};
   const pool=nativePool||{query,async connect(){return {query,release(){}};}};
   let active=true;
@@ -107,6 +233,7 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   const session=start?await service.startSelected({assignmentCode:code,classCode:'IC2304',studentRef:ref}):null;
   const identity=session?{accessToken:session.accessToken,studentRef:ref}:null;
   return {db,pool,service,session,identity,source,drop:()=>{active=false;}};
+  }catch(error){if(db)await db.close();else{await nativePool?.end();await ownerPool?.end();}throw error;}
 }
 
 test('the same main Share can be checked again after exhausted technical retries without duplicating an active retry',async()=>{
