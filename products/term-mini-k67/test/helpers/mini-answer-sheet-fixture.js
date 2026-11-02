@@ -1,5 +1,4 @@
 import {readFile} from 'node:fs/promises';
-import {PGlite} from '@electric-sql/pglite';
 import {createApp} from '../../src/app.js';
 import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
@@ -11,6 +10,7 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
     return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
       config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
+  const {PGlite}=await import('@electric-sql/pglite');
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
   const schema=await readFile(new URL('../../db/003-assessment.sql',import.meta.url),'utf8');
   for(const name of ['test_definition','term_test_attempt','term_test_exam_session','term_test_roster','term_test_temporary_student'])

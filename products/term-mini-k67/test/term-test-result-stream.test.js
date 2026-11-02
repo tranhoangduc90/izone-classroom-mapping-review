@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createApp} from '../src/app.js';
-import {PGlite} from '@electric-sql/pglite';
+import {createResultSqlFixture} from './result-sql-fixture.mjs';
 import {resultStreamStatusSql} from '../src/term-test-result-stream.js';
 
 const token='00000000-0000-4000-8000-000000000091';
@@ -10,9 +10,11 @@ const config={nodeEnv:'test',authMode:'legacy',legacyReviewToken:'fixture-only',
 // HTTP thật localhost với trạng thái giả: không gọi AI, Portal hoặc database production.
 async function fixture(t, rows, options={}) {
   let queries=0;
-  const app=createApp({config,pool:{query:async()=>{queries++;const row=typeof rows==='function'?await rows(queries):rows;return{rows:row?[row]:[],rowCount:row?1:0};}},resultStreamOptions:{pollIntervalMs:10,heartbeatMs:10,maxDurationMs:120,...options}});
+  const app=createApp({config,pool:{query:async input=>{queries++;const row=typeof rows==='function'?await rows(queries):rows;
+    const ids=Array.isArray(input.values[0])?input.values[0]:[input.values[0]],result=row?ids.map(id=>({attempt_token:id,...row})):[];
+    return{rows:result,rowCount:result.length};}},resultStreamOptions:{pollIntervalMs:10,heartbeatMs:10,maxDurationMs:120,...options}});
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
-  t.after(()=>new Promise(r=>{server.closeAllConnections();server.close(r);}));
+  t.after(async()=>{await app.locals.termTestResultStream?.close();await new Promise(r=>{server.closeAllConnections();server.close(r);});});
   const url=`http://127.0.0.1:${server.address().port}/api/term-tests/result/stream`;
   const post=(body={attemptToken:token},signal)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
   return{post,queries:()=>queries};
@@ -31,7 +33,7 @@ test('mã sai và lượt không tồn tại bị từ chối trước mở stre
 });
 test('chờ rồi ready: thông báo đúng một lần, không truy vấn chồng',async t=>{
   let busy=0,maxBusy=0;
-  const f=await fixture(t,async count=>{busy++;maxBusy=Math.max(maxBusy,busy);await new Promise(r=>setTimeout(r,15));busy--;return{status:count<3?'waiting':'ready'};});
+  const f=await fixture(t,async count=>{busy++;maxBusy=Math.max(maxBusy,busy);await new Promise(r=>setTimeout(r,15));busy--;return{status:count<3?'waiting':'ready'};},{maxDurationMs:2000});
   const response=await f.post();const text=await response.text();assert.match(text,/event: waiting/);
   assert.equal((text.match(/event: ready/g)||[]).length,1);assert.equal(maxBusy,1);
 });
@@ -53,12 +55,9 @@ test('đóng tab giải phóng stream và hạn theo lượt, không giữ vòng
 });
 
 test('SQL thật chỉ đọc đúng lượt đã nộp Writing và trạng thái chấm của lượt đó',async()=>{
-  const db=new PGlite();
+  const {db}=await createResultSqlFixture();
   try {
-    await db.exec(`CREATE SCHEMA assessment;
-      CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY,listening_submitted_at timestamptz,writing_submitted_at timestamptz);
-      CREATE TABLE assessment.term_test_writing_grading_final(attempt_id uuid PRIMARY KEY,status text);
-      INSERT INTO assessment.term_test_attempt VALUES ('${token}',now(),NULL),('00000000-0000-4000-8000-000000000092',now(),now());
+    await db.exec(`INSERT INTO assessment.term_test_attempt VALUES ('${token}',now(),NULL),('00000000-0000-4000-8000-000000000092',now(),now());
       INSERT INTO assessment.term_test_writing_grading_final VALUES ('00000000-0000-4000-8000-000000000092','ready');`);
     const read=async id=>(await db.query(resultStreamStatusSql,[id])).rows;
     assert.deepEqual(await read(token),[]);

@@ -1284,7 +1284,7 @@ export function createApp({
     });
   }));
 
-  registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
+  app.locals.termTestResultStream=registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
   mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter });
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {

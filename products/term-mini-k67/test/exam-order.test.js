@@ -23,6 +23,15 @@ before(async()=>{
 });
 after(async()=>fixture?.db.close());
 const post=(path,body)=>api.post(path).send({...body,orderClientVersion:1});
+async function waitForNativeAdvisory(){
+  const deadline=Date.now()+5000;
+  for(;;){
+    const waiting=await fixture.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory'`);
+    if(waiting.rows[0].n===1)return;
+    assert.ok(Date.now()<deadline,'Không quan sát được request thật đang đợi khóa trong DB fixture');
+    await new Promise(resolve=>setTimeout(resolve,20));
+  }
+}
 async function clean(){await fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now();UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');synced=[];}
 async function open(slug,delivery='cbt'){
   const paper=slug==='mini-test-lesson-5'&&delivery==='answer_sheet';
@@ -237,14 +246,16 @@ test('Hai học viên dùng cùng mã gửi Listening nhận xung đột; mã th
 });
 test('Native: đợi khóa vượt deadline không nhận nháp quá hạn', {skip:!process.env.K67_ORDER_NATIVE_URL},async()=>{
   await clean();const {base,state}=await open('term-test-1');await post(`${base}/reading/start`,{attemptToken:state.attemptToken});
-  await fixture.db.query(`UPDATE assessment.term_test_attempt SET reading_deadline_at=clock_timestamp()+interval '2 seconds' WHERE id=$1`,[state.attemptToken]);
+  await fixture.db.query(`UPDATE assessment.term_test_attempt SET reading_deadline_at=clock_timestamp()+interval '5 seconds' WHERE id=$1`,[state.attemptToken]);
   const blocker=await fixture.pool.connect();await blocker.query('BEGIN');
   await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['term-test-1:1293:900001']);
   const pending=post(`${base}/reading/draft`,{attemptToken:state.attemptToken,revision:2,answers:{14:'B'}}).then(response=>response);
-  await new Promise(resolve=>setTimeout(resolve,250));
-  const waiting=await fixture.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory'`);
-  assert.equal(waiting.rows[0].n,1);
-  await new Promise(resolve=>setTimeout(resolve,2200));await blocker.query('ROLLBACK');blocker.release();
+  try{
+    await waitForNativeAdvisory();
+    const remaining=Number((await fixture.db.query('SELECT extract(epoch FROM reading_deadline_at-clock_timestamp())*1000 AS remaining FROM assessment.term_test_attempt WHERE id=$1',[state.attemptToken])).rows[0].remaining);
+    assert.ok(remaining>0,'Request phải vào hàng chờ trước deadline để kiểm đúng việc hết giờ khi đợi khóa');
+    await new Promise(resolve=>setTimeout(resolve,remaining+100));
+  }finally{await blocker.query('ROLLBACK');blocker.release();await pending;}
   const r=await pending;assert.equal(r.body.error,'READING_LOCKED');
   assert.deepEqual((await fixture.db.query('SELECT reading_draft FROM assessment.term_test_attempt')).rows[0].reading_draft,{});
 });
@@ -300,10 +311,12 @@ test('Native: thời điểm bắt đầu ở sau khi lấy được khóa, họ
     const blocker=await fixture.pool.connect();await blocker.query('BEGIN');
     await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['term-test-1:1293:900001']);
     const pending=post(`${base}/${skill==='reading'?'reading/start':'session/start'}`,{attemptToken:state.attemptToken}).then(r=>r);
-    await new Promise(resolve=>setTimeout(resolve,500));
-    // So cùng đồng hồ PostgreSQL; runner và DB có thể ở hai máy có độ lệch nhỏ.
-    const unlocked=Number((await blocker.query('SELECT extract(epoch FROM clock_timestamp())*1000 AS unlocked')).rows[0].unlocked);
-    await blocker.query('ROLLBACK');blocker.release();
+    let unlocked;
+    try{
+      await waitForNativeAdvisory();
+      // So cùng đồng hồ PostgreSQL; chỉ chốt mốc sau khi đã thấy request đợi khóa.
+      unlocked=Number((await blocker.query('SELECT extract(epoch FROM clock_timestamp())*1000 AS unlocked')).rows[0].unlocked);
+    }finally{await blocker.query('ROLLBACK');blocker.release();await pending;}
     const r=await pending;assert.equal(r.status,200,JSON.stringify(r.body));
     assert.ok(Date.parse(r.body[skill+'StartedAt'])>=unlocked-5);
     assert.equal(Date.parse(r.body[skill+'DeadlineAt'])-Date.parse(r.body[skill+'StartedAt']),skill==='reading'?3600000:1855000);

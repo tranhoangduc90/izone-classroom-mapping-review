@@ -32,10 +32,11 @@ server.requestTimeout = 15000;
 server.headersTimeout = 16000;
 server.keepAliveTimeout = 5000;
 let stopping = false;
-function shutdown(signal) {
+async function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   notifier.close();
+  await app.locals.termTestResultStream.close();
   console.log(`Nhận ${signal}; đang đóng backend K67 an toàn.`);
   server.close(async () => { await pool.end(); process.exit(0); });
   setTimeout(() => process.exit(1), 10000).unref();
