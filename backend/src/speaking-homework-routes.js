@@ -294,7 +294,8 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
     const input=parseOrReply(z.object({classIds:z.array(z.string().regex(/^(\d+|unlinked)$/)).max(1000)}).strict(),req.body,res);
     if(!input)return;
     res.set('Cache-Control','private, no-store');res.json({ok:true,allowed:await independentSource.teachers({...input,reviewer:req.reviewer}),
-      authSource:req.authSource||null,reviewer:req.reviewer});
+      authSource:req.authSource||null,reviewer:req.reviewer,
+      ...(observation&&typeof observeTeacherAccess==='function'?{capabilities:{teacherStateStream:true}}:{})});
   }));
   // Chỉ snapshot quyền; worker secret đã kiểm bên trên. Không authenticate từng
   // actor ở đây vì đường đó gia hạn/ghi phiên và không phải đọc theo nhóm.

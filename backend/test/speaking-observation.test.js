@@ -21,6 +21,22 @@ function adapter(f,store=schema){
  return{stats,observation:createSpeakingObservation({schema:store,data,source,observeTeachers})};
 }
 
+test('Speaking teacher observation tracks current template labels even when saved unit content is unchanged',async()=>{
+ const f=await fixture();try{
+  for(const [store,unitId]of [[schema,id(1001)],[legacy,id(2001)]]){
+   const {observation:o}=adapter(f,store);try{
+    const pair=o.teacher({...teacherScope,unitId},principal),first=await o.hub.readOnce(pair.scope,pair.guard);
+    f.template.title+=' · nhãn hiện hành';
+    const title=await o.hub.readOnce(pair.scope,pair.guard);assert.notEqual(title.classRevision,first.classRevision);
+    assert.equal(title.unitContentRevision,first.unitContentRevision);
+    f.template.parts=f.template.parts.map(part=>({...part,display_title:(part.display_title||'')+' · '+store}));
+    const parts=await o.hub.readOnce(pair.scope,pair.guard);assert.notEqual(parts.classRevision,title.classRevision);
+    assert.equal(parts.unitContentRevision,title.unitContentRevision);
+   }finally{await o.close();}
+  }
+ }finally{await f.close();}
+});
+
 test('Speaking observation:100 distinct students and100 teacher views share one hub/data read and grouped source scopes',async t=>{
  const f=await fixture(),{stats,observation:o}=adapter(f);try{
   const owners=await seedBatch(f);

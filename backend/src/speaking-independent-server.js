@@ -169,7 +169,8 @@ export function createIndependentSourceClient({base,secret,call=fetch,teacherOri
     const {allowed}=data;
     if(!Array.isArray(allowed)||new Set(allowed).size!==allowed.length||allowed.some(id=>!requested.includes(id)))
       throw new SpeakingHomeworkError('SOURCE_BATCH_INVALID','Chưa đối soát được quyền các lớp.',503);
-    return {allowed:new Set(allowed),authSource:data.authSource||null,reviewer:data.reviewer||null};
+    return {allowed:new Set(allowed),authSource:data.authSource||null,reviewer:data.reviewer||null,
+      ...(data.capabilities?.teacherStateStream===true?{capabilities:{teacherStateStream:true}}:{})};
   }
   async function teachers(classIds,headers){
     // Lối cũ trả Set và không gọi nguồn với danh sách rỗng.
@@ -245,7 +246,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const coordinator=env.TEST_SERVICES_COORDINATOR_ENABLED==='true'?startSpeakingWorkCoordinator({pool,schema:'speaking_independent',worker,
     createClient:()=>new pg.Client({connectionString:env.INDEPENDENT_DATABASE_URL,connectionTimeoutMillis:5000,application_name:'speaking_independent_work_listener'}),
     onDocs:()=>progressWorker.wake?.(),onState:()=>observation?.wake(),onError:error=>console.error('Tín hiệu Speaking độc lập lỗi:',String(error.code||'WORK_SIGNAL_ERROR'))}):null;
-  const teacher=createSpeakingTeacherProgress({pool,source});
+  const teacher=createSpeakingTeacherProgress({pool,source,observationEnabled:Boolean(observation)});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
     observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));

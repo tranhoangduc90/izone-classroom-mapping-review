@@ -165,8 +165,11 @@ export function createSpeakingObservation({schema,data,source,observeTeachers,in
    // đọc có payload riêng để UI không phải đọc/dựng lại toàn bộ chi tiết.
    const values=state.rows.map(row=>{const {docsRevision,...content}=summary(row,state.context);return content;});
    const members={students:sorted(state.context.students||[]),selection:sorted(state.context.selectionStudents||[]),excluded:sorted(state.context.excludedStudents||[])};
+   // Native students cũng trả nhãn/cấu hình mẫu hiện hành, trong khi nội dung
+   // unit vẫn giữ mẫu đã lưu. Đổi nhãn phải được phát dù bài đã lưu không đổi.
+   const template=state.context.template||{},assignment={code:scope.code,title:template.title,parts:template.parts,requiredPracticeCount:template.requiredPracticeCount};
    return{kind:'speaking-teacher-state-v1',classId,code:scope.code,unitId:scope.unitId,
-    classRevision:digest([values,members]),unitRevision:state.unit?digest(summary(state.unit,state.context)):null,
+    classRevision:digest([values,members,assignment]),unitRevision:state.unit?digest(summary(state.unit,state.context)):null,
     unitContentRevision:state.unit?speakingContentRevision(state.unit,state.context):null,
     unitDocsRevision:state.unit?speakingDocsRevision(state.unit):null,unitDocs:state.unit?docs(state.unit):null};
   }};

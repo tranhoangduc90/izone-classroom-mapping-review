@@ -4,7 +4,7 @@ const fail = (code, message, status = 403) => { throw new SpeakingHomeworkError(
 
 // Nhận quyền Google từ nguồn sở hữu và đọc tiến trình Speaking, kể cả chưa có biên nhận.
 // Chỉ SELECT: không mở phiên học viên, kiểm hội thoại, nộp bài hoặc phát sinh job.
-export function createSpeakingTeacherProgress({ pool, source }) {
+export function createSpeakingTeacherProgress({ pool, source, observationEnabled=false }) {
   async function authorize(classId, headers) {
     if (!await source.teacher(String(classId), headers)) {
       fail('TEACHER_ACCESS_DENIED', 'Tài khoản Google này chưa được cấp quyền xem lớp.');
@@ -38,7 +38,14 @@ export function createSpeakingTeacherProgress({ pool, source }) {
   async function classes({ assignmentCode }, headers) {
     const context = await source.context({ assignmentCode });
     const allowed = [];
-    if(source.teachers){
+    let admission;
+    if(observationEnabled===true&&typeof source.teacherAdmission==='function'&&context.classes.length){
+      // Lần kiểm quyền đã cần để tải lớp cũng cho biết cả kho nguồn có observer.
+      // Không gọi thêm capability probe và không dùng lỗi admission để hạ quyền.
+      admission=await source.teacherAdmission(context.classes.map(row=>String(row.class_id)),headers);
+      allowed.push(...context.classes.filter(row=>admission.allowed.has(String(row.class_id)))
+        .map(row=>({classId:String(row.class_id),classCode:row.class_code})));
+    }else if(source.teachers){
       const access=await source.teachers(context.classes.map(row=>String(row.class_id)),headers);
       allowed.push(...context.classes.filter(row=>access.has(String(row.class_id)))
         .map(row=>({classId:String(row.class_id),classCode:row.class_code})));
@@ -53,7 +60,9 @@ export function createSpeakingTeacherProgress({ pool, source }) {
     }
     }
     if (!allowed.length) fail('TEACHER_ACCESS_DENIED', 'Tài khoản chưa được cấp lớp nào cho bài này.');
-    return { assignment: { code: assignmentCode, title: context.template.title }, classes: allowed };
+    const streaming=admission?.authSource==='session'&&admission?.capabilities?.teacherStateStream===true;
+    return { assignment: { code: assignmentCode, title: context.template.title }, classes: allowed,
+      ...(streaming?{capabilities:{teacherStateStream:true,teacherStateStores:['independent','legacy']}}:{}) };
   }
 
   async function students({ assignmentCode, classCode }, headers) {

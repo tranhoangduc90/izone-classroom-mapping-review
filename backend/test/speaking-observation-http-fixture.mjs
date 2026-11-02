@@ -3,14 +3,16 @@ import {fixture,code,hash} from './speaking-observation-fixture.mjs';
 import {createApp} from '../src/app.js';
 import {createIndependentApp,createIndependentSourceClient} from '../src/speaking-independent-server.js';
 import {createSpeakingObservation} from '../src/speaking-observation.js';
+import {createSpeakingTeacherProgress} from '../src/speaking-teacher-progress.js';
 export const secret='fixture-observation-worker-secret-at-least-32',origin='https://tranhoangduc90.github.io',cookie='observe_teacher='+'t'.repeat(43);
 async function listen(app){const server=createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));return{server,url:`http://127.0.0.1:${server.address().port}`};}
 
 // Hai app HTTP thật, hai hub/kho và source/auth native trên dữ liệu tổng hợp.
 // Owner chỉ seed/auth; metadata vẫn qua role reader SELECT-only của fixture.
-export async function httpFixture({enabled=true,nativeOpen=false}={}){
+export async function httpFixture({enabled=true,parentEnabled=enabled,nativeOpen=false,nativeTeacher=false}={}){
  const f=await fixture();let parent,independent,observation;const authCalls=[];
  try{
+  if(nativeTeacher)await f.db.exec("ALTER TABLE speaking_homework.submission ADD COLUMN created_at timestamptz DEFAULT '2026-11-01T00:00:00.000Z'");
   await f.db.exec(`CREATE TABLE mapping.reviewer_account(email text PRIMARY KEY,display_name text,role text,can_access_all_classes boolean,google_subject text,status text,last_login_at timestamptz,updated_at timestamptz);
    CREATE TABLE mapping.reviewer_session(token_hash bytea PRIMARY KEY,reviewer_email text,google_subject text,revoked_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz,last_seen_at timestamptz);
    CREATE TABLE mapping.reviewer_class_access(reviewer_email text,erp_course_class_id bigint);
@@ -28,13 +30,14 @@ export async function httpFixture({enabled=true,nativeOpen=false}={}){
   const authPool={async query(sql,params){authCalls.push(sql);const result=await f.db.query(sql,params);return{...result,rowCount:result.rowCount??result.rows.length};}};
   const config={authMode:'google',nodeEnv:'test',trustProxyHops:0,teacherSessionCookieName:'observe_teacher',allowedOrigins:new Set([origin]),
    speakingHomeworkEnabled:true,speakingHomeworkWorkerSecret:secret,speakingHomeworkAccessSecret:secret};
-  const parentApp=createApp({config,pool:authPool,speakingHomeworkPool:nativeOpen?f.independent.pool:f.pool,speakingObservationEnabled:enabled,
+  const parentApp=createApp({config,pool:authPool,speakingHomeworkPool:nativeOpen?f.independent.pool:f.pool,speakingObservationEnabled:parentEnabled,
    verifyGoogleToken:async()=>({email:'teacher@fixture.test',sub:'fixture-subject',email_verified:true})});
   parent=await listen(parentApp);
   const source=createIndependentSourceClient({base:parent.url+'/api/speaking-homework',secret});
   observation=enabled?createSpeakingObservation({schema:'speaking_independent',data:f.data('speaking_independent'),source,
    observeTeachers:actors=>source.observeTeachers(actors)}):null;
-  independent=await listen(createIndependentApp({service:f.independent,observation,
+  const teacher=nativeTeacher?createSpeakingTeacherProgress({pool:f.pool,source,observationEnabled:Boolean(observation)}):null;
+  independent=await listen(createIndependentApp({service:f.independent,observation,teacher,
    teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers)}));
   const close=async()=>{await observation?.close();await parentApp.locals.speakingObservation?.close();
    for(const item of [independent,parent])if(item){item.server.closeAllConnections();await new Promise(resolve=>item.server.close(resolve));}await f.close();};
