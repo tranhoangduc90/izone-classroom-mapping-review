@@ -2128,5 +2128,18 @@ export const ASSETS = {
       }
     ],
     "key": "public-audio/9fe9bc88076d5273e2420962a1dd65512312a142e08c5209a8d707e3a6c67b21.mp3"
+  },
+  "homework-listening-paper-on-public-libraries": {
+    "id": "homework-listening-paper-on-public-libraries",
+    "sha256": "f07de9888f53efd789a664e0da98a35486a4346dbdb4c96f7b376bee47237c30",
+    "byteLength": 520704,
+    "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/listening-homework/audio-assets/paper-on-public-libraries-f07de9888f53efd7.mp3",
+    "chunks": [
+      {
+        "byteLength": 520704,
+        "sha256": "f07de9888f53efd789a664e0da98a35486a4346dbdb4c96f7b376bee47237c30"
+      }
+    ],
+    "key": "public-audio/f07de9888f53efd789a664e0da98a35486a4346dbdb4c96f7b376bee47237c30.mp3"
   }
 };
