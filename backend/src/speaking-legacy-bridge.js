@@ -17,7 +17,7 @@ export function createSpeakingLegacyBridge({pool,source,catalog,service}) {
     return service.openAssignment(input);
   }
   async function start(input) {
-    const c=await source.context(input);
+    const c=await source.context({...input,...(!input.documentId?{webEntry:true}:{})});
     if(c.template.lesson>=6)return null;
     if(!c.member)fail('STUDENT_NOT_ACTIVE','Chọn đúng người đang học trong lớp.');
     if(input.documentId) {

@@ -27,12 +27,13 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
   const readPendingLogin = createPendingRoster();
   const loginContext = input => readPendingLogin(
     JSON.stringify([input.assignmentCode,input.classCode||'',input.studentRef||'']),
-    () => context(input));
+    () => context({...input,...(!input.documentId?{webEntry:true}:{})}));
   async function unitContext(u) {
     // Tên tự chọn chỉ thuộc hồ sơ Docs; chưa nhập lịch sử của hồ sơ đã duyệt.
     const selected=u.profile_kind==='document' && !u.course_id && u.student_ref;
     const c=await context({assignmentCode:u.assignment_code,...(u.student_ref?{
-      classCode:u.class_code,...(selected?{}:{studentRef:u.student_ref})}:{})});
+      classCode:u.class_code,...(selected?{}:{studentRef:u.student_ref}),
+      ...(u.profile_kind==='member'&&u.origin==='web'?{webEntry:true}:{})}:{})});
     if(selected && !c.selectionStudents?.some(s=>s.student_ref===u.student_ref))
       fail('STUDENT_NOT_ACTIVE','Học viên không còn trong danh sách đang học của lớp.',403);
     return c;
@@ -81,7 +82,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
     if(old)return old;
     if(input.documentId && documents) return documents.start(input);
     if (input.documentId) fail('DOCUMENT_INTAKE_PENDING','Chưa đọc được nội dung Docs. Bạn vẫn có thể mở link web trực tiếp.');
-    const c=await context(input);
+    const c=await context({...input,webEntry:true});
     if (!c.member) fail('STUDENT_NOT_ACTIVE','Chọn đúng tên học viên trong lớp.',403);
     if(!hasWeb && c.template.assignmentStatus && c.template.assignmentStatus!=='open')
       fail(c.template.assignmentStatus==='closed'?'HOMEWORK_CLOSED':'HOMEWORK_DRAFT','Bài này chưa nhận lượt nộp mới.',403);
