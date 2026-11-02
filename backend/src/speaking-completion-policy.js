@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {fetchSpeakingEvidence} from './speaking-ai-verification.js';
 
 export const COMPLETION_POLICY = 'speaking-fairness-2026-10-18-v1';
 const ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT
@@ -85,7 +86,7 @@ function completionContext(messages) {
 export async function analyzeChatbotCompletion(messages, target, call = fetch) {
   const context = completionContext(messages);
   if (!context) return { completed: false, confidence: 1 };
-  const response = await call(ENDPOINT, {
+  const response = await fetchSpeakingEvidence(ENDPOINT, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({ anh_minh_hoa: '', prompt: [
@@ -101,7 +102,12 @@ export async function analyzeChatbotCompletion(messages, target, call = fetch) {
       'CÁC LỜI ỨNG VIÊN (vẫn phải phân biệt ví dụ và kết thúc bước nhỏ):', JSON.stringify(context.candidates),
       'NGỮ CẢNH HỘI THOẠI:', context.transcript
     ].join('\n\n') })
-  });
+  },{call,anchored:false,totalMs:40_000,validate:result=>{
+    if(result.completed===false){validateCompletion(messages,result);return;}
+    const chosen=context.candidates.find(c=>c.id===result.candidateId);
+    if(!chosen)throw new Error('COMPLETION_CANDIDATE_INVALID');
+    validateCompletion(messages,{...result,message:chosen.message,quote:chosen.quote});
+  }});
   if (!response.ok) throw new Error(`COMPLETION_AI_HTTP_${response.status}`);
   const body = await response.json();
   const raw = body?.candidates?.[0]?.content?.parts?.map(p => p?.text || '').join('') || body?.text;

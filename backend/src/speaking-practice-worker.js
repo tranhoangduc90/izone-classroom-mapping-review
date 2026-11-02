@@ -5,6 +5,7 @@ import { readSpeakingShare } from './speaking-share-reader.js';
 import { analyzeDoctorConversation } from './speaking-doctor-worker.js';
 import { doctorDiagnostic } from './speaking-doctor-text.js';
 import { completionFallback, COMPLETION_POLICY } from './speaking-completion-policy.js';
+import {fetchSpeakingEvidence,speakingVerificationCode} from './speaking-ai-verification.js';
 
 const AI_ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT
   || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
@@ -34,16 +35,20 @@ export async function analyzePracticeConversation(messages, exerciseTitle, call 
     'Trả JSON object {"confidence":0.9,"matched":true,"completed":true,"questionMessage":2,"questionText":"Do you enjoy cooking?","answerMessage":3,"answerQuote":"nguyên văn câu trả lời","feedbackMessage":4,"repeatMessage":5,"repeatQuote":"nguyên văn câu trả lời đã nói lại"}. Nếu không đủ chu trình thì completed=false và không bịa vị trí/quote. questionText chỉ chép câu hỏi IELTS trong tin gốc; hai quote chép nguyên văn 5–500 ký tự từ đúng lượt học viên. Chỉ số từ 1. Không đánh giá cách nhập bằng giọng nói hay bàn phím.',
     transcript
   ].join('\n\n');
-  const response = await call(AI_ENDPOINT, {
+  const response = await fetchSpeakingEvidence(AI_ENDPOINT, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt, anh_minh_hoa: '' }),
     signal: AbortSignal.timeout(45_000)
-  });
+  },{messages,call,validate:result=>validatePracticeAnalysis(messages,result)});
   if (!response.ok) throw new Error(`PRACTICE_AI_HTTP_${response.status}`);
   const body = await response.json();
   const raw = body?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('') || body?.text;
   if (!raw) throw new Error('PRACTICE_AI_EMPTY');
   const result = JSON.parse(raw.trim().replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/, ''));
+  return validatePracticeAnalysis(messages,result);
+}
+
+function validatePracticeAnalysis(messages,result){
   if (!Number.isFinite(result?.confidence) || result.confidence < 0.65 || result.confidence > 1
     || typeof result.matched !== 'boolean' || typeof result.completed !== 'boolean') throw new Error('PRACTICE_AI_UNCERTAIN');
   if (!result.completed || !result.matched) return { completed: false, matched: result.matched, completedTurns: [], typingEvidence: [] };
@@ -101,7 +106,7 @@ export async function runPracticeCheckJob(service, job, {
       return service.rejectPracticeCheckJob({ checkJobId: job.job_id, checkCode: 'SHARE_UNAVAILABLE' });
     }
     console.error(`Kiểm bài bổ trợ lỗi: ${String(error?.message || 'PRACTICE_ERROR').slice(0, 80)}.`);
-    await service.failPracticeCheckJob({ checkJobId: job.job_id, errorCode: 'PRACTICE_CHECK_ERROR' });
+    await service.failPracticeCheckJob({ checkJobId: job.job_id, errorCode: speakingVerificationCode(error,'PRACTICE_CHECK_ERROR') });
     return { status: 'retry' };
   }
 }
