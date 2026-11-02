@@ -9,12 +9,28 @@ const columns = {
   reviewer_class_access: ['reviewer_email', 'erp_course_class_id']
 };
 const types = { erp_course_class_id: 'bigint', erp_student_contact_id: 'bigint', public_id: 'uuid' };
-async function replaceRows(client, table, rows) {
+const keys = {
+  classroom_course_mapping: ['erp_course_class_id'],
+  student_mapping_review: ['public_id'],
+  erp_class_membership_snapshot: ['erp_course_class_id', 'erp_student_contact_id'],
+  reviewer_class_access: ['reviewer_email', 'erp_course_class_id']
+};
+async function reconcileRows(client, table, rows) {
   const fields = columns[table];
-  await client.query(`DELETE FROM mapping.${table}`);
-  // Chèn cả nhóm bằng tham số JSON; chỉ nội suy tên/cột cố định trong whitelist.
-  await client.query(`INSERT INTO mapping.${table} (${fields.join(',')})
-    SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(${fields.map(field => `${field} ${types[field] || 'text'}`).join(',')})`, [JSON.stringify(rows)]);
+  const identity = keys[table], changes = fields.filter(field => !identity.includes(field));
+  // Nhận cả nhóm đã kiểm; xóa đúng hàng mất, thêm/sửa đúng hàng đổi.
+  // Vẫn đối chiếu mirror khi hash nguồn không đổi để sửa được drift cục bộ.
+  const conflict = changes.length ? `DO UPDATE SET ${changes.map(field => `${field}=EXCLUDED.${field}`).join(',')}
+    WHERE ROW(${changes.map(field => `existing.${field}`).join(',')})
+      IS DISTINCT FROM ROW(${changes.map(field => `EXCLUDED.${field}`).join(',')})` : 'DO NOTHING';
+  await client.query(`WITH incoming AS MATERIALIZED (
+      SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(${fields.map(field => `${field} ${types[field] || 'text'}`).join(',')})
+    ), removed AS (
+      DELETE FROM mapping.${table} existing WHERE NOT EXISTS (
+        SELECT 1 FROM incoming WHERE ${identity.map(field => `incoming.${field}=existing.${field}`).join(' AND ')})
+    ) INSERT INTO mapping.${table} AS existing (${fields.join(',')})
+      SELECT ${fields.join(',')} FROM incoming
+      ON CONFLICT (${identity.join(',')}) ${conflict}`, [JSON.stringify(rows)]);
 }
 export async function applyContextSnapshot(pool, input, now = Date.now()) {
   const snapshot = parseContextSnapshot(input, now);
@@ -45,18 +61,22 @@ export async function applyContextSnapshot(pool, input, now = Date.now()) {
       ) UPDATE mapping.reviewer_session SET revoked_at=coalesce(revoked_at,now()),revoked_reason='context_changed'
         WHERE reviewer_email IN (SELECT email FROM changed) AND revoked_at IS NULL`, [incoming, grants]);
     await client.query("UPDATE mapping.reviewer_account SET status='disabled',updated_at=now() WHERE NOT (email=ANY($1::text[])) AND status<>'disabled'", [snapshot.accounts.map(row => row.email)]);
-    for (const row of snapshot.accounts) {
-      await client.query(`INSERT INTO mapping.reviewer_account(email,google_subject,display_name,role,status,can_access_all_classes)
-        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(email) DO UPDATE SET
-          google_subject=coalesce(EXCLUDED.google_subject,mapping.reviewer_account.google_subject),
-          display_name=EXCLUDED.display_name,role=EXCLUDED.role,status=EXCLUDED.status,
-          can_access_all_classes=EXCLUDED.can_access_all_classes,updated_at=now()`,
-      [row.email, row.google_subject, row.display_name, row.role, row.status, row.can_access_all_classes]);
-    }
-    await replaceRows(client, 'reviewer_class_access', snapshot.access);
-    await replaceRows(client, 'classroom_course_mapping', snapshot.classes);
-    await replaceRows(client, 'student_mapping_review', snapshot.students);
-    await replaceRows(client, 'erp_class_membership_snapshot', snapshot.memberships);
+    // Gộp account thành một lần gọi; giữ Google binding khi nguồn trả NULL.
+    // updated_at chỉ đổi khi nội dung account đổi; freshness vẫn ghi riêng bên dưới.
+    await client.query(`INSERT INTO mapping.reviewer_account AS existing
+        (email,google_subject,display_name,role,status,can_access_all_classes)
+      SELECT email,google_subject,display_name,role,status,can_access_all_classes
+        FROM jsonb_to_recordset($1::jsonb) AS a(email text,google_subject text,display_name text,role text,status text,can_access_all_classes boolean)
+      ON CONFLICT(email) DO UPDATE SET
+        google_subject=coalesce(EXCLUDED.google_subject,existing.google_subject),
+        display_name=EXCLUDED.display_name,role=EXCLUDED.role,status=EXCLUDED.status,
+        can_access_all_classes=EXCLUDED.can_access_all_classes,updated_at=now()
+      WHERE ROW(existing.google_subject,existing.display_name,existing.role,existing.status,existing.can_access_all_classes)
+        IS DISTINCT FROM ROW(coalesce(EXCLUDED.google_subject,existing.google_subject),EXCLUDED.display_name,EXCLUDED.role,EXCLUDED.status,EXCLUDED.can_access_all_classes)`, [incoming]);
+    await reconcileRows(client, 'reviewer_class_access', snapshot.access);
+    await reconcileRows(client, 'classroom_course_mapping', snapshot.classes);
+    await reconcileRows(client, 'student_mapping_review', snapshot.students);
+    await reconcileRows(client, 'erp_class_membership_snapshot', snapshot.memberships);
     await client.query(`INSERT INTO mapping.k67_context_state(singleton,api_version,product_id,source_revision,captured_at)
       VALUES(true,1,$1,$2,$3) ON CONFLICT(singleton) DO UPDATE SET
         source_revision=EXCLUDED.source_revision,captured_at=EXCLUDED.captured_at,applied_at=now()`,
