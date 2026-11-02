@@ -209,7 +209,7 @@ export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret,
   router.post('/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(identity, req.body, res);
     if (!input) return;
-    res.json({ ok: true, ...(await service.open(input)) });
+    res.json({ ok: true, ...(await service.open(input)),...(observation?{capabilities:{studentStateStream:true,studentCombinedView:true}}:{}) });
   }));
   router.post('/checks/request', asyncRoute(async (req, res) => {
     const input = parseOrReply(checkRequest, req.body, res);

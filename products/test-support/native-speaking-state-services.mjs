@@ -23,3 +23,4 @@ test.after(async()=>{
 await import('../../backend/test/speaking-observation-data.test.js');
 await import('../../backend/test/speaking-observation.test.js');
 await import('../../backend/test/speaking-observation-http.test.js');
+await import('../../backend/test/speaking-observation-docs.test.js');

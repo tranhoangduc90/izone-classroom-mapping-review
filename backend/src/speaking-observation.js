@@ -33,6 +33,7 @@ const matches=(row,scope)=>String(row.class_id??'unlinked')===scope.classId&&row
 const summary=(row,context)=>({unitId:row.unit_id,studentRef:row.student_ref,status:row.status,documentId:row.document_id,
  receiptId:row.receipt_id,sentLinks:row.sent_links,acceptedLinks:row.accepted_links,savedAt:row.saved_at,
  contentRevision:speakingContentRevision(row,context),docsRevision:speakingDocsRevision(row)});
+const docs=row=>({docsProgress:row.docs_progress||null,docsJobs:row.docs_jobs});
 
 // Một hub/reader chung cho HV và GV của một kho native. Guard không gọi SQL/API:
 // toàn bộ quyền, metadata và nguồn được đọc theo nhóm trong read() của lượt hiện tại.
@@ -135,7 +136,7 @@ export function createSpeakingObservation({schema,data,source,observeTeachers,in
   },assertCurrent(session,verified){proof(guard,session,verified);},state(state){
    if(!state.row)fail('SPEAKING_STATE_NOT_READY',409);
    if(view)return speakingObservationView(state.row,state.context);
-   return{kind:'speaking-student-state-v1',...summary(state.row,state.context),studentRef};
+   return{kind:'speaking-student-state-v1',...summary(state.row,state.context),...docs(state.row),studentRef};
   }};
   return{scope,guard};
  }
@@ -160,10 +161,14 @@ export function createSpeakingObservation({schema,data,source,observeTeachers,in
    if(scope.classId!=='unlinked'&&String(state.context?.scope?.class_id)!==scope.classId)fail('TEACHER_ACCESS_DENIED',403);
    if(scope.courseId&&String(state.context?.scope?.course_id)!==scope.courseId)fail('TEACHER_ACCESS_DENIED',403);
    if(scope.unitId&&(!state.unit||!matches(state.unit,scope)))fail('TEACHER_ACCESS_DENIED',403);
-   const values=state.rows.map(row=>summary(row,state.context));
+   // Danh sách native chỉ đổi khi nội dung/roster đổi. Docs-only của unit đang
+   // đọc có payload riêng để UI không phải đọc/dựng lại toàn bộ chi tiết.
+   const values=state.rows.map(row=>{const {docsRevision,...content}=summary(row,state.context);return content;});
    const members={students:sorted(state.context.students||[]),selection:sorted(state.context.selectionStudents||[]),excluded:sorted(state.context.excludedStudents||[])};
    return{kind:'speaking-teacher-state-v1',classId,code:scope.code,unitId:scope.unitId,
-    classRevision:digest([values,members]),unitRevision:state.unit?digest(summary(state.unit,state.context)):null};
+    classRevision:digest([values,members]),unitRevision:state.unit?digest(summary(state.unit,state.context)):null,
+    unitContentRevision:state.unit?speakingContentRevision(state.unit,state.context):null,
+    unitDocsRevision:state.unit?speakingDocsRevision(state.unit):null,unitDocs:state.unit?docs(state.unit):null};
   }};
   return{scope,guard};
  }

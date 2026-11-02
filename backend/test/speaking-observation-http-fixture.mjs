@@ -8,7 +8,7 @@ async function listen(app){const server=createServer(app);await new Promise(reso
 
 // Hai app HTTP thật, hai hub/kho và source/auth native trên dữ liệu tổng hợp.
 // Owner chỉ seed/auth; metadata vẫn qua role reader SELECT-only của fixture.
-export async function httpFixture({enabled=true}={}){
+export async function httpFixture({enabled=true,nativeOpen=false}={}){
  const f=await fixture();let parent,independent,observation;const authCalls=[];
  try{
   await f.db.exec(`CREATE TABLE mapping.reviewer_account(email text PRIMARY KEY,display_name text,role text,can_access_all_classes boolean,google_subject text,status text,last_login_at timestamptz,updated_at timestamptz);
@@ -28,7 +28,7 @@ export async function httpFixture({enabled=true}={}){
   const authPool={async query(sql,params){authCalls.push(sql);const result=await f.db.query(sql,params);return{...result,rowCount:result.rowCount??result.rows.length};}};
   const config={authMode:'google',nodeEnv:'test',trustProxyHops:0,teacherSessionCookieName:'observe_teacher',allowedOrigins:new Set([origin]),
    speakingHomeworkEnabled:true,speakingHomeworkWorkerSecret:secret,speakingHomeworkAccessSecret:secret};
-  const parentApp=createApp({config,pool:authPool,speakingHomeworkPool:f.pool,speakingObservationEnabled:enabled,
+  const parentApp=createApp({config,pool:authPool,speakingHomeworkPool:nativeOpen?f.independent.pool:f.pool,speakingObservationEnabled:enabled,
    verifyGoogleToken:async()=>({email:'teacher@fixture.test',sub:'fixture-subject',email_verified:true})});
   parent=await listen(parentApp);
   const source=createIndependentSourceClient({base:parent.url+'/api/speaking-homework',secret});

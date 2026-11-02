@@ -72,7 +72,10 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
   route('post','/assignment/open',selected.omit({classCode:true}).extend({classCode:selected.shape.classCode.optional(),documentId:selected.shape.documentId.unwrap()}),service.roster,'assignment');
   route('post','/session/start-selected',selected.extend({studentRef:z.string().uuid(),identityConfirmed:z.literal(true)}),service.startSelected,'session');
   route('post','/identity/resolve',z.object({assignmentCode:code,studentRef:z.string().uuid()}).strict(),service.resolveIdentity);
-  route('post','/open',identity,service.open);
+  route('post','/open',identity,async input=>{
+    const data=await service.open(input);
+    return observation?{...data,capabilities:{studentStateStream:true,studentCombinedView:true}}:data;
+  });
   route('post','/doctor/list',identity,service.listDoctor);
   route('post','/checks/request',identity.extend({part:z.string().regex(/^[a-z][a-z0-9_]{1,31}$/),url:z.url().max(500)}).strict(),i=>service.requestCheck({...i,rawUrl:i.url}),'check',202);
   route('post','/doctor/practice/request',identity.extend({slot:z.number().int().min(1).max(2),exerciseId:z.string().uuid(),url:z.url().max(500)}).strict(),i=>service.requestPracticeCheck({...i,rawUrl:i.url}),'check',202);
