@@ -11,6 +11,11 @@ export function commentView(row) {
     noteText:row.note_text,visibility:row.visibility,revision:Number(row.revision),
     authorDisplayName:row.author_display_name,updatedAt:row.updated_at || row.occurred_at};
 }
+function draftView(row) {
+  return row ? {studentRef:row.student_ref,sessionNumber:Number(row.session_number),
+    noteText:row.note_text,revision:Number(row.revision),baseCommentRevision:Number(row.base_comment_revision),
+    updatedAt:row.updated_at} : null;
+}
 
 // Mã hóa link để GV lấy lại đúng link trên máy khác; khóa chỉ có trong cấu hình server.
 export function createProgressLinkCipher({keys={},activeVersion='v1'}={}) {
@@ -68,8 +73,67 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
     await database.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[key]);
   }
   function requestHash(input,action) {
-    return hash(JSON.stringify([action,String(input.classId),input.studentRef,input.sessionNumber??null,
-      input.expectedRevision??null,input.expectedAccessId??null,input.noteText??null,input.reviewer.email]));
+    const fields=[action,String(input.classId),input.studentRef,input.sessionNumber??null,
+      input.expectedRevision??null,input.expectedAccessId??null,input.noteText??null,input.reviewer.email];
+    // Không đổi hash của thao tác cũ đã được ghi trước lần nâng cấp này.
+    if(input.expectedDraftRevision!==undefined)fields.push(input.expectedDraftRevision);
+    return hash(JSON.stringify(fields));
+  }
+  const draftKey=input=>[String(input.reviewer.email).trim().toLowerCase(),input.classId,input.studentRef,input.sessionNumber];
+  async function readDraft(db,input) {
+    return (await db.query(`SELECT * FROM learning.teacher_session_comment_draft WHERE teacher_email=$1
+      AND erp_course_class_id=$2::bigint AND student_ref=$3::uuid AND session_number=$4`,draftKey(input))).rows[0];
+  }
+  async function readPublished(db,input) {
+    return (await db.query(`SELECT * FROM learning.student_session_comment WHERE erp_course_class_id=$1::bigint
+      AND student_ref=$2::uuid AND session_number=$3`,[input.classId,input.studentRef,input.sessionNumber])).rows[0];
+  }
+  function commentText(value) {
+    const text=String(value??'').trim();
+    if(!text || [...text].length>1000 || text.includes('\0'))
+      fail('INVALID_SESSION_COMMENT','Nhận xét cần từ 1 đến 1.000 ký tự.',400);
+    return text;
+  }
+  async function getSessionCommentEditor(input) {
+    return withTransaction(pool,async db=>{
+      await authorize(db,input,{session:true});
+      await lock(db,`comment:${input.classId}:${input.studentRef}:${input.sessionNumber}`);
+      return {classId:String(input.classId),studentRef:input.studentRef,sessionNumber:input.sessionNumber,
+        comment:commentView(await readPublished(db,input)),draft:draftView(await readDraft(db,input))};
+    });
+  }
+  async function saveSessionCommentDraft(input) {
+    input={...input,noteText:commentText(input.noteText)};
+    const fingerprint=requestHash(input,'draft');
+    return withTransaction(pool,async db=>{
+      await authorize(db,input,{session:true});
+      await lock(db,`comment:${input.classId}:${input.studentRef}:${input.sessionNumber}`);
+      await lock(db,`comment-operation:${input.operationId}`);
+      const replay=(await db.query('SELECT * FROM learning.teacher_session_comment_draft_operation WHERE operation_id=$1::uuid',[input.operationId])).rows[0];
+      if(replay){
+        if(replay.request_hash!==fingerprint)fail('COMMENT_OPERATION_CONFLICT','Mã thao tác đã được dùng cho nội dung khác.');
+        return {...draftView(replay),replayed:true};
+      }
+      const prior=await readDraft(db,input),published=await readPublished(db,input);
+      if(Number(prior?.revision||0)!==input.expectedDraftRevision)
+        fail('COMMENT_DRAFT_STALE','Nháp đã được cập nhật trên thiết bị khác. Giữ bản đang gõ và tải bản hiện hành trước khi lưu.');
+      if(Number(published?.revision||0)!==input.expectedRevision)
+        fail('COMMENT_STALE','Nhận xét đã gửi đã thay đổi. Giữ bản đang gõ và tải bản hiện hành trước khi lưu.');
+      const key=draftKey(input);
+      const row=(await db.query(`INSERT INTO learning.teacher_session_comment_draft
+        (teacher_email,erp_course_class_id,student_ref,session_number,note_text,revision,base_comment_revision)
+        VALUES($1,$2::bigint,$3::uuid,$4,$5,$6,$7)
+        ON CONFLICT(teacher_email,erp_course_class_id,student_ref,session_number) DO UPDATE
+        SET note_text=EXCLUDED.note_text,revision=EXCLUDED.revision,base_comment_revision=EXCLUDED.base_comment_revision,updated_at=now()
+        RETURNING *`,[...key,input.noteText,Number(prior?.revision||0)+1,input.expectedRevision])).rows[0];
+      const result=(await db.query(`INSERT INTO learning.teacher_session_comment_draft_operation
+        (operation_id,teacher_email,erp_course_class_id,student_ref,session_number,note_text,revision,base_comment_revision,request_hash)
+        VALUES($1::uuid,$2,$3::bigint,$4::uuid,$5,$6,$7,$8,$9) RETURNING *`,
+        [input.operationId,...key,row.note_text,row.revision,row.base_comment_revision,fingerprint])).rows[0];
+      if(!result || result.request_hash!==fingerprint || Number(result.revision)!==Number(row.revision))
+        fail('COMMENT_READBACK_FAILED','Chưa xác nhận được nháp vừa lưu.',500);
+      return {...draftView(result),replayed:false};
+    });
   }
   async function readComments(classId,studentRef=null,{visibleOnly=false}={}) {
     const result=await pool.query(`SELECT * FROM learning.student_session_comment WHERE erp_course_class_id=$1::bigint
@@ -78,9 +142,7 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
     return result.rows.map(commentView);
   }
   async function writeComment(input,hide=false) {
-    const text=String(input.noteText??'').trim();
-    if(!hide && (!text || [...text].length>1000 || text.includes('\0')))
-      fail('INVALID_SESSION_COMMENT','Nhận xét cần từ 1 đến 1.000 ký tự.',400);
+    const text=hide?'':commentText(input.noteText);
     input={...input,noteText:hide?null:text};
     const fingerprint=requestHash(input,hide?'hide':'save');
     return withTransaction(pool,async db=>{
@@ -90,7 +152,8 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
       const replay=await db.query('SELECT * FROM learning.student_session_comment_revision WHERE operation_id=$1::uuid',[input.operationId]);
       if(replay.rowCount) {
         if(replay.rows[0].request_hash!==fingerprint) fail('COMMENT_OPERATION_CONFLICT','Mã thao tác đã được dùng cho nội dung khác.');
-        return {...commentView(replay.rows[0]),replayed:true};
+        return {...commentView(replay.rows[0]),replayed:true,...(input.expectedDraftRevision!==undefined?
+          {draftRevision:input.expectedDraftRevision?input.expectedDraftRevision+1:0}:{})};
       }
       const key=[input.classId,input.studentRef,input.sessionNumber];
       const prior=(await db.query(`SELECT * FROM learning.student_session_comment WHERE erp_course_class_id=$1::bigint
@@ -98,6 +161,13 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
       if(Number(prior?.revision||0)!==input.expectedRevision) fail('COMMENT_STALE',
         'Nhận xét đã được cập nhật. Bản bạn đang gõ vẫn được giữ; tải bản hiện hành trước khi lưu.');
       if(hide && !prior) fail('COMMENT_NOT_FOUND','Chưa có nhận xét để ẩn.',404);
+      // Chỉ route gửi mới đọc nháp; client cũ vẫn dùng hợp đồng đã phát hành.
+      let draft;
+      if(!hide && input.expectedDraftRevision!==undefined){
+        draft=await readDraft(db,input);
+        if(Number(draft?.revision||0)!==input.expectedDraftRevision)
+          fail('COMMENT_DRAFT_STALE','Nháp đã được cập nhật trên thiết bị khác. Giữ nội dung đang gõ và tải bản hiện hành trước khi gửi.');
+      }
       const name=String(input.reviewer.displayName||'Giáo viên').trim();
       const displayName=name.includes('@')?'Giáo viên':name.slice(0,200);
       const row=(await db.query(`INSERT INTO learning.student_session_comment
@@ -116,7 +186,12 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
       const readback=(await db.query('SELECT * FROM learning.student_session_comment_revision WHERE operation_id=$1::uuid',[input.operationId])).rows[0];
       if(!readback || readback.request_hash!==fingerprint || Number(readback.revision)!==Number(row.revision))
         fail('COMMENT_READBACK_FAILED','Chưa xác nhận được nhận xét vừa lưu.',500);
-      return {...commentView(readback),replayed:false};
+      if(draft)await db.query(`UPDATE learning.teacher_session_comment_draft
+        SET note_text=NULL,revision=revision+1,base_comment_revision=$5,updated_at=now()
+        WHERE teacher_email=$1 AND erp_course_class_id=$2::bigint AND student_ref=$3::uuid AND session_number=$4`,
+        [...draftKey(input),row.revision]);
+      return {...commentView(readback),replayed:false,...(input.expectedDraftRevision!==undefined?
+        {draftRevision:draft?Number(draft.revision)+1:0}:{})};
     });
   }
   async function progressLink(input,action='resolve') {
@@ -169,7 +244,11 @@ export function createJourneyCommentService({pool,ErrorType,cipher}) {
   }
   return {
     readComments,
+    getSessionCommentEditor,
+    saveSessionCommentDraft,
     saveSessionComment:input=>writeComment(input),
+    sendSessionComment:input=>writeComment(input),
+    deleteSessionComment:input=>writeComment(input,true),
     hideSessionComment:input=>writeComment(input,true),
     resolveStudentProgressLink:input=>progressLink(input),
     rotateStudentProgressLink:input=>progressLink(input,'rotate'),

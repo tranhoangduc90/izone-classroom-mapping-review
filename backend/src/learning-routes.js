@@ -194,6 +194,7 @@ const commentWriteSchema=z.object({...commentTarget,noteText:z.string().trim().m
   .refine(value=>[...value].length<=1000),expectedRevision:z.number().int().min(0),operationId:uuidSchema}).strict();
 const commentHideSchema=z.object({...commentTarget,expectedRevision:z.number().int().min(0),operationId:uuidSchema}).strict();
 const commentHistorySchema=z.object(commentTarget).strict();
+const commentDraftSchema=commentWriteSchema.extend({expectedDraftRevision:z.number().int().min(0)});
 const progressResolveSchema=z.object({classId:commentTarget.classId,studentRef:uuidSchema,operationId:uuidSchema}).strict();
 const progressChangeSchema=progressResolveSchema.extend({expectedAccessId:uuidSchema.nullable()}).strict();
 const studentCommentsSchema=z.union([studentJourneySchema,z.object({attemptToken:uuidSchema}).strict()]);
@@ -439,6 +440,22 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.put('/teacher/session-comments',authenticate,featureReady,asyncRoute(async(req,res)=>{
     const input=parseOrReply(commentWriteSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
     return res.json({ok:true,comment:await service.saveSessionComment({...input,reviewer:req.reviewer})});
+  }));
+  router.get('/teacher/session-comments/editor',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentHistorySchema,req.query,res,'INVALID_COMMENT_TARGET');if(!input)return;
+    return res.json({ok:true,...await service.getSessionCommentEditor({...input,reviewer:req.reviewer})});
+  }));
+  router.put('/teacher/session-comments/draft',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentDraftSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
+    return res.json({ok:true,draft:await service.saveSessionCommentDraft({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/session-comments/send',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentDraftSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
+    return res.json({ok:true,comment:await service.sendSessionComment({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/session-comments/delete',authenticate,featureReady,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(commentHideSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
+    return res.json({ok:true,comment:await service.deleteSessionComment({...input,reviewer:req.reviewer})});
   }));
   router.post('/teacher/session-comments/hide',authenticate,featureReady,asyncRoute(async(req,res)=>{
     const input=parseOrReply(commentHideSchema,req.body,res,'INVALID_SESSION_COMMENT');if(!input)return;
