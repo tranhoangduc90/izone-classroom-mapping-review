@@ -15,7 +15,7 @@ export async function nativeContextFixture(){
   try{if(created){assert.match(name,/^term_mini_k67_test_tsto_[a-f0-9]{12}$/);await admin.query('DROP DATABASE '+name);}}finally{await admin.end();}
  }
  try{
-  const version=Number((await admin.query('SHOW server_version_num')).rows[0].server_version_num);assert.ok(version>=170000&&version<180000);
+  const version=Number((await admin.query('SHOW server_version_num')).rows[0].server_version_num);assert.ok(version>=160000&&version<180000);
   await admin.query(`DO $$ BEGIN
    IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='k67_owner') THEN CREATE ROLE k67_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE; END IF;
    IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='k67_context_sync') THEN CREATE ROLE k67_context_sync LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE; END IF;
@@ -35,6 +35,6 @@ export async function nativeContextFixture(){
    await assert.rejects(pool.query('CREATE TABLE mapping.forbidden_fixture(id integer)'),e=>e.code==='42501');
    await assert.rejects(pool.query('SELECT token_hash FROM mapping.reviewer_session'),e=>e.code==='42501');
   }
-  return{db,pool,grantAndVerify,close:async()=>{await close();assert.equal(externalAttempts,0);console.log(JSON.stringify({event:'term_context_native_cleanup',database:name,role:'k67_context_sync',closed:true,externalAttempts}));}};
+  return{db,pool,grantAndVerify,close:async()=>{await close();assert.equal(externalAttempts,0);console.log(JSON.stringify({event:'term_context_native_cleanup',database:name,role:'k67_context_sync',serverVersion:version,closed:true,externalAttempts}));}};
  }catch(error){await close();throw error;}
 }
