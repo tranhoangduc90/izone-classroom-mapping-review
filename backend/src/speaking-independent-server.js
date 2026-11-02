@@ -18,11 +18,12 @@ import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './sp
 import {createDurableWorkLoop} from './test-work-runtime.js';
 import {startSpeakingWorkCoordinator} from './speaking-work-runtime.js';
 import {speakingSourceScopes,expandSpeakingSourceBatch} from './speaking-source-batch.js';
+const speakingWebOrigin='https://tranhoangduc90.github.io';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
 // Không khởi động các worker Writing, Progress Log hoặc Speaking bài cũ.
-export function createIndependentApp({service,teacher,documents,workerSecret='',origin='https://tranhoangduc90.github.io',docsReadMode='queued'}) {
+export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued'}) {
   const app=express();
   app.set('trust proxy',1);
   app.use(helmet());app.use(express.json({limit:'2mb'}));
@@ -104,9 +105,11 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
   return app;
 }
 
-export function createIndependentSourceClient({base,secret,call=fetch}) {
+export function createIndependentSourceClient({base,secret,call=fetch,teacherOrigin=speakingWebOrigin}) {
   const url=new URL(base);
-  if(!['http:','https:'].includes(url.protocol)||secret.length<32) throw new Error('SOURCE_CONFIG_INVALID');
+  const teacherUrl=new URL(teacherOrigin);
+  if(!['http:','https:'].includes(url.protocol)||secret.length<32||!['http:','https:'].includes(teacherUrl.protocol)
+    ||teacherUrl.origin!==teacherOrigin) throw new Error('SOURCE_CONFIG_INVALID');
   async function request(path,body,headers={}) {
     const response=await call(base.replace(/\/$/,'')+path,{method:body?'POST':'GET',headers:{
       'content-type':'application/json','x-speaking-worker-secret':secret,...headers},
@@ -139,7 +142,10 @@ export function createIndependentSourceClient({base,secret,call=fetch}) {
       throw new SpeakingHomeworkError('INVALID_CLASS','Danh sách lớp không hợp lệ.',400);
     const requested=[...new Set(classIds)];if(!requested.length)return new Set();
     let data;
-    try{data=await request('/internal/independent/teacher-access',{classIds:requested},headers);}
+    // Đây là POST nội bộ chỉ đọc. Vẫn đáp ứng CSRF native cho cookie Google;
+    // GET/CLI không có Origin dùng origin tin cậy của dịch vụ, origin lạ không được thay.
+    const teacherHeaders={...headers,origin:headers?.origin||teacherOrigin,'x-izone-csrf':'1'};
+    try{data=await request('/internal/independent/teacher-access',{classIds:requested},teacherHeaders);}
     catch(error){
       // Chuyển từng runtime có thể gặp nguồn cũ chưa có đường batch. Chỉ 404/405
       // mới dùng lại kiểm quyền native; 401/403/503 phải giữ nguyên lỗi.

@@ -20,3 +20,4 @@ test.after(async()=>{
  console.log(JSON.stringify({event:'speaking_source_native_cleanup',fixtureDatabases:0,externalAttempts,closed:true}));
 });
 await import('../../backend/test/speaking-source-batch.test.js');
+await import('../../backend/test/speaking-source-csrf.test.js');
