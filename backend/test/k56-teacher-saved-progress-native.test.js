@@ -70,3 +70,30 @@ test('Native K56 saved progress HTTP: exact native profile, strict compact selec
  const options=await request(f.app).get('/api/term-tests/teacher/options').set('x-review-token','fixture-only-key').expect(200);
  assert.equal(options.body.capabilities.teacherSavedProgressVersion,1);
 });
+
+test('Saved progress mode matrix: native K56 answer-sheet and Reading-first Writing keep legacy views and all stored data', {skip:!native},async t=>{
+ const f=await fixture(t);
+ const verify=async(order,delivery)=>{
+  const snapshot=async()=>({sessions:(await f.db.query('SELECT to_jsonb(s) AS value FROM assessment.term_test_exam_session s')).rows,
+   attempts:(await f.db.query('SELECT to_jsonb(a) AS value FROM assessment.term_test_attempt a')).rows});
+  const before=await snapshot(),legacyData=await f.read(),index=await f.read({mode:'index'});
+  assert.equal(index.attempts.length,1);assert.equal(index.attempts[0].order,order);assert.equal(index.attempts[0].delivery,delivery);
+  const selected=await f.read({mode:'view',viewId:index.attempts[0].viewId}),{revision,...saved}=selected.attempts[0];
+  assert.equal(revision,index.attempts[0].revision);assert.deepEqual(saved,legacyData.attempts[0]);assert.deepEqual(await snapshot(),before);
+ };
+ await f.db.query("UPDATE assessment.term_test_exam_session SET attempt_mode='answer_sheet' WHERE id=$1",[session]);
+ await verify('lis_first','answer_sheet');
+ // Writing chỉ bắt đầu sau khi L/R hoàn tất; giữ nguyên ràng buộc native trong fixture.
+ await f.db.query(`UPDATE assessment.term_test_exam_session SET attempt_mode='cbt',listening_started_at=now()-interval '40 minutes',
+  listening_deadline_at=now()-interval '10 minutes',listening_submitted_at=now()-interval '15 minutes' WHERE id=$1`,[session]);
+ const attempt='80000000-0000-4000-8000-000000000001';
+ await f.db.query(`INSERT INTO assessment.term_test_attempt(id,client_submission_id,test_slug,definition_version,erp_course_class_id,
+  class_name_snapshot,erp_student_contact_id,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,
+  reading_started_at,reading_deadline_at,reading_draft,reading_draft_updated_at,reading_answers,reading_result,reading_submitted_at,
+  listening_answers,listening_result,listening_submitted_at,combined_result,completed_at,writing_started_at,writing_updated_at,writing_task_2)
+  VALUES($1,$1,$2,1,1293,'IC2304',900001,'Học viên mô phỏng',$3,'cbt','read_first',
+   now()-interval '90 minutes',now()-interval '30 minutes','{"2":"Bản Reading"}',now()-interval '45 minutes','{"2":"Bản Reading"}','{}',now()-interval '45 minutes',
+   '{"1":"B"}','{}',now()-interval '15 minutes','{}',now()-interval '15 minutes',now()-interval '10 minutes',now()-interval '5 minutes','Bản Writing chưa nộp')`,[attempt,input.test,session]);
+ await verify('read_first','cbt');
+ const saved=await f.read();assert.equal(saved.attempts[0].writing.task2,'Bản Writing chưa nộp');
+});

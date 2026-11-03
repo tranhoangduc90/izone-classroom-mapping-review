@@ -132,3 +132,18 @@ test('K67 compact saved progress HTTP: strict selector contract, native auth, no
   assert.deepEqual(body,legacy.body.attempts[0]);
  }finally{await f.db.close();}
 });
+
+test('Saved progress mode matrix: K67 answer-sheet and Reading-first views preserve native legacy data without changing clocks',async()=>{
+ const f=await fixture();try{
+  for(const [mode,order,delivery] of [['answer_sheet','lis_first','answer_sheet'],['cbt','read_first','cbt']]){
+   await f.db.query('UPDATE assessment.term_test_exam_session SET attempt_mode=$1,exam_mode=$2 WHERE id=$3',[mode,order,session]);
+   const before=(await f.db.query('SELECT to_jsonb(s) AS value FROM assessment.term_test_exam_session s')).rows;
+   const legacy=await readTeacherSavedProgress(f.pool,input,email,authorization);
+   const index=await readTeacherSavedProgress(f.pool,{...input,mode:'index'},email,authorization);
+   assert.equal(index.attempts.length,1);assert.equal(index.attempts[0].order,order);assert.equal(index.attempts[0].delivery,delivery);
+   const view=await readTeacherSavedProgress(f.pool,{...input,mode:'view',viewId:index.attempts[0].viewId},email,authorization);
+   const {revision,...saved}=view.attempts[0];assert.equal(revision,index.attempts[0].revision);assert.deepEqual(saved,legacy.attempts[0]);
+   assert.deepEqual((await f.db.query('SELECT to_jsonb(s) AS value FROM assessment.term_test_exam_session s')).rows,before);
+  }
+ }finally{await f.db.close();}
+});
