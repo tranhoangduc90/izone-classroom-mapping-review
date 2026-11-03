@@ -69,3 +69,66 @@ test('K67 HTTP: phiên GV bắt buộc, query lạ bị từ chối và phản h
   assert.match(response.headers['cache-control'],/no-store/);assert.equal(response.body.attempts[0].listening.answers['11'],'B');
  }finally{await f.db.close();}
 });
+
+test('K67 compact saved progress: index omits content, selected views equal legacy data and detect same-timestamp edits',async()=>{
+ const f=await fixture();try{
+  await f.db.query(`INSERT INTO assessment.term_test_attempt(id,client_submission_id,test_slug,definition_version,erp_course_class_id,
+   class_name_snapshot,erp_student_contact_id,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,
+   reading_started_at,reading_deadline_at,reading_draft,reading_draft_updated_at,writing_started_at,writing_updated_at,writing_task_2,
+   listening_answers,listening_result,listening_submitted_at,reading_answers,reading_result,reading_submitted_at,combined_result,completed_at)
+   VALUES($1,$1,'mini-test-lesson-5',1,1293,'IC2304',900001,'Học viên mô phỏng',$2,'cbt','read_first','cbt',now(),now()+interval '60 minutes','{"14":"C"}',
+    '2026-11-01T00:00:00Z',now(),'2026-11-01T00:00:00Z',$3,'{}','{}',now(),'{"14":"C"}','{}',now(),'{}',now())`,[attempt,session,'Bản Writing riêng '.repeat(1200)]);
+  const read=extra=>readTeacherSavedProgress(f.pool,{...input,...extra},email,authorization);
+  const legacy=await read({}),index=await read({mode:'index'}),summary=index.attempts[0];
+  assert.equal(index.format,'saved-progress-index-v1');assert.equal(summary.viewId,legacy.attempts[0].viewId);
+  assert.match(summary.revision,/^[a-f0-9]{32}$/);
+  for(const key of ['listening','reading','writing'])assert.equal(Object.hasOwn(summary,key),false);
+  assert.equal(JSON.stringify(index).includes('Bản Writing riêng'),false);assert.equal(JSON.stringify(index).includes(attempt),false);
+  const before=(await f.db.query('SELECT to_jsonb(a) AS value FROM assessment.term_test_attempt a')).rows;
+  const detail=await read({mode:'view',viewId:summary.viewId}),{revision,...original}=detail.attempts[0];
+  assert.equal(detail.format,'saved-progress-view-v1');assert.equal(revision,summary.revision);assert.deepEqual(original,legacy.attempts[0]);
+  assert.deepEqual((await f.db.query('SELECT to_jsonb(a) AS value FROM assessment.term_test_attempt a')).rows,before);
+  const savedAt=detail.attempts[0].writing.savedAt;
+  await f.db.query(`UPDATE assessment.term_test_attempt SET writing_task_2='Nội dung vừa sửa' WHERE id=$1`,[attempt]);
+  const changed=await read({mode:'index'});assert.notEqual(changed.attempts[0].revision,revision);
+  const latest=await read({mode:'view',viewId:summary.viewId});assert.equal(latest.attempts[0].writing.savedAt,savedAt);
+  assert.equal(latest.attempts[0].writing.task2,'Nội dung vừa sửa');
+  await assert.rejects(read({mode:'view',viewId:'0'.repeat(64)}),e=>e.status===404&&e.code==='SAVED_VIEW_NOT_FOUND');
+  await assert.rejects(read({mode:'view',viewId:summary.viewId,student:emptyRef}),e=>e.status===404);
+  await f.db.query('DELETE FROM mapping.reviewer_class_access WHERE reviewer_email=$1',[email]);
+  for(const mode of ['index','view'])await assert.rejects(read({mode,...(mode==='view'?{viewId:summary.viewId}:{})}),e=>e.status===403);
+ }finally{await f.db.close();}
+});
+
+test('K67 compact saved progress: historical session views remain selectable and deletion invalidates only that view',async()=>{
+ const f=await fixture();try{
+  const read=extra=>readTeacherSavedProgress(f.pool,{...input,...extra},email,authorization);
+  const old=(await read({mode:'index'})).attempts[0];
+  await f.db.query('UPDATE assessment.term_test_exam_session SET superseded_at=now() WHERE id=$1',[session]);
+  const second='60000000-0000-4000-8000-000000000003';
+  await f.db.query(`INSERT INTO assessment.term_test_exam_session(id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,
+   erp_student_contact_id,student_name_snapshot,attempt_mode,listening_draft)
+   VALUES($1,'mini-test-lesson-5',1,1293,'IC2304',900001,'Học viên mô phỏng','cbt','{"11":"Lượt mới"}')`,[second]);
+  const index=await read({mode:'index'});assert.equal(index.attempts.length,2);
+  const current=index.attempts.find(a=>a.viewId!==old.viewId);
+  assert.equal((await read({mode:'view',viewId:old.viewId})).attempts[0].listening.answers['11'],'B');
+  assert.equal((await read({mode:'view',viewId:current.viewId})).attempts[0].listening.answers['11'],'Lượt mới');
+  await f.db.query('DELETE FROM assessment.term_test_exam_session WHERE id=$1',[session]);
+  assert.deepEqual((await read({mode:'index'})).attempts,[current]);
+  await assert.rejects(read({mode:'view',viewId:old.viewId}),e=>e.code==='SAVED_VIEW_NOT_FOUND');
+ }finally{await f.db.close();}
+});
+
+test('K67 compact saved progress HTTP: strict selector contract, native auth, no-store and unchanged legacy response',async()=>{
+ const f=await fixture();try{
+  const api=()=>request(f.app).get('/api/term-tests/teacher/saved-progress').set('x-review-token','fixture-only-key');
+  for(const extra of [{viewId:'a'.repeat(64)},{mode:'view'},{mode:'index',viewId:'a'.repeat(64)},
+   {mode:'view',viewId:session},{mode:'unknown'},{mode:'index',extra:'bad'}])await api().query({...input,...extra}).expect(400);
+  const legacy=await api().query(input).expect(200);assert.equal(Object.hasOwn(legacy.body,'format'),false);
+  assert.equal(Object.hasOwn(legacy.body.attempts[0],'revision'),false);
+  const index=await api().query({...input,mode:'index'}).expect(200);assert.match(index.headers['cache-control'],/no-store/);
+  const selected=await api().query({...input,mode:'view',viewId:index.body.attempts[0].viewId}).expect(200);
+  const {revision,...body}=selected.body.attempts[0];assert.equal(revision,index.body.attempts[0].revision);
+  assert.deepEqual(body,legacy.body.attempts[0]);
+ }finally{await f.db.close();}
+});

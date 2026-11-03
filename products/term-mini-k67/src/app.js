@@ -1383,7 +1383,7 @@ export function createApp({
       auth.readAuthorization(req)
     ]);
     const response = result.rows[0]?.response || { classes: [], tests: [] };
-    return res.json({ ok: true, reviewer: req.reviewer, ...response });
+    return res.json({ ok: true, reviewer: req.reviewer, ...response, capabilities:{teacherStateVersion:1,teacherSavedProgressVersion:1} });
   }));
 
   app.post('/api/mini-tests/results', testReadLimiter, asyncRoute(async (req, res) => {

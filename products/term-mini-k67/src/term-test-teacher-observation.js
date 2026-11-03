@@ -88,6 +88,10 @@ export const teacherObservationBatchSql=`WITH watched AS MATERIALIZED (
 )
 SELECT a.key,a.scope_key,a.context_fresh,a.login_valid,a.class_count,a.allowed_count,a.definition_version,
  (SELECT count(*)::int FROM identities i WHERE i.scope_key=a.scope_key) AS identity_count,
+ md5(jsonb_build_array(
+  (SELECT jsonb_build_array(account.role,account.can_access_all_classes) FROM mapping.reviewer_account account WHERE account.email=a.email),
+  EXISTS(SELECT 1 FROM mapping.reviewer_class_access access WHERE access.reviewer_email=a.email AND access.erp_course_class_id=a.class_id)
+ )::text) AS access_revision,
  coalesce(r.revision,md5('[]')) AS revision
 FROM authorized a LEFT JOIN revisions r ON r.scope_key=a.scope_key;`;
 
@@ -112,7 +116,7 @@ export function createTermTeacherObservation({pool,interval=30000,maxConnections
    if(!input||sessions.has(row.key)||row.scope_key!==input.scope_key
     ||typeof row.context_fresh!=='boolean'||typeof row.login_valid!=='boolean'
     ||![row.class_count,row.allowed_count,row.identity_count].every(Number.isInteger)
-    ||!(/^[a-f0-9]{32}$/.test(row.revision)))fail(503,'STATE_DATA_INVALID');
+    ||!(/^[a-f0-9]{32}$/.test(row.revision))||!(/^[a-f0-9]{32}$/.test(row.access_revision)))fail(503,'STATE_DATA_INVALID');
    sessions.set(row.key,row);
    const value={revision:row.revision,definitionVersion:row.definition_version};
    // Phiên không được phép không được quyết định revision của lớp đang có người khác xem.
@@ -138,8 +142,9 @@ export function createTermTeacherObservation({pool,interval=30000,maxConnections
     if(row.class_count!==1)fail(404,'CLASS_NOT_FOUND');
     if(row.allowed_count!==1)fail(403,'ACCESS_DENIED');
     if(student&&row.identity_count!==1)fail(404,'STUDENT_NOT_FOUND');
-   },state(value){return{kind:'term-teacher-state-v1',className:scope.className,testSlug:scope.testSlug,studentRef:student,
-    definitionVersion:value.definitionVersion,contentRevision:value.revision};}}};
+    return{accessRevision:row.access_revision};
+   },state(value,verified){return{kind:'term-teacher-state-v1',className:scope.className,testSlug:scope.testSlug,studentRef:student,
+    definitionVersion:value.definitionVersion,contentRevision:value.revision,accessRevision:verified.accessRevision};}}};
  }
  return{hub,guard};
 }

@@ -15,6 +15,8 @@ test('Teacher state HTTP: native middleware, strict scope, compact no-store resp
  const f=await fixture(t),url='/api/term-tests/teacher/state';
  await request(f.app).get(url).query(input).expect(401);
  await request(f.app).get(url).set('x-review-token','fixture-only-key').query({...input,token:'wrong'}).expect(400);
+ const options=await request(f.app).get('/api/term-tests/teacher/options').set('x-review-token','fixture-only-key').expect(200);
+ assert.equal(options.body.capabilities.teacherStateVersion,1);
  const before=(await f.db.query('SELECT jsonb_agg(to_jsonb(a)) AS value FROM assessment.term_test_attempt a')).rows;
  const response=await request(f.app).get(url).set('x-review-token','fixture-only-key').query(input).expect(200);
  assert.match(response.headers['cache-control'],/private, no-store/);assert.equal(response.body.state.className,input.class);
