@@ -131,7 +131,7 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     const a=await sourceAssignment(input);
     const c=await source.context({assignmentCode:a.assignment_code,classCode:a.class_code});
     const pending=[];
-    let skippedExcluded=0;
+    let skippedExcluded=0,unmatched=0;
     if(new Set(input.submissions.map(s=>s.id)).size!==input.submissions.length
       ||new Set(input.submissions.filter(s=>s.documentId).map(s=>s.documentId)).size!==input.submissions.filter(s=>s.documentId).length)
       error('SOURCE_SNAPSHOT_DUPLICATE','Danh sách Classroom trùng bài nộp hoặc Doc ID.');
@@ -139,18 +139,23 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
       if(!s.documentId) continue;
       const matches=c.students.filter(m=>m.google_user_id===s.userId);
       if(!matches.length&&c.excludedStudents?.some(m=>m.google_user_id===s.userId)){skippedExcluded++;continue;}
-      if(matches.length!==1) error('STUDENT_MAPPING_INVALID','Học viên Classroom chưa ghép duy nhất với lớp đang học.');
+      if(matches.length>1) error('STUDENT_MAPPING_INVALID','Học viên Classroom chưa ghép duy nhất với lớp đang học.');
       const member=matches[0];
+      if(!member)unmatched++;
       const result=await pool.query(`INSERT INTO speaking_independent.source_binding
         (course_id,course_work_id,submission_id,google_user_id,document_id,student_ref,assignment_code)
-        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(course_id,course_work_id,submission_id,document_id) DO UPDATE SET google_user_id=EXCLUDED.google_user_id
+        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(course_id,course_work_id,submission_id,document_id) DO UPDATE SET google_user_id=EXCLUDED.google_user_id,
+          student_ref=EXCLUDED.student_ref,
+          cta_verified_at=CASE WHEN speaking_independent.source_binding.student_ref IS NULL AND EXCLUDED.student_ref IS NOT NULL
+            THEN NULL ELSE speaking_independent.source_binding.cta_verified_at END
         WHERE speaking_independent.source_binding.google_user_id=EXCLUDED.google_user_id
-          AND speaking_independent.source_binding.student_ref=EXCLUDED.student_ref RETURNING cta_verified_at`,
-      [input.courseId,input.courseWorkId,s.id,s.userId,s.documentId,member.student_ref,a.assignment_code]);
+          AND (speaking_independent.source_binding.student_ref IS NOT DISTINCT FROM EXCLUDED.student_ref
+            OR (speaking_independent.source_binding.student_ref IS NULL AND EXCLUDED.student_ref IS NOT NULL)) RETURNING cta_verified_at`,
+      [input.courseId,input.courseWorkId,s.id,s.userId,s.documentId,member?.student_ref||null,a.assignment_code]);
       if(!result.rows.length) error('SOURCE_CONFLICT','Nguồn Classroom có chủ bài mâu thuẫn; cần kiểm lại.');
       if(!result.rows[0].cta_verified_at) pending.push({documentId:s.documentId,classroomSubmissionId:s.id,classCode:a.class_code,assignmentCode:a.assignment_code});
     }
-    return {pending,bound:input.submissions.filter(s=>s.documentId).length-skippedExcluded,skippedExcluded};
+    return {pending,bound:input.submissions.filter(s=>s.documentId).length-skippedExcluded-unmatched,unmatched,skippedExcluded};
   }
   async function binding(documentId,db=pool) {
     const {rows}=await db.query(`SELECT b.*,a.class_id,a.class_code FROM speaking_independent.source_binding b
@@ -168,6 +173,12 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
     const b=await binding(input.documentId);
     const v=validateIndependentDocument(input.document,{documentId:input.documentId,assignmentCode:b.assignment_code});
     if(!verifySpeakingCopyCta({...input,classCode:b.class_code,assignmentCode:b.assignment_code})) error('DOC_CTA_NOT_VERIFIED','CTA chưa trỏ đúng bản Docs.');
+    if(!b.student_ref) {
+      const saved=await pool.query(`UPDATE speaking_independent.source_binding SET cta_verified_at=now()
+        WHERE document_id=$1 AND student_ref IS NULL AND status='pending' AND work_unit_id IS NULL RETURNING document_id`,[input.documentId]);
+      if(saved.rows.length!==1) error('SOURCE_CONFLICT','Nguồn Classroom vừa thay đổi; hãy kiểm lại CTA.');
+      return {documentId:input.documentId,verified:true,status:'pending',entryMode:'unmatched'};
+    }
     const c=await source.context({assignmentCode:b.assignment_code,classCode:b.class_code,studentRef:b.student_ref});
     return withTransaction(pool,async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`member:${b.class_id}:${b.student_ref}`]);

@@ -87,6 +87,7 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   // Live còn khóa hội thoại nguồn legacy; migration phải giữ cả loại nguồn lịch sử này.
   await db.exec("ALTER TABLE speaking_homework.conversation_claim DROP CONSTRAINT conversation_claim_source_kind_check, ADD CONSTRAINT conversation_claim_source_kind_check CHECK(source_kind IN ('homework','practice','legacy'))");
   await db.exec(await readFile(new URL('../ops/migrations/202610080530_speaking_independent_intake.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../ops/migrations/202611030102_speaking_unmatched_sources.sql',import.meta.url),'utf8'));
   for(const name of ['202610250930_speaking_progress_docs.sql','202610250931_speaking_independent_progress_docs.sql'])
     await db.exec(await readFile(new URL('../ops/migrations/'+name,import.meta.url),'utf8'));
   await db.exec(`CREATE TABLE speaking_independent.conversation_snapshot(link_id uuid PRIMARY KEY,original_fingerprint text,fingerprint text,messages jsonb,source text DEFAULT 'accepted',recovery_job_id uuid)`);
@@ -472,6 +473,31 @@ if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) test('PostgreSQL nhiều conne
 });
 
 // Chọn tên chỉ nhận diện bài Docs, không cấp quyền hồ sơ đã duyệt hoặc nhập Doctor cũ.
+test('Classroom chưa ghép vẫn gắn CTA, không chặn bản đã ghép và không tự nhận chủ',async()=>{
+  const f=await fixture({start:false,unapproved:true});try{
+    const document=documentFixture();
+    const docs=createIndependentDocuments({pool:f.pool,source:f.source,accessSecret:'fixture-secret-32-characters-long-only',gateway:{async get(){return document;}}});
+    const input={courseId:'826336470852',courseWorkId:'123456'};
+    await docs.register({...input,assignmentCode:code,classroomState:'PUBLISHED'});
+    const submissions=[{id:'unknown-first',userId:'unmatched-google',documentId:document.documentId},
+      {id:'known-last',userId:'fixture-user',documentId:'fixture-known-document'}];
+    const first=await docs.sync({...input,submissions});
+    assert.equal(first.pending.length,2);assert.equal(first.unmatched,1);assert.equal(first.bound,1);
+    const row=(await f.pool.query('SELECT * FROM speaking_independent.source_binding WHERE document_id=$1',[document.documentId])).rows[0];
+    assert.equal(row.student_ref,null);assert.equal(row.work_unit_id,null);
+    const plan=await docs.plan({documentId:document.documentId,document});
+    const linked=JSON.parse(JSON.stringify(document));
+    assert.equal(plan.url,'https://tranhoangduc90.github.io/izone-ai-team-pages/speaking-homework/lesson-6.html?documentId=fixture-document&class=IC2304&assignmentCode=67-speaking-ly_do_hanh_vi');
+    linked.tabs[0].documentTab.body.content[1].paragraph.elements[0].textRun.textStyle=plan.requests[0].updateTextStyle.textStyle;
+    const verified=await docs.verify({documentId:document.documentId,document:linked});
+    assert.equal(verified.verified,true);assert.equal(verified.entryMode,'unmatched');
+    const replay=await docs.sync({...input,submissions:submissions.toReversed()});
+    assert.deepEqual(replay.pending.map(x=>x.documentId),['fixture-known-document']);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.work_unit')).rows[0].n,0);
+    await assert.rejects(docs.sync({...input,submissions:[{...submissions[0],userId:'different-google'}]}),{code:'SOURCE_CONFLICT'});
+  }finally{await f.db.close();}
+});
+
 test('Docs chưa khớp hiện cả lớp, chọn tên ERP chưa duyệt và phục hồi đúng bài',async()=>{
   const f=await fixture({start:false,unapproved:true});try{
     const document=documentFixture();
