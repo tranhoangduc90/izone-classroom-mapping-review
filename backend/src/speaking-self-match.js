@@ -47,10 +47,10 @@ export function createSpeakingSelfMatch({pool, secret, eligibleRefs, eligibleDoc
     if (state.state !== 'choose') return null;
     const studentRefs = state.students.map(student => student.student_ref).filter(ref => allowed.has(ref));
     if (!studentRefs.length) return null;
-    const at = state.email.lastIndexOf('@');
-    if (at < 1 || at === state.email.length - 1) return null;
+    const account = state.email.trim();
+    if (!emailAddress.test(account)) return null;
     const expires = now() + 15 * 60_000;
-    return {studentRefs, account: `${state.email[0]}•••${state.email.slice(at)}`,
+    return {studentRefs, account,
       token: `${expires}.${sign(input, state, studentRefs, expires)}`};
   }
   async function confirm(input, workUnitId) {

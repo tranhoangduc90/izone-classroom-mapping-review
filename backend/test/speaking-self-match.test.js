@@ -99,10 +99,9 @@ test('Speaking: một xác nhận qua HTTP, ghi mapping/audit cùng nguồn, ret
   const f = await fixture(t,['fixture-once-doc']);
   const input = await f.addDocument('fixture-once-doc','google-a');
   const before = (await f.query('SELECT to_jsonb(m) AS row FROM mapping.student_mapping_review m WHERE public_id=$1',[approved])).rows[0];
-  const {body:{assignment}} = await f.post('/assignment/roster',input).expect(200);
+  const {body:{assignment}} = await f.post('/assignment/roster',input).expect(200).expect('Cache-Control','no-store');
   assert.deepEqual(assignment.selfMatch.studentRefs,[pending,second]);
-  assert.equal(assignment.selfMatch.account,'g•••@example.invalid');
-  assert.ok(!JSON.stringify(assignment).includes('google-a'));
+  assert.equal(assignment.selfMatch.account,'google-a@example.invalid');
   const confirm = selected(input,pending,assignment.selfMatch);
   await f.post('/session/start-selected',{...confirm,selfMatchStudentRefs:[pending,approved,second]}).expect(409);
   assert.equal((await f.query('SELECT * FROM speaking_independent.self_match_decision')).rows.length,0);
@@ -124,7 +123,10 @@ test('Speaking: một xác nhận qua HTTP, ghi mapping/audit cùng nguồn, ret
     JOIN speaking_independent.source_binding b ON b.document_id=d.document_id`)).rows;
   assert.deepEqual(after,[{id:first.selfMatchDecisionId,previous:'pending_review',current:'approved',google_user_id:'google-a',status:'linked',work_unit_id:first.workUnitId}]);
   assert.deepEqual((await f.query('SELECT to_jsonb(m) AS row FROM mapping.student_mapping_review m WHERE public_id=$1',[approved])).rows[0],before);
-  assert.equal((await f.post('/assignment/roster',input).expect(200)).body.assignment.selectedStudentRef,pending);
+  const linked = (await f.post('/assignment/roster',input).expect(200)).body.assignment;
+  assert.equal(linked.selectedStudentRef,pending);
+  assert.equal(linked.selfMatch,undefined);
+  assert.ok(!JSON.stringify(linked).includes('google-a@example.invalid'));
   assert.equal((await f.query('SELECT * FROM mapping.mapping_decision_event')).rows.length,1);
   assert.equal((await f.query('SELECT * FROM speaking_independent.self_match_notice')).rows.length,0);
   await f.query('SET ROLE speaking_independent_api');
@@ -259,9 +261,10 @@ test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly'
     try { await page.getByRole('heading',{name:'Xác nhận họ và tên của bạn'}).waitFor(); }
     catch (error) { await screenshot('failed-entry'); throw new Error(`${error.message}\n${await page.locator('#identity-message').textContent()}\n${errors.join('\n')}`); }
     assert.equal(await page.locator('#student-select option').count(),3);
-    assert.match(await page.locator('.self-match-account').textContent(),/g•••@example\.invalid/);
+    assert.match(await page.locator('.self-match-account').textContent(),/google-a@example\.invalid/);
     await page.locator('#student-select').selectOption(pending);
     await page.getByRole('button',{name:'Tiếp tục',exact:true}).click();
+    assert.match(await page.locator('[data-match-summary]').textContent(),/google-a@example\.invalid/);
     await page.getByRole('button',{name:'Quay lại',exact:true}).click();
     assert.equal(writes.length,0);
     assert.equal(await page.locator('#student-select').inputValue(),pending);

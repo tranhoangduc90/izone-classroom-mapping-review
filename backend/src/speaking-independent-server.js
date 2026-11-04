@@ -56,6 +56,7 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
     router[method](path,async(req,res,next)=>{try{
       const data=schema.parse(method==='get'?req.query:req.body);
       const result=await fn(data,req);
+      if(key==='assignment' && result.selfMatch) res.set('Cache-Control','no-store');
       res.status(status).json(key?{ok:true,[key]:result}:{ok:true,...result});
     }catch(e){next(e);}});
   }
