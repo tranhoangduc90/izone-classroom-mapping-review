@@ -41,6 +41,7 @@ test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa n
     const assignment=(await f.pool.query('SELECT id,public_token FROM learning.form_assignment')).rows[0],student=(await f.pool.query('SELECT student_ref FROM learning.form_assignment_roster WHERE assignment_id=$1 LIMIT 1',[assignment.id])).rows[0];
     const journeyInput={publicToken:assignment.public_token,studentRef:student.student_ref};
     const journey=await f.service.getStudentCourseJourney(journeyInput);assert.equal(journey.sessions[1].submissionWindow.canSubmit,true);assert.equal(journey.sessions[1].submissionWindowSource,undefined);
+    assert.equal(journey.sessions[1].firstBlockStatus,'open');assert.equal(journey.sessions[0].firstBlockStatus,null);
     await f.pool.query("UPDATE learning.form_assignment SET closes_at='2020-01-01T00:00:00Z' WHERE id=$1",[assignment.id]);
     const closed=await f.service.getStudentCourseJourney(journeyInput);assert.equal(closed.sessions[1].submissionWindow.canSubmit,false);assert.equal(closed.sessions[1].submissionWindow.reason,'manual_cutoff');
     assert.equal((await f.service.listTeacherOptions(reviewer)).classes[0].student_count,18);

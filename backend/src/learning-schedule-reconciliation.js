@@ -30,7 +30,10 @@ export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bi
         attendanceFrozen: !!(binding?.write_started || binding?.accepted_at) });
     }
     // Buổi đã chốt luôn giữ ngày và số cho tới khi xác nhận, kể cả nguồn lỗi/hủy.
-    return { ...session, previouslyPlannedDate: date, sessionDate: date,
+    const confirmedStart=prior?.erpSessionId&&beforeById.get(prior.erpSessionId);
+    const sessionStartTime=confirmedStart?.date===date
+      ?confirmedStart?.startsAt?.match(/^\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2})$/u)?.[1]:undefined;
+    return { ...session, previouslyPlannedDate: date, sessionDate: date, ...(sessionStartTime?{sessionStartTime}:{}),
       erpSessionId: id || null, scheduleStatus: status };
   });
   const used = new Set(confirmedDates.map(s => s.erpSessionId).filter(Boolean));

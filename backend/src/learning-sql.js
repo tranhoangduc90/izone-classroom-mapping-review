@@ -1184,6 +1184,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
       OR session_numbers.session_number = ANY(plan.test_session_numbers)
       THEN 'test' ELSE 'lesson' END AS session_kind,
     assignment.status AS assignment_status,
+    first_release.status AS first_block_status,
     CASE WHEN assignment.id IS NULL THEN NULL ELSE jsonb_build_object(
       'status',assignment.status,'opens_at',assignment.opens_at,'closes_at',assignment.closes_at,
       'extension_closes_at',assignment.extension_closes_at,'auto_submission_threshold_at',assignment.auto_submission_threshold_at,
@@ -1249,6 +1250,10 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     ORDER BY candidate.created_at DESC, candidate.id DESC
     LIMIT 1
   ) AS assignment ON true
+  LEFT JOIN learning.form_version AS assigned_version ON assigned_version.id = assignment.form_version_id
+  LEFT JOIN learning.assignment_block_release AS first_release
+    ON first_release.assignment_id = assignment.id
+    AND first_release.block_id = (assigned_version.public_definition #>> '{blocks,0,blockId}')::uuid
   LEFT JOIN LATERAL (
     SELECT CASE event.source_system WHEN 'mini_test' THEN 'Mini Test' ELSE 'Term Test' END AS title
     FROM learning.evidence_event AS event
@@ -1315,6 +1320,7 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
     'sessionKind', session_kind,
     'title', title,
     'assignmentStatus', assignment_status,
+    'firstBlockStatus', first_block_status,
     'submissionWindowSource',submission_window_source,
     'dataOrigin', data_origin,
     'attemptStatus', attempt_status,
