@@ -51,7 +51,7 @@ test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa n
   }finally{resume?.();await f.close();}
 });
 
-test('PostgreSQL learning_api: giao và nhận bài vào đúng ID Portal khi lớp chưa có kế hoạch',{timeout:60000},async()=>{
+test('PostgreSQL learning_api: lọc buổi theo ngày Việt Nam, giao và nhận bài vào đúng ID Portal',{timeout:60000},async t=>{
   const f=await postgresFixture({asApplication:true,studentCount:2});
   try{
     for(const file of ['202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql',
@@ -63,7 +63,9 @@ test('PostgreSQL learning_api: giao và nhận bài vào đúng ID Portal khi l�
         VALUES('teacher@example.test','56',true,'Native isolated fixture only');`);
     const startsAt='2026-11-04 18:30:00',endsAt='2026-10-29 21:00:00';
     const slot={erpSessionId:'71901',startsAt,endsAt,date:'2026-11-04',statusCode:1};
-    const schedule={classId:'2139',sessions:[slot]};
+    const prior={erpSessionId:'71900',startsAt:'2026-11-03 18:30:00',endsAt:'2026-11-03 21:00:00',date:'2026-11-03',statusCode:1};
+    const upcoming={erpSessionId:'71902',startsAt:'2026-11-05 18:30:00',endsAt:'2026-11-05 21:00:00',date:'2026-11-05',statusCode:0};
+    const schedule={classId:'2139',sessions:[prior,slot,upcoming]};
     const portalAssignmentReader=async()=>schedule;
     const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
     const drafts=createLearningFormDraftService({pool:f.clockPool,portalAssignmentReader});
@@ -73,16 +75,19 @@ test('PostgreSQL learning_api: giao và nhận bài vào đúng ID Portal khi l�
     const draft=await drafts.create({classId:'2139',sessionNumber:1,operationId:randomUUID(),...payload,reviewer});
     await drafts.approve({id:draft.id,expectedRevision:1,expectedHash:draft.contentHash,reviewer});
     const publication=await drafts.publishLibrary({id:draft.id,expectedRevision:1,operationId:randomUUID(),reviewer});
-    const options=await service.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer});
-    assert.deepEqual(options.sessions.map(s=>s.portalTarget),[{id:'71901',startsAt}]);
+    const readOptions=()=>service.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer});
+    t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-03T16:59:59Z')});
+    assert.deepEqual((await readOptions()).sessions.map(s=>s.sessionNumber),[1,2,3]);
+    t.mock.timers.setTime(Date.parse('2026-11-03T17:00:00Z'));
+    assert.deepEqual((await readOptions()).sessions.map(s=>[s.sessionNumber,s.date]),[[2,'2026-11-04'],[3,'2026-11-05']]);
     const assignmentInput={id:publication.id,reviewer,operationId:randomUUID()};
-    const target={classId:'2139',sessionNumber:1,portalTarget:{id:'71901',startsAt}};
+    const target={classId:'2139',sessionNumber:2,portalTarget:{id:'71901',startsAt}};
     const stale=await drafts.assignPublication({...assignmentInput,targets:[{...target,portalTarget:{...target.portalTarget,startsAt:'2026-11-04 17:00:00'}}]});
     assert.equal(stale.results[0].error,'ERP_SESSION_REVIEW_REQUIRED');
     const delivery=(await drafts.assignPublication({...assignmentInput,targets:[target]})).results[0];
     assert.equal(delivery.ok,true,JSON.stringify(delivery));
     assert.equal((await drafts.assignPublication({...assignmentInput,targets:[target]})).results[0].delivery.replayed,true);
-    assert.deepEqual((await service.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer})).sessions,[]);
+    assert.deepEqual((await readOptions()).sessions.map(s=>s.sessionNumber),[3]);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.class_journey_plan')).rows[0].n,0);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.outbox_job')).rows[0].n,0);
     const assignment=await service.getPublicAssignment(delivery.delivery.publicToken);
@@ -92,7 +97,9 @@ test('PostgreSQL learning_api: giao và nhận bài vào đúng ID Portal khi l�
     await service.submit({attemptToken:attempt.attemptToken,submissionId:randomUUID(),definitionHash:assignment.definitionHash,draftRevision:0,responses:{}});
     const binding=(await f.pool.query('SELECT target_session_id::text,schedule_fingerprint FROM learning.portal_attendance_binding')).rows[0];
     assert.equal(binding.target_session_id,'71901');
-    assert.deepEqual(JSON.parse(binding.schedule_fingerprint),['2139',[['71901',startsAt,endsAt,1]]]);
+    assert.deepEqual(JSON.parse(binding.schedule_fingerprint),['2139',
+      [[prior.erpSessionId,prior.startsAt,prior.endsAt,1],['71901',startsAt,endsAt,1],
+        [upcoming.erpSessionId,upcoming.startsAt,upcoming.endsAt,0]]]);
     assert.equal((await f.pool.query("SELECT count(*)::int n FROM learning.outbox_job WHERE job_type='sync_portal_attendance'")).rows[0].n,1);
     slot.startsAt='2026-11-04 19:00:00';
     await assert.rejects(()=>start(assignment.roster[1]),{code:'ERP_SESSION_REVIEW_REQUIRED'});

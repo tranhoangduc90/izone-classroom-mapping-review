@@ -68,6 +68,8 @@ import {
   upsertLearningTeacherHumanNoteSql
 } from './learning-sql.js';
 
+const vietnamDate = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh'});
+
 export class LearningError extends Error {
   constructor(code, message, httpStatus = 400) {
     super(message);
@@ -372,7 +374,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       AND a.status IN ('published','closed')`,[classId]);
     if(!direct.rowCount)return result;
     const starts=new Map(direct.rows.map(row=>[row.id,row.starts_at]));
-    const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh'}).format(new Date());
+    const today=vietnamDate.format(new Date());
     return {...result,sessions:result.sessions.map(session=>{
       const assignmentId=session.assignmentId||(session.assignments?.length===1?session.assignments[0].assignmentId:null);
       const start=starts.get(assignmentId);
@@ -1086,8 +1088,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         ]);
         const occupiedNumbers=new Set(booked.rows.map(row=>Number(row.session_number)));
         const occupiedIds=new Set(booked.rows.map(row=>row.portal_session_id));
+        const today=vietnamDate.format(new Date());
         const sessions=schedule?portalAssignmentTargets(schedule)
-          .filter(row=>!occupiedNumbers.has(row.erpSessionNumber)&&!occupiedIds.has(row.erpSessionId))
+          .filter(row=>row.date>=today&&!occupiedNumbers.has(row.erpSessionNumber)&&!occupiedIds.has(row.erpSessionId))
           .map(row=>({sessionNumber:row.erpSessionNumber,date:row.date,kind:'lesson',status:'available',
             portalTarget:{id:row.erpSessionId,startsAt:row.startsAt}})):[];
         return {classId:target.class_id,rosterStatus:!roster.rowCount?'empty':roster.rows.some(row=>row.membership_verified!==true)?'unverified':'verified',
