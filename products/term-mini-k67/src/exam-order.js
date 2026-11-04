@@ -42,18 +42,23 @@ export function orderState(row) {
     policy:{timed:row.attempt_mode!=='answer_sheet',autoSubmit:row.attempt_mode!=='answer_sheet'},
     result:row.combined_result||null,resultAvailable:Boolean(row.completed_at),serverNow:new Date(row.server_now||Date.now()).toISOString()};
 }
-const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
+const attemptSource = `FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
+  JOIN assessment.test_definition d ON d.slug=a.test_slug AND d.version=a.definition_version`;
+const stateColumns = `a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
   s.listening_audio_checkpoint_seconds AS session_checkpoint_seconds,s.listening_recovery_seconds AS session_recovery_seconds,
   s.audio_owner_protocol AS session_owner_protocol,
   s.listening_draft AS session_draft,s.listening_draft_revision AS session_revision,
   s.listening_draft_updated_at,
-  s.superseded_at AS session_superseded_at,s.generation AS session_generation,
+  s.superseded_at AS session_superseded_at,s.generation AS session_generation,clock_timestamp() AS server_now`;
+const select = `SELECT ${stateColumns},
   d.slug AS test_slug,d.title AS test_title,d.version AS definition_version,
-  d.listening_band_adjustment,d.listening_definition,d.reading_definition,clock_timestamp() AS server_now,
+  d.listening_band_adjustment,d.listening_definition,d.reading_definition,
   clock_timestamp()>a.reading_deadline_at AS reading_timed_out,clock_timestamp()<=a.reading_deadline_at+interval '5 minutes' AS reading_grace,
   clock_timestamp()>s.listening_deadline_at AS listening_timed_out,clock_timestamp()<=s.listening_deadline_at+interval '5 minutes' AS listening_grace
-  FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
-  JOIN assessment.test_definition d ON d.slug=a.test_slug AND d.version=a.definition_version`;
+  ${attemptSource}`;
+const selectResultBinding = `SELECT a.id,a.exam_session_id,a.test_slug,a.erp_course_class_id,a.erp_student_contact_id,
+  a.attempt_mode,a.generation,a.superseded_at,s.generation AS session_generation,s.superseded_at AS session_superseded_at
+  ${attemptSource}`;
 
 // Nhận yêu cầu Reading trước, khóa cùng học viên/lớp rồi lưu vào SQL thật.
 // Bài Listening trước đi tiếp qua tuyến hiện hành; cờ chỉ khóa việc tạo Reading trước mới.
@@ -71,11 +76,14 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     try {await client.query('BEGIN');const out=await run(client);await client.query('COMMIT');return out;}
     catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
   }
-  async function reload(db,id) {return (await db.query(`${select} WHERE a.id=$1 AND a.superseded_at IS NULL
-    AND s.superseded_at IS NULL AND s.generation=a.generation`,[id])).rows[0];}
-  async function locate(data,slug) {
+  async function reload(db,id,paperResult=false) {
+    const projection=paperResult?`SELECT ${stateColumns} ${attemptSource}`:select;
+    return (await db.query(`${projection} WHERE a.id=$1 AND a.superseded_at IS NULL
+      AND s.superseded_at IS NULL AND s.generation=a.generation${paperResult?' FOR UPDATE OF a':''}`,[id])).rows[0];
+  }
+  async function locate(data,slug,paperResult=false) {
     if(!data.attemptToken&&!data.examSessionToken)return null;
-    return (await pool.query(`${select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
+    return (await pool.query(`${paperResult?selectResultBinding:select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
       AND a.test_slug=$3 AND a.exam_mode='read_first'`,[data.attemptToken||null,data.examSessionToken||null,slug])).rows[0];
   }
   function clientCheck(data,row,paper) {
@@ -85,11 +93,12 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(paper!== (row.attempt_mode==='answer_sheet'))throw error('MODE_CONFLICT','Hãy mở đúng cách làm bài đã chọn cho lượt này.');
     if(paper&&data.generation!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại. Hãy xác nhận lại tên; bản nháp vẫn được giữ.');
   }
-  async function locked(db,row) {
+  async function locked(db,row,paperResult=false) {
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${row.test_slug}:${row.erp_course_class_id}:${row.erp_student_contact_id}`]);
     await db.query('SELECT id FROM assessment.term_test_exam_session WHERE id=$1 FOR UPDATE',[row.exam_session_id]);
-    await db.query('SELECT id FROM assessment.term_test_attempt WHERE id=$1 FOR UPDATE',[row.id]);
-    const current=await reload(db,row.id);
+    // Kết quả bài giấy lấy snapshot và khóa attempt cùng câu SQL sau khi đã khóa phiên.
+    if(!paperResult)await db.query('SELECT id FROM assessment.term_test_attempt WHERE id=$1 FOR UPDATE',[row.id]);
+    const current=await reload(db,row.id,paperResult);
     if(!current)throw error('STALE_ATTEMPT','Lượt bài đã được thay thế. Hãy xác nhận lại tên.');
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
@@ -234,9 +243,10 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   }));
   async function handle(req,res,next,action,paper=false) {
     const slug=paper?'mini-test-lesson-5':req.params.testSlug;
+    const paperResult=paper&&action==='result';
     // Nhận diện token trước validation: payload sai của Reading trước không được rơi vào tuyến cũ.
     const attempt=z.uuid().safeParse(req.body?.attemptToken),session=z.uuid().safeParse(req.body?.examSessionToken);
-    const row=await locate({attemptToken:attempt.success?attempt.data:undefined,examSessionToken:session.success?session.data:undefined},slug);
+    const row=await locate({attemptToken:attempt.success?attempt.data:undefined,examSessionToken:session.success?session.data:undefined},slug,paperResult);
     if(!row) {
       if(req.body?.examMode==='read_first') {
         if(!await admit(req,res,writeLimiter))return;
@@ -252,9 +262,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     clientCheck(data,row,paper);
     let startedOwner=null;
     const out=await tx(async db=>{
-      const r=await locked(db,row);clientCheck(data,r,paper);
-      const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
+      const r=await locked(db,row,paperResult);clientCheck(data,r,paper);
       if(action==='result')return r;
+      const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action.endsWith('start')) {
         if(action==='listening/start'&&r.exam_delivery==='cbt'){
           const deferred=data.ownerStartVersion===2;

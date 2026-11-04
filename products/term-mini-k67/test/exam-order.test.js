@@ -86,6 +86,46 @@ test('Constraint không cho điểm 0 giả hoặc hoàn tất khi thiếu kỹ 
   await assert.rejects(fixture.db.query('UPDATE assessment.term_test_attempt SET completed_at=now(),combined_result=\'{}\' WHERE id=$1',[state.attemptToken]),/check constraint/);
   await assert.rejects(fixture.db.query('UPDATE assessment.term_test_attempt SET listening_result=\'{}\' WHERE id=$1',[state.attemptToken]),/check constraint/);
 });
+test('Mini giấy Reading trước: đọc kết quả đúng lượt trong tối đa 6 câu SQL và không tải lại nội dung đề',async()=>{
+  await clean();
+  const {base,state}=await open('mini-test-lesson-5','answer_sheet');
+  const token={attemptToken:state.attemptToken,examSessionToken:state.examSessionToken,generation:state.generation};
+  const pending=await post(`${base}/result`,token);
+  assert.equal(pending.status,200);
+  assert.equal(pending.body.result,null);
+  await post(`${base}/reading/start`,token).expect(200);
+  await post(`${base}/reading`,{...token,answers:{14:'A'}}).expect(200);
+  const submitted=await post(`${base}/listening`,{...token,answers:{11:'A'},clientSubmissionId:randomUUID()}).expect(200);
+  const {query,connect}=fixture.pool;
+  const queries=[];
+  function track(execute){
+    return async (...args)=>{
+      const result=await execute(...args);
+      queries.push(result.rows[0]);
+      return result;
+    };
+  }
+  fixture.pool.query=track(query.bind(fixture.pool));
+  fixture.pool.connect=async (...args)=>{
+    // pg.Pool.query tự mượn connection qua callback và đã được đếm ở lớp query.
+    if(typeof args.at(-1)==='function')return connect.apply(fixture.pool,args);
+    const client=await connect.apply(fixture.pool,args);
+    const execute=client.query;
+    client.query=track(execute.bind(client));
+    return {query:client.query,release(){client.query=execute;client.release();}};
+  };
+  let result;
+  try{result=await post(`${base}/result`,token).expect(200);}
+  finally{Object.assign(fixture.pool,{query,connect});}
+  const {serverNow:_,...received}=result.body;
+  const {serverNow:__,timedOut,...expected}=submitted.body;
+  assert.deepEqual(received,expected);
+  assert.equal(synced.length,0);
+  assert.ok(queries.length<=6,`Đọc kết quả dùng ${queries.length} câu SQL`);
+  assert.ok(queries.every(row=>!row||(!('listening_definition' in row)&&!('reading_definition' in row))));
+  await post(`${base}/result`,{...token,examSessionToken:randomUUID()}).expect(409);
+  await post(`${base}/result`,{...token,generation:token.generation+1}).expect(409);
+});
 test('Hết giờ Reading dùng nháp ACK, giữ thời hạn qua reload và không khởi động Listening',async()=>{
   await clean();const {base,state}=await open('term-test-2');const token={attemptToken:state.attemptToken};
   await post(`${base}/reading/start`,token);await post(`${base}/reading/draft`,{...token,revision:3,answers:{14:'A'}});
