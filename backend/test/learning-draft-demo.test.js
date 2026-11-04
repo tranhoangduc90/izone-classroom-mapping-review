@@ -85,12 +85,12 @@ test('D06/P04: nháp xem thử/nộp/reset ở DB riêng; grant hết hạn/đ�
       (SELECT count(*)::integer FROM learning.submission) AS submissions,(SELECT count(*)::integer FROM learning.outbox_job) AS jobs,
       (SELECT count(*)::integer FROM learning.form_draft) AS drafts;`)).rows[0];
     assert.deepEqual(counts,{assignments:0,submissions:0,jobs:0,drafts:1});
-    // Grant giữ cờ admin cũ: phía nguồn phải đọc lại quyền vừa thu hồi, dù account còn active.
+    // Grant cũ và quyền admin của Mapping không cấp quyền xem ngoài lớp trong Progress Log.
     const current=await drafts.get({id:draft.id,reviewer});
     await sourceDb.exec("DELETE FROM mapping.reviewer_class_access; UPDATE mapping.reviewer_account SET role='admin';");
     const adminGrant=createLearningDraftDemoGrant({draft:current,reviewer:{...reviewer,canAccessAllClasses:true},secret});
-    await request(sourceApp).post('/api/learning/assignments/demo-source').set('x-learning-demo-source',secret).send({grant:adminGrant}).expect(200);
-    await sourceDb.exec("UPDATE mapping.reviewer_account SET role='teacher';");
+    await request(sourceApp).post('/api/learning/assignments/demo-source').set('x-learning-demo-source',secret).send({grant:adminGrant}).expect(403);
+    await sourceDb.exec("UPDATE mapping.reviewer_account SET role='teacher', can_access_all_classes=true;");
     await request(sourceApp).post('/api/learning/assignments/demo-source').set('x-learning-demo-source',secret).send({grant:adminGrant}).expect(403);
     await sourceDb.exec("INSERT INTO learning.progress_log_admin(reviewer_email,grant_reference) VALUES('owner@example.test','Test fixture only');");
     await request(sourceApp).post('/api/learning/assignments/demo-source').set('x-learning-demo-source',secret).send({grant:adminGrant}).expect(200);
