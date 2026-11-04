@@ -27,7 +27,9 @@ export function validateIndependentDocument(document,{documentId,assignmentCode}
 
 // Đọc Docs thực qua cầu nối có quyền. File chưa nằm trong Classroom vẫn có hồ sơ riêng.
 // Tên tự chọn thuộc riêng bài Docs; chỉ nguồn Classroom đối soát mới nối hồ sơ cá nhân.
-export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
+export function createIndependentDocuments({pool,source,accessSecret,gateway,selfMatch,
+  directDocEntryIds=(process.env.SPEAKING_DIRECT_DOC_ENTRY_IDS||'').split(',')}) {
+  const directDocs = new Set(directDocEntryIds.map(id=>id.trim()).filter(Boolean));
   const mint=u=>createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function ensure({documentId,assignmentCode}) {
     const {template}=await source.context({assignmentCode});
@@ -61,23 +63,56 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway}) {
       prepared.u=(await pool.query(`SELECT u.*,p.identity_ref,p.student_name,p.class_id,p.class_code,p.student_ref,p.course_id
         FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[prepared.u.id])).rows[0];
     }
-    return prepared;
+    return {...prepared,document};
   }
   async function open(input) {
+    const match = await selfMatch?.entry(input);
     const {u,template}=await ensure(input);
-    if(!u.course_id && (u.class_code||(input.classCode && input.classCode!=='DOCS'))) {
+    const selectedClass = u.class_code || match?.classCode || input.classCode;
+    if(!u.course_id && selectedClass && selectedClass !== 'DOCS') {
       if(u.class_code && input.classCode && u.class_code!==input.classCode)
         error('CLASS_MISMATCH','Lớp đã chọn chưa khớp bản Docs này.');
-      const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code||input.classCode});
+      const c=await source.context({assignmentCode:input.assignmentCode,classCode:selectedClass});
+      const form = match && (!c.template.assignmentStatus || c.template.assignmentStatus === 'open')
+        ? selfMatch.form(input, match) : null;
       return {...c.template,classCode:c.scope.class_code,intakeMode:'unmatched',assignmentStatus:c.template.assignmentStatus||'open',
+        ...(form ? {selfMatch:form} : {}),
         students:c.selectionStudents,selectedStudentRef:u.student_ref||''};
     }
     if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
-    return {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
+    const result = {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
+      ...(u.course_id ? {selectedStudentRef:u.student_ref} : {}),
       students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}]};
+    if (!u.course_id || !u.student_ref || u.revoked_at || !directDocs.has(input.documentId) || match?.state!=='already_linked') return result;
+    const b=await binding(input.documentId);
+    if (b.status!=='linked' || !b.cta_verified_at || b.work_unit_id!==u.id || b.student_ref!==u.student_ref
+        || b.class_code!==u.class_code || b.course_id!==u.course_id || b.assignment_code!==input.assignmentCode) return result;
+    const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code,studentRef:u.student_ref});
+    if(c.member?.student_ref===u.student_ref && c.member.google_user_id===b.google_user_id
+       && c.scope?.course_id===b.course_id && (!c.template.assignmentStatus || c.template.assignmentStatus==='open'))
+      result.directDocEntry=true;
+    return result;
   }
   async function start(input) {
-    let {u}=await ensure(input);
+    if (input.selfMatchToken && !selfMatch) error('SELF_MATCH_DISABLED','Tính năng xác nhận chưa được bật. Hãy tải lại màn chọn tên.');
+    if (selfMatch) await selfMatch.entry(input);
+    let {u,document}=await ensure(input);
+    if (input.selfMatchToken) {
+      const c = await source.context({assignmentCode:input.assignmentCode,classCode:input.classCode});
+      if (c.template.assignmentStatus && c.template.assignmentStatus !== 'open')
+        error('SELF_MATCH_UNAVAILABLE','Bài này hiện chưa mở xác nhận.');
+      const decisionId = await selfMatch.confirm(input, u.id);
+      const linked = await verify({documentId:input.documentId,document});
+      u=(await pool.query(`SELECT u.*,p.identity_ref,p.student_ref,p.class_code,p.course_id
+        FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id
+        WHERE u.id=$1`,[u.id])).rows[0];
+      if (linked.status !== 'linked' || u?.student_ref !== input.studentRef || u.class_code !== input.classCode || !u.course_id) {
+        await selfMatch.record(input, 'MAPPING_CONFLICT', input.classCode, input.studentRef);
+        error('SELF_MATCH_BINDING_PENDING','Thông tin đã được lưu nhưng chưa nối được đúng bài. Hãy tải lại hoặc nhờ giảng viên kiểm tra.');
+      }
+      return {accessToken:mint(u),studentRef:input.studentRef,classCode:u.class_code,
+        documentId:u.document_id,workUnitId:u.id,selfMatchDecisionId:decisionId};
+    }
     if(!u.course_id && (u.class_code||(input.classCode && input.classCode!=='DOCS'))) {
       if(u.class_code && input.classCode && u.class_code!==input.classCode) error('CLASS_MISMATCH','Lớp đã chọn chưa khớp bản Docs này.');
       const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code||input.classCode});

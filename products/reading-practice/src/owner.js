@@ -39,6 +39,7 @@ export function createOwnerResolver({url,key,fetcher=fetch,clock=Date.now}){
  return async({courseId,googleUserId})=>{
   let response;
   try{response=await fetcher(`${url.replace(/\/$/,'')}/v1/owner-by-classroom?courseId=${encodeURIComponent(courseId)}&googleUserId=${encodeURIComponent(googleUserId)}`,{headers:{'x-reading-owner-key':key},signal:AbortSignal.timeout(5000)});}catch{fail('OWNER_SOURCE_UNAVAILABLE','Chưa đối chiếu được chủ bài.',503);}
+  if(response.status===403)fail('OWNER_NOT_MAPPED','Không có đúng một mapping đã duyệt cho học viên/lớp.',503);
   if(!response.ok)fail('OWNER_SOURCE_UNAVAILABLE','Không có đúng một mapping đã duyệt cho học viên/lớp.',503);
   const parsed=schema.safeParse(await response.json());if(!parsed.success)fail('OWNER_SOURCE_INVALID','Nguồn mapping trả sai cấu trúc.',503);
   const {capturedAt,sourceRevision,...payload}=parsed.data,age=clock()-Date.parse(capturedAt);

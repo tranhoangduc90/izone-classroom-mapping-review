@@ -65,6 +65,10 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
     return matches.length===1 ? {status:'unique',classCode:matches[0]} : {status:matches.length?'ambiguous':'missing'};
   }
   async function startSelected(input) {
+    if (input.selfMatchToken) {
+      if (!input.documentId || !documents) fail('SELF_MATCH_UNAVAILABLE','Hãy mở đúng link Homework để xác nhận.');
+      return documents.start(input);
+    }
     // Một bài web đã mở phải tiếp tục là bài đó, kể cả Docs cũ đến sau.
     // Truy vấn chỉ đọc; chưa có bài web mới hỏi cầu nối lịch sử.
     let hasWeb=false;

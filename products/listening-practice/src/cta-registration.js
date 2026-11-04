@@ -27,7 +27,7 @@ export function findListeningCta(document,code=CODE){
 
 // Nhận một sự kiện Classroom đã chuẩn hóa; đối chiếu chủ Docs trước đăng ký, giữ link ổn định khi chạy lại.
 // Hàng Docs hiện có chịu trách nhiệm ghi/đọc lại; timeout trả lỗi để thử lại an toàn, không báo đã gắn khi mới xếp hàng.
-export function createCtaRegistrar({pool,service,context,docs,resolveOwner,entryKey,contentVersion,code=CODE,waitMs=12000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}){
+export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publishPending,verifyClassroomCopy,pageBase,entryKey,contentVersion,code=CODE,waitMs=12000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}){
  return async event=>{
   const document=await docs.read(event.doc_id);
   if(document.documentId!==event.doc_id)fail('DOC_IDENTITY_MISMATCH','Nguồn Docs trả sai tài liệu.');
@@ -37,7 +37,24 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,entry
   const selectedCode=authoredCodes[0]||code,shared=Boolean(authoredLesson(selectedCode));
   const target=findListeningCta(document,selectedCode);
   if(!target)return{documentId:event.doc_id,status:'not_applicable',code};
-  const owner=await resolveOwner({courseId:event.classroom_course_id,googleUserId:event.student_id});
+  const checkOpen=async()=>{
+   const catalog=await service.lessonCatalog({code:selectedCode});
+   if(!shared||!catalog.classes.some(c=>c.classCode===event.class_name))fail('CTA_CLASS_MISMATCH','Lớp chưa mở bài Listening.',403);
+  };
+  if(event.check_only){
+   await checkOpen();
+   await verifyClassroomCopy(event);
+   return {documentId:event.doc_id,status:'eligible',code:selectedCode};
+  }
+  let owner;
+  try { owner=await resolveOwner({courseId:event.classroom_course_id,googleUserId:event.student_id}); }
+  catch(error){
+   if(!shared||!publishPending||error.code!=='OWNER_NOT_MAPPED')throw error;
+   await checkOpen();
+   const fallback=new URL(pageBase);
+   fallback.search=new URLSearchParams({lesson:selectedCode,mode:'student',class:event.class_name}).toString();
+   return publishPending({event,document,binding:{document_id:event.doc_id,tab_id:target.tabId,code:selectedCode},fallbackUrl:fallback.href});
+  }
   const snapshot=await context.snapshot();
   const found=snapshot.classes.filter(c=>c.erp_course_class_id===owner.classId&&c.erp_class_name_snapshot===event.class_name);
   if(found.length!==1)fail('CTA_CLASS_MISMATCH','Lớp sự kiện không khớp mapping đã duyệt.',403);
@@ -53,7 +70,8 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,entry
     if(state?.status==='blocked')fail('CTA_WRITE_BLOCKED','Chưa gắn được CTA: '+state.error_code,409);
     if(state?.status==='verified'){
      if(!planDocWrite(await docs.read(event.doc_id),binding,job).verified)fail('DOC_READBACK_FAILED','CTA đọc lại chưa khớp link chung.',503);
-     return{documentId:event.doc_id,status:'verified',code:selectedCode,entryMode:'shared',bindingId:registered.bindingId,assignmentId:registered.assignmentId};
+     return{documentId:event.doc_id,status:'verified',code:selectedCode,entryMode:'shared',bindingId:registered.bindingId,
+      assignmentId:registered.assignmentId,studentRef:owner.studentRef,entryUrl:registered.entryUrl};
     }
     if(Date.now()>=deadline)break;
     await sleep(250);
