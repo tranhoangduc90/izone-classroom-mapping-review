@@ -34,7 +34,7 @@ function documentFixture(documentId) {
   ]}}}]};
 }
 
-async function fixture(t, eligibleDocuments) {
+async function fixture(t, eligibleDocuments, directDocEntryIds=[]) {
   const db = new PGlite();
   t.after(() => db.close());
   const schema = await readFile(new URL('../../docs/schema.sql', import.meta.url), 'utf8');
@@ -70,7 +70,7 @@ async function fixture(t, eligibleDocuments) {
   const docsData = new Map();
   const source = createIndependentSource({pool});
   const selfMatch = createSpeakingSelfMatch({pool,secret,eligibleRefs:[pending,approved,second],eligibleDocuments});
-  const documents = createIndependentDocuments({pool,source,accessSecret:secret,selfMatch,gateway:{async get(id){
+  const documents = createIndependentDocuments({pool,source,accessSecret:secret,selfMatch,directDocEntryIds,gateway:{async get(id){
     assert.ok(docsData.has(id), 'A fixture must not fetch an external document'); return docsData.get(id);
   }}});
   const service = createIndependentSpeaking({pool,accessSecret:secret,source,documents,progressDocsEnabled:false});
@@ -214,7 +214,7 @@ test('Speaking: đăng ký đổi sau khi hiện tên tạo ca sai lớp và gi�
 
 test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly',
   {skip:!process.env.SPEAKING_SELF_MATCH_PAGES||!process.env.PLAYWRIGHT_MODULE,timeout:90000}, async t => {
-    const f=await fixture(t,['fixture-browser-confirm','fixture-browser-fallback','fixture-browser-conflict']);
+    const f=await fixture(t,['fixture-browser-confirm','fixture-browser-fallback','fixture-browser-conflict'],['fixture-browser-confirm']);
     const success=await f.addDocument('fixture-browser-confirm','google-a');
     const fallback=await f.addDocument('fixture-browser-fallback','google-c');
     const browserConflict=await f.addDocument('fixture-browser-conflict','google-invalid',{roster:false});
@@ -239,7 +239,7 @@ test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly'
     const errors=[];
     const writes=[];
     page.on('pageerror',e=>errors.push(e.message));
-    await context.route('**/*', async route=>{
+    const handleRoute=async route=>{
       const requestUrl=new URL(route.request().url());
       if(requestUrl.origin===origin)return route.continue();
       if(requestUrl.origin!=='https://ducizone.ddns.net')return route.abort();
@@ -250,7 +250,8 @@ test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly'
       const response=await fetch(origin+requestUrl.pathname+requestUrl.search,{method:route.request().method(),
         ...(data?{body:data,headers:{'content-type':'application/json'}}:{})});
       return route.fulfill({status:response.status,body:await response.text(),contentType:'application/json',headers:{'access-control-allow-origin':origin}});
-    });
+    };
+    await context.route('**/*',handleRoute);
     const url = input => `${origin}/speaking-homework/lesson-6.html?${new URLSearchParams({...input,class:classCode,mode:'student'})}`;
     const evidence=process.env.SPEAKING_EVIDENCE_DIR;
     const screenshot=async name=>{if(evidence){await mkdir(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,name+'.png'),fullPage:true});}};
@@ -276,6 +277,26 @@ test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly'
     assert.equal(writes.length,2);
     assert.equal(writes[1].selfMatchToken,undefined);
     await screenshot('02-nho-dung-hoc-vien');
+    const clean=await browser.newContext({viewport:{width:390,height:844}});
+    await clean.route('**/*',handleRoute);
+    const direct=await clean.newPage();
+    direct.on('pageerror',e=>errors.push(e.message));
+    await direct.goto(url(success));
+    await direct.locator('#homework-content').waitFor({state:'visible',timeout:9000});
+    assert.equal(writes.length,3);
+    assert.equal(writes[2].studentRef,pending);
+    assert.equal(writes[2].documentId,success.documentId);
+    assert.equal(await direct.evaluate(()=>localStorage.getItem('izone:student-identity:v1')),null);
+    if(evidence)await direct.screenshot({path:path.join(evidence,'05-vao-thang-doc-da-duyet.png'),fullPage:true});
+    await direct.evaluate(()=>localStorage.setItem('izone:student-identity:v1',JSON.stringify({version:1,
+      identity:{authority:'erp-contact',id:'22'},revision:'direct_guard_other',updatedAt:new Date().toISOString()})));
+    const mismatch=await clean.newPage();
+    mismatch.on('pageerror',e=>errors.push(e.message));
+    await mismatch.goto(url(success));
+    await mismatch.getByText('Người học đã nhớ khác chủ link',{exact:false}).waitFor({timeout:9000});
+    assert.equal(await mismatch.locator('#homework-content').isHidden(),true);
+    assert.equal(writes.length,3);
+    await clean.close();
     await page.goto(url(fallback));
     await page.getByRole('button',{name:'Không thấy tên của tôi',exact:true}).click();
     assert.equal(await page.locator('#student-select option').count(),4);

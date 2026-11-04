@@ -27,7 +27,9 @@ export function validateIndependentDocument(document,{documentId,assignmentCode}
 
 // Đọc Docs thực qua cầu nối có quyền. File chưa nằm trong Classroom vẫn có hồ sơ riêng.
 // Tên tự chọn thuộc riêng bài Docs; chỉ nguồn Classroom đối soát mới nối hồ sơ cá nhân.
-export function createIndependentDocuments({pool,source,accessSecret,gateway,selfMatch}) {
+export function createIndependentDocuments({pool,source,accessSecret,gateway,selfMatch,
+  directDocEntryIds=(process.env.SPEAKING_DIRECT_DOC_ENTRY_IDS||'').split(',')}) {
+  const directDocs = new Set(directDocEntryIds.map(id=>id.trim()).filter(Boolean));
   const mint=u=>createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
   async function ensure({documentId,assignmentCode}) {
     const {template}=await source.context({assignmentCode});
@@ -78,9 +80,18 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway,sel
         students:c.selectionStudents,selectedStudentRef:u.student_ref||''};
     }
     if(u.course_id && input.classCode && input.classCode!==u.class_code) error('CLASS_MISMATCH','Lớp chưa khớp chủ bài đã xác nhận.');
-    return {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
+    const result = {...template,classCode:u.class_code||'DOCS',intakeMode:u.course_id?'linked':'document',assignmentStatus:'open',
       ...(u.course_id ? {selectedStudentRef:u.student_ref} : {}),
       students:[{student_ref:u.student_ref||u.identity_ref,name:u.student_name}]};
+    if (!u.course_id || !u.student_ref || u.revoked_at || !directDocs.has(input.documentId) || match?.state!=='already_linked') return result;
+    const b=await binding(input.documentId);
+    if (b.status!=='linked' || !b.cta_verified_at || b.work_unit_id!==u.id || b.student_ref!==u.student_ref
+        || b.class_code!==u.class_code || b.course_id!==u.course_id || b.assignment_code!==input.assignmentCode) return result;
+    const c=await source.context({assignmentCode:input.assignmentCode,classCode:u.class_code,studentRef:u.student_ref});
+    if(c.member?.student_ref===u.student_ref && c.member.google_user_id===b.google_user_id
+       && c.scope?.course_id===b.course_id && (!c.template.assignmentStatus || c.template.assignmentStatus==='open'))
+      result.directDocEntry=true;
+    return result;
   }
   async function start(input) {
     if (input.selfMatchToken && !selfMatch) error('SELF_MATCH_DISABLED','Tính năng xác nhận chưa được bật. Hãy tải lại màn chọn tên.');
