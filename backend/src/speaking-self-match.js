@@ -13,12 +13,22 @@ const signature = (secret, value) => createHmac('sha256', secret).update(value).
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('base64url');
 
 // Token chỉ công bố hạn và chữ ký. Server tra lại toàn bộ nguồn trước khi nhận lựa chọn.
-export function createSpeakingSelfMatch({pool, secret, eligibleRefs, eligibleDocuments, now = Date.now}) {
+export function createSpeakingSelfMatch({pool, secret, eligibleRefs, eligibleDocuments, registeredDocsEnabled = false, now = Date.now}) {
   const allowed = new Set(eligibleRefs.map(ref => ref.toLowerCase()));
   const scoped = new Set(eligibleDocuments);
-  if (!allowed.size || !scoped.size || secret.length < 32) throw new Error('SELF_MATCH_CONFIG_INVALID');
-  async function inspect({documentId, assignmentCode, classCode}) {
-    if (!scoped.has(documentId)) return {state: 'not_registered'};
+  if ((!registeredDocsEnabled && (!allowed.size || !scoped.size)) || secret.length < 32)
+    throw new Error('SELF_MATCH_CONFIG_INVALID');
+  async function inspect({documentId, assignmentCode, classCode, selfMatchToken}) {
+    if (!scoped.has(documentId)) {
+      if (!registeredDocsEnabled) return {state: 'not_registered'};
+      // CTA của bài Classroom đã phát hành mới được xét. Link chung và Docs ngoài registry giữ đường vào cũ.
+      const {rows} = await pool.query(`SELECT 1 FROM speaking_independent.source_binding b
+        JOIN speaking_independent.source_assignment a USING (course_id,course_work_id)
+        WHERE b.document_id=$1 AND b.assignment_code=$2 AND a.assignment_code=$2 AND a.state='PUBLISHED'
+          AND b.cta_verified_at IS NOT NULL AND (b.status<>'linked' OR $3::boolean) LIMIT 1`,
+      [documentId, assignmentCode, Boolean(selfMatchToken)]);
+      if (!rows.length) return {state: 'not_registered'};
+    }
     const {rows: [{state}]} = await pool.query(
       'SELECT speaking_independent.self_match($1,$2,$3) AS state', [documentId, assignmentCode, classCode || null]);
     return state;
@@ -45,8 +55,9 @@ export function createSpeakingSelfMatch({pool, secret, eligibleRefs, eligibleDoc
   }
   function form(input, state) {
     if (state.state !== 'choose') return null;
-    const studentRefs = state.students.map(student => student.student_ref).filter(ref => allowed.has(ref));
-    if (!studentRefs.length) return null;
+    const studentRefs = state.students.map(student => student.student_ref)
+      .filter(ref => registeredDocsEnabled || allowed.has(ref));
+    if (!studentRefs.length || studentRefs.length > 100) return null;
     const account = state.email.trim();
     if (!emailAddress.test(account)) return null;
     const expires = now() + 15 * 60_000;
@@ -54,7 +65,8 @@ export function createSpeakingSelfMatch({pool, secret, eligibleRefs, eligibleDoc
       token: `${expires}.${sign(input, state, studentRefs, expires)}`};
   }
   async function confirm(input, workUnitId) {
-    if (!allowed.has(input.studentRef)) fail('SELF_MATCH_INVALID', 'Hồ sơ chưa được mở xác nhận. Hãy tải lại danh sách.');
+    if (!registeredDocsEnabled && !allowed.has(input.studentRef))
+      fail('SELF_MATCH_INVALID', 'Hồ sơ chưa được mở xác nhận. Hãy tải lại danh sách.');
     const [expiry, received] = input.selfMatchToken.split('.');
     const expires = Number(expiry);
     if (!received || expires < now() || expires > now() + 15 * 60_000)

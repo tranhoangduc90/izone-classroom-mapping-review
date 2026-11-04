@@ -34,7 +34,7 @@ function documentFixture(documentId) {
   ]}}}]};
 }
 
-async function fixture(t, eligibleDocuments, directDocEntryIds=[]) {
+async function fixture(t, eligibleDocuments, directDocEntryIds=[], registeredDocsEnabled=false) {
   const db = new PGlite();
   t.after(() => db.close());
   const schema = await readFile(new URL('../../docs/schema.sql', import.meta.url), 'utf8');
@@ -69,7 +69,8 @@ async function fixture(t, eligibleDocuments, directDocEntryIds=[]) {
   await query(`INSERT INTO mapping.student_identity_mapping(erp_student_contact_id,google_user_id,match_method) VALUES(22,'google-b','manual')`);
   const docsData = new Map();
   const source = createIndependentSource({pool});
-  const selfMatch = createSpeakingSelfMatch({pool,secret,eligibleRefs:[pending,approved,second],eligibleDocuments});
+  const selfMatch = createSpeakingSelfMatch({pool,secret,
+    eligibleRefs:registeredDocsEnabled?[]:[pending,approved,second],eligibleDocuments,registeredDocsEnabled});
   const documents = createIndependentDocuments({pool,source,accessSecret:secret,selfMatch,directDocEntryIds,gateway:{async get(id){
     assert.ok(docsData.has(id), 'A fixture must not fetch an external document'); return docsData.get(id);
   }}});
@@ -212,6 +213,31 @@ test('Speaking: đăng ký đổi sau khi hiện tên tạo ca sai lớp và gi�
   assert.deepEqual((await f.query('SELECT reason,student_ref FROM speaking_independent.self_match_notice')).rows,
     [{reason:'CLASS_MISMATCH',student_ref:pending}]);
   assert.equal((await f.query('SELECT status FROM mapping.student_mapping_review WHERE public_id=$1',[pending])).rows[0].status,'pending_review');
+});
+
+test('Speaking: nguồn Classroom mới được xác nhận không cần danh sách DocID hoặc UUID cấu hình', async t => {
+  const f = await fixture(t,[],[],true);
+  const outside = await f.addDocument('fixture-no-verified-cta','google-outside',{verified:false});
+  const before = (await f.post('/assignment/open',outside).expect(200)).body.assignment;
+  assert.equal(before.selfMatch,undefined);
+  assert.ok(!JSON.stringify(before).includes('google-outside@example.invalid'));
+  const input = await f.addDocument('fixture-registered-after-rollout','google-new');
+  const {body:{assignment}} = await f.post('/assignment/open',input).expect(200).expect('Cache-Control','no-store');
+  assert.equal(assignment.selfMatch.account,'google-new@example.invalid');
+  assert.deepEqual(assignment.selfMatch.studentRefs,[pending,second]);
+  const selection = selected(input,second,assignment.selfMatch);
+  const invalid = await f.post('/session/start-selected',{...selection,studentRef:approved}).expect(409);
+  assert.equal(invalid.body.error,'SELF_MATCH_INVALID');
+  const confirmed = (await f.post('/session/start-selected',selection).expect(200)).body.session;
+  assert.ok(confirmed.selfMatchDecisionId);
+  const replay = (await f.post('/session/start-selected',selection).expect(200)).body.session;
+  assert.deepEqual(replay,confirmed);
+  const readback = (await f.post('/assignment/open',input).expect(200)).body.assignment;
+  assert.equal(readback.selectedStudentRef,second);
+  assert.equal(readback.selfMatch,undefined);
+  assert.equal(readback.directDocEntry,undefined);
+  assert.equal((await f.query('SELECT count(*)::int n FROM speaking_independent.self_match_decision')).rows[0].n,1);
+  assert.equal((await f.query('SELECT count(*)::int n FROM speaking_independent.self_match_notice')).rows[0].n,0);
 });
 
 test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly',

@@ -173,8 +173,9 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway});
   const csv=value=>(value||'').split(',').map(item=>item.trim()).filter(Boolean);
   const selfMatch=env.SPEAKING_SELF_MATCH_ENABLED==='true'?createSpeakingSelfMatch({pool,secret:env.INDEPENDENT_ACCESS_SECRET,
-    eligibleRefs:z.array(z.string().uuid()).min(1).max(100).parse(csv(env.SPEAKING_SELF_MATCH_STUDENT_REFS)),
-    eligibleDocuments:z.array(z.string().regex(/^[A-Za-z0-9_-]{5,120}$/)).min(1).max(100).parse(csv(env.SPEAKING_SELF_MATCH_DOCUMENT_IDS))}):null;
+    registeredDocsEnabled:env.SPEAKING_SELF_MATCH_REGISTERED_DOCS_ENABLED==='true',
+    eligibleRefs:z.array(z.string().uuid()).max(100).parse(csv(env.SPEAKING_SELF_MATCH_STUDENT_REFS)),
+    eligibleDocuments:z.array(z.string().regex(/^[A-Za-z0-9_-]{5,120}$/)).max(100).parse(csv(env.SPEAKING_SELF_MATCH_DOCUMENT_IDS))}):null;
   const selfMatchMailer=startSpeakingSelfMatchMailer({pool,send:env.SPEAKING_SELF_MATCH_MAIL_ENABLED==='true'?speakingSelfMatchMailFromEnv(env):null});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway,selfMatch}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
