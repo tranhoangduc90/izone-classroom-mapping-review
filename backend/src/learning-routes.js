@@ -226,7 +226,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   const router = express.Router();
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
-    if(logger?.info&&/^\/teacher\/(erp-schedule|journey-plan|form-drafts|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
+    if(logger?.info&&/^\/teacher\/(erp-schedule|assignment-sessions|journey-plan|form-drafts|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
       const started=performance.now(),correlation=randomUUID();
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
@@ -525,6 +525,15 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, plan });
+  }));
+
+  router.get('/teacher/assignment-sessions', authenticate, asyncRoute(async (req, res) => {
+    const input = parseOrReply(z.object({ classId: z.string().regex(/^\d{1,18}$/u) }).strict(),
+      req.query, res, 'INVALID_ASSIGNMENT_SESSIONS_QUERY');
+    if (!input) return;
+    const availability = await service.getTeacherAssignmentSessions({ classId: input.classId, reviewer: req.reviewer });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, availability });
   }));
 
   router.get('/teacher/erp-schedule', authenticate, asyncRoute(async (req, res) => {

@@ -51,18 +51,22 @@ export function createScheduleMonitor(reader, { classIds = [], intervalMs = 3000
   if (!reader) return null;
   const cache = new Map(), pending = new Map();
   const watched = [...new Set(classIds.map(String).filter(id => /^[1-9]\d*$/.test(id)))].slice(0, 10);
-  async function read(id, { fresh = false } = {}) {
+  async function read(id, { fresh = false, allowEmpty = false } = {}) {
     id = String(id);
+    const checked = value => {
+      if (!allowEmpty && !value.sessions.length) throw Error('ERP_SCHEDULE_INCOMPLETE');
+      return value;
+    };
     const saved = cache.get(id);
     if (!fresh && saved && now() - saved.at < cacheMs) {
       if (saved.error) throw saved.error;
-      return saved.value;
+      return checked(saved.value);
     }
-    if (pending.has(id)) return pending.get(id);
+    if (pending.has(id)) return checked(await pending.get(id));
     const request = (async () => {
       try {
         const data = await Promise.resolve().then(()=>reader(id));
-        if ((data.classId !== undefined && String(data.classId) !== id) || !Array.isArray(data.sessions) || !data.sessions.length)
+        if ((data.classId !== undefined && String(data.classId) !== id) || !Array.isArray(data.sessions))
           throw new Error('ERP_SCHEDULE_INCOMPLETE');
         const value = { ...data, scheduleCheckedAt: new Date(now()).toISOString() };
         cache.set(id, { value, at: now() });
@@ -71,7 +75,7 @@ export function createScheduleMonitor(reader, { classIds = [], intervalMs = 3000
       finally { pending.delete(id); }
     })();
     pending.set(id, request);
-    return request;
+    return checked(await request);
   }
   const poll = async () => {
     // Tuần tự để một lần kiểm nền không dồn request ERP.
@@ -83,6 +87,6 @@ export function createScheduleMonitor(reader, { classIds = [], intervalMs = 3000
   read.close = () => { if (timer) timers.clearInterval(timer); };
   read.poll = poll;
   read.status = () => watched.map(id => ({ classId: id, checkedAt: cache.get(id)?.value?.scheduleCheckedAt || null,
-    available: !!cache.get(id)?.value && !cache.get(id)?.error }));
+      available: Boolean(cache.get(id)?.value?.sessions.length) && !cache.get(id)?.error }));
   return read;
 }
