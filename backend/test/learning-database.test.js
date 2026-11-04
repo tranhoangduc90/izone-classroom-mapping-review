@@ -1242,6 +1242,10 @@ test('GV mở từng phần và checkpoint được lưu thật, idempotent, đi
   const assignment = await service.getPublicAssignment(published.publicToken);
   assert.deepEqual(assignment.blockReleases.map(item => item.status), ['open', 'locked']);
   const student = assignment.roster[0];
+  const readJourney=()=>service.getStudentCourseJourney({publicToken:published.publicToken,studentRef:student.studentRef});
+  const beforeRelease=await readJourney();
+  assert.equal(beforeRelease.sessions.find(session=>session.assignmentId===published.assignmentId).firstBlockStatus,'open');
+  assert.ok(beforeRelease.sessions.filter(session=>!session.assignmentId).every(session=>session.firstBlockStatus===null));
   const attempt = await service.startAttempt({
     publicToken: published.publicToken,
     studentRef: student.studentRef,
@@ -1298,6 +1302,9 @@ test('GV mở từng phần và checkpoint được lưu thật, idempotent, đi
     reviewer,
     operationId: crypto.randomUUID()
   });
+  const afterRelease=await readJourney();
+  assert.equal(afterRelease.sessions.find(session=>session.assignmentId===published.assignmentId).firstBlockStatus,'closed',
+    'Phần thứ hai đang mở không được bật cổng của phần đầu');
   const lateReplay = await service.submitCheckpoint(checkpointInput);
   assert.equal(lateReplay.replayed, true, 'Mất phản hồi rồi thử lại phải đọc được checkpoint cũ dù phần đã đóng.');
   await assert.rejects(
