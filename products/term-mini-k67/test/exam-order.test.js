@@ -181,6 +181,48 @@ test('Mini giấy Reading trước dùng một kết nối khi nộp và trả k
   const saved=(await fixture.db.query('SELECT listening_answers,reading_answers FROM assessment.term_test_attempt WHERE id=$1',[token.attemptToken])).rows[0];
   assert.deepEqual(saved,{listening_answers:{11:'A'},reading_answers:{14:'A'}});
 });
+test('Mini giấy Reading trước trả biên nhận nháp Listening từ bản ghi thật với ít lượt đọc hơn',async()=>{
+  await clean();
+  const {base,state}=await open('mini-test-lesson-5','answer_sheet');
+  const token={attemptToken:state.attemptToken,examSessionToken:state.examSessionToken,generation:state.generation};
+  await post(`${base}/reading/start`,token).expect(200);
+  await post(`${base}/reading`,{...token,answers:{14:'A'}}).expect(200);
+  const {query,connect}=fixture.pool;
+  const rows=[];
+  const track=execute=>async (...args)=>{
+    const result=await execute(...args);
+    rows.push(result.rows[0]);
+    return result;
+  };
+  fixture.pool.query=track(query.bind(fixture.pool));
+  fixture.pool.connect=async (...args)=>{
+    if(typeof args.at(-1)==='function')return connect.apply(fixture.pool,args);
+    const client=await connect.apply(fixture.pool,args);
+    return {query:track(client.query.bind(client)),release:()=>client.release()};
+  };
+  let saved,duplicate;
+  try{
+    saved=await post(`${base}/listening/draft`,{...token,revision:2,answers:{11:'A'}}).expect(200);
+    assert.equal(rows.length,8);
+    assert.ok(rows.every(row=>!row||(!('listening_definition' in row)&&!('reading_definition' in row))));
+    rows.length=0;
+    duplicate=await post(`${base}/listening/draft`,{...token,revision:2,answers:{11:'B'}}).expect(200);
+    assert.equal(rows.length,7);
+    await post(`${base}/listening/draft`,{...token,generation:token.generation+1,revision:3,answers:{11:'B'}}).expect(409);
+  }finally{Object.assign(fixture.pool,{query,connect});}
+  const stored=(await fixture.db.query(`SELECT listening_draft,listening_draft_revision,listening_draft_updated_at
+    FROM assessment.term_test_exam_session WHERE id=$1`,[token.examSessionToken])).rows[0];
+  assert.deepEqual(saved.body.draft,stored.listening_draft);
+  assert.equal(saved.body.revision,Number(stored.listening_draft_revision));
+  assert.equal(saved.body.savedAt,stored.listening_draft_updated_at.toISOString());
+  assert.equal(saved.body.accepted,true);
+  assert.deepEqual(duplicate.body.draft,saved.body.draft);
+  assert.equal(duplicate.body.revision,saved.body.revision);
+  assert.equal(duplicate.body.savedAt,saved.body.savedAt);
+  assert.equal(duplicate.body.accepted,false);
+  assert.ok(Date.parse(saved.body.serverNow)>=Date.parse(saved.body.savedAt));
+  assert.ok(Date.parse(duplicate.body.serverNow)>=Date.parse(saved.body.serverNow));
+});
 test('Chờ quá 8 giờ sau Reading vẫn tải được audio; trước Reading không cấp audio',async()=>{
   await clean();const {base,state}=await open('term-test-1');const token={attemptToken:state.attemptToken};
   const audio=`${base}/session/${state.examSessionToken}/audio`;

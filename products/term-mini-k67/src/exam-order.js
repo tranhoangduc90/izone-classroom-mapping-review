@@ -56,9 +56,12 @@ const select = `SELECT ${stateColumns},
   clock_timestamp()>a.reading_deadline_at AS reading_timed_out,clock_timestamp()<=a.reading_deadline_at+interval '5 minutes' AS reading_grace,
   clock_timestamp()>s.listening_deadline_at AS listening_timed_out,clock_timestamp()<=s.listening_deadline_at+interval '5 minutes' AS listening_grace
   ${attemptSource}`;
-const selectResultBinding = `SELECT a.id,a.exam_session_id,a.test_slug,a.erp_course_class_id,a.erp_student_contact_id,
+const selectAttemptBinding = `SELECT a.id,a.exam_session_id,a.test_slug,a.erp_course_class_id,a.erp_student_contact_id,
   a.attempt_mode,a.generation,a.superseded_at,s.generation AS session_generation,s.superseded_at AS session_superseded_at
   ${attemptSource}`;
+const paperResultSnapshot = {projection:`SELECT ${stateColumns} ${attemptSource}`,lockAttempt:true};
+const paperListeningDraftSnapshot = {projection:`SELECT ${stateColumns},
+  clock_timestamp()>s.listening_deadline_at AS listening_timed_out ${attemptSource}`};
 
 // Nhận yêu cầu Reading trước, khóa cùng học viên/lớp rồi lưu vào SQL thật.
 // Bài Listening trước đi tiếp qua tuyến hiện hành; cờ chỉ khóa việc tạo Reading trước mới.
@@ -80,14 +83,13 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     catch(e){await client.query('ROLLBACK');throw e;}
   }
   const tx=run=>withConnection(client=>transaction(client,run));
-  async function reload(db,id,paperResult=false) {
-    const projection=paperResult?`SELECT ${stateColumns} ${attemptSource}`:select;
+  async function reload(db,id,{projection=select,lockAttempt=false}={}) {
     return (await db.query(`${projection} WHERE a.id=$1 AND a.superseded_at IS NULL
-      AND s.superseded_at IS NULL AND s.generation=a.generation${paperResult?' FOR UPDATE OF a':''}`,[id])).rows[0];
+      AND s.superseded_at IS NULL AND s.generation=a.generation${lockAttempt?' FOR UPDATE OF a':''}`,[id])).rows[0];
   }
-  async function locate(data,slug,paperResult=false,db=pool) {
+  async function locate(data,slug,compactBinding=false,db=pool) {
     if(!data.attemptToken&&!data.examSessionToken)return null;
-    return (await db.query(`${paperResult?selectResultBinding:select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
+    return (await db.query(`${compactBinding?selectAttemptBinding:select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
       AND a.test_slug=$3 AND a.exam_mode='read_first'`,[data.attemptToken||null,data.examSessionToken||null,slug])).rows[0];
   }
   function clientCheck(data,row,paper) {
@@ -97,12 +99,12 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(paper!== (row.attempt_mode==='answer_sheet'))throw error('MODE_CONFLICT','Hãy mở đúng cách làm bài đã chọn cho lượt này.');
     if(paper&&data.generation!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại. Hãy xác nhận lại tên; bản nháp vẫn được giữ.');
   }
-  async function locked(db,row,paperResult=false) {
+  async function locked(db,row,snapshot) {
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${row.test_slug}:${row.erp_course_class_id}:${row.erp_student_contact_id}`]);
     await db.query('SELECT id FROM assessment.term_test_exam_session WHERE id=$1 FOR UPDATE',[row.exam_session_id]);
     // Kết quả bài giấy lấy snapshot và khóa attempt cùng câu SQL sau khi đã khóa phiên.
-    if(!paperResult)await db.query('SELECT id FROM assessment.term_test_attempt WHERE id=$1 FOR UPDATE',[row.id]);
-    const current=await reload(db,row.id,paperResult);
+    if(!snapshot?.lockAttempt)await db.query('SELECT id FROM assessment.term_test_attempt WHERE id=$1 FOR UPDATE',[row.id]);
+    const current=await reload(db,row.id,snapshot);
     if(!current)throw error('STALE_ATTEMPT','Lượt bài đã được thay thế. Hãy xác nhận lại tên.');
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
@@ -248,13 +250,15 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   async function handle(req,res,next,action,paper=false) {
     const slug=paper?'mini-test-lesson-5':req.params.testSlug;
     const paperResult=paper&&action==='result';
+    const paperListeningDraft=paper&&action==='listening/draft';
+    const snapshot=paperResult?paperResultSnapshot:paperListeningDraft?paperListeningDraftSnapshot:undefined;
     const paperSubmit=paper&&(action==='reading'||action==='listening');
     // Nhận diện token trước validation: payload sai của Reading trước không được rơi vào tuyến cũ.
     const attempt=z.uuid().safeParse(req.body?.attemptToken),session=z.uuid().safeParse(req.body?.examSessionToken);
     const binding={attemptToken:attempt.success?attempt.data:undefined,examSessionToken:session.success?session.data:undefined};
     let startedOwner=null;
     async function resolveAction(client) {
-      const row=await locate(binding,slug,paperResult,client);
+      const row=await locate(binding,slug,Boolean(snapshot),client);
       if(!row)return null;
       if(!await admit(req,res,action==='result'?readLimiter:action.endsWith('draft')?draftLimiter:writeLimiter))return null;
       clientCheck(req.body,row,paper);
@@ -267,7 +271,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       return {data,out};
     }
     async function applyAction(db,row,data) {
-      const r=await locked(db,row,paperResult);clientCheck(data,r,paper);
+      const r=await locked(db,row,snapshot);clientCheck(data,r,paper);
       if(action==='result')return r;
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action.endsWith('start')) {
@@ -313,11 +317,23 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if(action.endsWith('draft')) {
         if(data.revision===undefined)throw error('INVALID_DRAFT','Thiếu phiên bản nháp.',400);
         if(expired)throw error(section.toUpperCase()+'_LOCKED','Phần này đã hết giờ. Bản đã lưu vẫn được giữ.');
-        if(data.revision>revision)await db.query(`UPDATE assessment.${section==='reading'?'term_test_attempt':'term_test_exam_session'}
-          SET ${section}_draft=$2,${section}_draft_revision=$3,${section}_draft_updated_at=now(),updated_at=now() WHERE id=$1`,
-          [section==='reading'?r.id:r.exam_session_id,JSON.stringify(data.answers),data.revision]);
-        return {...await reload(db,r.id),draftAccepted:data.revision>revision,event:{name:'draft_saved',token:section==='reading'?r.id:r.exam_session_id,
-          details:{section,revision:Math.max(revision,data.revision),answeredCount:Object.values(data.answers).filter(value=>String(value).trim()).length,accepted:data.revision>revision}}};
+        const accepted=data.revision>revision;
+        let saved;
+        if(accepted) {
+          const returning=paperListeningDraft?` RETURNING listening_draft AS session_draft,
+            listening_draft_revision AS session_revision,listening_draft_updated_at,clock_timestamp() AS server_now`:'';
+          const update=await db.query(`UPDATE assessment.${section==='reading'?'term_test_attempt':'term_test_exam_session'}
+            SET ${section}_draft=$2,${section}_draft_revision=$3,${section}_draft_updated_at=now(),updated_at=now() WHERE id=$1${returning}`,
+            [section==='reading'?r.id:r.exam_session_id,JSON.stringify(data.answers),data.revision]);
+          if(paperListeningDraft) {
+            saved=update.rows[0];
+            if(!saved)throw error('STALE_ATTEMPT','Lượt bài đã được thay thế. Hãy xác nhận lại tên.');
+          }
+        }
+        // Hai hàng vẫn được giữ khóa. Phiếu giấy ghép dữ liệu PostgreSQL vừa ghi vào snapshot đã kiểm.
+        const current=paperListeningDraft?{...r,...saved}:await reload(db,r.id);
+        return {...current,draftAccepted:accepted,event:{name:'draft_saved',token:section==='reading'?r.id:r.exam_session_id,
+          details:{section,revision:Math.max(revision,data.revision),answeredCount:Object.values(data.answers).filter(value=>String(value).trim()).length,accepted}}};
       }
       if(section==='listening'&&!data.clientSubmissionId)throw error('INVALID_SUBMISSION','Thiếu mã gửi bài.',400);
       if(section==='listening') {
