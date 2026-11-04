@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import {effectiveItemKind} from './learning-item-kinds.js';
 import { readCheckpointAttendance, recordCheckpointAttendance } from './learning-checkpoint-attendance.js';
 import {createJourneyCommentService} from './learning-journey-comments.js';
-import { decorateSchedule } from './learning-schedule-plan.js';
+import { decorateSchedule, matchesConfirmedScheduleSlot } from './learning-schedule-plan.js';
 import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
@@ -271,12 +271,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         :{sessionComment:byKey.get(student.studentRef+':'+view.sessionNumber)||null})}))};
   }
 
-  async function readErpSchedule(classId, fresh = false) {
+  async function readErpSchedule(classId, fresh = false, { allowEmpty = false } = {}) {
     if (!erpScheduleReader) {
       throw new LearningError('ERP_SCHEDULE_NOT_CONFIGURED',
         'Nguồn lịch ERP chưa được cấu hình. Hãy giữ bản chốt và thử đọc lại sau.', 503);
     }
-    try { return await erpScheduleReader(classId, { fresh }); }
+    try { return await erpScheduleReader(classId, { fresh, allowEmpty }); }
     catch {
       throw new LearningError('ERP_SCHEDULE_UNAVAILABLE',
         'Chưa đọc được lịch ERP; bản chốt vẫn được giữ. Hãy thử đọc lại.', 503);
@@ -1049,6 +1049,46 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           rosterCount: rosterResult.rowCount
         };
       }).catch(legacyPublishConflict);
+    },
+
+    async getTeacherAssignmentSessions({ classId, reviewer }) {
+      const target = await authorizeJourneyTarget(pool, { classId, reviewer });
+      const [planResult, roster, baselineResult] = await Promise.all([
+        pool.query(fetchLearningJourneyPlanSql, [classId]),
+        pool.query(fetchCourseCurrentRosterSql, [classId]),
+        pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1', [classId])
+      ]);
+      const plan = planResult.rows[0];
+      const baseline = baselineResult.rows[0]?.erp_snapshot;
+      const confirmed = normalizeJourneySessionDates(plan?.session_dates);
+      const byNumber = new Map(confirmed.map(slot => [slot.sessionNumber, slot]));
+      const booked = new Set(asArray(target.assignment_session_numbers).map(Number));
+      const tests = new Set(asArray(plan?.test_session_numbers).map(Number));
+      const rosterStatus = !roster.rowCount ? 'empty' : roster.rows.some(row => row.membership_verified !== true) ? 'unverified' : 'verified';
+      let schedule;
+      try {
+        schedule = decorateSchedule(classId, await readErpSchedule(classId, false, { allowEmpty: true }), confirmed);
+      } catch (error) {
+        if (!['ERP_SCHEDULE_UNAVAILABLE', 'ERP_SCHEDULE_NOT_CONFIGURED'].includes(error.code)) throw error;
+      }
+      const numbers = new Set(booked);
+      for (let number = 1; number <= Number(plan?.total_sessions || 0); number++) numbers.add(number);
+      const sessions = [...numbers].sort((a, b) => a - b).map(sessionNumber => {
+        const slot = byNumber.get(sessionNumber);
+        let status = 'needs_confirmation';
+        if (booked.has(sessionNumber)) status = 'occupied';
+        else if (slot?.erpSessionId) {
+          status = !schedule ? 'unavailable' : matchesConfirmedScheduleSlot(slot, schedule, baseline) ? 'available' : 'needs_review';
+        }
+        return { sessionNumber, date: slot?.date || null, kind: tests.has(sessionNumber) ? 'test' : 'lesson', status };
+      });
+      const assignedErp = new Set(confirmed.map(slot => slot.erpSessionId).filter(Boolean));
+      const proposals = (schedule?.sessions || []).filter(row => row.proposalEligible && !assignedErp.has(row.erpSessionId))
+        .map(row => ({ sessionNumber: row.erpSessionNumber, date: row.date, startsAt: row.startsAt }));
+      const scheduleStatus = !schedule ? 'unavailable' : schedule.ambiguous ? 'needs_review'
+        : !schedule.sessions.some(row => row.proposalEligible) ? 'empty'
+          : !confirmed.some(slot => slot.erpSessionId) ? 'unconfirmed' : 'ready';
+      return { classId: target.class_id, rosterStatus, scheduleStatus, sessions, proposals };
     },
 
     async getTeacherErpSchedule({ assignmentId, classId, reviewer }) {

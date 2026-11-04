@@ -42,3 +42,12 @@ test('kiểm nền giới hạn theo lớp, cả khi không mở dashboard, khô
  await monitor('1294');assert.deepEqual(calls,['1294']);await tick();assert.deepEqual(calls,['1294','1294']);
  assert.equal(monitor.status()[0].available,true);monitor.close();assert.equal(closed,true);
 });
+test('phân biệt ERP trống với lỗi nguồn và giữ cách đọc nghiêm ngặt của Hành trình',async()=>{
+ let calls=0;
+ const monitor=createScheduleMonitor(async id=>{calls++;if(id==='1295')throw Error('offline');return {classId:id,sessions:[]};});
+ const [strict,lenient]=await Promise.allSettled([monitor('1294'),monitor('1294',{allowEmpty:true})]);
+ assert.equal(strict.reason?.message,'ERP_SCHEDULE_INCOMPLETE');
+ assert.deepEqual(lenient.value?.sessions,[]);assert.equal(calls,1);
+ await assert.rejects(()=>monitor('1294'),/ERP_SCHEDULE_INCOMPLETE/);assert.equal(calls,1);
+ await assert.rejects(()=>monitor('1295',{allowEmpty:true}),/offline/);
+});

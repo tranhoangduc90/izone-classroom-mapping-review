@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import {validateAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {sha256,stableStringify,gradeLearningSubmission} from './learning-domain.js';
 import {parseFormDefinition,parseFormGradingKey} from './learning-contracts.js';
-import {decorateSchedule} from './learning-schedule-plan.js';
+import {decorateSchedule,matchesConfirmedScheduleSlot} from './learning-schedule-plan.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {buildLearningClassAccessPredicate,authorizeLearningJourneyPlanAssignmentSql,insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
@@ -61,11 +61,8 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     let schedule;
     try{schedule=decorateSchedule(String(classId),await erpScheduleReader(String(classId),{fresh:true}));}
     catch{throw fail('ERP_SCHEDULE_UNAVAILABLE','Chưa đọc được lịch ERP; bản xuất bản vẫn được giữ.',503);}
-    const current=schedule.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
     const baseline=(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId])).rows[0]?.erp_snapshot;
-    const prior=baseline?.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
-    if(schedule.ambiguous||!current||![0,1].includes(current.statusCode)||current.date!==confirmed.date
-      ||(prior&&(prior.startsAt!==current.startsAt||prior.endsAt!==current.endsAt)))
+    if(!matchesConfirmedScheduleSlot(confirmed,schedule,baseline))
       throw fail('ERP_SESSION_REVIEW_REQUIRED','Lịch ERP đã đổi; đối chiếu kế hoạch trước khi giao bài.');
   }
   async function publication(database,id,reviewer){
