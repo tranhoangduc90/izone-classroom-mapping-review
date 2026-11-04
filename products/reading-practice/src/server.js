@@ -4,10 +4,11 @@ import {readConfig} from './config.js';
 import {createContext} from './context.js';
 import {createReadingService} from './service.js';
 import {createApp} from './app.js';
-import {createDocsAdapter,createDocsWorker} from './docs.js';
+import {createDocsAdapter,createDocsWorker,planDocWrite} from './docs.js';
 import {createOwnerVerifier,createOwnerResolver,readOwnerSource} from './owner.js';
 import {createCtaRegistrar} from './cta-registration.js';
 import {createSharedHomeworkResolver} from './shared-homework.js';
+import {publisherFromEnv,verifyClassroomCopy} from './cta-confirmation-client.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -23,7 +24,9 @@ else{auth=new OAuth2Client(c.READING_DOCS_CLIENT_ID,c.READING_DOCS_CLIENT_SECRET
 const docs=createDocsAdapter(auth);
 const verifyBinding=createOwnerVerifier({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
 const service=createReadingService({pool,context,pageBase:c.READING_PAGE_BASE,resolveCurrentOwner:input=>readOwnerSource({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY},input),verifyBinding});
-const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.READING_ADMIN_KEY,resolveOwner:createOwnerResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY}),contentVersion:'legacy-unused'});
+const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.READING_ADMIN_KEY,resolveOwner:createOwnerResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY}),contentVersion:'legacy-unused',
+ pageBase:c.READING_PAGE_BASE,verifyClassroomCopy:verifyClassroomCopy(auth),
+ publishPending:publisherFromEnv(process.env,{product:'reading-practice',docs,planWrite:planDocWrite})});
 const verifier=new OAuth2Client(c.READING_GOOGLE_CLIENT_ID);
 const app=createApp({pool,service,registerCta,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.READING_GOOGLE_CLIENT_ID})).getPayload()});
