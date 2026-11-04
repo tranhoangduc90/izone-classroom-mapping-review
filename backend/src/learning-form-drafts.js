@@ -19,7 +19,7 @@ function dto(row,{includeKey=true}={}) {
     updatedAt:row.updated_at,assignmentId:row.published_assignment_id||null};
 }
 
-export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
+export function createLearningFormDraftService({pool,erpScheduleReader=null,portalAssignmentReader=null}) {
   async function authorizeClass(database,classId,reviewer) {
     const result=await database.query(authorizeLearningClassSql,[reviewer.email,reviewer.canAccessAllClasses,classId]);
     if(result.rowCount!==1) throw error('DRAFT_CLASS_ACCESS_DENIED','Bạn chưa được cấp quyền soạn phiếu cho lớp này.',403);
@@ -54,7 +54,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null}) {
   }
   const editWorksheet=createWorksheetEditing({pool,owned,dto});
   return {
-    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader}),
+    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader,portalAssignmentReader}),
     editWorksheet,
     async editAssignedWorksheet({assignmentId,operationId,reviewer}){
       const access=await pool.query(authorizeLearningJourneyPlanAssignmentSql,[assignmentId,reviewer.email,reviewer.canAccessAllClasses]);

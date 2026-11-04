@@ -7,6 +7,7 @@ import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js'
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
+import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets } from './learning-portal-assignment-schedule.js';
 import { withTransaction } from './db.js';
 import {
   buildEvidenceEnvelope,
@@ -247,7 +248,7 @@ function buildStudentCourseJourney(row) {
 }
 
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
-  testResultReader = null, portalTestReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
+  testResultReader = null, portalTestReader = null, portalAssignmentReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
   const pendingPublicAssignments=new Map();
@@ -305,29 +306,38 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   // Phiếu có mốc ERP đã chốt: kiểm đúng ID/ngày, giữ đích khi nhận bài.
   // Lỗi mạng giữ bản chốt; xung đột lịch thật giữ nháp và yêu cầu GV đối chiếu.
   async function guardAssignmentSchedule(database, assignmentId, capture = false) {
-    if (!erpScheduleReader) return;
+    if (!erpScheduleReader && !portalAssignmentReader) return;
+    const portalColumns=portalAssignmentReader?', t.portal_session_id::text,t.starts_at,t.attendance_fingerprint':'';
+    const portalJoin=portalAssignmentReader?'LEFT JOIN learning.form_assignment_portal_target t ON t.assignment_id=a.id':'';
     const row = (await database.query(`SELECT a.erp_course_class_id::text AS class_id,
-      a.session_number, p.session_dates, p.revision FROM learning.form_assignment a
+      a.session_number, p.session_dates, p.revision${portalColumns} FROM learning.form_assignment a
       LEFT JOIN learning.class_journey_plan p ON p.erp_course_class_id=a.erp_course_class_id
+      ${portalJoin}
       WHERE a.id=$1::uuid`, [assignmentId])).rows[0];
-    const confirmed = normalizeJourneySessionDates(row?.session_dates)
-      .find(s => s.sessionNumber === Number(row?.session_number));
+    const pinned=row?.portal_session_id?row:null;
+    const confirmed = pinned ? {erpSessionId:pinned.portal_session_id,date:pinned.starts_at.slice(0,10)} :
+      normalizeJourneySessionDates(row?.session_dates).find(s => s.sessionNumber === Number(row?.session_number));
     if (!confirmed?.erpSessionId) return;
     let schedule;
-    try { schedule = decorateSchedule(row.class_id, await readErpSchedule(row.class_id)); }
+    try {
+      schedule = pinned ? assignmentPortalSchedule(row.class_id, await portalAssignmentReader(row.class_id,{allowEmpty:true}))
+        : decorateSchedule(row.class_id, await readErpSchedule(row.class_id));
+    }
     catch { if (!capture) return; }
     const target = schedule?.sessions.find(s => s.erpSessionId === confirmed.erpSessionId);
-    const baseline=(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[row.class_id])).rows[0]?.erp_snapshot;
+    const baseline=pinned?null:(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[row.class_id])).rows[0]?.erp_snapshot;
     const priorTime=baseline?.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
     if (schedule && (schedule.ambiguous || !target || ![0, 1].includes(target.statusCode)
-      || target.date !== confirmed.date || (priorTime && (priorTime.startsAt!==target.startsAt || priorTime.endsAt!==target.endsAt)))) throw new LearningError('ERP_SESSION_REVIEW_REQUIRED',
+      || target.date !== confirmed.date || (pinned && pinned.starts_at!==target.startsAt)
+      || (priorTime && (priorTime.startsAt!==target.startsAt || priorTime.endsAt!==target.endsAt)))) throw new LearningError('ERP_SESSION_REVIEW_REQUIRED',
       'Lịch buổi học đã đổi. Bản nhập vẫn được giữ; giảng viên cần xác nhận lại lịch trước khi nhận bài.', 409);
     const binding = (await database.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id=$1::uuid', [assignmentId])).rows[0];
     if (binding && (String(binding.target_session_id) !== confirmed.erpSessionId || binding.review_required))
       throw new LearningError('ERP_SESSION_REVIEW_REQUIRED', 'Đích điểm danh cần đối chiếu. Bản nhập vẫn được giữ.', 409);
     if (capture) {
       // Portal và Metabase dùng cùng ảnh lịch chuẩn hóa; đích đã nhận bài không đổi theo thứ tự ngày.
-      const fingerprint = schedule ? JSON.stringify([String(row.class_id), [...schedule.sessions]
+      const fingerprint = pinned ? (schedule?.attendanceFingerprint || pinned.attendance_fingerprint)
+        : schedule ? JSON.stringify([String(row.class_id), [...schedule.sessions]
         .sort((a,b)=>a.startsAt.localeCompare(b.startsAt))
         .map(s=>[s.erpSessionId,s.startsAt,s.endsAt,s.statusCode])])
         : `confirmed-plan:${row.revision}:${confirmed.erpSessionId}`;
@@ -344,16 +354,30 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   }
 
   async function attachCurrentSchedule(view, classId) {
-    if (!erpScheduleReader) return view;
+    let result=view;
     try {
-      const schedule = decorateSchedule(classId, await readErpSchedule(classId));
-      const plan = await pool.query(fetchLearningJourneyPlanSql, [classId]);
-      const baseline = await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId]);
-      const bindings = await pool.query(`SELECT binding.* FROM learning.portal_attendance_binding AS binding
-        JOIN learning.form_assignment AS assignment ON assignment.id = binding.assignment_id
-        WHERE assignment.erp_course_class_id = $1::bigint AND (binding.write_started OR binding.accepted_at IS NOT NULL)`, [classId]);
-      return reconcileJourneySchedule(view, schedule, normalizeJourneySessionDates(plan.rows[0]?.session_dates), bindings.rows, baseline.rows[0]?.erp_snapshot);
-    } catch { return { ...view, scheduleStatus: 'temporarily_unavailable' }; }
+      if(erpScheduleReader){
+        const schedule = decorateSchedule(classId, await readErpSchedule(classId));
+        const plan = await pool.query(fetchLearningJourneyPlanSql, [classId]);
+        const baseline = await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId]);
+        const bindings = await pool.query(`SELECT binding.* FROM learning.portal_attendance_binding AS binding
+          JOIN learning.form_assignment AS assignment ON assignment.id = binding.assignment_id
+          WHERE assignment.erp_course_class_id = $1::bigint AND (binding.write_started OR binding.accepted_at IS NOT NULL)`, [classId]);
+        result=reconcileJourneySchedule(view, schedule, normalizeJourneySessionDates(plan.rows[0]?.session_dates), bindings.rows, baseline.rows[0]?.erp_snapshot);
+      }
+    } catch { result={ ...view, scheduleStatus: 'temporarily_unavailable' }; }
+    if(!portalAssignmentReader)return result;
+    const direct=await pool.query(`SELECT a.id::text,t.starts_at FROM learning.form_assignment_portal_target t
+      JOIN learning.form_assignment a ON a.id=t.assignment_id WHERE a.erp_course_class_id=$1::bigint
+      AND a.status IN ('published','closed')`,[classId]);
+    if(!direct.rowCount)return result;
+    const starts=new Map(direct.rows.map(row=>[row.id,row.starts_at]));
+    const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh'}).format(new Date());
+    return {...result,sessions:result.sessions.map(session=>{
+      const assignmentId=session.assignmentId||(session.assignments?.length===1?session.assignments[0].assignmentId:null);
+      const start=starts.get(assignmentId);
+      return start?{...session,sessionDate:start.slice(0,10),sessionStartTime:start.slice(11),future:start.slice(0,10)>today}:session;
+    })};
   }
 
   return {
@@ -1051,8 +1075,23 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       }).catch(legacyPublishConflict);
     },
 
-    async getTeacherAssignmentSessions({ classId, reviewer }) {
+    async getTeacherAssignmentSessions({ classId, source, reviewer }) {
       const target = await authorizeJourneyTarget(pool, { classId, reviewer });
+      if(source==='portal'){
+        const [roster,booked,schedule]=await Promise.all([
+          pool.query(fetchCourseCurrentRosterSql,[classId]),
+          pool.query(occupiedPortalTargetsSql,[classId]),
+          portalAssignmentReader?.(classId,{allowEmpty:true}).then(raw=>assignmentPortalSchedule(classId,raw)).catch(()=>null)
+        ]);
+        const occupiedNumbers=new Set(booked.rows.map(row=>Number(row.session_number)));
+        const occupiedIds=new Set(booked.rows.map(row=>row.portal_session_id));
+        const sessions=schedule?portalAssignmentTargets(schedule)
+          .filter(row=>!occupiedNumbers.has(row.erpSessionNumber)&&!occupiedIds.has(row.erpSessionId))
+          .map(row=>({sessionNumber:row.erpSessionNumber,date:row.date,kind:'lesson',status:'available',
+            portalTarget:{id:row.erpSessionId,startsAt:row.startsAt}})):[];
+        return {classId:target.class_id,rosterStatus:!roster.rowCount?'empty':roster.rows.some(row=>row.membership_verified!==true)?'unverified':'verified',
+          scheduleStatus:!schedule?'unavailable':schedule.ambiguous?'needs_review':schedule.sessions.length?'ready':'empty',sessions,proposals:[]};
+      }
       const [planResult, roster, baselineResult] = await Promise.all([
         pool.query(fetchLearningJourneyPlanSql, [classId]),
         pool.query(fetchCourseCurrentRosterSql, [classId]),
