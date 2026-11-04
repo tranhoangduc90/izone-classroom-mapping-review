@@ -15,6 +15,7 @@ import { createOpeningDocsGateway } from './speaking-docs-read.js';
 import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
 import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
 import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
+import {createSpeakingSelfMatch, speakingSelfMatchMailFromEnv, startSpeakingSelfMatchMailer} from './speaking-self-match.js';
 
 // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
 // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
@@ -61,7 +62,10 @@ export function createIndependentApp({service,teacher,documents,workerSecret='',
   route('get','/classes',z.object({assignmentCode:code}).strict(),service.classes,'classes');
   route('post','/assignment/roster',selected,service.roster,'assignment');
   route('post','/assignment/open',selected.omit({classCode:true}).extend({classCode:selected.shape.classCode.optional(),documentId:selected.shape.documentId.unwrap()}),service.roster,'assignment');
-  route('post','/session/start-selected',selected.extend({studentRef:z.string().uuid(),identityConfirmed:z.literal(true)}),service.startSelected,'session');
+  route('post','/session/start-selected',selected.extend({studentRef:z.string().uuid(),identityConfirmed:z.literal(true),
+    selfMatchToken:z.string().regex(/^\d{13}\.[A-Za-z0-9_-]{43}$/).optional(),
+    selfMatchStudentRefs:z.array(z.string().uuid()).min(1).max(100).optional()})
+    .refine(i=>Boolean(i.selfMatchToken)===Boolean(i.selfMatchStudentRefs)),service.startSelected,'session');
   route('post','/identity/resolve',z.object({assignmentCode:code,studentRef:z.string().uuid()}).strict(),service.resolveIdentity);
   route('post','/open',identity,service.open);
   route('post','/doctor/list',identity,service.listDoctor);
@@ -166,11 +170,16 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
   const progressGateway=env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE}):null;
   const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway});
-  const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway}):null;
+  const csv=value=>(value||'').split(',').map(item=>item.trim()).filter(Boolean);
+  const selfMatch=env.SPEAKING_SELF_MATCH_ENABLED==='true'?createSpeakingSelfMatch({pool,secret:env.INDEPENDENT_ACCESS_SECRET,
+    eligibleRefs:z.array(z.string().uuid()).min(1).max(100).parse(csv(env.SPEAKING_SELF_MATCH_STUDENT_REFS)),
+    eligibleDocuments:z.array(z.string().regex(/^[A-Za-z0-9_-]{5,120}$/)).min(1).max(100).parse(csv(env.SPEAKING_SELF_MATCH_DOCUMENT_IDS))}):null;
+  const selfMatchMailer=startSpeakingSelfMatchMailer({pool,send:env.SPEAKING_SELF_MATCH_MAIL_ENABLED==='true'?speakingSelfMatchMailFromEnv(env):null});
+  const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway,selfMatch}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
   const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
   const teacher=createSpeakingTeacherProgress({pool,source});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
-  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await pool.end();});
+  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await selfMatchMailer.stop();await pool.end();});
 }
