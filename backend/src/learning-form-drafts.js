@@ -80,13 +80,12 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       return create({...payload,classId,sessionNumber,operationId,reviewer});
     },
     async demoSource({grant}) {
-      const active=await pool.query(`SELECT account.email,account.role,account.can_access_all_classes,
+      const active=await pool.query(`SELECT account.email,
         EXISTS(SELECT 1 FROM learning.progress_log_admin AS admin WHERE lower(admin.reviewer_email)=lower(account.email)
           AND admin.status='active') AS progress_log_admin
         FROM mapping.reviewer_account AS account WHERE lower(account.email)=lower($1) AND account.status='active';`,[grant.ownerEmail]);
       if(active.rowCount!==1) throw error('DRAFT_PREVIEW_DENIED','Quyền xem thử đã thay đổi.',403);
-      const account=active.rows[0],reviewer={email:account.email,canAccessAllClasses:
-        account.role==='admin'||account.can_access_all_classes===true||account.progress_log_admin===true};
+      const account=active.rows[0],reviewer={email:account.email,canAccessAllClasses:account.progress_log_admin===true};
       const row=await owned(pool,grant.draftId,reviewer);
       if(Number(row.revision)!==grant.revision||row.content_hash!==grant.contentHash) throw error('DRAFT_PREVIEW_STALE','Nháp đã đổi; hãy mở lại bản xem thử.');
       const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,allowIncomplete:true});

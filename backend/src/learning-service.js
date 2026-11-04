@@ -854,8 +854,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         attendanceStatus:session.attendanceStatus, portalSync:session.portalSync};
     },
 
-    async listTeacherOptions({ email, canAccessAllClasses }) {
-      const result = await pool.query(listLearningTeacherOptionsSql, [email, canAccessAllClasses]);
+    async listTeacherOptions({ email, canAccessAllClasses, readClassIds=[] }) {
+      const result = await pool.query(listLearningTeacherOptionsSql, [email, canAccessAllClasses, readClassIds]);
       return asObject(result.rows[0]?.response || { classes: [], assignments: [] });
     },
 
@@ -1075,8 +1075,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       }).catch(legacyPublishConflict);
     },
 
-    async getTeacherAssignmentSessions({ classId, source, reviewer }) {
+    async getTeacherAssignmentSessions({ classId, source, reviewer, assertAssignable }) {
       const target = await authorizeJourneyTarget(pool, { classId, reviewer });
+      if(assertAssignable)await assertAssignable(target.class_id);
       if(source==='portal'){
         const [roster,booked,schedule]=await Promise.all([
           pool.query(fetchCourseCurrentRosterSql,[classId]),

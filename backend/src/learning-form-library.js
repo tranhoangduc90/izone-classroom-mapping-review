@@ -55,7 +55,7 @@ export function createLearningFormLibrary({pool,drafts}){
     if(!['approved','published'].includes(draft.status)||draft.approvedRevision!==draft.revision||!draft.definition.courseCode)
       throw fail('LIBRARY_APPROVAL_REQUIRED','Kho IZONE chỉ nhận đúng bản đã duyệt và có mã khóa học.');
     const authority=await pool.query(`SELECT 1 FROM mapping.reviewer_account a WHERE lower(a.email)=lower($1) AND a.status='active'
-      AND (a.role='admin' OR EXISTS(SELECT 1 FROM learning.progress_log_admin p WHERE lower(p.reviewer_email)=lower(a.email) AND p.status='active')
+      AND (EXISTS(SELECT 1 FROM learning.progress_log_admin p WHERE lower(p.reviewer_email)=lower(a.email) AND p.status='active')
       OR EXISTS(SELECT 1 FROM learning.course_content_authority c WHERE lower(c.reviewer_email)=lower(a.email) AND c.course_code=$2 AND c.status='active'))`,[reviewer.email,draft.definition.courseCode]);
     if(authority.rowCount!==1)throw fail('LIBRARY_APPROVAL_DENIED','Chỉ người phụ trách chuyên môn của khóa hoặc quản trị được đưa bài vào Kho IZONE.',403);
    }
