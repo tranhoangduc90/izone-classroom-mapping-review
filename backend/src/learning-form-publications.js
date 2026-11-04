@@ -7,6 +7,7 @@ import {validateAuthoringPayload,FormAuthoringError} from './learning-form-autho
 import {sha256,stableStringify,gradeLearningSubmission} from './learning-domain.js';
 import {parseFormDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {decorateSchedule,matchesConfirmedScheduleSlot} from './learning-schedule-plan.js';
+import {assignmentPortalSchedule,occupiedPortalTargetsSql,portalAssignmentTargets} from './learning-portal-assignment-schedule.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {buildLearningClassAccessPredicate,authorizeLearningJourneyPlanAssignmentSql,insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
@@ -39,7 +40,7 @@ function targetOperation(operationId,classId,sessionNumber){
   return h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-a'+h.slice(17,20)+'-'+h.slice(20,32);
 }
 
-export function createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader}){
+export function createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader}){
   async function lockSource(database,key){
     await database.query('INSERT INTO learning.form_publication_lock(source_key) VALUES($1) ON CONFLICT DO NOTHING',[key]);
     await database.query('SELECT source_key FROM learning.form_publication_lock WHERE source_key=$1 FOR UPDATE',[key]);
@@ -64,6 +65,18 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     const baseline=(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId])).rows[0]?.erp_snapshot;
     if(!matchesConfirmedScheduleSlot(confirmed,schedule,baseline))
       throw fail('ERP_SESSION_REVIEW_REQUIRED','Lịch ERP đã đổi; đối chiếu kế hoạch trước khi giao bài.');
+  }
+  async function checkPortalTarget(database,{classId,sessionNumber,portalTarget}){
+    let schedule;
+    try{schedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{fresh:true,allowEmpty:true}));}
+    catch{throw fail('ERP_SCHEDULE_UNAVAILABLE','Chưa đọc được lịch Portal. Hãy thử lại.',503);}
+    const selected=portalAssignmentTargets(schedule).find(row=>row.erpSessionNumber===sessionNumber);
+    if(selected?.erpSessionId!==portalTarget.id||selected.startsAt!==portalTarget.startsAt)
+      throw fail('ERP_SESSION_REVIEW_REQUIRED','Buổi trên Portal đã đổi. Hãy chọn lại buổi.');
+    const booked=(await database.query(occupiedPortalTargetsSql,[classId])).rows;
+    if(booked.some(row=>Number(row.session_number)===sessionNumber||row.portal_session_id===portalTarget.id))
+      throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu. Hãy chọn buổi khác.');
+    return schedule.attendanceFingerprint;
   }
   async function publication(database,id,reviewer){
     const row=(await database.query(`SELECT publication.*,version.public_definition,grading.private_definition,
@@ -224,12 +237,21 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             const prior=(await database.query('SELECT * FROM learning.form_delivery WHERE operation_id=$1::uuid',[operation])).rows[0];
             if(prior){if(prior.publication_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
               throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác.');
+              if(target.portalTarget){
+                const pinned=(await database.query('SELECT portal_session_id::text,starts_at FROM learning.form_assignment_portal_target WHERE assignment_id=$1::uuid',[prior.assignment_id])).rows[0];
+                if(pinned?.portal_session_id!==target.portalTarget.id||pinned.starts_at!==target.portalTarget.startsAt)
+                  throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một mốc Portal khác.');
+              }
               return {...await readDelivery(database,prior),replayed:true};}
             await assertCourse(database,{erp_course_class_id:target.classId,public_definition:source.public_definition});
-            await checkSchedule(database,target.classId,target.sessionNumber);
-            const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
-              AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
-            if(existing.rowCount)throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu; hãy thu hồi hoặc thay phiếu có giữ lịch sử.');
+            let attendanceFingerprint;
+            if(target.portalTarget) attendanceFingerprint=await checkPortalTarget(database,target);
+            else{
+              await checkSchedule(database,target.classId,target.sessionNumber);
+              const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
+                AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
+              if(existing.rowCount)throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu; hãy thu hồi hoặc thay phiếu có giữ lịch sử.');
+            }
             const current=await database.query(fetchCourseCurrentRosterSql,[target.classId]);
             if(!current.rowCount||current.rows.some(s=>s.membership_verified!==true))throw fail('DRAFT_ROSTER_UNVERIFIED','Đọc lại danh sách ERP trước khi giao bài.');
             const refs=new Set(current.rows.map(s=>s.student_ref)),roster=(await database.query(fetchLearningRosterForClassSql,[target.classId])).rows.filter(s=>refs.has(s.student_ref));
@@ -237,6 +259,9 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             const definition=source.public_definition;
             const assignment=(await database.query(insertLearningAssignmentSql,[source.form_version_id,definition.courseCode||null,
               target.classId,classInfo.class_name,target.sessionNumber,definition.title,null,null,reviewer.email])).rows[0];
+            if(target.portalTarget)await database.query(`INSERT INTO learning.form_assignment_portal_target
+              (assignment_id,portal_session_id,starts_at,attendance_fingerprint) VALUES($1::uuid,$2::bigint,$3,$4)`,
+              [assignment.assignment_id,target.portalTarget.id,target.portalTarget.startsAt,attendanceFingerprint]);
             for(const student of roster)await database.query(insertLearningAssignmentRosterSql,[assignment.assignment_id,student.student_ref,student.student_id,student.student_name,student.display_discriminator]);
             const first=Math.min(...definition.blocks.map(b=>b.checkpoint));
             for(const block of definition.blocks)await database.query(insertLearningAssignmentBlockReleaseSql,[assignment.assignment_id,block.blockId,block.checkpoint,block.checkpoint===first?'open':'locked',reviewer.email]);

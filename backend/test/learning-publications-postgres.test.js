@@ -6,6 +6,7 @@ import {postgresFixture} from './learning-postgres-fixture.js';
 import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {createLearningFormLibrary} from '../src/learning-form-library.js';
 import {previewFormImport} from '../src/learning-form-import.js';
+import {createLearningService} from '../src/learning-service.js';
 
 test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa nhầm revision mới; hai lần giao cạnh tranh chỉ có một phiếu',{timeout:60000},async()=>{
   const f=await postgresFixture({asApplication:true});let resume;
@@ -48,4 +49,53 @@ test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa n
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.submission')).rows[0].n,0);
     assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.outbox_job')).rows[0].n,0);
   }finally{resume?.();await f.close();}
+});
+
+test('PostgreSQL learning_api: giao và nhận bài vào đúng ID Portal khi lớp chưa có kế hoạch',{timeout:60000},async()=>{
+  const f=await postgresFixture({asApplication:true,studentCount:2});
+  try{
+    for(const file of ['202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql',
+      '202610220002_form_library.sql','202610280001_form_publications.sql','202611040001_form_assignment_portal_target.sql'])
+      await f.pool.query(await readFile(new URL('../ops/learning-migrations/'+file,import.meta.url),'utf8'));
+    await f.pool.query(`ALTER TABLE mapping.reviewer_account ADD COLUMN role text DEFAULT 'teacher';
+      INSERT INTO mapping.erp_class_membership_snapshot SELECT erp_course_class_id,erp_student_contact_id FROM mapping.student_mapping_review;
+      INSERT INTO learning.course_content_authority(reviewer_email,course_code,can_self_approve_scored_forms,grant_reference)
+        VALUES('teacher@example.test','56',true,'Native isolated fixture only');`);
+    const startsAt='2026-11-04 18:30:00',endsAt='2026-10-29 21:00:00';
+    const slot={erpSessionId:'71901',startsAt,endsAt,date:'2026-11-04',statusCode:1};
+    const schedule={classId:'2139',sessions:[slot]};
+    const portalAssignmentReader=async()=>schedule;
+    const reviewer={email:'teacher@example.test',canAccessAllClasses:false};
+    const drafts=createLearningFormDraftService({pool:f.clockPool,portalAssignmentReader});
+    const service=createLearningService({pool:f.clockPool,portalAssignmentReader});
+    const payload=previewFormImport('type,prompt,skill\nreflection,Phiếu kiểm thử Portal,reading').payload;
+    payload.definition.courseCode='56';
+    const draft=await drafts.create({classId:'2139',sessionNumber:1,operationId:randomUUID(),...payload,reviewer});
+    await drafts.approve({id:draft.id,expectedRevision:1,expectedHash:draft.contentHash,reviewer});
+    const publication=await drafts.publishLibrary({id:draft.id,expectedRevision:1,operationId:randomUUID(),reviewer});
+    const options=await service.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer});
+    assert.deepEqual(options.sessions.map(s=>s.portalTarget),[{id:'71901',startsAt}]);
+    const assignmentInput={id:publication.id,reviewer,operationId:randomUUID()};
+    const target={classId:'2139',sessionNumber:1,portalTarget:{id:'71901',startsAt}};
+    const stale=await drafts.assignPublication({...assignmentInput,targets:[{...target,portalTarget:{...target.portalTarget,startsAt:'2026-11-04 17:00:00'}}]});
+    assert.equal(stale.results[0].error,'ERP_SESSION_REVIEW_REQUIRED');
+    const delivery=(await drafts.assignPublication({...assignmentInput,targets:[target]})).results[0];
+    assert.equal(delivery.ok,true,JSON.stringify(delivery));
+    assert.equal((await drafts.assignPublication({...assignmentInput,targets:[target]})).results[0].delivery.replayed,true);
+    assert.deepEqual((await service.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer})).sessions,[]);
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.class_journey_plan')).rows[0].n,0);
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.outbox_job')).rows[0].n,0);
+    const assignment=await service.getPublicAssignment(delivery.delivery.publicToken);
+    const start=student=>service.startAttempt({publicToken:delivery.delivery.publicToken,studentRef:student.studentRef,
+      identityConfirmed:true,clientIdempotencyKey:randomUUID()});
+    const attempt=await start(assignment.roster[0]);
+    await service.submit({attemptToken:attempt.attemptToken,submissionId:randomUUID(),definitionHash:assignment.definitionHash,draftRevision:0,responses:{}});
+    const binding=(await f.pool.query('SELECT target_session_id::text,schedule_fingerprint FROM learning.portal_attendance_binding')).rows[0];
+    assert.equal(binding.target_session_id,'71901');
+    assert.deepEqual(JSON.parse(binding.schedule_fingerprint),['2139',[['71901',startsAt,endsAt,1]]]);
+    assert.equal((await f.pool.query("SELECT count(*)::int n FROM learning.outbox_job WHERE job_type='sync_portal_attendance'")).rows[0].n,1);
+    slot.startsAt='2026-11-04 19:00:00';
+    await assert.rejects(()=>start(assignment.roster[1]),{code:'ERP_SESSION_REVIEW_REQUIRED'});
+    await assert.rejects(()=>f.clockPool.query('UPDATE learning.form_assignment_portal_target SET portal_session_id=71902'),{code:'42501'});
+  }finally{await f.close();}
 });

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
 import { createLearningErpScheduleReader } from './learning-erp-schedule.js';
+import { createPortalAssignmentScheduleReader } from './learning-portal-assignment-schedule.js';
 import { createLearningTestSourceReader } from './learning-test-sources.js';
 import { createLearningTestResultReader } from './learning-test-results.js';
 import { createSpeakingHomeworkRouter } from './speaking-homework-routes.js';
@@ -1369,6 +1370,7 @@ export function createApp({
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
+      portalAssignmentScheduleReader: createPortalAssignmentScheduleReader(),
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: learningTestResultReader ?? createLearningTestResultReader({ pool })
     });

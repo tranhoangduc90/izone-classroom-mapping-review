@@ -12,7 +12,7 @@ import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const scored=definition=>definition.blocks.some(block=>block.items.some(item=>item.graderType!=='none'||item.maxScore>0));
 
-export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null}) {
+export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null,portalAssignmentReader=null}) {
   async function authority(database,email,definition,ownerEmail) {
     if(!scored(definition)) return email.toLowerCase()===ownerEmail.toLowerCase();
     if(!definition.courseCode) return false;
@@ -57,7 +57,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
       definitionHash:current.definition_hash,rosterCount:current.roster_count,blockCount:current.block_count,replayed};
   }
   return {
-    ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader}),
+    ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader}),
     async reviewQueue({classId,reviewer}) {
       await authorizeClass(pool,classId,reviewer);
       const result=await pool.query(`SELECT * FROM learning.form_draft WHERE erp_course_class_id=$1::bigint

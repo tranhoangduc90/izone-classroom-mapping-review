@@ -220,6 +220,7 @@ function attemptRateKey(req) {
 }
 
 export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
+  portalAssignmentScheduleReader = null,
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
   realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null }) {
@@ -241,11 +242,12 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   const monitoredReader = createScheduleMonitor(erpScheduleReader, {
     classIds: String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ?? (process.env.NODE_ENV==='production'?'1294':'')).split(',')
   });
-  const service = createLearningService({ pool, erpScheduleReader: monitoredReader, testSourceReader, testResultReader,
+  const portalAssignmentReader = createScheduleMonitor(portalAssignmentScheduleReader);
+  const service = createLearningService({ pool, erpScheduleReader: monitoredReader, portalAssignmentReader, testSourceReader, testResultReader,
     portalTestReader:portalTestReader||createLearningPortalTestReader({pool}),
     journeyCommentsEnabled,progressLinkCipher:journeyCommentsEnabled?
       createProgressLinkCipher({keys:progressLinkKeys,activeVersion:progressLinkKeyVersion}):null });
-  const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader});
+  const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader,portalAssignmentReader});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts});
   const liveUpdates=createLearningLiveUpdates({pool,service,revalidate,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
@@ -528,10 +530,10 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   router.get('/teacher/assignment-sessions', authenticate, asyncRoute(async (req, res) => {
-    const input = parseOrReply(z.object({ classId: z.string().regex(/^\d{1,18}$/u) }).strict(),
+    const input = parseOrReply(z.object({ classId: z.string().regex(/^\d{1,18}$/u), source:z.literal('portal').optional() }).strict(),
       req.query, res, 'INVALID_ASSIGNMENT_SESSIONS_QUERY');
     if (!input) return;
-    const availability = await service.getTeacherAssignmentSessions({ classId: input.classId, reviewer: req.reviewer });
+    const availability = await service.getTeacherAssignmentSessions({ ...input, reviewer: req.reviewer });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, availability });
   }));
@@ -612,7 +614,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.post('/teacher/form-publications/:id/assign',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_PUBLICATION_ID');if(!path)return;
     const input=parseOrReply(z.object({operationId:uuidSchema,origin:z.object({source:z.enum(['draft','library']),id:uuidSchema}).strict().optional(),targets:z.array(z.object({
-      classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100)
+      classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
+      portalTarget:z.object({id:z.string().regex(/^[1-9]\d{0,17}$/u),startsAt:z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u)}).strict().optional()
     }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_DELIVERY');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer})});
   }));
