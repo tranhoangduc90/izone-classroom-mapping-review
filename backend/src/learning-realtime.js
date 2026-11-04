@@ -5,16 +5,18 @@ const ZERO='00000000-0000-0000-0000-000000000000';
 const UUID=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 // Nhận revision bền vững từ PostgreSQL; trả đúng phần đổi, không tính lại analytics khi chỉ lưu nháp.
-export function createLearningLiveUpdates({pool,service,revalidate,enabled=true,streamEnabled=true,classIds=null,
+export function createLearningLiveUpdates({pool,service,revalidate,assignmentRead=actor=>actor,enabled=true,streamEnabled=true,classIds=null,
   heartbeatMs=15000,repairMs=10000,coalesceMs=600,maxStreams=300,maxStreamsPerAccount=4,logger=console}) {
   const streams=new Set(),dirty=new Set(),releases=new Set(),bindings=new Map();
   const rollout=classIds?new Set(classIds.map(String)):null;
   let listener=null,connecting=null,closed=false,flushTimer=null,repairTimer=null,repairing=null;
   async function authorize(assignmentId,reviewer,database=pool) {
     if(!enabled) throw new LearningError('LIVE_UPDATES_UNAVAILABLE','Cập nhật trực tiếp đang tạm dừng.',503);
-    const access=await database.query(authorizeLearningLiveAssignmentSql,[assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
+    const actor=await assignmentRead(reviewer,assignmentId,database);
+    const access=await database.query(authorizeLearningLiveAssignmentSql,[assignmentId,actor.email,actor.canAccessAllClasses]);
     if(access.rowCount!==1) throw new LearningError('ASSIGNMENT_ACCESS_DENIED','Phiếu không thuộc phạm vi được cấp quyền.',404);
     if(rollout&&!rollout.has(String(access.rows[0].class_id)))throw new LearningError('LIVE_UPDATES_UNAVAILABLE','Lớp đang dùng nhịp cập nhật hiện hành.',503);
+    return actor;
   }
   async function revisions(ids) {
     if(!ids.length)return new Map();
@@ -27,7 +29,7 @@ export function createLearningLiveUpdates({pool,service,revalidate,enabled=true,
     const database=await pool.connect();
     try{
     await database.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL statement_timeout='8s'");
-    await authorize(assignmentId,reviewer,database);
+    reviewer=await authorize(assignmentId,reviewer,database);
     const reader=service.readUsing(database);
     // Một statement giữ revision và danh sách đổi cùng snapshot; lần đọc kế tiếp bù mọi commit đến sau đó.
     const result=await database.query(`SELECT COALESCE(live.revision,0)::text AS revision,

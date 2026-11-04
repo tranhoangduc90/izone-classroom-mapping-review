@@ -219,12 +219,23 @@ function attemptRateKey(req) {
     : `ip:${ipKeyGenerator(req.ip)}`;
 }
 
-export function createLearningRouter({ pool, authenticate, erpScheduleReader = null,
+export function createLearningRouter({ pool, authenticate:sharedAuthenticate, erpScheduleReader = null, classPolicy=null,
   portalAssignmentScheduleReader = null,
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
   realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null }) {
   const router = express.Router();
+  const authenticate=classPolicy?((req,res,next)=>sharedAuthenticate(req,res,error=>{
+    if(error)return next(error);
+    Promise.resolve(classPolicy.reviewer(req.reviewer)).then(actor=>{req.reviewer=actor;next();},next);
+  })):sharedAuthenticate;
+  const classRead=(actor,classId)=>classPolicy?classPolicy.classRead(actor,classId):actor;
+  const assignmentRead=(actor,assignmentId,database)=>classPolicy?classPolicy.assignmentRead(actor,assignmentId,database):actor;
+  const journeyRead=(actor,input)=>input.classId?classRead(actor,input.classId):assignmentRead(actor,input.assignment);
+  const refreshReviewer=revalidate&&classPolicy?async req=>{
+    const actor=await revalidate(req);
+    return actor?classPolicy.reviewer(actor):null;
+  }:revalidate;
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
     if(logger?.info&&/^\/teacher\/(erp-schedule|assignment-sessions|journey-plan|form-drafts|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
@@ -250,7 +261,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader,portalAssignmentReader});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts});
-  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
+  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate:refreshReviewer,assignmentRead,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
   router.liveUpdates=liveUpdates;
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
@@ -412,7 +423,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }));
 
   registerStudentPortalRoutes(router,{pool,service,testResultReader,limiter:journeyLimiter});
-  registerTeacherWritingResultRoutes(router,{authenticate,service,testResultReader});
+  registerTeacherWritingResultRoutes(router,{authenticate,service,testResultReader,classRead});
   router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
     if (!input) return;
@@ -475,10 +486,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   }
 
   router.get('/teacher/options', authenticate, asyncRoute(async (req, res) => {
-    const options = await service.listTeacherOptions({
-      email: req.reviewer.email,
-      canAccessAllClasses: req.reviewer.canAccessAllClasses
-    });
+    const options = classPolicy?await classPolicy.options(req.reviewer,service.listTeacherOptions)
+      :await service.listTeacherOptions(req.reviewer);
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, reviewer: req.reviewer, ...options,
       assignments:(req.query.includeOrigins==='1'?await withAssignmentOrigins(pool,options.assignments):options.assignments).map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
@@ -523,7 +532,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_JOURNEY_PLAN_QUERY');
     if (!input) return;
     const plan = await service.getTeacherJourneyPlan({
-      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: await journeyRead(req.reviewer,input)
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, plan });
@@ -533,7 +542,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input = parseOrReply(z.object({ classId: z.string().regex(/^\d{1,18}$/u), source:z.literal('portal').optional() }).strict(),
       req.query, res, 'INVALID_ASSIGNMENT_SESSIONS_QUERY');
     if (!input) return;
-    const availability = await service.getTeacherAssignmentSessions({ ...input, reviewer: req.reviewer });
+    const availability = await service.getTeacherAssignmentSessions({ ...input, reviewer: req.reviewer,
+      assertAssignable:classPolicy?.deliveryCheck() });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, availability });
   }));
@@ -542,7 +552,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_ERP_SCHEDULE_QUERY');
     if (!input) return;
     const schedule = await service.getTeacherErpSchedule({
-      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: await journeyRead(req.reviewer,input)
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, schedule });
@@ -552,7 +562,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input = parseOrReply(journeyContextQuerySchema, req.query, res, 'INVALID_TEST_SOURCES_QUERY');
     if (!input) return;
     const sources = await service.getTeacherTestSources({
-      assignmentId: input.assignment, classId:input.classId, reviewer: req.reviewer
+      assignmentId: input.assignment, classId:input.classId, reviewer: await journeyRead(req.reviewer,input)
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, sources });
@@ -568,11 +578,11 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
 
   router.get('/teacher/classes/:classId/withdrawn-assignments',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.params,res,'INVALID_CLASS');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,assignments:await management.history({...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,assignments:await management.history({...input,reviewer:await classRead(req.reviewer,input.classId)})});
   }));
   router.get('/teacher/assignments/:assignmentId/management',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,management:await management.get({...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,management:await management.get({...input,reviewer:await assignmentRead(req.reviewer,input.assignmentId)})});
   }));
   router.post('/teacher/assignments/:assignmentId/management',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
@@ -617,7 +627,8 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
       classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
       portalTarget:z.object({id:z.string().regex(/^[1-9]\d{0,17}$/u),startsAt:z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u)}).strict().optional()
     }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_DELIVERY');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer,
+      assertAssignable:classPolicy?.deliveryCheck({fresh:true})})});
   }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
   router.post('/teacher/form-drafts/from-assignment/:id/edit',authenticate,asyncRoute(async(req,res)=>{
@@ -703,7 +714,15 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.get('/teacher/classes/:classId/overview', authenticate, asyncRoute(async (req,res) => {
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/)}).strict(),req.params,res,'INVALID_CLASS');
     if (!input) return;
-    const overview=await service.getCourseOverview({...input,reviewer:req.reviewer});
+    let overview;
+    try{overview=await service.getCourseOverview({...input,reviewer:await classRead(req.reviewer,input.classId)});}
+    catch(error){
+      if(error.code!=='CLASS_ACCESS_DENIED')throw error;
+      const cls=await classPolicy?.courseClass(req.reviewer,input.classId);
+      if(!cls)throw error;
+      overview={classId:cls.class_id,className:cls.class_name,progressLogMapped:false,
+        sessions:[],students:[],totalSessions:0,counts:{currentStudents:0,complete:0},testCoverage:'not_mapped'};
+    }
     res.set('Cache-Control','no-store');
     return res.json({ok:true,overview});
   }));
@@ -711,7 +730,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.get('/teacher/assignments/:assignmentId/question-analytics', authenticate, asyncRoute(async (req,res) => {
     const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');
     if (!input) return;
-    const analytics=await service.getQuestionAnalytics({...input,reviewer:req.reviewer});
+    const analytics=await service.getQuestionAnalytics({...input,reviewer:await assignmentRead(req.reviewer,input.assignmentId)});
     res.set('Cache-Control','no-store');
     return res.json({ok:true,analytics});
   }));
@@ -720,7 +739,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),
       sessionNumber:z.coerce.number().int().min(1).max(100),studentRef:uuidSchema}).strict(),req.params,res,'INVALID_JOURNEY_DETAIL');
     if (!input) return;
-    const detail=await service.getCourseSessionDetail({...input,reviewer:req.reviewer});
+    const detail=await service.getCourseSessionDetail({...input,reviewer:await classRead(req.reviewer,input.classId)});
     res.set('Cache-Control','no-store');
     return res.json({ok:true,detail});
   }));
@@ -728,7 +747,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.get('/teacher/dashboard', authenticate, asyncRoute(async (req, res) => {
     const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
     if (!input) return;
-    const dashboard = await service.getTeacherDashboard({ assignmentId: input.assignment, reviewer: req.reviewer });
+    const dashboard = await service.getTeacherDashboard({ assignmentId: input.assignment, reviewer: await assignmentRead(req.reviewer,input.assignment) });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, dashboard });
   }));
@@ -736,8 +755,9 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   if (demoSourceSecret) router.post('/teacher/demo-grants', authenticate, asyncRoute(async (req, res) => {
     const input = parseOrReply(z.object({ assignmentId: uuidSchema }).strict(), req.body, res, 'INVALID_ASSIGNMENT');
     if (!input) return;
+    const actor=await assignmentRead(req.reviewer,input.assignmentId);
     const result = await pool.query(fetchTeacherLearningDemoGrantSql,
-      [input.assignmentId, req.reviewer.email, req.reviewer.canAccessAllClasses]);
+      [input.assignmentId, actor.email, actor.canAccessAllClasses]);
     if (result.rowCount !== 1) return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
     const row = result.rows[0];
     res.set('Cache-Control', 'no-store');
@@ -748,7 +768,7 @@ export function createLearningRouter({ pool, authenticate, erpScheduleReader = n
   router.get('/teacher/live-drafts', authenticate, asyncRoute(async (req, res) => {
     const input = parseOrReply(dashboardQuerySchema, req.query, res, 'INVALID_DASHBOARD_QUERY');
     if (!input) return;
-    const live = await service.getTeacherLiveDrafts({ assignmentId: input.assignment, reviewer: req.reviewer });
+    const live = await service.getTeacherLiveDrafts({ assignmentId: input.assignment, reviewer: await assignmentRead(req.reviewer,input.assignment) });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, live });
   }));

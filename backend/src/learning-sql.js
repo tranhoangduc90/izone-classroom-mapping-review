@@ -622,7 +622,10 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
               AND lower(trim(COALESCE(to_jsonb(membership)->>'registration_status',''))) NOT IN ('dropped','on_hold')))
       ELSE NULL END AS student_count,
     grant_snapshot.value->>'class_status_snapshot' AS class_status,
-    grant_snapshot.value->>'access_source' AS access_source
+    grant_snapshot.value->>'access_source' AS access_source,
+    ($2::boolean OR ${buildLearningClassAccessPredicate({
+      reviewerEmailSql:'$1',classIdSql:'course.erp_course_class_id'
+    })}) AS can_manage
   FROM mapping.classroom_course_mapping AS course
   LEFT JOIN LATERAL (
     SELECT to_jsonb(access) AS value FROM mapping.reviewer_class_access AS access
@@ -630,7 +633,7 @@ export const listLearningTeacherOptionsSql = `WITH allowed_classes AS (
     ORDER BY (access.reviewer_email=$1) DESC,(to_jsonb(access)->>'access_source'='portal') DESC,
       to_jsonb(access)->>'source_seen_at' DESC NULLS LAST LIMIT 1
   ) AS grant_snapshot ON true
-  WHERE $2::boolean
+  WHERE $2::boolean OR course.erp_course_class_id=ANY($3::bigint[])
     OR ${buildLearningClassAccessPredicate({
       reviewerEmailSql: '$1',
       classIdSql: 'course.erp_course_class_id'
@@ -645,7 +648,8 @@ assignments AS (
     assignment.session_number,
     assignment.title,
     assignment.status,
-    assignment.created_at
+    assignment.created_at,
+    allowed_classes.can_manage
   FROM learning.form_assignment AS assignment
   JOIN allowed_classes ON allowed_classes.class_id = assignment.erp_course_class_id::text
   WHERE assignment.status <> 'retired'

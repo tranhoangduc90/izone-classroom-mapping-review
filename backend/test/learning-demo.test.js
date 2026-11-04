@@ -239,7 +239,7 @@ test('dashboard chỉ cấp vé cho giảng viên có quyền lớp của phiế
     const legacyDemo = await pool.query(insertLearningAssignmentSql,
       [source.definition.formVersionId, 'DEMO-56', '12345', 'Lớp kiểm thử',
         source.sessionNumber, `${source.title} · Bản dùng thử cũ`, null, null, 'allowed@example.invalid']);
-    const options = await pool.query(listLearningTeacherOptionsSql, ['allowed@example.invalid', false]);
+    const options = await pool.query(listLearningTeacherOptionsSql, ['allowed@example.invalid', false, []]);
     assert.deepEqual(options.rows[0].response.assignments.map(item => item.assignment_id),
       [assignment.rows[0].assignment_id]);
     let reviewer = { email: 'denied@example.invalid', canAccessAllClasses: false };

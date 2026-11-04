@@ -220,7 +220,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         return {...publicationDto(saved),replayed:false};
       });
     },
-    async assignPublication({id,targets,operationId,reviewer,origin}){
+    async assignPublication({id,targets,operationId,reviewer,origin,assertAssignable}){
       const unique=new Set(targets.map(t=>String(t.classId)+':'+t.sessionNumber));
       if(unique.size!==targets.length)throw fail('DELIVERY_DUPLICATE_TARGET','Không chọn trùng một lớp và buổi.',400);
       const results=[];
@@ -243,6 +243,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
                   throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một mốc Portal khác.');
               }
               return {...await readDelivery(database,prior),replayed:true};}
+            if(assertAssignable)await assertAssignable(target.classId);
             await assertCourse(database,{erp_course_class_id:target.classId,public_definition:source.public_definition});
             let attendanceFingerprint;
             if(target.portalTarget) attendanceFingerprint=await checkPortalTarget(database,target);
@@ -276,7 +277,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           results.push({...target,ok:true,delivery:delivered});
         }catch(error){
           // Lỗi đích sau một đích thành công phải được báo theo từng dòng để retry đúng đích.
-          const known=error instanceof FormAuthoringError;
+          const known=error instanceof FormAuthoringError||['CLASS_STATUS_UNAVAILABLE','CLASS_NOT_ONGOING'].includes(error.code);
           results.push({...target,ok:false,error:known?error.code:'DELIVERY_FAILED',
             message:known?error.message:'Chưa giao được đích này. Thử lại sẽ đối chiếu mã thao tác cũ.',status:known?error.httpStatus:500});}
       }

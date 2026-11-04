@@ -45,14 +45,13 @@ function assertScheduleRows(payload, classId) {
   });
 }
 
-export function createLearningErpScheduleReader({
+function createErpDatasetReader({
   url, username, password, timeoutMs = 7000, fetchImpl = fetch
 }) {
   if (!url || !username || !password) return null;
   const baseUrl = new URL(url);
   if (baseUrl.protocol !== 'https:') throw new Error('ERP_SCHEDULE_HTTPS_REQUIRED');
   const timeout = Math.min(15000, Math.max(2000, Number(timeoutMs) || 7000));
-  const pending = new Map();
 
   async function postJson(path, body, token = '', deadline) {
     const response = await fetchImpl(new URL(path, baseUrl), {
@@ -68,12 +67,23 @@ export function createLearningErpScheduleReader({
     return response.json();
   }
 
-  async function read(classId) {
+  return async query => {
     const deadline = AbortSignal.timeout(18_000);
     const session = await postJson('/api/session', { username, password }, '', deadline);
     if (typeof session?.id !== 'string' || !session.id) {
       throw new Error('ERP_SCHEDULE_LOGIN_FAILED');
     }
+    return postJson('/api/dataset', {
+      database: 2, native: { query }, type: 'native'
+    }, session.id, deadline);
+  };
+}
+
+export function createLearningErpScheduleReader(options) {
+  const dataset = createErpDatasetReader(options);
+  if (!dataset) return null;
+  const pending = new Map();
+  async function read(classId) {
     const query = `SELECT cs.class_session_id, cs.course_class_id,
   DATE_FORMAT(cs.session_start_datetime, '%Y-%m-%d %H:%i:%s') AS starts_at,
   DATE_FORMAT(cs.session_end_datetime, '%Y-%m-%d %H:%i:%s') AS ends_at,
@@ -82,9 +92,7 @@ FROM class_sessions AS cs
 WHERE cs.course_class_id = ${classId}
 ORDER BY cs.session_start_datetime, cs.class_session_id
 LIMIT 201`;
-    const payload = await postJson('/api/dataset', {
-      database: 2, native: { query }, type: 'native'
-    }, session.id, deadline);
+    const payload = await dataset(query);
     return { sessions: assertScheduleRows(payload, classId), fetchedAt: new Date().toISOString() };
   }
   return async classIdInput => {
@@ -94,5 +102,32 @@ LIMIT 201`;
     const request = read(classId).finally(() => pending.delete(classId));
     pending.set(classId, request);
     return request;
+  };
+}
+
+export function createLearningErpClassDirectoryReader(options) {
+  const dataset = createErpDatasetReader(options);
+  if (!dataset) return null;
+  return async () => {
+    const payload = await dataset(`SELECT CAST(id AS CHAR) AS class_id, name AS class_name, CAST(course_id AS CHAR) AS course_id, status,
+      DATE_FORMAT(started_at, '%Y-%m-%d') AS started_at FROM course_classes ORDER BY id LIMIT 2501`);
+    const data = payload?.data;
+    const fields = ['class_id', 'class_name', 'course_id', 'status', 'started_at'];
+    if (JSON.stringify(data?.cols?.map(column => column.name)) !== JSON.stringify(fields)
+      || !Array.isArray(data?.rows) || !data.rows.length || data.rows.length > 2500) {
+      throw Error('ERP_CLASS_DIRECTORY_INVALID');
+    }
+    const ids = new Set();
+    return data.rows.map(row => {
+      const [classId, className, courseId, status, startedAt] = row;
+      const id = String(classId);
+      if (!/^[1-9]\d{0,17}$/u.test(id) || ids.has(id) || typeof className !== 'string' || !className.trim()
+        || !/^[1-9]\d{0,17}$/u.test(String(courseId)) || !['pending','on_going','completed','cancelled'].includes(status)
+        || (startedAt !== null && !validCalendarDateTime(String(startedAt)+' 00:00:00'))) {
+        throw Error('ERP_CLASS_DIRECTORY_ROW_INVALID');
+      }
+      ids.add(id);
+      return {class_id:id,class_name:className,course_id:String(courseId),class_status:status,class_started_at:startedAt};
+    });
   };
 }

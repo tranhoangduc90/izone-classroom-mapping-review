@@ -7,7 +7,8 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { createAuthService } from './auth.js';
 import { createLearningRouter } from './learning-routes.js';
-import { createLearningErpScheduleReader } from './learning-erp-schedule.js';
+import { createLearningErpScheduleReader, createLearningErpClassDirectoryReader } from './learning-erp-schedule.js';
+import { createLearningClassPolicy } from './learning-class-policy.js';
 import { createPortalAssignmentScheduleReader } from './learning-portal-assignment-schedule.js';
 import { createLearningTestSourceReader } from './learning-test-sources.js';
 import { createLearningTestResultReader } from './learning-test-results.js';
@@ -1350,12 +1351,14 @@ export function createApp({
     throw new Error('LEARNING_ENABLED cần một database pool riêng cho schema learning.');
   }
   if (config.learningEnabled) {
-    const scheduleReader = learningErpScheduleReader ?? createLearningErpScheduleReader({
+    const erpSource = {
       url: config.learningErpScheduleMetabaseUrl,
       username: config.learningErpScheduleMetabaseUsername,
       password: config.learningErpScheduleMetabasePassword,
       timeoutMs: config.learningErpScheduleTimeoutMs
-    });
+    };
+    const scheduleReader = learningErpScheduleReader ?? createLearningErpScheduleReader(erpSource);
+    const classPolicy=createLearningClassPolicy({pool:learningPool,directoryReader:createLearningErpClassDirectoryReader(erpSource)});
     app.use('/api/learning', (req, res, next) => {
       if (req.get('x-progress-log-demo') === '1') {
         return res.status(403).json({ ok: false, error: 'DEMO_REQUEST_ON_LIVE_API', message: 'Trang thử đang kết nối sai dịch vụ.' });
@@ -1370,6 +1373,7 @@ export function createApp({
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
+      classPolicy,
       portalAssignmentScheduleReader: createPortalAssignmentScheduleReader(),
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: learningTestResultReader ?? createLearningTestResultReader({ pool })
