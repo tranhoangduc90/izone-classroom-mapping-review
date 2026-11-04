@@ -136,6 +136,51 @@ test('Hết giờ Reading dùng nháp ACK, giữ thời hạn qua reload và kh�
   const sub=await post(`${base}/reading`,{...token,answers:{14:'B'},draftRevision:4});assert.equal(sub.body.next,'listening');
   const row=(await fixture.db.query('SELECT * FROM assessment.term_test_attempt')).rows[0];assert.deepEqual(row.reading_answers,{14:'A'});
 });
+test('Mini giấy Reading trước dùng một kết nối khi nộp và trả kết nối cả khi từ chối',async()=>{
+  await clean();
+  const {base,state}=await open('mini-test-lesson-5','answer_sheet');
+  const token={attemptToken:state.attemptToken,examSessionToken:state.examSessionToken,generation:state.generation};
+  await post(`${base}/reading/start`,token).expect(200);
+  const {query,connect}=fixture.pool;
+  const events=[];
+  fixture.pool.query=(...args)=>{
+    events.push('pool');
+    return query.apply(fixture.pool,args);
+  };
+  fixture.pool.connect=async (...args)=>{
+    if(typeof args.at(-1)==='function')return connect.apply(fixture.pool,args);
+    const client=await connect.apply(fixture.pool,args);
+    events.push('borrow');
+    return {
+      query(sql,...params){
+        events.push(sql.includes('OR a.exam_session_id=$2::uuid')?'lookup':sql);
+        return client.query(sql,...params);
+      },
+      release(){events.push('release');client.release();}
+    };
+  };
+  async function submit(skill,payload,status,transactionEnd){
+    events.length=0;
+    const response=await post(`${base}/${skill}`,payload).expect(status);
+    assert.deepEqual(events.filter(event=>['pool','borrow','release'].includes(event)),['borrow','release']);
+    assert.equal(events[1],'lookup');
+    assert.equal(events.at(-1),'release');
+    assert.deepEqual(events.filter(event=>['BEGIN','COMMIT','ROLLBACK'].includes(event)),transactionEnd?['BEGIN',transactionEnd]:[]);
+    return response.body;
+  }
+  const reading={...token,answers:{14:'A'}};
+  const listening={...token,answers:{11:'A'},clientSubmissionId:randomUUID()};
+  try{
+    assert.equal((await submit('reading',reading,200,'COMMIT')).next,'listening');
+    assert.equal((await submit('listening',{...listening,generation:token.generation+1},409)).error,'STALE_GENERATION');
+    assert.equal((await submit('listening',{...listening,clientSubmissionId:undefined},400,'ROLLBACK')).error,'INVALID_SUBMISSION');
+    const submitted=await submit('listening',listening,200,'COMMIT');
+    assert.equal(submitted.completed,true);
+    assert.deepEqual((await submit('listening',{...listening,answers:{11:'B'}},200,'COMMIT')).result,submitted.result);
+  }finally{Object.assign(fixture.pool,{query,connect});}
+  const saved=(await fixture.db.query('SELECT listening_answers,reading_answers FROM assessment.term_test_attempt WHERE id=$1',[token.attemptToken])).rows[0];
+  assert.deepEqual(saved,{listening_answers:{11:'A'},reading_answers:{14:'A'}});
+});
 test('Chờ quá 8 giờ sau Reading vẫn tải được audio; trước Reading không cấp audio',async()=>{
   await clean();const {base,state}=await open('term-test-1');const token={attemptToken:state.attemptToken};
   const audio=`${base}/session/${state.examSessionToken}/audio`;

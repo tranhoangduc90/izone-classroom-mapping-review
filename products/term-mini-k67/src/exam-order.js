@@ -71,19 +71,23 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const finish=()=>{res.off('finish',finish);resolve(false);};res.once('finish',finish);
     limiter(req,res,err=>{res.off('finish',finish);if(err)reject(err);else resolve(true);});
   });
-  async function tx(run) {
+  async function withConnection(run) {
     const client=await pool.connect();
-    try {await client.query('BEGIN');const out=await run(client);await client.query('COMMIT');return out;}
-    catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+    try{return await run(client);}finally{client.release();}
   }
+  async function transaction(client,run) {
+    try {await client.query('BEGIN');const out=await run(client);await client.query('COMMIT');return out;}
+    catch(e){await client.query('ROLLBACK');throw e;}
+  }
+  const tx=run=>withConnection(client=>transaction(client,run));
   async function reload(db,id,paperResult=false) {
     const projection=paperResult?`SELECT ${stateColumns} ${attemptSource}`:select;
     return (await db.query(`${projection} WHERE a.id=$1 AND a.superseded_at IS NULL
       AND s.superseded_at IS NULL AND s.generation=a.generation${paperResult?' FOR UPDATE OF a':''}`,[id])).rows[0];
   }
-  async function locate(data,slug,paperResult=false) {
+  async function locate(data,slug,paperResult=false,db=pool) {
     if(!data.attemptToken&&!data.examSessionToken)return null;
-    return (await pool.query(`${paperResult?selectResultBinding:select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
+    return (await db.query(`${paperResult?selectResultBinding:select} WHERE (a.id=$1::uuid OR a.exam_session_id=$2::uuid)
       AND a.test_slug=$3 AND a.exam_mode='read_first'`,[data.attemptToken||null,data.examSessionToken||null,slug])).rows[0];
   }
   function clientCheck(data,row,paper) {
@@ -244,24 +248,25 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   async function handle(req,res,next,action,paper=false) {
     const slug=paper?'mini-test-lesson-5':req.params.testSlug;
     const paperResult=paper&&action==='result';
+    const paperSubmit=paper&&(action==='reading'||action==='listening');
     // Nhận diện token trước validation: payload sai của Reading trước không được rơi vào tuyến cũ.
     const attempt=z.uuid().safeParse(req.body?.attemptToken),session=z.uuid().safeParse(req.body?.examSessionToken);
-    const row=await locate({attemptToken:attempt.success?attempt.data:undefined,examSessionToken:session.success?session.data:undefined},slug,paperResult);
-    if(!row) {
-      if(req.body?.examMode==='read_first') {
-        if(!await admit(req,res,writeLimiter))return;
-        throw error('EXAM_SESSION_REQUIRED','Chưa mở được lượt Reading trước. Hãy xác nhận lại tên rồi thử lại.');
-      }
-      return next();
-    }
-    if(!await admit(req,res,action==='result'?readLimiter:action.endsWith('draft')?draftLimiter:writeLimiter))return;
-    clientCheck(req.body,row,paper);
-    if((attempt.success&&attempt.data!==row.id)||(session.success&&session.data!==row.exam_session_id))throw error('TOKEN_MISMATCH','Hai mã lượt bài không thuộc cùng một lượt. Hãy xác nhận lại tên.');
-    const parsed=input.safeParse(req.body);if(!parsed.success)throw error('INVALID_REQUEST','Dữ liệu lưu bài không hợp lệ.',400);
-    const data=parsed.data;
-    clientCheck(data,row,paper);
+    const binding={attemptToken:attempt.success?attempt.data:undefined,examSessionToken:session.success?session.data:undefined};
     let startedOwner=null;
-    const out=await tx(async db=>{
+    async function resolveAction(client) {
+      const row=await locate(binding,slug,paperResult,client);
+      if(!row)return null;
+      if(!await admit(req,res,action==='result'?readLimiter:action.endsWith('draft')?draftLimiter:writeLimiter))return null;
+      clientCheck(req.body,row,paper);
+      if((attempt.success&&attempt.data!==row.id)||(session.success&&session.data!==row.exam_session_id))throw error('TOKEN_MISMATCH','Hai mã lượt bài không thuộc cùng một lượt. Hãy xác nhận lại tên.');
+      const parsed=input.safeParse(req.body);if(!parsed.success)throw error('INVALID_REQUEST','Dữ liệu lưu bài không hợp lệ.',400);
+      const data=parsed.data;
+      clientCheck(data,row,paper);
+      const run=db=>applyAction(db,row,data);
+      const out=await (client?transaction(client,run):tx(run));
+      return {data,out};
+    }
+    async function applyAction(db,row,data) {
       const r=await locked(db,row,paperResult);clientCheck(data,r,paper);
       if(action==='result')return r;
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
@@ -338,7 +343,18 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       return {...await reload(db,r.id),event:{name:'submission_completed',token:section==='reading'?r.id:r.exam_session_id,
         details:{section,revision:data.draftRevision,answeredCount:Object.values(effective).filter(value=>String(value).trim()).length,timedOut:expired,
           snapshotSource:expired?(grace&&current?'grace_submission':'saved_draft'):'on_time_submission'}}};
-    });
+    }
+    // Nộp phiếu giấy giữ kết nối đã tìm lượt. Trả kết nối trước khi trả HTTP hoặc chuyển tuyến cũ.
+    const result=paperSubmit&&(attempt.success||session.success)?await withConnection(resolveAction):await resolveAction();
+    if(!result) {
+      if(res.headersSent)return;
+      if(req.body?.examMode==='read_first') {
+        if(!await admit(req,res,writeLimiter))return;
+        throw error('EXAM_SESSION_REQUIRED','Chưa mở được lượt Reading trước. Hãy xác nhận lại tên rồi thử lại.');
+      }
+      return next();
+    }
+    const {data,out}=result;
     if(out.event)logEvent(out.event.name,slug,out.event.token,out.event.details);
     const state=orderState(out);
     const syncRow={...out,attempt_token:out.id,test_slug:slug,class_id:String(out.erp_course_class_id),student_id:String(out.erp_student_contact_id),class_name:out.class_name_snapshot,student_name:out.student_name_snapshot};
