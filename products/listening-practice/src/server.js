@@ -7,12 +7,13 @@ import {readConfig} from './config.js';
 import {createContext} from './context.js';
 import {createListeningService} from './service.js';
 import {createApp} from './app.js';
-import {createDocsAdapter,createDocsWorker} from './docs.js';
+import {createDocsAdapter,createDocsWorker,planDocWrite} from './docs.js';
 import {createOwnerVerifier,createOwnerResolver,readOwnerSource} from './owner.js';
 import {createCtaRegistrar} from './cta-registration.js';
 import {loadReview} from './review.js';
 import {loadMediaCatalog} from './media-catalog.js';
 import {createSharedHomeworkResolver} from './shared-homework.js';
+import {publisherFromEnv,verifyClassroomCopy} from './cta-confirmation-client.js';
 
 // Nhận cấu hình riêng, kết nối kho riêng, mở API và hàng Docs. Không chạy migration lúc khởi động.
 const c=readConfig();
@@ -30,6 +31,8 @@ const verifyBinding=createOwnerVerifier({url:c.LISTENING_OWNER_SOURCE_URL,key:c.
 const service=createListeningService({pool,context,pageBase:c.LISTENING_PAGE_BASE,resolveCurrentOwner:input=>readOwnerSource({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY},input),verifyBinding});
 const registerCta=createCtaRegistrar({pool,service,context,docs,entryKey:c.LISTENING_ADMIN_KEY,
  resolveOwner:createOwnerResolver({url:c.LISTENING_OWNER_SOURCE_URL,key:c.LISTENING_OWNER_SOURCE_KEY}),
+ pageBase:c.LISTENING_PAGE_BASE,verifyClassroomCopy:verifyClassroomCopy(auth),
+ publishPending:publisherFromEnv(process.env,{product:'listening-practice',docs,planWrite:planDocWrite}),
  contentVersion:'cam19-t3-p3-approved-20261014-v1'});
 const verifier=new OAuth2Client(c.LISTENING_GOOGLE_CLIENT_ID);
 const audioHash=crypto.createHash('sha256').update(await readFile(c.LISTENING_AUDIO_FILE)).digest('hex');

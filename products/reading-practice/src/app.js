@@ -97,7 +97,8 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   if(!registerCta)throw new ReadingError('CTA_UNAVAILABLE','Chưa cấu hình đăng ký CTA.',503);
   const input=z.object({schema_version:z.enum(['course67_cta_registration_v1','course67_cta_registration_v2']),course:z.literal(67),
    doc_id:z.string().regex(/^[\w-]{20,150}$/),submission_id:z.string().min(1).max(200),
-   classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80)}).parse(req.body);
+   classroom_course_id:z.string().regex(/^\d{1,30}$/),coursework_id:z.string().regex(/^\d{1,30}$/),student_id:z.string().regex(/^\d{1,30}$/),class_name:z.string().min(1).max(80),
+   check_only:z.literal(true).optional()}).parse(req.body);
   res.json(await registerCta(input));
  }));
  app.post('/api/admin/shared-lesson',wrap(async(req,res)=>res.json(await service.configureSharedLesson(z.object({code:z.string().min(1).max(100),contentVersion:z.string().min(1).max(80),status:z.enum(['open','closed'])}).strict().parse(req.body)))));
