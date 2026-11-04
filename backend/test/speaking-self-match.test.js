@@ -90,7 +90,8 @@ async function fixture(t, eligibleDocuments, directDocEntryIds=[], registeredDoc
     return {documentId,assignmentCode,classCode};
   }
   const post = (endpoint,input) => request(api).post(prefix+endpoint).send(input);
-  return {db,pool,api,post,query,addDocument};
+  const verifyDocument = documentId => documents.verify({documentId,document:docsData.get(documentId)});
+  return {db,pool,api,post,query,addDocument,verifyDocument};
 }
 
 const selected = (input, ref, form) => ({...input,studentRef:ref,identityConfirmed:true,
@@ -238,6 +239,44 @@ test('Speaking: nguồn Classroom mới được xác nhận không cần danh s
   assert.equal(readback.directDocEntry,undefined);
   assert.equal((await f.query('SELECT count(*)::int n FROM speaking_independent.self_match_decision')).rows[0].n,1);
   assert.equal((await f.query('SELECT count(*)::int n FROM speaking_independent.self_match_notice')).rows[0].n,0);
+});
+
+test('Speaking: bỏ qua bài đã thu hồi và nối lại CTA với đúng bài đang hoạt động', async t => {
+  const documentId='fixture-recover-revoked-doc';
+  const f=await fixture(t,[documentId],[documentId],true);
+  const input=await f.addDocument(documentId,'google-b');
+  async function seedUnit(key, ref, doc, hashChar) {
+    const {rows:[unit]}=await f.query(`WITH profile AS (
+      INSERT INTO speaking_independent.profile(identity_ref,profile_key,kind,class_id,class_code,student_ref,student_name)
+      VALUES(gen_random_uuid(),$1,'document',CASE WHEN $2::uuid IS NULL THEN NULL ELSE $3::bigint END,
+        CASE WHEN $2::uuid IS NULL THEN NULL ELSE $4 END,$2,'Fixture') RETURNING id
+    )
+    INSERT INTO speaking_independent.work_unit(profile_id,assignment_code,context_key,template,template_digest,
+      document_id,tab_id,origin,token_hash)
+    SELECT id,$5,$1,$6,$7,$8,CASE WHEN $8::text IS NULL THEN NULL ELSE 't.0' END,'document',repeat($9,64)
+    FROM profile RETURNING id`,[key,ref,classId,classCode,assignmentCode,JSON.stringify(template),template.digest,doc,hashChar]);
+    return unit.id;
+  }
+  const old=await seedUnit('document:retired-fixture:t.0',approved,null,'a');
+  const current=await seedUnit('document:fixture-recover-revoked-doc:t.0',null,documentId,'b');
+  await f.query(`INSERT INTO speaking_independent.document_binding(document_id,tab_id,assignment_code,work_unit_id,verified_revision,template_digest)
+    VALUES($1,'t.0',$2,$3,'fixture-revision',$4)`,[documentId,assignmentCode,current,template.digest]);
+  const conflict=await f.verifyDocument(documentId);
+  assert.equal(conflict.reason,'EXISTING_PROGRESS_CONFLICT');
+  await f.query('UPDATE speaking_independent.work_unit SET revoked_at=now() WHERE id=$1',[old]);
+  const snapshot=async()=> (await f.query(`SELECT to_jsonb(u) AS unit,to_jsonb(p) AS profile FROM speaking_independent.work_unit u
+    JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=$1`,[old])).rows[0];
+  const historical=await snapshot();
+  assert.equal((await f.verifyDocument(documentId)).status,'linked');
+  const {body:{assignment}}=await f.post('/assignment/open',input).expect(200);
+  assert.equal(assignment.directDocEntry,true);
+  assert.equal(assignment.selectedStudentRef,approved);
+  assert.equal(assignment.selfMatch,undefined);
+  const {body:{session}}=await f.post('/session/start-selected',selected(input,approved)).expect(200);
+  assert.equal(session.workUnitId,current);
+  assert.deepEqual(await snapshot(),historical);
+  await f.query('UPDATE speaking_independent.work_unit SET revoked_at=now() WHERE id=$1',[current]);
+  assert.equal((await f.verifyDocument(documentId)).status,'review');
 });
 
 test('Speaking: trang Lesson 6 thật với API và PostgreSQL fixture cách ly',
