@@ -8,7 +8,7 @@ test('Speaking tắt log giữ nguyên native transaction, không gọi bên g�
  for(const journal of [undefined,null,false]){
  const boundary=createSpeakingJournalBoundary({transaction,journal});
  assert.equal(boundary.transaction,transaction);assert.equal(boundary.record({},{}),false);
- assert.deepEqual(boundary.snapshot(),{enabled:false,staged:0,committed:0,pending:0,delivered:0,unknown:0,overflow:0,discardedOnTransactionError:0});
+ assert.deepEqual(boundary.snapshot(),{enabled:false,staged:0,committed:0,pending:0,delivered:0,durableQueued:0,unknown:0,overflow:0,discardedOnTransactionError:0});
  }
 });
 

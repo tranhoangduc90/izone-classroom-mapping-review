@@ -239,7 +239,7 @@
        grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
    }
 -  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
-+  return {journalHealth:journalBoundary.snapshot,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
++  return {journalHealth:journalBoundary.snapshot,flushJournal:journalBoundary.flush,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
      requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
      pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
  }
@@ -402,7 +402,7 @@
    }
    async function once(unitId){const [job]=await claim(1,unitId);return job?run(job):false;}
 -  return {claim,run,once};
-+  return {claim,run,once,journalHealth:boundary.snapshot};
++  return {claim,run,once,journalHealth:boundary.snapshot,flushJournal:boundary.flush};
  }
  
  // Keep the native one-writer/four-item burst and two-second provider gap.
