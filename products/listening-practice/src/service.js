@@ -5,6 +5,7 @@ import {authoredLesson} from './authored-content.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
+import {createJournalTransaction} from './journal-observer.js';
 
 // Chỉ dùng pool của kho Reading. Mọi thay đổi lượt và job Docs cùng commit hoặc rollback.
 export async function transaction(pool,fn){
@@ -13,7 +14,8 @@ export async function transaction(pool,fn){
  catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 }
 const initialState=()=>({attempts:[],events:[],firstCompleted:null,sequence:0});
-export function createListeningService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
+export function createListeningService({pool,context,clock=Date.now,pageBase,resolveCurrentOwner,journal=null,verifyBinding=async()=>fail('OWNER_PROOF_REQUIRED','Chưa cấu hình đối chiếu chủ bản Docs.',503)}){
+ const observedTransaction=createJournalTransaction({pool,transaction,journal,clock});
  const entryContext=createEntryContext({pool,context,schema:'listening_practice',fail,lessonFor:code=>authoredLesson(code),resolveCurrentOwner});
  async function guardEntry({documentId,code,token,entryToken}){
   const expected=await entryContext.resolve({documentId,code}),b=await binding(pool,{token,entryToken});
@@ -61,7 +63,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
  }
  async function operation(input,kind,fn){
   if(!/^[0-9a-f-]{36}$/i.test(input.operationId||''))fail('OPERATION_REQUIRED','Thao tác thiếu mã chống gửi lặp.',400);
-  return transaction(pool,async db=>{
+  return observedTransaction(async(db,record)=>{
    const b=await binding(db,{token:input.token}),state=await work(db,b);
    const fingerprint=hash(canonical({kind,...input,token:undefined,operationId:undefined}));
    const old=(await db.query('SELECT fingerprint,response FROM listening_practice.operation WHERE binding_id=$1 AND operation_id=$2',[b.id,input.operationId])).rows[0];
@@ -73,6 +75,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
    }
    const result=await fn(db,b,state);await save(db,b,state);
    await db.query('INSERT INTO listening_practice.operation(binding_id,operation_id,fingerprint,response) VALUES($1,$2,$3,$4)',[b.id,input.operationId,fingerprint,result]);
+   record(b,state,kind,input.operationId,{leaseIssued:Boolean(result.lease)});
    return result;
   });
  }
@@ -258,15 +261,15 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   });
  }
  async function pulse(input,pause=false){
-  return transaction(pool,async db=>{
+  return observedTransaction(async(db,record)=>{
    const b=await binding(db,{token:input.token}),state=await work(db,b),a=active(state,input.attemptId);
    checkLease(a,input.lease);
    if(a.status==='paused'&&!pause)fail('ATTEMPT_PAUSED','Lần làm bài đang tạm dừng.');
-   if(pause){if(!recoverCheckpoint(a,input.snapshot,input.lease,clock())){await save(db,b,state);return view(db,b,state);}}
+   if(pause){if(!recoverCheckpoint(a,input.snapshot,input.lease,clock())){await save(db,b,state);record(b,state,'pause');return view(db,b,state);}}
    else checkpoint(a,input.snapshot,input.lease,clock());
    if(a.usedMs>=timingFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
-   await save(db,b,state);return view(db,b,state);
+   await save(db,b,state);if(pause)record(b,state,'pause');return view(db,b,state);
   });
  }
  const reset=input=>operation(input,'reset',async(db,b,state)=>{
