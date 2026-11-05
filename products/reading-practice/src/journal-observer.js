@@ -1,3 +1,4 @@
+import {queuedDocsReceipt,publishDocsProgress} from './docs-journal-observer.js';
 import {randomUUID} from 'node:crypto';
 import {canonical} from './domain.js';
 import {lessonFor} from './lessons.js';
@@ -12,8 +13,8 @@ export function readingDraftChanged(before,after){
 export function createJournalTransaction({pool,transaction,journal,clock}){
  if(!journal)return fn=>transaction(pool,db=>fn(db,()=>{}));
  return async fn=>{
-  let receipt;
-  const result=await transaction(pool,db=>fn(db,(b,state,action,operationId,details={})=>{
+  let receipt;const docsReceipts=[];
+  const record=(b,state,action,operationId,details={})=>{
    try{
     const a=state.attempts.at(-1);if(!a)return;
     receipt={scope:{code:b.code,classCode:b.class_code,studentRef:b.student_ref,attemptId:a.id,attemptNo:a.no},
@@ -26,7 +27,10 @@ export function createJournalTransaction({pool,transaction,journal,clock}){
       ...(details.previousAttemptId?{previousAttemptId:details.previousAttemptId}:{}),
       ...(a.method?{method:a.method}:{})}};
    }catch{receipt=undefined;}
-  }));
+  };
+  record.docs=(b,job,a)=>{const value=queuedDocsReceipt(b,job,a);if(value)docsReceipts.push(value);};
+  const result=await transaction(pool,db=>fn(db,record));
+  for(const value of docsReceipts)publishDocsProgress(journal,value,clock);
   if(receipt)try{
    // Mốc quan sát sau ACK COMMIT; không tự nhận đây là timestamp commit SQL.
    receipt.occurredAt=new Date(clock()).toISOString();
