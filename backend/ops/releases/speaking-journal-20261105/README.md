@@ -1,5 +1,13 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Startup/đóng dịch vụ —06/11, chưa phát
+
+Thêm helper speaking-journal-runtime.js vào đúng native webapp; mount readonly thư viện log tại src/exam-journal-runtime. Cờ EXAM_JOURNAL_ENABLED=1 và EXAM_JOURNAL_CONFIG_FILE dùng cấu trúc v1 hiện có, bắt buộc rpc.producerSpool v1. Tắt không import thư viện/đọc config/gửi request. Lỗi startup trả journal=false để giữ nghiệp vụ, console chỉ có mã cố định. configured không chứng minh Agent hoặc Collector đã nhận log. Một callable journal giữ nguyên batch capability được truyền vào cả API và Docs.
+
+Entrypoint dừng HTTP/workers theo thứ tự native rồi flush callback API và Docs, close producer, cuối cùng đóng pool. Cả dispatcher Docs coordinated và nhịp cũ đều có flushJournal. Runtime close idempotent, vẫn thử các drain/close còn lại nếu một bước lỗi; RAM retry/pending còn lại được báo shutdown_unknown. Không cam kết SIGKILL hoặc crash trước Agent ACK được bảo toàn.
+
+Helper6ca, thư viện/schema15ca; native42ID duy nhất theo hợp27ca đạt của lượt28, một ca khởi tạo Docs kiểm riêng đạt và14ca nền không đổi. Lượt28 có27đạt/1lỗi RPC setup JOURNAL_OUTCOME_UNKNOWN, không nhận lượt đó xanh hoặc đã sửa nguyên nhân kết nối. Cleanup thoát bình thường. Hai ca mới kiểm config thật→SQL→Agent→Collector sau drain và flush của hai dispatcher tắt. Chưa thử tín hiệu SIGTERM cả container, Google/AI thật hoặc production. Còn vé/client, báo cáo/P3/P4 và rollout; không tự mở thêm tầng đo Google nội bộ.
+
 ## Callback tới hàng chờ bền —06/11, chưa phát
 
 Helper tách durableQueued của Agent khỏi delivered/persisted của Collector. Batch capability gom tối đa32projection, mỗi mục có deliveryId UUID riêng; trả đảo thứ tự vẫn ghép theo ID, thiếu/ACK mâu thuẫn thành unknown. Callback cũ vẫn serial. Native transaction không đợi mạng; false/throw của logger không đổi kết quả nghiệp vụ. API và worker Docs có flushJournal để dùng khi shutdown sau khi dừng nguồn phát; không đóng producer trước khi callback xong.

@@ -406,17 +406,37 @@
  }
  
  // Keep the native one-writer/four-item burst and two-second provider gap.
+@@ -207,11 +247,14 @@
+ 
+ export function startSpeakingProgressDocsWorker(options) {
+   const worker=createSpeakingProgressDocsWorker(options);let stopped=false,running=false,timer;
+-  if(options.coordinated)return createSpeakingProgressDispatcher({...options.loopOptions,worker,enabled:Boolean(options.gateway),
+-    onError:error=>console.error('Speaking Docs progress:',String(error.code||'PROGRESS_WORKER_ERROR'))});
++  if(options.coordinated){
++    const dispatcher=createSpeakingProgressDispatcher({...options.loopOptions,worker,enabled:Boolean(options.gateway),
++      onError:error=>console.error('Speaking Docs progress:',String(error.code||'PROGRESS_WORKER_ERROR'))});
++    return {...dispatcher,flushJournal:worker.flushJournal};
++  }
+   async function tick(){if(stopped||running)return;running=true;try{for(let n=0;n<4;n++)if(!await worker.once())break;}
+     catch(error){console.error('Speaking Docs progress:',String(error.code||'PROGRESS_WORKER_ERROR'));}
+     finally{running=false;if(!stopped)timer=setTimeout(tick,2000).unref();}}
+   if(options.gateway)timer=setTimeout(tick,0).unref();
+-  return {async stop(){stopped=true;clearTimeout(timer);while(running)await new Promise(r=>setTimeout(r,100));}};
+-}
++  return {flushJournal:worker.flushJournal,async stop(){stopped=true;clearTimeout(timer);while(running)await new Promise(r=>setTimeout(r,100));}};
++}
 --- a/src/speaking-independent-server.js
 +++ b/src/speaking-independent-server.js
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,8 @@
  import { runSpeakingCheckJob } from './speaking-check-worker.js';
  import { runPracticeCheckJob,runPracticeAnalysisJob } from './speaking-practice-worker.js';
  import { runSpeakingDoctorJob } from './speaking-doctor-worker.js';
 +import {withSpeakingProviderJournal} from './speaking-provider-journal.js';
++import {startSpeakingJournalRuntime} from './speaking-journal-runtime.js';
  import { timingSafeEqual,createHash } from 'node:crypto';
  import { createIndependentDocuments,createDocsGateway,writeIndependentDocument } from './speaking-independent-documents.js';
  import { createOpeningDocsGateway } from './speaking-docs-read.js';
-@@ -215,12 +216,14 @@
+@@ -215,12 +217,14 @@
    if(coordinated&&enabled){
      const run=async job=>{
        const adapter=service.workerService(job);
@@ -431,7 +451,7 @@
      };
      const loop=createDurableWorkLoop({...loopOptions,claim:n=>service.claimJobs(n),run,capacity:4,scanMs:pollMs,
        onError:error=>console.error('Hàng Speaking độc lập lỗi:',String(error.code||'WORKER_ERROR'))});
-@@ -235,12 +238,14 @@
+@@ -235,12 +239,14 @@
        for(let i=0;i<4;i++){const j=await service.claimJob();if(!j)break;jobs.push(j);}
        await Promise.all(jobs.map(async job=>{
          const adapter=service.workerService(job);
@@ -446,6 +466,33 @@
        }));
      } catch(e) { console.error('Hàng Speaking độc lập lỗi:',String(e.code||'WORKER_ERROR')); }
      finally {running=false;if(!stopped) timer=setTimeout(tick,pollMs).unref();}
+@@ -258,7 +264,8 @@
+   const gateway=env.SPEAKING_DOCS_GATEWAY_URL?createDocsGateway({url:env.SPEAKING_DOCS_GATEWAY_URL,secret:env.SPEAKING_DOCS_GATEWAY_SECRET}):null;
+   const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
+   const progressGateway=env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE}):null;
+-  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true'});
++  const journalRuntime=await startSpeakingJournalRuntime({env,onHealth:row=>console.info(JSON.stringify(row))});
++  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',journal:journalRuntime.journal});
+   const csv=value=>(value||'').split(',').map(item=>item.trim()).filter(Boolean);
+   const selfMatch=env.SPEAKING_SELF_MATCH_ENABLED==='true'?createSpeakingSelfMatch({pool,secret:env.INDEPENDENT_ACCESS_SECRET,
+     registeredDocsEnabled:env.SPEAKING_SELF_MATCH_REGISTERED_DOCS_ENABLED==='true',
+@@ -266,7 +273,7 @@
+     eligibleDocuments:z.array(z.string().regex(/^[A-Za-z0-9_-]{5,120}$/)).max(100).parse(csv(env.SPEAKING_SELF_MATCH_DOCUMENT_IDS))}):null;
+   const selfMatchMailer=startSpeakingSelfMatchMailer({pool,send:env.SPEAKING_SELF_MATCH_MAIL_ENABLED==='true'?speakingSelfMatchMailFromEnv(env):null});
+   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway,selfMatch}):null;
+-  const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
++  const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents,journal:journalRuntime.journal});
+   const observation=env.TEST_SERVICES_OBSERVATION_ENABLED==='true'?createSpeakingObservation({schema:'speaking_independent',
+     data:createSpeakingObservationData({pool,schema:'speaking_independent'}),source,observeTeachers:actors=>source.observeTeachers(actors)}):null;
+   const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
+@@ -278,6 +285,6 @@
+     teacherSessionCookieName:env.TEACHER_SESSION_COOKIE_NAME||'izone_teacher_session',
+     observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
+     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
+-  let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await selfMatchMailer.stop();await pool.end();})();
++  let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await selfMatchMailer.stop();await journalRuntime.close({flushers:[service.flushJournal,progressWorker.flushJournal]});await pool.end();})();
+   for(const signal of ['SIGTERM','SIGINT']) process.on(signal,()=>void stop());
+ }
 --- a/src/speaking-share-reader.js
 +++ b/src/speaking-share-reader.js
 @@ -1,4 +1,5 @@
