@@ -31,3 +31,29 @@ test('Docs queue: không vượt job lỗi trước đó, retry lỗi mạng r�
  failWrite=false;await f.pool.query("UPDATE listening_practice.doc_job SET available_at=now() WHERE sequence=0");await worker.once();jobs=(await f.pool.query('SELECT * FROM listening_practice.doc_job ORDER BY sequence')).rows;
  assert.equal(jobs[0].status,'verified');assert.equal(jobs[1].status,'pending');assert.equal(calls,2);
 });
+
+test('read-only Google Doc retries the saved status and verifies its link after write access returns',async t=>{
+ const f=await fixture();t.after(f.close);await f.begin();
+ const table='listening_practice.doc_job';
+ await f.pool.query("DELETE FROM "+table+" WHERE kind='cta'");
+ const binding=(await f.pool.query('SELECT * FROM listening_practice.binding')).rows[0];
+ const job=(await f.pool.query('SELECT * FROM '+table)).rows[0];
+ const payload={text:'Completed. Giảng viên nhấn vào đây để xem kết quả.',link:'https://page.test/teacher.html#submission=fixture'};
+ await f.pool.query('UPDATE '+table+' SET payload=$2 WHERE id=$1',[job.id,payload]);
+ let editable=false,text='',link='',writes=0;
+ const worker=createDocsWorker({pool:f.pool,docs:{read:async()=>{
+  const doc=document(binding,text,link);
+  if(!editable)delete doc.revisionId;
+  return doc;
+ },write:async(_id,plan)=>{
+  assert.equal(plan.revisionId,'revision1');writes++;
+  text=plan.requests.find(req=>req.insertText).insertText.text;
+  link=plan.requests.at(-1).updateTextStyle.textStyle.link.url;
+ }}});
+ await worker.once();
+ assert.deepEqual((await f.pool.query('SELECT status,error_code FROM '+table)).rows,[{status:'pending',error_code:'DOC_WRITE_UNAVAILABLE'}]);
+ assert.equal(await worker.once(),false);assert.equal(writes,0);
+ editable=true;await f.pool.query('UPDATE '+table+' SET available_at=now()');await worker.once();
+ assert.equal((await f.pool.query('SELECT status FROM '+table)).rows[0].status,'verified');
+ assert.equal(writes,1);assert.equal(text,payload.text);assert.equal(link,payload.link);
+});

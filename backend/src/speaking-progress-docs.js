@@ -132,11 +132,14 @@ export function createSpeakingProgressDocsWorker({pool,schema,gateway}) {
           WHERE unit_id=$1`,[current.unit_id,current.payload.text,current.payload.link,current.sequence]);
         if(schema==='speaking_homework'&&current.payload.receiptId)await db.query("SELECT pg_notify('speaking_homework_write_doc_ready','')");
       }catch(error){
-        const code=String(error.code||error.message||'DOC_RETRY').slice(0,90);
-        const blocked=/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|WRITE_UNAVAILABLE|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8;
-        await db.query(`UPDATE ${target} SET status=CASE WHEN sequence<>$2 THEN 'pending' WHEN $3 THEN 'blocked' ELSE 'pending' END,
-          error_code=$4,available_at=now()+$5*interval '1 second' WHERE unit_id=$1`,
-          [current.unit_id,current.sequence,blocked,code,Math.min(300,2**current.attempts)]);
+        const code=error.name==='TimeoutError'?'DOC_TIMEOUT':String(error.code||error.message||'DOC_RETRY').slice(0,90);
+        const recoverable=/^DOC_(?:WRITE_UNAVAILABLE|TIMEOUT|HTTP_(?:429|5\d\d))$/.test(code);
+        const blocked=!recoverable&&(/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8);
+        const delay=recoverable?([60,300,900][current.attempts-1]||3600):Math.min(300,2**current.attempts);
+        const updated=await db.query(`UPDATE ${target} SET status=CASE WHEN sequence<>$2 THEN 'pending' WHEN $3 THEN 'blocked' ELSE 'pending' END,
+          error_code=$4,available_at=CASE WHEN sequence<>$2 THEN available_at ELSE now()+$5*interval '1 second' END WHERE unit_id=$1 RETURNING sequence`,
+          [current.unit_id,current.sequence,blocked,code,delay]);
+        if(recoverable&&current.attempts===4&&updated.rows[0]?.sequence===current.sequence)console.warn(JSON.stringify({event:'speaking_docs_recovery_delayed',code,unitId:current.unit_id}));
       }
       return true;
     }finally{if(lock)await db.query('SELECT pg_advisory_unlock(hashtext($1))',[lock]);db.release();}
