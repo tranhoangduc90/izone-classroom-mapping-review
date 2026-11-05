@@ -5,7 +5,7 @@
 -import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
 +import {withSpeakingTransaction as nativeTransaction} from './speaking-work-runtime.js';
 +import {createSpeakingJournalBoundary,speakingJournalTime} from './speaking-journal-boundary.js';
-+import {rememberSpeakingJournalScope} from './speaking-journal-runtime.js';
++import {rememberSpeakingJournalScope,createSpeakingReadSummary} from './speaking-journal-runtime.js';
  import {markWorkReady} from './test-work-runtime.js';
  import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
  import { createPendingRoster } from './pending-roster.js';
@@ -15,7 +15,7 @@
  import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
  import { saveConversationSnapshot,readConversationSnapshot } from './speaking-conversation-snapshot.js';
  import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
-@@ -17,9 +19,33 @@
+@@ -17,9 +19,34 @@
  // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
  // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
  // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
@@ -24,6 +24,7 @@
 -  const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
 +export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true',journal}) {
 +  const journalBoundary=createSpeakingJournalBoundary({transaction:nativeTransaction,journal});
++  const readSummary=journal?createSpeakingReadSummary({emit:journalBoundary.recordCommitted}):null;
 +  const journalClaims=new WeakMap();
 +  const withTransaction=journalBoundary.transaction;
 +  const recordJournal=(db,u,kind,id,createdAt,data)=>journal&&journalBoundary.record(db,()=>({
@@ -52,7 +53,7 @@
    if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
    const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
    async function context(input) { return source.context(input); }
-@@ -129,13 +155,17 @@
+@@ -129,13 +156,17 @@
      if (!u) fail('SESSION_INVALID','Phiên làm bài không còn hợp lệ. Hãy mở lại bài.',403);
      // Danh sách đã nhớ không cấp quyền: kiểm đăng ký hiện hành ở mỗi lượt.
      await unitContext(u);
@@ -73,7 +74,7 @@
    }
    async function open(identity) {
      const u=await grant(identity);
-@@ -143,7 +173,7 @@
+@@ -143,7 +174,7 @@
      const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
      const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
      return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
@@ -82,7 +83,7 @@
        links:all.filter(l=>l.kind==='main').map(l=>speakingCheckView({...l,check_status:l.status},jobs.find(j=>j.link_id===l.id&&j.kind==='check_main'),'check_status')),
        practiceLinks:all.filter(l=>l.kind==='practice').map(l=>({...speakingCheckView(l,jobs.find(j=>j.link_id===l.id&&j.kind==='check_practice')),analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null})),
        processing:Object.fromEntries(jobs.filter(j=>!j.link_id).map(j=>[j.kind,{status:j.status}]))};
-@@ -186,7 +216,9 @@
+@@ -186,7 +217,9 @@
        [u.id,kind,part,slot,exerciseId,title,(old?.revision||0)+1,share.url,share.shareId,linkOnly?'accepted':'pending',linkOnly?hash(`link-only:${share.shareId}`):null,linkOnly?0:null]);
        markWorkReady(db,'state');
        if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
@@ -93,7 +94,7 @@
        return {id:l.id,status:l.status};
      });
    }
-@@ -209,9 +241,11 @@
+@@ -209,9 +242,11 @@
        catch(e) { if(e.code==='23505') fail('REUSED_CONVERSATION','Một hội thoại đã được nộp ở bài khác trong khóa. Hãy dùng hội thoại mới.'); throw e; }
        const {rows:[r]}=await db.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1) RETURNING id,created_at',[u.id]);
        await db.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[u.id]);
@@ -107,7 +108,7 @@
        return r;
      });
    }
-@@ -244,24 +278,33 @@
+@@ -244,24 +279,33 @@
            WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
          ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1), claimed AS (
          UPDATE speaking_independent.job j SET status='processing',owner=gen_random_uuid(),lease_until=now()+interval '4 minutes',
@@ -147,7 +148,7 @@
        }
        if(invalid.length){
          await db.query("UPDATE speaking_independent.job SET status='review',last_error='WORK_ITEM_INVALID',lease_until=NULL,updated_at=now() WHERE id=ANY($1::uuid[])",[invalid]);
-@@ -273,8 +316,11 @@
+@@ -273,8 +317,11 @@
    async function claimJob(){return(await claimJobs(1))[0]||null;}
    async function mutateJob(job,fn) {
      return withTransaction(pool,async db=>{
@@ -161,7 +162,7 @@
        if (!j) fail('STALE_JOB','Lượt xử lý đã hết hạn; kết quả cũ không được ghi.');
        const result=await fn(db,j);markWorkReady(db,'state');return result;
      });
-@@ -288,8 +334,10 @@
+@@ -288,8 +335,10 @@
          if(current.attempts===4)console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code,jobId:job.job_id}));
          return;
        }
@@ -174,7 +175,7 @@
      });
    }
    async function checkComplete(job,result) {
-@@ -297,7 +345,8 @@
+@@ -297,7 +346,8 @@
        await db.query('SELECT id FROM speaking_independent.work_unit WHERE id=$1 FOR UPDATE',[j.work_unit_id]);
        const current=(await links(j.work_unit_id,db)).find(l=>l.part===job.part&&l.kind===job.link_kind);
        if (current?.id!==j.link_id) {
@@ -184,7 +185,7 @@
          return {status:'superseded'};
        }
        const valid=result.qualityPassed===true && Number.isInteger(result.questionCount)
-@@ -309,8 +358,8 @@
+@@ -309,8 +359,8 @@
        const all=await links(j.work_unit_id,db);
        if (valid && all.some(l=>l.id!==j.link_id&&l.fingerprint===result.fingerprint)) code='REUSED_CONVERSATION';
        let status=valid&&!code?'accepted':'rejected';
@@ -195,7 +196,7 @@
        [j.link_id,status,code,result.fingerprint||null,result.questionCount||0,JSON.stringify(result.evidence||{})]);
        if (status==='accepted'&&j.kind==='check_practice') {
          await db.query('SAVEPOINT reserve_practice');
-@@ -322,11 +371,13 @@
+@@ -322,11 +372,13 @@
            await db.query("UPDATE speaking_independent.link SET status='rejected',check_code='REUSED_CONVERSATION' WHERE id=$1",[j.link_id]);
          }
          await db.query('RELEASE SAVEPOINT reserve_practice');
@@ -212,7 +213,7 @@
        return {status};
      });
    }
-@@ -349,6 +400,11 @@
+@@ -349,6 +401,11 @@
      }
    }
    function workerService(job) {
@@ -224,7 +225,7 @@
      const complete=r=>checkComplete(job,r);
      const failWorker=r=>failJob(job,r.errorCode);
      const completeAnalysis=async r=>{
-@@ -360,11 +416,12 @@
+@@ -360,11 +417,12 @@
          fail('DOCTOR_RESULT_INVALID','Bằng chứng ghép bài luyện không hợp lệ.');
        return mutateJob(job,async(db,j)=>{
          for(const exerciseId of new Set(r.matches.map(m=>m.exerciseId))) await recordEvent(db,job.u,{sourceKey:`doctor:${j.id}:${exerciseId}`,exerciseId,kind:'recommendation',occurredAt:new Date(j.created_at).toISOString()});
@@ -239,18 +240,21 @@
        rejectCheckJob:r=>complete({...r,qualityPassed:false}),rejectPracticeCheckJob:r=>complete({...r,qualityPassed:false}),
        failCheckJob:failWorker,failPracticeCheckJob:failWorker,failPracticeAnalysisJob:failWorker,failOutboxJob:failWorker,
        getDoctorCatalog:()=>catalog(job.u),getPracticeDoctorCatalog:()=>catalog(job.u),
-@@ -386,7 +443,13 @@
+@@ -386,7 +444,16 @@
        processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
        grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
    }
 -  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
 +  function observeJournalHttp(frame,route,httpStatus){
 +    if(!journal||!frame.scope)return;
++    if(readSummary.record(frame,route,httpStatus))return;
 +    journalBoundary.recordCommitted(()=>({scope:frame.scope,kind:'api.request',operationId:frame.requestId,requestId:frame.requestId,
 +      committedAt:new Date().toISOString(),data:{route,httpStatus,durationMs:Math.max(0,Math.round(performance.now()-frame.started)),outcome:'http_response_only',
 +        ...(frame.linkId?{linkId:frame.linkId}:{}),...(frame.receiptId?{receiptId:frame.receiptId}:{})}}));
++    readSummary.flush();
 +  }
-+  return {journalHealth:journalBoundary.snapshot,flushJournal:journalBoundary.flush,observeJournalHttp,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
++  const flushJournal=()=>{readSummary?.flush();return journalBoundary.flush();};
++  return {journalHealth:()=>({...journalBoundary.snapshot(),...(readSummary?{readSummary:readSummary.snapshot()}:{})}),flushJournal,observeJournalHttp,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
      requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
      pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
  }

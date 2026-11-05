@@ -6,11 +6,11 @@
       "mode": "independent",
       "source": "src/speaking-independent.js",
       "baseSha256": "26f21cb877f343c7624ad8b8c4100979f9da99b82b15c98651ade56b302eff13",
-      "candidateSha256": "81f0db19d6caa842b7ff0db1ee29d15f9ef58de699de93e2a062f099edef9a76",
+      "candidateSha256": "c3bf236460b7cbc1ead5bcab18b5b513c79315ccc38f7033a65861075e139edf",
       "patch": "independent.patch",
       "reverseApplyCheck": true,
       "extraModule": "src/speaking-journal-boundary.js",
-      "forwardAppliedSha256": "81f0db19d6caa842b7ff0db1ee29d15f9ef58de699de93e2a062f099edef9a76",
+      "forwardAppliedSha256": "c3bf236460b7cbc1ead5bcab18b5b513c79315ccc38f7033a65861075e139edf",
       "forwardExactBytes": true,
       "additionalFiles": [
         {
@@ -139,8 +139,9 @@
   "maxTransactionEvents": 32,
   "maxPendingEvents": 256,
   "remaining": [
-    "current webapp browser adapter across three engines",
-    "reports/P3/P4 and producer rollout"
+    "cross-origin/Linux qualification and reports",
+    "P3 mixed load/quota/cold Drive",
+    "P4 per-product rollout and readback"
   ],
   "qualification": "PGlite SQL plus signed localhost Collector; checker accepted states seeded, no live PostgreSQL/AI/Google/production actions.",
   "modeCoverage": {
@@ -172,7 +173,7 @@
   "startupQualification": "Opt-in EXAM_JOURNAL_ENABLED=1/config v1 with producerSpool. Startup config failure disables journal only; configured is not transport health/ACK. Stop emitters, drain API/Docs then close transport/pool. Shutdown with remaining RAM retry/pending is unknown. Whole-container SIGTERM and production not yet tested.",
   "googleRequestQualification": "Counts gateway calls only; internal OAuth/retry wire requests remain unmeasured, not a new mandatory instrumentation layer.",
   "canonicalRuntimeHelper": "backend/src/speaking-journal-runtime.js",
-  "canonicalRuntimeHelperSha256": "6aabf2a3b1a6fb5123282d3e7ddec11196e78ce5d8c55496d98b9e07d3d36fee",
-  "clientIntakeQualification": "Native grant issues append-only independent-scope ticket. Collector persisted ACK only; no browser queue ACK. Request UUID is diagnostic, not authority. Scope captured after native grant; HTTP finish/result IDs remain separate from committed SQL facts. No browser engine is wired yet.",
-  "nativeCoverageQualification": "46 unique qualified cases: 28 current unaffected native cases, 4 final HTTP cases, 14 unchanged provider/legacy cases. Combined run30/31 had a V8 fatal/Wasm crash after two HTTP subtests; not green or root cause fixed. Final HTTP file4/4 exits normally. Whole-container/Linux/browser/P3/P4 not proved."
+  "canonicalRuntimeHelperSha256": "c85db36d86e6668d904157c433753203f3dbb1866a4849fa740b4b029a192e06",
+  "clientIntakeQualification": "All three current webapp engines wired through common disabled-by-default client. Native tickets, IndexedDB, replay and old-owner ACK separation verified on isolated Edge/localhost. Native grant alone binds scope; HTTP observations do not prove SQL commit. Successful reads coalesced by native owner/route.",
+  "nativeCoverageQualification": "47 unique qualified cases:28 retained direct-service,5 final HTTP,14 unchanged provider/legacy. The previous combined V8 fatal/Wasm run remains failed/unrooted; final HTTP5/5 exits normally. Browser mock business API is separate from native SQL fixture; no whole-container/cross-origin production/P3/P4 proof."
 }

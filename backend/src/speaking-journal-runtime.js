@@ -11,6 +11,31 @@ export function withSpeakingJournalRequest(requestId,work){
 export function rememberSpeakingJournalScope(scope){
  const frame=requests.getStore();if(frame)frame.scope=Object.freeze({...scope});
 }
+
+// Successful reads are counts/latencies, not one event per background poll.
+export function createSpeakingReadSummary({emit,clock=()=>performance.now(),windowMs=60000,maxGroups=256,setTimer=setTimeout,clearTimer=clearTimeout}){
+ const groups=new Map();let timer,emitted=0,failed=0;
+ function flush(){
+  clearTimer(timer);timer=null;const pending=[...groups.values()];groups.clear();
+  for(const row of pending)try{
+   const result=emit({scope:row.scope,kind:'api.summary',operationId:randomUUID(),committedAt:new Date().toISOString(),
+    data:{route:row.route,requests:row.count,sumDurationMs:row.total,maxDurationMs:row.maximum,windowMs:Math.max(0,Math.round(clock()-row.started)),outcome:'http_response_only'}});
+   if(result===false)failed++;else emitted++;
+  }catch{failed++;}
+ }
+ return{
+  record(frame,route,httpStatus){
+   if(!frame.scope||!['open','doctor_list'].includes(route)||httpStatus<200||httpStatus>=300)return false;
+   const key=JSON.stringify([frame.scope,route]);
+   if(!groups.has(key)&&groups.size>=maxGroups)flush();
+   let row=groups.get(key);
+   if(!row){row={scope:{...frame.scope},route,count:0,total:0,maximum:0,started:frame.started};groups.set(key,row);}
+   const duration=Math.max(0,Math.round(clock()-frame.started));row.count++;row.total+=duration;row.maximum=Math.max(row.maximum,duration);
+   if(!timer){timer=setTimer(flush,windowMs);timer?.unref?.();}
+   return true;
+  },flush,snapshot:()=>({pendingGroups:groups.size,emitted,failed}),
+ };
+}
 export async function startSpeakingJournalRuntime({env=process.env,
  load=()=>import('./exam-journal-runtime/adapters/speaking-producer.mjs'),onHealth=()=>{},allowedOrigins=[]}={}){
  const enabled=env.EXAM_JOURNAL_ENABLED==='1';
