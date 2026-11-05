@@ -11,7 +11,7 @@ import {lessonFor} from './lessons.js';
 import {sendPublicAudioMetadata} from './public-audio.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api',journal=null}){
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
@@ -25,6 +25,20 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.use(express.json({limit:'512kb'}));
  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+ const withJournal=value=>{
+  if(!journal)return value;
+  try{
+   const a=value.attempts?.at(-1),identity=value.identity;
+   if(!a||!identity)return value;
+   const listeningJournal=journal.context({code:value.lesson?.code||CODE,classCode:identity.classCode,
+    studentRef:identity.studentRef,attemptId:a.id,attemptNo:a.no});
+   return listeningJournal?{...value,listeningJournal}:value;
+  }catch{return value;}
+ };
+ if(journal)app.post('/api/journal-events',wrap(async(req,res)=>{
+  const reply=await journal.collect({method:req.method,headers:req.headers,body:req.body});
+  res.set(reply.headers).status(reply.status).json(reply.body);
+ }));
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
  // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
  const mediaFor=hash=>mediaCatalog[hash]||(hash===audioHash?{audioFile,review}:null);
@@ -63,7 +77,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  }));
  app.post('/api/shared-login',wrap(async(req,res)=>{
   const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
-  res.set('Cache-Control','no-store');res.json(await service.sharedLogin({...input,code:lessonFor(input.code).code,...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}));
+  res.set('Cache-Control','no-store');res.json(withJournal(await service.sharedLogin({...input,code:lessonFor(input.code).code,...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})})));
  }));
  const documentContext=req=>({documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document']),code:z.string().min(1).max(100).parse(req.headers['x-izone-assignment'])});
  app.get('/api/entry-context',wrap(async(req,res)=>{
@@ -76,9 +90,10 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
-  res.json(await service[action]({...input,token:token(req)}));
+  const value=await service[action]({...input,token:token(req)});
+  res.json(['login','begin','resume','reset'].includes(action)?withJournal(value):value);
  }));
- app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
+ app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(withJournal(await service.read({token:token(req)})));}));
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{
   const id=z.uuid().parse(req.params.attemptId),result=await service.result({token:token(req),attemptId:id});
   res.set('Cache-Control','no-store');res.json(withReview(result,`review-audio/${id}`));
