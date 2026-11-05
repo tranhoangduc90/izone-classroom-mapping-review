@@ -3,7 +3,7 @@
 export function createSpeakingJournalBoundary({transaction,journal,maxTransactionEvents=32,maxPendingEvents=256,onFailure=()=>{}}){
  const stats={staged:0,committed:0,pending:0,delivered:0,unknown:0,overflow:0,discardedOnTransactionError:0};
  const snapshot=()=>({enabled:typeof journal==='function',...stats});
- if(journal==null||journal===false)return{transaction,record:()=>false,snapshot};
+ if(journal==null||journal===false)return{transaction,record:()=>false,recordCommitted:()=>false,snapshot};
  if(typeof transaction!=='function'||typeof journal!=='function'
   ||!Number.isInteger(maxTransactionEvents)||maxTransactionEvents<1||maxTransactionEvents>100
   ||!Number.isInteger(maxPendingEvents)||maxPendingEvents<1||maxPendingEvents>4096)
@@ -34,6 +34,23 @@ export function createSpeakingJournalBoundary({transaction,journal,maxTransactio
   try{rows.push(structuredClone(typeof projection==='function'?projection():projection));stats.staged++;return true;}
   catch{stats.unknown++;failure('SPEAKING_JOURNAL_PROJECTION_INVALID');return false;}
  }
+ function enqueueCommitted(rows){
+  stats.committed+=rows.length;let accepted=0;
+  for(const row of rows){
+   if(stats.pending>=maxPendingEvents){stats.overflow++;failure('SPEAKING_JOURNAL_DELIVERY_FULL');continue;}
+   stats.pending++;delivery.push(row);accepted++;
+  }
+  if(delivery.length)scheduleDelivery();
+  return accepted;
+ }
+ // Chỉ caller vừa nhận SQL auto-commit hoặc kết quả I/O mới dùng đường này.
+ // Boundary không tự chứng minh kết quả đã commit; ACK của Collector vẫn riêng.
+ function recordCommitted(projection){
+  let row;
+  try{row=structuredClone(typeof projection==='function'?projection():projection);}
+  catch{stats.unknown++;failure('SPEAKING_JOURNAL_PROJECTION_INVALID');return false;}
+  return enqueueCommitted([row])===1;
+ }
  async function observedTransaction(pool,work){
   const rows=[];
   let result;
@@ -43,15 +60,10 @@ export function createSpeakingJournalBoundary({transaction,journal,maxTransactio
     try{return await work(client);}finally{active.delete(client);}
    });
   }catch(error){stats.discardedOnTransactionError+=rows.length;throw error;}
-  stats.committed+=rows.length;
-  for(const row of rows){
-   if(stats.pending>=maxPendingEvents){stats.overflow++;failure('SPEAKING_JOURNAL_DELIVERY_FULL');continue;}
-   stats.pending++;delivery.push(row);
-  }
-  if(delivery.length)scheduleDelivery();
+  enqueueCommitted(rows);
   return result;
  }
- return{transaction:observedTransaction,record,snapshot};
+ return{transaction:observedTransaction,record,recordCommitted,snapshot};
 }
 
 export function speakingJournalTime(value){

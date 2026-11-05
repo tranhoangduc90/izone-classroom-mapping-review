@@ -1,6 +1,6 @@
 --- a/src/speaking-independent.js
 +++ b/src/speaking-independent.js
-@@ -1,5 +1,6 @@
+@@ -1,10 +1,11 @@
  import { createHash, createHmac, randomUUID } from 'node:crypto';
 -import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
 +import {withSpeakingTransaction as nativeTransaction} from './speaking-work-runtime.js';
@@ -8,11 +8,19 @@
  import {markWorkReady} from './test-work-runtime.js';
  import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
  import { createPendingRoster } from './pending-roster.js';
-@@ -17,7 +18,24 @@
+ import { hasChatbotCompletion } from './speaking-completion-policy.js';
+-import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
++import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress,speakingDocsJournalData } from './speaking-progress-docs.js';
+ import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
+ import { saveConversationSnapshot,readConversationSnapshot } from './speaking-conversation-snapshot.js';
+ import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
+@@ -17,9 +18,32 @@
  // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
  // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
  // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
 -export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true'}) {
+-  const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
+-  const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
 +export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true',journal}) {
 +  const journalBoundary=createSpeakingJournalBoundary({transaction:nativeTransaction,journal});
 +  const withTransaction=journalBoundary.transaction;
@@ -31,10 +39,18 @@
 +        ...(checking?{linkId:j.link_id,linkRevision:Number(revision)}:{jobKind:j.kind,...(j.link_id?{linkId:j.link_id}:{})}),...extra},
 +    }));
 +  };
-   const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
-   const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
++  const docsOptions=u=>journal&&u?{transaction:journalBoundary.transaction,onQueued:(db,row,payload)=>journalBoundary.record(db,()=>({
++    scope:{mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id},
++    kind:'docs.progress',operationId:u.id,committedAt:speakingJournalTime(row.updated_at),data:speakingDocsJournalData(row,{phase:'queued',payload}),
++  }))}:undefined;
++  const nativeEnqueueProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
++  const nativeReadProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
++  const enqueueSpeakingProgress=(db,schema,id,u)=>nativeEnqueueProgress(db,schema,id,docsOptions(u));
++  const readSpeakingDocsProgress=(db,schema,id,u)=>nativeReadProgress(db,schema,id,docsOptions(u));
    if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
-@@ -132,10 +150,13 @@
+   const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
+   async function context(input) { return source.context(input); }
+@@ -132,10 +156,13 @@
      return u;
    }
    async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows.map(l=>({...l,linkId:l.id})); }
@@ -51,29 +67,41 @@
    }
    async function open(identity) {
      const u=await grant(identity);
-@@ -187,6 +208,8 @@
+@@ -143,7 +170,7 @@
+     const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
+     const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
+     return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
+-      docsProgress:await readSpeakingDocsProgress(pool,'speaking_independent',u.id),
++      docsProgress:await readSpeakingDocsProgress(pool,'speaking_independent',u.id,u),
+       links:all.filter(l=>l.kind==='main').map(l=>speakingCheckView({...l,check_status:l.status},jobs.find(j=>j.link_id===l.id&&j.kind==='check_main'),'check_status')),
+       practiceLinks:all.filter(l=>l.kind==='practice').map(l=>({...speakingCheckView(l,jobs.find(j=>j.link_id===l.id&&j.kind==='check_practice')),analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null})),
+       processing:Object.fromEntries(jobs.filter(j=>!j.link_id).map(j=>[j.kind,{status:j.status}]))};
+@@ -186,7 +213,9 @@
+       [u.id,kind,part,slot,exerciseId,title,(old?.revision||0)+1,share.url,share.shareId,linkOnly?'accepted':'pending',linkOnly?hash(`link-only:${share.shareId}`):null,linkOnly?0:null]);
        markWorkReady(db,'state');
        if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
-       await enqueueSpeakingProgress(db,'speaking_independent',u.id);
+-      await enqueueSpeakingProgress(db,'speaking_independent',u.id);
++      await enqueueSpeakingProgress(db,'speaking_independent',u.id,u);
 +      recordJournal(db,u,'link.saved',l.id,l.created_at,{linkId:l.id,linkKind:kind,part,
 +        ...(slot===null?{}:{slot}),linkRevision:Number(l.revision),status:l.status});
        return {id:l.id,status:l.status};
      });
    }
-@@ -209,9 +232,11 @@
+@@ -209,9 +238,11 @@
        catch(e) { if(e.code==='23505') fail('REUSED_CONVERSATION','Một hội thoại đã được nộp ở bài khác trong khóa. Hãy dùng hội thoại mới.'); throw e; }
        const {rows:[r]}=await db.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1) RETURNING id,created_at',[u.id]);
        await db.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[u.id]);
 -      await queue(db,u.id,'analyze_homework',`doctor:${r.id}`);
 +      await queue(db,u.id,'analyze_homework',`doctor:${r.id}`,null,u);
        if (u.document_id) await queue(db,u.id,'write_doc',`doc:${r.id}:${u.document_id}`);
-       await enqueueSpeakingProgress(db,'speaking_independent',u.id);
+-      await enqueueSpeakingProgress(db,'speaking_independent',u.id);
++      await enqueueSpeakingProgress(db,'speaking_independent',u.id,u);
 +      recordJournal(db,u,'submit.accepted',r.id,r.created_at,{receiptId:r.id,
 +        acceptedMainCount:main.length,acceptedPracticeCount:required.length});
        return r;
      });
    }
-@@ -244,21 +269,24 @@
+@@ -244,21 +275,24 @@
            WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
          ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1), claimed AS (
          UPDATE speaking_independent.job j SET status='processing',owner=gen_random_uuid(),lease_until=now()+interval '4 minutes',
@@ -103,7 +131,7 @@
            min_questions:u.template.parts.find(p=>p.part_key===l?.part)?.min_questions,
            class_id:u.class_id,student_ref:u.student_ref,
            links:Object.fromEntries(latest.filter(l=>l.work_unit_id===u.id&&l.kind==='main').map(l=>[l.part,{url:l.share_url,fingerprint:l.fingerprint,linkId:l.id}]))});
-@@ -273,8 +301,11 @@
+@@ -273,8 +307,11 @@
    async function claimJob(){return(await claimJobs(1))[0]||null;}
    async function mutateJob(job,fn) {
      return withTransaction(pool,async db=>{
@@ -117,7 +145,7 @@
        if (!j) fail('STALE_JOB','Lượt xử lý đã hết hạn; kết quả cũ không được ghi.');
        const result=await fn(db,j);markWorkReady(db,'state');return result;
      });
-@@ -288,8 +319,10 @@
+@@ -288,8 +325,10 @@
          if(current.attempts===4)console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code,jobId:job.job_id}));
          return;
        }
@@ -130,7 +158,7 @@
      });
    }
    async function checkComplete(job,result) {
-@@ -297,7 +330,8 @@
+@@ -297,7 +336,8 @@
        await db.query('SELECT id FROM speaking_independent.work_unit WHERE id=$1 FOR UPDATE',[j.work_unit_id]);
        const current=(await links(j.work_unit_id,db)).find(l=>l.part===job.part&&l.kind===job.link_kind);
        if (current?.id!==j.link_id) {
@@ -140,7 +168,7 @@
          return {status:'superseded'};
        }
        const valid=result.qualityPassed===true && Number.isInteger(result.questionCount)
-@@ -309,8 +343,8 @@
+@@ -309,8 +349,8 @@
        const all=await links(j.work_unit_id,db);
        if (valid && all.some(l=>l.id!==j.link_id&&l.fingerprint===result.fingerprint)) code='REUSED_CONVERSATION';
        let status=valid&&!code?'accepted':'rejected';
@@ -151,7 +179,7 @@
        [j.link_id,status,code,result.fingerprint||null,result.questionCount||0,JSON.stringify(result.evidence||{})]);
        if (status==='accepted'&&j.kind==='check_practice') {
          await db.query('SAVEPOINT reserve_practice');
-@@ -322,10 +356,12 @@
+@@ -322,11 +362,13 @@
            await db.query("UPDATE speaking_independent.link SET status='rejected',check_code='REUSED_CONVERSATION' WHERE id=$1",[j.link_id]);
          }
          await db.query('RELEASE SAVEPOINT reserve_practice');
@@ -160,13 +188,15 @@
        }
        if(status==='accepted') await saveConversationSnapshot(db,'speaking_independent',job.link_kind,j.link_id,result.fingerprint,result.snapshot);
 -      await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1",[j.id,JSON.stringify({status})]);
+-      await enqueueSpeakingProgress(db,'speaking_independent',j.work_unit_id);
 +      const {rows:[transition]}=await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1 RETURNING updated_at",[j.id,JSON.stringify({status})]);
 +      recordWorkerJournal(db,j,j._journal_unit,j._journal_revision,status,transition.updated_at,
 +        {questionCount:checked.question_count,...(code?{errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(code)?code:'CHECK_REJECTED'}:{})});
-       await enqueueSpeakingProgress(db,'speaking_independent',j.work_unit_id);
++      await enqueueSpeakingProgress(db,'speaking_independent',j.work_unit_id,j._journal_unit);
        return {status};
      });
-@@ -360,7 +396,8 @@
+   }
+@@ -360,7 +402,8 @@
          fail('DOCTOR_RESULT_INVALID','Bằng chứng ghép bài luyện không hợp lệ.');
        return mutateJob(job,async(db,j)=>{
          for(const exerciseId of new Set(r.matches.map(m=>m.exerciseId))) await recordEvent(db,job.u,{sourceKey:`doctor:${j.id}:${exerciseId}`,exerciseId,kind:'recommendation',occurredAt:new Date(j.created_at).toISOString()});
@@ -176,7 +206,7 @@
          return {status:'done'};
        });
      };
-@@ -386,7 +423,7 @@
+@@ -386,7 +429,7 @@
        processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
        grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
    }
@@ -185,3 +215,166 @@
      requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
      pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
  }
+--- a/src/speaking-progress-docs.js
++++ b/src/speaking-progress-docs.js
+@@ -1,6 +1,8 @@
+ import { planSpeakingStatusWrite, verifySpeakingStatusWrite } from './speaking-independent-status.js';
+ import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
+ import {markWorkReady,announceCommittedWork} from './test-work-runtime.js';
++import {createHash,randomUUID} from 'node:crypto';
++import {createSpeakingJournalBoundary,speakingJournalTime} from './speaking-journal-boundary.js';
+ 
+ const schemas = new Set(['speaking_independent','speaking_homework']);
+ function table(schema) { if(!schemas.has(schema))throw new Error('DOC_PROGRESS_SCOPE_INVALID');return schema+'.doc_progress'; }
+@@ -24,7 +26,15 @@
+   return {text:[heading,...lines,'Giảng viên nhấn vào đây để xem '+(receiptId?'kết quả.':'tiến độ.')].join('\n'),link:url.href,receiptId:receiptId||null};
+ }
+ 
+-export async function enqueueSpeakingProgress(db,schema,unitId) {
++export function speakingDocsJournalData(row,{phase,payload=row.payload,runHash,jobAttempt=row.attempts,attemptSequence,readCalls,writeCalls,durationMs,errorCode}={}){
++  // Băm ba giá trị theo vị trí cố định; JSONB đổi thứ tự key không đổi hash.
++  const data={phase,queueSequence:Number(row.sequence),appliedSequence:Number(row.applied_sequence),jobAttempt:Number(jobAttempt),
++    payloadHash:createHash('sha256').update(JSON.stringify([payload.text,payload.link,payload.receiptId||null])).digest('hex'),status:row.status};
++  for(const [key,value]of Object.entries({runHash,attemptSequence,readCalls,writeCalls,durationMs,errorCode}))if(value!==undefined)data[key]=value;
++  return data;
++}
++
++export async function enqueueSpeakingProgress(db,schema,unitId,options={}) {
+   const target=table(schema);let row,parts,links;
+   await db.query(`SELECT id FROM ${schema==='speaking_independent'?'speaking_independent.work_unit':'speaking_homework.access_grant'} WHERE id=$1 FOR UPDATE`,[unitId]);
+   if(schema==='speaking_independent'){
+@@ -56,9 +66,13 @@
+   const changed=await db.query(`INSERT INTO ${target}(unit_id,document_id,tab_id,assignment_code,payload)
+     VALUES($1,$2,$3,$4,$5) ON CONFLICT(unit_id) DO UPDATE SET payload=EXCLUDED.payload,
+     sequence=${target}.sequence+1,status='pending',attempts=0,error_code=NULL,available_at=now(),updated_at=now()
+-    WHERE ${target}.document_id=EXCLUDED.document_id AND ${target}.tab_id=EXCLUDED.tab_id AND ${target}.payload IS DISTINCT FROM EXCLUDED.payload RETURNING unit_id`,
++    WHERE ${target}.document_id=EXCLUDED.document_id AND ${target}.tab_id=EXCLUDED.tab_id AND ${target}.payload IS DISTINCT FROM EXCLUDED.payload
++    RETURNING unit_id,sequence,applied_sequence,attempts,status,updated_at`,
+     [unitId,row.document_id,row.tab_id,row.assignment_code,JSON.stringify(payload)]);
+-  if(changed.rows.length){markWorkReady(db,'docs');markWorkReady(db,'state');}
++  if(changed.rows.length){
++    markWorkReady(db,'docs');markWorkReady(db,'state');
++    if(schema==='speaking_independent'&&typeof options?.onQueued==='function')try{options.onQueued(db,changed.rows[0],payload);}catch{}
++  }
+ }
+ 
+ export async function readSpeakingDocsProgress(db,schema,unitId) {
+@@ -70,14 +84,15 @@
+   const exists=(await db.query('SELECT to_regclass($1) IS NOT NULL AS present',[table(schema)])).rows[0]?.present;
+   return exists?readSpeakingDocsProgress(db,schema,unitId):null;
+ }
+-export async function enqueueExistingSpeakingProgress(db,schema,unitId){
+-  if(await existingSpeakingDocsProgress(db,schema,unitId))return enqueueSpeakingProgress(db,schema,unitId);
+-}
+-
+-export async function restoreSpeakingDocsProgress(pool,schema,unitId){
++export async function enqueueExistingSpeakingProgress(db,schema,unitId,options){
++  if(await existingSpeakingDocsProgress(db,schema,unitId))return enqueueSpeakingProgress(db,schema,unitId,options);
++}
++
++export async function restoreSpeakingDocsProgress(pool,schema,unitId,options={}){
+   const row=await readSpeakingDocsProgress(pool,schema,unitId);
+   if(row)return row;
+-  await withTransaction(pool,db=>enqueueSpeakingProgress(db,schema,unitId));
++  const transaction=typeof options?.transaction==='function'?options.transaction:withTransaction;
++  await transaction(pool,db=>enqueueSpeakingProgress(db,schema,unitId,options));
+   return readSpeakingDocsProgress(pool,schema,unitId);
+ }
+ 
+@@ -103,8 +118,18 @@
+   if(typeof row.assignment_code!=='string'||text(tab.documentTab?.body?.content).split(row.assignment_code).length!==2)throw new Error('DOC_CODE_MISMATCH');
+ }
+ 
+-export function createSpeakingProgressDocsWorker({pool,schema,gateway}) {
++export function createSpeakingProgressDocsWorker({pool,schema,gateway,journal,clock=()=>performance.now()}) {
+   const target=table(schema),handles=new WeakMap();let initialized=false;
++  const audit=schema==='speaking_independent'&&typeof journal==='function';
++  const boundary=createSpeakingJournalBoundary({transaction:withTransaction,journal:audit?journal:false});
++  function emit(current,handle,phase,row,{at=new Date().toISOString(),errorCode}={}){
++    if(!audit)return;
++    boundary.recordCommitted(()=>({scope:handle.journalScope,kind:'docs.progress',operationId:current.unit_id,
++      committedAt:speakingJournalTime(at),data:speakingDocsJournalData(row,{phase,payload:current.payload,
++        runHash:handle.journalRun,jobAttempt:Number(current.attempts),attemptSequence:Number(current.sequence),
++        readCalls:handle.readCalls,writeCalls:handle.writeCalls,durationMs:Math.max(0,Math.round(clock()-handle.started)),
++        ...(errorCode?{errorCode:/^DOC_[A-Z0-9_]{1,75}$/.test(errorCode)?errorCode:'DOC_RETRY'}:{})})}));
++  }
+   async function release(handle){
+     if(handle.released)return;handle.released=true;
+     try{await handle.db.query('SELECT pg_advisory_unlock(hashtext($1))',[handle.lock]);handle.db.release();}
+@@ -128,14 +153,18 @@
+           WHERE locked.acquired AND d.unit_id=locked.unit_id AND d.document_id=locked.document_id
+           AND d.status IN ('pending','processing') AND d.available_at<=now() RETURNING d.*)
+           SELECT changed.*,locked.document_id AS locked_document_id,locked.acquired AS lock_acquired
++          ${audit?`,now() AS _journal_at,(SELECT jsonb_build_object('mode','independent','assignmentRef',u.assignment_code,
++            'classRef',p.class_id::text,'subjectRef',p.identity_ref,'unitId',u.id)
++            FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=changed.unit_id) AS _journal_scope`:''}
+           FROM locked LEFT JOIN changed ON changed.unit_id=locked.unit_id`,[unitId||null,excluded])).rows[0];
+         if(!selected){db.release();return[];}
+-        const {locked_document_id:documentId,lock_acquired:acquired,...current}=selected;
++        const {locked_document_id:documentId,lock_acquired:acquired,_journal_at:at,_journal_scope:journalScope,...current}=selected;
+         excluded.push(documentId);
+         if(!acquired)continue;
+         const handle={db,lock:'speaking-doc:'+documentId,released:false,running:false};
+         if(!current.unit_id){await db.query('SELECT pg_advisory_unlock(hashtext($1))',[handle.lock]);continue;}
+-        handles.set(current,handle);return[current];
++        if(audit)Object.assign(handle,{journalScope,journalRun:createHash('sha256').update(randomUUID()).digest('hex'),readCalls:0,writeCalls:0,started:clock()});
++        handles.set(current,handle);emit(current,handle,'started',current,{at});return[current];
+       }
+       db.release();return[];
+     }catch(error){db.release(true);throw error;}
+@@ -143,21 +172,29 @@
+   async function run(current){
+     const handle=handles.get(current);
+     if(!handle||handle.released||handle.running)throw new Error('DOC_PROGRESS_CLAIM_INVALID');
+-    handle.running=true;const db=handle.db;
++    handle.running=true;const db=handle.db;let writeReceived=false,stage='read';
+     try{
+       try{
+-        const document=await gateway.get(current.document_id);
++        if(audit)handle.readCalls++;
++        const document=await gateway.get(current.document_id);stage='plan';
+         const plan=planProgressWrite(document,current);
+         if(plan.requests.length){
+           // Keep the attempted output across a lost ACK, even when a newer snapshot arrives.
+-          await db.query(`UPDATE ${target} SET attempt_text=$2,attempt_link=$3 WHERE unit_id=$1`,[current.unit_id,current.payload.text,current.payload.link]);
++          const attempt=await db.query(`UPDATE ${target} SET attempt_text=$2,attempt_link=$3 WHERE unit_id=$1
++            RETURNING sequence,applied_sequence,status,now() AS journal_at`,[current.unit_id,current.payload.text,current.payload.link]);
++          stage='write';if(audit)handle.writeCalls++;
++          emit(current,handle,'write_attempt',attempt.rows[0],{at:attempt.rows[0]?.journal_at});
+           await gateway.write(current.document_id,{requests:plan.requests,writeControl:{requiredRevisionId:plan.revisionId}});
++          writeReceived=true;emit(current,handle,'write_received',attempt.rows[0]);
+         }
++        stage='readback';if(audit&&plan.requests.length)handle.readCalls++;
+         const readback=plan.requests.length?await gateway.get(current.document_id):document;
+         if(!verifyProgressWrite(readback,current))throw new Error('DOC_READBACK_MISMATCH');
++        stage='save';
+         const {rows:[saved]}=await db.query(`UPDATE ${target} SET last_text=$2,last_link=$3,attempt_text=NULL,attempt_link=NULL,applied_sequence=$4,
+           status=CASE WHEN sequence=$4 THEN 'verified' ELSE 'pending' END,error_code=NULL,attempts=0,available_at=now(),verified_at=now()
+-          WHERE unit_id=$1 RETURNING status`,[current.unit_id,current.payload.text,current.payload.link,current.sequence]);
++          WHERE unit_id=$1 RETURNING status,sequence,applied_sequence,verified_at`,[current.unit_id,current.payload.text,current.payload.link,current.sequence]);
++        emit(current,handle,saved?.status==='verified'?'verified':'snapshot_applied',saved,{at:saved?.verified_at});
+         announceCommittedWork(pool,'state');
+         if(saved?.status==='pending')announceCommittedWork(pool,'docs');
+         if(current.payload.receiptId){
+@@ -170,8 +207,11 @@
+         const blocked=!recoverable&&(/DOC_(?:MANUAL|IDENTITY|TAB|CODE|STATUS|HTTP_40[134]|READ_FORBIDDEN|READ_NOT_FOUND)/.test(code)||current.attempts>=8);
+         const delay=recoverable?([60,300,900][current.attempts-1]||3600):Math.min(300,2**current.attempts);
+         const updated=await db.query(`UPDATE ${target} SET status=CASE WHEN sequence<>$2 THEN 'pending' WHEN $3 THEN 'blocked' ELSE 'pending' END,
+-          error_code=$4,available_at=CASE WHEN sequence<>$2 THEN available_at ELSE now()+$5*interval '1 second' END WHERE unit_id=$1 RETURNING sequence`,
++          error_code=$4,available_at=CASE WHEN sequence<>$2 THEN available_at ELSE now()+$5*interval '1 second' END
++          WHERE unit_id=$1 RETURNING sequence,applied_sequence,status,now() AS journal_at`,
+           [current.unit_id,current.sequence,blocked,code,delay]);
++        const row=updated.rows[0],unknown=(stage==='write'&&!writeReceived)||stage==='save';
++        emit(current,handle,row?.status==='blocked'?'blocked':unknown?'outcome_unknown':'retry',row,{at:row?.journal_at,errorCode:code});
+         if(recoverable&&current.attempts===4&&updated.rows[0]?.sequence===current.sequence)console.warn(JSON.stringify({event:'speaking_docs_recovery_delayed',code,unitId:current.unit_id}));
+         announceCommittedWork(pool,'state');
+       }
+@@ -179,7 +219,7 @@
+     }finally{await release(handle);}
+   }
+   async function once(unitId){const [job]=await claim(1,unitId);return job?run(job):false;}
+-  return {claim,run,once};
++  return {claim,run,once,journalHealth:boundary.snapshot};
+ }
+ 
+ // Keep the native one-writer/four-item burst and two-second provider gap.

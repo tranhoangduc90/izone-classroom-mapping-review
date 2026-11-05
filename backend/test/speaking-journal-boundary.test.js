@@ -81,3 +81,23 @@ test('gửi nhiều transaction theo hàng hữu hạn, không mở đồng th�
  assert.equal(boundary.snapshot().pending,12);release();await nextTurn();await nextTurn();
  assert.deepEqual(sent,results);assert.equal(boundary.snapshot().pending,0);assert.equal(boundary.snapshot().delivered,12);
 });
+
+test('facts sau auto-commit/provider dùng cùng hàng hữu hạn, snapshot và không chờ mạng',async()=>{
+ let release;const held=new Promise(done=>{release=done;}),rows=[];
+ const boundary=createSpeakingJournalBoundary({transaction:async(pool,work)=>work({}),journal:async row=>{rows.push(row);await held;return{persisted:true};}});
+ const value={phase:'provider_received',unit:'original'};
+ assert.equal(boundary.recordCommitted(()=>value),true);value.unit='changed';
+ assert.equal(boundary.recordCommitted(()=>{throw Error('fixture projection failed');}),false);
+ await nextTurn();assert.equal(rows.length,1);assert.equal(rows[0].unit,'original');
+ assert.equal(boundary.snapshot().pending,1);assert.equal(boundary.snapshot().unknown,1);
+ release();await nextTurn();assert.equal(boundary.snapshot().delivered,1);
+});
+
+test('recordCommitted tắt log là no-op; hàng đầy báo overflow và không nhận đã lưu',async()=>{
+ const off=createSpeakingJournalBoundary({transaction:async()=>{},journal:false});assert.equal(off.recordCommitted({id:0}),false);
+ let release;const held=new Promise(done=>{release=done;});
+ const boundary=createSpeakingJournalBoundary({transaction:async()=>{},maxPendingEvents:1,journal:async()=>{await held;return{persisted:false};}});
+ assert.equal(boundary.recordCommitted({id:1}),true);assert.equal(boundary.recordCommitted({id:2}),false);
+ assert.equal(boundary.snapshot().committed,2);assert.equal(boundary.snapshot().overflow,1);
+ release();await nextTurn();await nextTurn();assert.equal(boundary.snapshot().unknown,1);assert.equal(boundary.snapshot().delivered,0);
+});

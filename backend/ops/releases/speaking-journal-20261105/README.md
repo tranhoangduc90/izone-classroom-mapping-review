@@ -1,5 +1,17 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Phạm vi hiện hành và log Docs webapp —06/11
+
+Đức chỉ yêu cầu Speaking webapp hiện hành; phần legacy bên dưới giữ làm lịch sử/tương thích, không làm tiếp hoặc dùng làm điều kiện hoàn thành. Patch independent nay gồm speaking-independent.js và speaking-progress-docs.js của đúng native. Không copy toàn module Docs canonical: native có claim/run, coordinator và work-ready khác bản canonical cũ. Patch đã áp xuôi/ngược, khớp byte nguồn thử ở cả hai file; helper chung vẫn lấy từ src/speaking-journal-boundary.js.
+
+Queued được stage trong transaction API và chỉ gửi sau COMMIT. Worker ghi started từ SQL auto-commit, write_attempt sau khi lưu bản định ghi, write_received sau phản hồi gateway, rồi verified hoặc snapshot_applied từ đọc lại Docs và SQL cập nhật. Mất ACK lúc write hoặc SQL trả về sau readback giữ outcome_unknown; sai chủ/403/thiếu quyền sửa có lý do riêng. Snapshot cũ áp dụng xong nhưng sequence mới đã đến vẫn pending. attemptSequence, queueSequence và appliedSequence tách ba mốc; schema không nhận bản đang ghi cũ là verified của bản mới.
+
+Scope lấy từ work_unit/profile đã xác thực; payload chỉ giữ hash theo bộ giá trị cố định, không có text/link/Doc ID/token. WeakMap native vẫn kiểm handle; không giữ transaction qua Google I/O. Trường write_received dùng snapshot SQL gần nhất của attempt, chưa chứng minh hàng đợi hiện hành đã xác minh. readCalls/writeCalls đếm lần gọi gateway, chưa đếm token refresh hoặc retry HTTP nội bộ Google. Không bật logger cho schema legacy.
+
+Helper có thêm recordCommitted cho caller vừa nhận SQL auto-commit hoặc kết quả I/O; dùng cùng hàng RAM hữu hạn, serial, không await mạng trong nghiệp vụ. Caller chịu trách nhiệm lấy đúng bằng chứng; helper không tự chứng minh COMMIT hay Collector đã lưu. Hàng vẫn chưa bền qua crash, chưa có retry/batching/startup; không coi mốc này là xong Speaking.
+
+Kiểm cuối30/30 nguồn native/PGlite/Collector ký khi chạy file lần lượt, gồm7ca Docs webapp; contract11/11 và helper10/10. Lượt gộp song song trước có28/30 đạt, hai ca cũ hết5giây khi pending chưa xong; giữ riêng TAP, không gọi lượt đó xanh hoặc dùng lượt serial làm sức tải. RED6 trước tính năng có5thiếulog/1đạt; ca mất ACK SQL thứ7 thêm sauRED6. Helper/direct-fact và điều kiện verified có RED riêng rồi GREEN. Google giả, không gọi provider/production. Còn provider/client/vé, producer bền/gom lô/startup, báo cáo và P3/P4 của webapp.
+
 ## Bổ sung checker legacy — chưa phát production
 
 Patch legacy gồm ba file native: speaking-homework.js và hai runner check/practice. Giữ overlay AI native; canonical practice runner có kiểm bằng chứng AI khác native nên không copy toàn file canonical đè runtime. Manifest ghi SHA từng file và kiểm áp xuôi/ngược; hai runner chỉ khác newline ở phép dựng patch, nội dung LF khớp ứng viên đã kiểm.
