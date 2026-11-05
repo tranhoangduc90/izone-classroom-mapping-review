@@ -1,5 +1,13 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Browser khác origin và Linux —06/11, chưa mở tuyến
+
+Fixture native-browser-fixture.mjs nối API từ patch hiện tại, SQL PGlite, factory cấu hình v1, Agent SQLite và Collector ký; Pages/Edge ở cổng loopback khác. Bốn ca đạt: OPTIONS/CORS thật, mất ACK log rồi reload/replay giữ ID, request browser↔API↔link SQL, chặn giả người và origin khác, tắt cả client/API hoặc chỉ intake không làm mất native link/job. Một check có đúng1link/1job, luồng chính17event không trùng/không URL hoặc token. Nguồn lớp giả; không chạy AI/Google/Drive thật. Playwright không intercept đường API vì lượt harness trước không quan sát được preflight; không sửa CORS sản phẩm để làm xanh.
+
+WSL/Linux local dùng Node24.15.0 được kiểm checksum nguồn chính thức, không khởi động Docker hoặc sửa VPS.5ca HTTP native,6ca spool/startup và1ca SIGTERM đạt. Child API/SQL/producer nhận SIGTERM thật, drain tới Agent bên ngoài rồi thoát0; queue ACK chưa là Collector persisted. Parent sau đó drain đúng2ID link.saved/api.request qua Collector. Đây là entry fixture dùng các component native, không phải image production/PID1 hay PostgreSQL TCP. Không biến kết quả thành chứng minh tải/quota/Drive/P3/P4 hoặc xóa giới hạn các lượt V8/RPC cũ.
+
+Ca kiểm browser ở Pages tests/speaking-native-journal-browser.mjs cần PLAYWRIGHT_MODULE, SPEAKING_NATIVE_FIXTURE_ROOT và SPEAKING_JOURNAL_LIBRARY_ROOT như các fixture trước. SPEAKING_NATIVE_FIXTURE_ROOT là thư mục thử riêng có test/fixture-independent.mjs, spool-agent.mjs, ba helper mới và independent/src đã áp patch; không trỏ vào service đang vận hành. Linux chạy file client-intake-collector.test.mjs, spool-collector.test.mjs và sigterm-collector.test.mjs riêng; EXAM_JOURNAL_TEST_PYTHON=/usr/bin/python3, PATH có Node24 Linux. Thử SIGTERM chỉ chạy trên Linux, Windows skip tường minh. Không gọi nhánh entrypoint production bằng config thật.
+
 ## Gom lượt đọc thành công —06/11, ứng viên chưa phát
 
 Runtime gom open/doctor_list HTTP2xx theo scope native và route trong cửa sổ60giây, tối đa256nhóm RAM. api.summary chỉ gồm số request, tổng/max thời gian và độ dài cửa sổ, không là biên nhận SQL. Ghi/lỗi vẫn phát api.request riêng và được xếp trước tổng kết; flushJournal drain cả tổng kết trước boundary. Thất bại emit có bộ đếm riêng; RAM tổng kết chưa phải dữ liệu bền qua crash. Không sửa native SQL, quyền, payload hoặc nhịp polling.
