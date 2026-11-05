@@ -68,8 +68,8 @@ test('modern: main/practice/receipt từ SQL commit qua signed Collector, replay
  for(const [i,row]of links.entries())if(row.status!=='accepted')await f.pool.query(
   "UPDATE speaking_independent.link SET status='accepted',fingerprint=$2,question_count=5 WHERE id=$1",[row.id,String(i+2).repeat(64)]);
  const receipt=await f.service.finish(f.identity),again=await f.service.finish(f.identity);
- assert.equal(again.id,receipt.id);assert.ok(first.id);await delivered(f.service,6);
- const rows=await c.read();assert.equal(rows.length,6);
+ assert.equal(again.id,receipt.id);assert.ok(first.id);await delivered(f.service,7);
+ const rows=await c.read();assert.equal(rows.length,7);
  assert.equal(rows.filter(row=>row.kind==='link.saved').length,5);
  const saved=rows.find(row=>row.kind==='submit.accepted');assert.equal(saved.data.receiptId,receipt.id);
  assert.equal(saved.data.acceptedMainCount,3);assert.equal(saved.data.acceptedPracticeCount,2);
