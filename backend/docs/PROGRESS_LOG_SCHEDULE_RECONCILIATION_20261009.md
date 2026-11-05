@@ -1,5 +1,7 @@
 # Progress Log: đối chiếu lịch ERP và giữ đúng buổi
 
+**Cập nhật 05/11/2026:** [Mã buổi ERP cố định và lịch hiện hành](PROGRESS_LOG_STABLE_SESSION_20261105.md) thay yêu cầu đối chiếu thủ công mọi lần thay đổi ngày/giờ trong hồ sơ lịch sử bên dưới. Giữ chặn đổi mã/mất/hủy buổi, dữ liệu bài làm và lịch sử Portal; không áp lại cờ chung chỉ vì trạng thái 0→1.
+
 Khi giảng viên nghỉ và ERP chuyển ngày, Journey giữ số buổi cùng mã sự kiện đã xác nhận. Giảng viên mở **Hành trình lớp → Kế hoạch buổi học**, xem ngày trước/sau, chọn ngày hoặc buổi bù rồi lưu. Một buổi chuyển qua ngày của buổi khác vẫn giữ nội dung, link và số buổi.
 
 ## Phạm vi vận hành
@@ -32,7 +34,3 @@ Backend đạt 371/371 ca ở 71 file, PostgreSQL riêng với role ứng dụng
 Production ngày 09/10/2026 dùng image overlay trên đúng image đang chạy; kiểm hash đủ 62 module, giữ toàn bộ source khác và env/cấu hình bảo vệ. Backup database/container được giữ riêng. Khi lỗi, tắt pilot nền hoặc khôi phục container trước; migration chỉ bổ sung tương thích. Không restore toàn database hoặc xóa bài để quay lại. Không ghi lại Portal nếu chưa biết kết quả lần ghi cũ.
 
 Resolver production đã đọc đúng đích IC2305/35819. **Điểm danh thật Buổi 8 còn chờ bài hoàn chỉnh tự nhiên**, chưa có bài học viên giả ở lớp thật. Tài khoản Google Thủy trên thiết bị chưa được quan sát trực tiếp; quyền backend đã kiểm, IC2304 bị từ chối. Kiểm nền mới chạy pilot IC2305; chưa đo tải để bật toàn trung tâm.
-# Cập nhật quy tắc ngày 05/11/2026
-
-[Mã buổi ERP cố định và lịch hiện hành](PROGRESS_LOG_STABLE_SESSION_20261105.md) thay yêu cầu đối chiếu thủ công mọi lần thay đổi ngày/giờ trong hồ sơ lịch sử bên dưới. Giữ chặn đổi mã/mất/hủy buổi, dữ liệu bài làm và lịch sử Portal; không áp lại cờ chung chỉ vì trạng thái 0→1.
-
