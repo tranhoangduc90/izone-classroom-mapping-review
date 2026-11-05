@@ -15,15 +15,16 @@ const {createJournalService}=await library('src/service.mjs');
 const {RemoteJournalStore}=await library('src/remote-store.mjs');
 const {ProductLogRegistry,storageScope}=await library('src/product-record.mjs');
 const product='speaking-homework',registry=new ProductLogRegistry({product,schemas:speakingHomeworkSchemas});
-async function fixture(t){
+async function fixture(t,{fetcher}={}){
  const key=Buffer.alloc(32,9),service=await createJournalService({version:1,role:'primary',
   dataRoot:mkdtempSync(join(tmpdir(),'speaking-worker-log-')),maxPhysicalBytes:64*1024*1024,incrementalAccounting:true,
   products:{[product]:{storageEngine:'scoped-drive-v2',encryptionKeys:{fixture:Buffer.alloc(32,4)},currentKeyId:'fixture',
    ingestKey:key,genericSchemas:speakingHomeworkSchemas,replicas:[{id:'fixture-copy',endpoint:'http://127.0.0.1:1/replica',key}],
    drive:{broker:'http://127.0.0.1:1/fixture-broker',receiptKey:key.toString('base64')}}}}, {fixtureMode:true});
  await new Promise(resolve=>service.server.listen(0,'127.0.0.1',resolve));
- const remote=new RemoteJournalStore({endpoint:`http://127.0.0.1:${service.server.address().port}/rpc/${product}`,productId:product,key,fixtureMode:true});
- await remote.ready;t.after(async()=>{await remote.close();await service.close();});
+ const remote=new RemoteJournalStore({endpoint:`http://127.0.0.1:${service.server.address().port}/rpc/${product}`,productId:product,key,fixtureMode:true,fetcher});
+ t.after(async()=>{await remote.close();await service.close();});
+ await remote.ready;
  const appendErrors=[];
  const journal=createSpeakingHomeworkJournal({append:async(...args)=>{try{return await remote.append(...args);}catch(error){appendErrors.push(error.code||error.message);throw error;}}}),projections=[];
  const f=await modern.fixture({journal:projection=>{projections.push(structuredClone(projection));return journal.recordCommitted(speakingHomeworkBinding(projection.scope),projection);}});
@@ -39,6 +40,15 @@ async function fixture(t){
  }};
 }
 const pass=(n=1)=>({qualityPassed:true,questionCount:2,fingerprint:modern.fingerprint(n)});
+
+test('fixture setup transport failure still closes the local Collector and client',async()=>{
+ const cleanup=[];
+ try{
+  await assert.rejects(fixture({after:action=>cleanup.push(action)},{fetcher:async()=>{throw Error('fake startup transport unavailable');}}),
+   error=>error.code==='JOURNAL_OUTCOME_UNKNOWN');
+  assert.equal(cleanup.length,1,'register cleanup before awaiting the startup RPC');
+ }finally{for(const action of cleanup.reverse())await action();}
+});
 
 test('modern worker: started lấy attempt mới từ SQL, completion cùng run; không đổi payload worker cũ',async t=>{
  const f=await fixture(t);

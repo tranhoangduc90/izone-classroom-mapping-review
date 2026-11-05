@@ -36,7 +36,8 @@ async function fixture(t,options={}){
    drive:{broker:'http://127.0.0.1:1/fixture-broker',receiptKey:key.toString('base64')}}}},{fixtureMode:true});
  await new Promise(done=>collector.server.listen(0,'127.0.0.1',done));
  const remote=new RemoteJournalStore({endpoint:`http://127.0.0.1:${collector.server.address().port}/rpc/${product}`,productId:product,key,fixtureMode:true});
- await remote.ready;t.after(async()=>{await remote.close();await collector.close();});
+ t.after(async()=>{await remote.close();await collector.close();});
+ await remote.ready;
  const projections=[],workers=[],journal=createSpeakingHomeworkJournal({append:remote.append.bind(remote)});
  const callback=Object.hasOwn(options,'journal')?options.journal:p=>{projections.push(structuredClone(p));return journal.recordCommitted(speakingHomeworkBinding(p.scope),p);};
  const f=await modern.fixture({journal:callback});t.after(()=>f.db.close());

@@ -1,5 +1,13 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Callback tới hàng chờ bền —06/11, chưa phát
+
+Helper tách durableQueued của Agent khỏi delivered/persisted của Collector. Batch capability gom tối đa32projection, mỗi mục có deliveryId UUID riêng; trả đảo thứ tự vẫn ghép theo ID, thiếu/ACK mâu thuẫn thành unknown. Callback cũ vẫn serial. Native transaction không đợi mạng; false/throw của logger không đổi kết quả nghiệp vụ. API và worker Docs có flushJournal để dùng khi shutdown sau khi dừng nguồn phát; không đóng producer trước khi callback xong.
+
+Factory thư viện adapters/speaking-producer.mjs dùng producerSpool v1 bắt buộc, mã hóa, batch và RAM retry đã có. Giữ nguyên callable factory với capability batch khi truyền vào API/Docs. Chỉ mode independent được gửi; không mở Speaking cũ. Còn khoảng hở trước Agent ACK và RAM retry hữu hạn, chưa phải SQL outbox.
+
+Ca thật trên laptop dùng PGlite/Collector/Agent SQLite/host ledger giả:75mốc→tối đa10enqueue request; queue ACK khi Collector0event; Agent chết lúc claim, phục hồi và mất ACK Collector vẫn đủ75ID. Mất ACK enqueue/gửi lại không nhân đôi; Docs giả verified riêng với queue ACK. Boundary14/14 có4ca RED trên base, producer nền21/21; native40ID duy nhất theo hợp29ca nền còn hiệu lực+7Docs+4spool. Không nhận hai lượt full37/38 và37/39 là đạt: chúng lỗi RPC khởi tạo fixture, chưa có nguyên nhân kết nối chắc chắn. Sửa cleanup trước await có RED/GREEN riêng; không đổi assertion nghiệp vụ hoặc dùng force-exit cho bằng chứng GREEN cuối. Startup/vé/client, Google HTTP/auth, báo cáo/P3/P4 và production còn lại.
+
 ## Share/AI của Speaking webapp —06/11, chưa phát
 
 Patch independent thêm provider.progress tại ranh giới fetch/https.get của source native. WeakMap lấy định danh từ claim SQL đã commit, không đổi attempts cũ trong DTO nghiệp vụ. Worker coordinated và nhịp cũ đặt AsyncLocalStorage riêng từng job; các phần Doctor chia sẻ counter nhưng giữ part riêng. Lời gọi cũ hoàn tất sau khi job đã retry vẫn thuộc run cũ; job sao chép không tự tạo quyền gắn nhãn provider. Ghi mốc này không cấp quyền chốt job hoặc thay guard owner/lease SQL.
