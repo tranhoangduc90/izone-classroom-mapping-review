@@ -9,7 +9,7 @@ import {mountTeacherProgress} from './teacher-progress.js';
 import {lessonFor,LEGACY_CODE,ROBOTS_CODE} from './lessons.js';
 
 // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,teacherCookiePath='/reading-practice-api/api'}){
+export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,teacherCookiePath='/reading-practice-api/api',journal=null}){
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
  app.use(helmet({contentSecurityPolicy:false,referrerPolicy:{policy:'no-referrer'}}));
@@ -23,6 +23,20 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  app.use(express.json({limit:'512kb'}));
  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+ const withJournal=value=>{
+  if(!journal)return value;
+  try{
+   const a=value.attempts?.at(-1),identity=value.identity;
+   if(!a||!identity)return value;
+   const readingJournal=journal.context({code:value.lesson.code,classCode:identity.classCode,
+    studentRef:identity.studentRef,attemptId:a.id,attemptNo:a.no});
+   return readingJournal?{...value,readingJournal}:value;
+  }catch{return value;}
+ };
+ if(journal)app.post('/api/journal-events',wrap(async(req,res)=>{
+  const reply=await journal.collect({method:req.method,headers:req.headers,body:req.body});
+  res.set(reply.headers).status(reply.status).json(reply.body);
+ }));
  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
  const session=z.object({attemptId:z.uuid()});
@@ -59,9 +73,9 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  });
  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
   const input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
-  res.json(await service[action]({...input,token:token(req)}));
+  res.json(withJournal(await service[action]({...input,token:token(req)})));
  }));
- app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.read({token:token(req)}));}));
+ app.get('/api/state',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(withJournal(await service.read({token:token(req)})));}));
  app.get('/api/result/:attemptId',wrap(async(req,res)=>{res.set('Cache-Control','no-store');res.json(await service.result({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)}));}));
  app.use('/api/teacher',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
  mountTeacherProgress(app,{service:service.teacherProgress,teacherSessions,z,wrap});
