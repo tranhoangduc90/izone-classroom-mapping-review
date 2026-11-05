@@ -1,5 +1,13 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Vé client và mốc HTTP —06/11, nền API chưa phát
+
+Runtime nhận intake từ factory cấu hình với allowedOrigins cố định. Chỉ khi logger bật mới có POST journal-context và journal-events. Context dùng service.grant native kiểm SQL/token và nguồn thành viên hiện hành, rồi tạo scope từ assignment_code/class_id/identity_ref/work_unit. Không tạo bài để cấp vé và không nhận các trường scope client tự khai. Vé append-only mặc định7ngày, không là quyền đọc hoặc nghiệp vụ; quyền nguồn đã thu hồi không cấp vé mới, backlog có vé cũ chỉ gắn scope cũ đến hạn. collect trả persisted chỉ sau ACK Collector; sai vé/phạm vi/source/schema bị từ chối.
+
+Sáu route nghiệp vụ hiện có thêm context request khi logger bật. requestId UUID chỉ để đối chiếu; scope chụp sau grant native. Middleware đo HTTP finish và chụp ID check/receipt từ kết quả native, không ghi body/URL/token. HTTP202/409/503 vẫn http_response_only. Mốc SQL gốc giữ ID/chống trùng cũ. Hai request đồng thời hoặc phản hồi muộn giữ frame riêng, không đổi sang người/lượt hiện tại. CORS cho phép/expose đúng header x-exam-journal-request-id; không mở origin mới. Logger tắt không có hai route log và không thêm request ID.
+
+19ca thư viện/schema và7ca runtime đạt; native46ID duy nhất theo hợp28ca nền hiện tại,4HTTP hiện tại và14provider/legacy không đổi. Lượt tổng30/31 bị child V8 fatal/Wasm sau hai subtest HTTP, không là lượt xanh; file HTTP cuối4/4 đạt và thoát bình thường, chưa sửa nguyên nhân V8. Một lượt trước lỗi fixture plain Error thay cho lỗi403 native của source; đã làm mock đúng loại, không đổi error handler production. Các schema UI/client mới chưa được phát từ Pages; còn adapter ba engine, browser/cross-origin thật, báo cáo/P3/P4 và rollout.
+
 ## Startup/đóng dịch vụ —06/11, chưa phát
 
 Thêm helper speaking-journal-runtime.js vào đúng native webapp; mount readonly thư viện log tại src/exam-journal-runtime. Cờ EXAM_JOURNAL_ENABLED=1 và EXAM_JOURNAL_CONFIG_FILE dùng cấu trúc v1 hiện có, bắt buộc rpc.producerSpool v1. Tắt không import thư viện/đọc config/gửi request. Lỗi startup trả journal=false để giữ nghiệp vụ, console chỉ có mã cố định. configured không chứng minh Agent hoặc Collector đã nhận log. Một callable journal giữ nguyên batch capability được truyền vào cả API và Docs.

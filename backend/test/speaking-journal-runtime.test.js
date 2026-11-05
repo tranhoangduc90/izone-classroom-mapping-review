@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {startSpeakingJournalRuntime} from '../src/speaking-journal-runtime.js';
+import {startSpeakingJournalRuntime,withSpeakingJournalRequest,rememberSpeakingJournalScope} from '../src/speaking-journal-runtime.js';
+import {randomUUID} from 'node:crypto';
+
+test('Speaking HTTP contexts keep simultaneous/late native owners apart and sanitize supplied request IDs',async()=>{
+ const a=randomUUID(),b=randomUUID();let release;
+ const pending=new Promise(resolve=>{release=resolve;});
+ const first=withSpeakingJournalRequest(a,async frame=>{
+  const scope={subjectRef:'native-owner-a',unitId:randomUUID()};rememberSpeakingJournalScope(scope);scope.subjectRef='mutated';
+  await pending;assert.equal(frame.requestId,a);assert.equal(frame.scope.subjectRef,'native-owner-a');return frame;
+ });
+ const second=withSpeakingJournalRequest(b,async frame=>{rememberSpeakingJournalScope({subjectRef:'native-owner-b'});release();await Promise.resolve();return frame;});
+ const [one,two]=await Promise.all([first,second]);assert.equal(two.requestId,b);assert.equal(two.scope.subjectRef,'native-owner-b');assert.notEqual(one.scope,two.scope);
+ rememberSpeakingJournalScope({subjectRef:'outside-request'});
+ withSpeakingJournalRequest('PRIVATE_TOKEN',frame=>{assert.match(frame.requestId,/^[a-f0-9-]{36}$/);assert.equal(frame.scope,undefined);});
+});
 
 test('Speaking logging off does not import infrastructure or read its configuration',async()=>{
  for(const flag of [undefined,'0','false']){
