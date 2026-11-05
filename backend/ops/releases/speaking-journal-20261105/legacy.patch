@@ -1,6 +1,8 @@
 --- a/src/speaking-homework.js
 +++ b/src/speaking-homework.js
-@@ -2,7 +2,8 @@
+@@ -1,8 +1,9 @@
+-import { createHash, createHmac } from 'node:crypto';
++import { createHash, createHmac, randomUUID } from 'node:crypto';
  import { enqueueSpeakingProgress as enqueueProgress,restoreSpeakingDocsProgress as readDocsProgress } from './speaking-progress-docs.js';
  import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
  import { saveConversationSnapshot, readConversationSnapshot } from './speaking-conversation-snapshot.js';
@@ -10,7 +12,7 @@
  import {markWorkReady} from './test-work-runtime.js';
  import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js';
  import { isDoctorText } from './speaking-doctor-text.js';
-@@ -58,7 +59,13 @@
+@@ -58,7 +59,42 @@
    return lastTimes.length === 0 || eventTime - Math.max(...lastTimes) > 5 * 86400000;
  }
  
@@ -22,10 +24,39 @@
 +    scope:{mode:'legacy',assignmentRef:grant.assignment_code,classRef:String(grant.class_id),subjectRef:studentRef,unitId:grant.grant_id},
 +    kind,operationId:id,committedAt:speakingJournalTime(createdAt),data,
 +  }));
++  const workerRuns=new WeakMap(),trustedRuns=new WeakSet();
++  let nativeService;
++  // Legacy không có owner fence. Giữ run tạo kết quả và lần claim đang có riêng.
++  const recordCheckJournal=(db,run,jobId,kind,phase,before,at,data={})=>{
++    if(!journal)return;
++    return journalBoundary.record(db,()=>{
++      if(!trustedRuns.has(run)||run.jobId!==jobId||run.kind!==kind)throw Error('SPEAKING_JOURNAL_CLAIM_UNKNOWN');
++      const current=Number(before.attempts);
++      return{scope:run.scope,kind:'check.progress',operationId:jobId,committedAt:speakingJournalTime(at),
++        data:{phase,jobId,linkId:run.linkId,linkRevision:run.revision,runHash:run.runHash,jobAttempt:run.attempt,
++          currentJobAttempt:current,claimCurrent:current===run.attempt&&before._journal_claim_stamp===run.claimStamp,...data}};
++    });
++  };
++  const claimedRows=(db,rows,kind)=>rows.map(({_journal_claim:metadata,...row})=>{
++    if(journal){
++      const run={jobId:row.job_id,kind,scope:metadata.scope,linkId:metadata.linkId,revision:Number(metadata.revision),
++        attempt:Number(metadata.attempt),claimStamp:metadata.at,runHash:hash(JSON.stringify(['speaking-legacy',kind,row.job_id,randomUUID()]))};
++      trustedRuns.add(run);workerRuns.set(row,run);
++      recordCheckJournal(db,run,row.job_id,kind,'started',{attempts:run.attempt,_journal_claim_stamp:metadata.at},metadata.at);
++    }
++    return row;
++  });
++  const copyWorker=(job,extra)=>{const row={...job,...extra};if(workerRuns.has(job))workerRuns.set(row,workerRuns.get(job));return row;};
++  function workerService(job){
++    if(!journal)return nativeService;
++    const run=workerRuns.get(job),bind=fn=>args=>fn(args,run);
++    return{...nativeService,completeCheck:bind(completeCheck),failCheckJob:bind(failCheckJob),rejectCheckJob:bind(rejectCheckJob),
++      completePracticeCheck:bind(completePracticeCheck),failPracticeCheckJob:bind(failPracticeCheckJob),rejectPracticeCheckJob:bind(rejectPracticeCheckJob)};
++  }
    const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
    const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
    const progressClaimGuard=`AND (o.kind <> 'write_doc' OR NOT EXISTS (
-@@ -213,7 +220,7 @@
+@@ -213,7 +249,7 @@
      const tokenHash = hash(String(accessToken || ''));
      const result = await client.query(`
        SELECT g.id AS grant_id, g.document_id, a.id AS assignment_id, a.class_id,
@@ -34,7 +65,7 @@
               a.delivery_mode, a.title,
               m.erp_student_name_snapshot AS student_name
        FROM speaking_homework.access_grant g
-@@ -328,11 +335,14 @@
+@@ -328,11 +364,14 @@
        const inserted = await client.query(`
          INSERT INTO speaking_homework.submission_link
            (submission_id, part, revision, share_url, share_id)
@@ -50,7 +81,116 @@
        return { linkId: inserted.rows[0].id, status: 'pending', revision: inserted.rows[0].revision };
      });
    }
-@@ -735,6 +745,9 @@
+@@ -341,11 +380,12 @@
+   // Việc chính: áp ngưỡng câu, so dấu vân tay với bài đã nộp trong khóa, lưu bằng chứng.
+   // Kết quả: accepted/rejected bền; retry cùng job không ghi đè kết luận.
+   async function completeCheck({ checkJobId, fingerprint, questionCount, qualityPassed,
+-    typingWarning = null, evidence = {}, snapshot = null }) {
++    typingWarning = null, evidence = {}, snapshot = null },journalRun) {
+     return withTransaction(pool, async client => {
+       const found = await client.query(`
+         SELECT j.id AS job_id, j.status AS job_status, l.id AS link_id, l.part, l.share_id,
+-          l.check_status, a.course_id, s.id AS submission_id, s.access_grant_id AS grant_id, p.min_questions
++          l.check_status, a.course_id, s.id AS submission_id, s.access_grant_id AS grant_id, p.min_questions,
++          j.attempts AS _journal_attempt,to_jsonb(j.updated_at) AS _journal_claimed_at
+         FROM speaking_homework.check_job j
+         JOIN speaking_homework.submission_link l ON l.id = j.link_id
+         JOIN speaking_homework.submission s ON s.id = l.submission_id
+@@ -386,9 +426,11 @@
+         WHERE id = $1`,
+       [row.link_id, fingerprint, questionCount, status, code,
+         JSON.stringify(null), JSON.stringify(evidence)]);
+-      await client.query(`UPDATE speaking_homework.check_job SET status = 'done', updated_at = now() WHERE id = $1`,
++      const transition=await client.query(`UPDATE speaking_homework.check_job SET status = 'done', updated_at = now() WHERE id = $1 RETURNING updated_at`,
+         [checkJobId]);
+       await enqueueSpeakingProgress(client,'speaking_homework',row.grant_id);
++      recordCheckJournal(client,journalRun,checkJobId,'main',status,{attempts:row._journal_attempt,_journal_claim_stamp:row._journal_claimed_at},transition.rows[0].updated_at,
++        {questionCount,requiredCount:minimum,...(typeof evidence.countVerified==='boolean'?{countVerified:evidence.countVerified}:{}),...(code?{errorCode:code}:{})});
+       return { linkId: row.link_id, status, code };
+     });
+   }
+@@ -401,7 +443,7 @@
+       const found = await client.query(`
+         WITH ready AS MATERIALIZED (SELECT j.id AS job_id, l.id AS link_id, l.share_url, l.part,j.created_at AS queue_created_at,
+           a.course_id, a.course_work_id, a.class_id, g.student_ref,
+-          p.min_questions
++          p.min_questions,a.assignment_code AS _journal_assignment,g.id AS _journal_grant,l.revision AS _journal_revision
+         FROM speaking_homework.check_job j
+         JOIN speaking_homework.submission_link l ON l.id = j.link_id
+         JOIN speaking_homework.submission s ON s.id = l.submission_id
+@@ -415,32 +457,37 @@
+           AND j.attempts < 5
+         ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT $1), claimed AS (
+         UPDATE speaking_homework.check_job j SET status='processing',attempts=j.attempts+1,updated_at=now()
+-        FROM ready WHERE j.id=ready.job_id RETURNING j.id)
++        FROM ready WHERE j.id=ready.job_id RETURNING j.id,j.attempts,j.updated_at)
+         SELECT ready.job_id,ready.link_id,ready.share_url,ready.part,ready.course_id,ready.course_work_id,
+-          ready.class_id,ready.student_ref,ready.min_questions FROM ready JOIN claimed ON claimed.id=ready.job_id
++          ready.class_id,ready.student_ref,ready.min_questions,
++          jsonb_build_object('attempt',claimed.attempts,'at',claimed.updated_at,'linkId',ready.link_id,'revision',ready._journal_revision,
++            'scope',jsonb_build_object('mode','legacy','assignmentRef',ready._journal_assignment,'classRef',ready.class_id::text,'subjectRef',ready.student_ref,'unitId',ready._journal_grant)) AS _journal_claim
++          FROM ready JOIN claimed ON claimed.id=ready.job_id
+         ORDER BY ready.queue_created_at,ready.job_id`,[limit]);
+-      return found.rows;
++      return claimedRows(client,found.rows,'main');
+     });
+   }
+   async function claimCheckJob(){return(await claimCheckJobs(1))[0]||null;}
+ 
+-  async function failCheckJob({ checkJobId, errorCode }) {
++  async function failCheckJob({ checkJobId, errorCode },journalRun) {
+     return withTransaction(pool, async client => {
+-      const found = await client.query(`SELECT j.id, j.link_id, j.attempts
++      const found = await client.query(`SELECT j.id, j.link_id, j.attempts,to_jsonb(j.updated_at) AS _journal_claim_stamp
+         FROM speaking_homework.check_job j
+         WHERE j.id = $1 AND j.status = 'processing' FOR UPDATE`, [checkJobId]);
+       if (!found.rows.length) {
+         throw new SpeakingHomeworkError('CHECK_NOT_FOUND', 'Lượt kiểm không ở trạng thái xử lý.', 404);
+       }
+       const exhausted = Number(found.rows[0].attempts) >= 5;
+-      await client.query(`UPDATE speaking_homework.check_job
+-        SET status = $2, last_error_code = $3, updated_at = now() WHERE id = $1`,
++      const transition=await client.query(`UPDATE speaking_homework.check_job
++        SET status = $2, last_error_code = $3, updated_at = now() WHERE id = $1 RETURNING updated_at`,
+       [checkJobId, exhausted ? 'done' : 'failed', errorCode]);
+       if (exhausted) {
+         await client.query(`UPDATE speaking_homework.submission_link
+           SET check_status = 'rejected', check_code = 'CHECK_SERVICE_UNAVAILABLE', checked_at = now()
+           WHERE id = $1`, [found.rows[0].link_id]);
+       }
++      recordCheckJournal(client,journalRun,checkJobId,'main','failed',found.rows[0],transition.rows[0].updated_at,
++        {errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(errorCode||'')?errorCode:'CHECK_SERVICE_UNAVAILABLE'});
+       return { exhausted };
+     });
+   }
+@@ -448,12 +495,12 @@
+   // Dữ liệu vào: Share không mở được cho người ngoài sau khi đã đọc thử thật.
+   // Việc chính: chốt lỗi vĩnh viễn vào đúng link để học viên sửa và xác nhận lại.
+   // Kết quả: job kết thúc, phần bài vẫn chưa đạt; lỗi dịch vụ tạm thời dùng failCheckJob.
+-  async function rejectCheckJob({ checkJobId, checkCode }) {
++  async function rejectCheckJob({ checkJobId, checkCode },journalRun) {
+     if (!['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID'].includes(checkCode)) {
+       throw new SpeakingHomeworkError('INVALID_CHECK_CODE', 'Mã lỗi kiểm link chưa hợp lệ.', 400);
+     }
+     return withTransaction(pool, async client => {
+-      const found = await client.query(`SELECT j.id AS job_id, j.status, l.id AS link_id
++      const found = await client.query(`SELECT j.id AS job_id, j.status, l.id AS link_id,j.attempts,to_jsonb(j.updated_at) AS _journal_claim_stamp
+         FROM speaking_homework.check_job j
+         JOIN speaking_homework.submission_link l ON l.id = j.link_id
+         WHERE j.id = $1 FOR UPDATE OF j`, [checkJobId]);
+@@ -465,8 +512,9 @@
+       await client.query(`UPDATE speaking_homework.submission_link
+         SET check_status = 'rejected', check_code = $2, checked_at = now()
+         WHERE id = $1`, [found.rows[0].link_id, checkCode]);
+-      await client.query(`UPDATE speaking_homework.check_job
+-        SET status = 'done', updated_at = now() WHERE id = $1`, [checkJobId]);
++      const transition=await client.query(`UPDATE speaking_homework.check_job
++        SET status = 'done', updated_at = now() WHERE id = $1 RETURNING updated_at`, [checkJobId]);
++      recordCheckJournal(client,journalRun,checkJobId,'main','rejected',found.rows[0],transition.rows[0].updated_at,{errorCode:checkCode});
+       return { status: 'rejected', linkId: found.rows[0].link_id };
+     });
+   }
+@@ -735,6 +783,9 @@
          else await client.query("SELECT pg_notify('speaking_homework_write_doc_ready', '')");
        }
        await enqueueSpeakingProgress(client,'speaking_homework',grant.grant_id);
@@ -60,7 +200,7 @@
        return receipt.rows[0];
      });
    }
-@@ -868,12 +881,15 @@
+@@ -868,12 +919,15 @@
        }
        const inserted = await client.query(`INSERT INTO speaking_homework.practice_link
          (access_grant_id, slot, revision, share_url, share_id, exercise_id)
@@ -77,12 +217,158 @@
        return { linkId: inserted.rows[0].id, status: 'pending', revision: inserted.rows[0].revision, slot };
      });
    }
-@@ -1220,7 +1236,7 @@
+@@ -882,27 +936,32 @@
+     claimCapacity(limit);
+     return claimTransaction(connection, async client => {
+       const found = await client.query(`WITH ready AS MATERIALIZED (SELECT j.id AS job_id, p.share_url, p.exercise_id, p.slot,
+-          e.title AS exercise_title,j.created_at AS queue_created_at
++          e.title AS exercise_title,j.created_at AS queue_created_at,p.id AS _journal_link,p.revision AS _journal_revision,
++          a.assignment_code AS _journal_assignment,a.class_id AS _journal_class,g.student_ref AS _journal_subject,g.id AS _journal_grant
+         FROM speaking_homework.practice_check_job j
+         JOIN speaking_homework.practice_link p ON p.id = j.practice_link_id
+         JOIN speaking_homework.doctor_exercise e ON e.id = p.exercise_id
++        JOIN speaking_homework.access_grant g ON g.id=p.access_grant_id
++        JOIN speaking_homework.assignment a ON a.id=g.assignment_id
+         WHERE (j.status IN ('pending', 'failed')
+           OR (j.status = 'processing' AND j.updated_at < now() - INTERVAL '5 minutes'))
+           AND j.attempts < 5
+         ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT $1), claimed AS (
+         UPDATE speaking_homework.practice_check_job j SET status='processing',attempts=j.attempts+1,updated_at=now()
+-        FROM ready WHERE j.id=ready.job_id RETURNING j.id)
+-        SELECT ready.job_id,ready.share_url,ready.exercise_id,ready.slot,ready.exercise_title
++        FROM ready WHERE j.id=ready.job_id RETURNING j.id,j.attempts,j.updated_at)
++        SELECT ready.job_id,ready.share_url,ready.exercise_id,ready.slot,ready.exercise_title,
++          jsonb_build_object('attempt',claimed.attempts,'at',claimed.updated_at,'linkId',ready._journal_link,'revision',ready._journal_revision,
++            'scope',jsonb_build_object('mode','legacy','assignmentRef',ready._journal_assignment,'classRef',ready._journal_class::text,'subjectRef',ready._journal_subject,'unitId',ready._journal_grant)) AS _journal_claim
+         FROM ready JOIN claimed ON claimed.id=ready.job_id ORDER BY ready.queue_created_at,ready.job_id`,[limit]);
+-      return found.rows;
++      return claimedRows(client,found.rows,'practice');
+     });
+   }
+   async function claimPracticeCheckJob(){return(await claimPracticeCheckJobs(1))[0]||null;}
+ 
+   async function completePracticeCheck({ checkJobId, fingerprint, questionCount,
+-    qualityPassed, matchedExerciseId, typingWarning = null, evidence = {}, snapshot = null }) {
++    qualityPassed, matchedExerciseId, typingWarning = null, evidence = {}, snapshot = null },journalRun) {
+     const outcome = await withTransaction(pool, async client => {
+-      const found = await client.query(`SELECT j.status AS job_status, p.id AS link_id,
++      const found = await client.query(`SELECT j.status AS job_status,j.attempts AS _journal_attempt,to_jsonb(j.updated_at) AS _journal_claimed_at,p.id AS link_id,
+         p.status, p.share_id, p.exercise_id, p.fingerprint, p.checked_at,
+         g.student_ref, g.id AS grant_id, a.class_id, a.course_id, a.id AS assignment_id
+         FROM speaking_homework.practice_check_job j
+@@ -942,14 +1001,16 @@
+         SET fingerprint = $2, question_count = $3, status = $4, check_code = $5,
+           typing_warning = $6::jsonb, evidence = $7::jsonb, checked_at = now() WHERE id = $1`,
+       [row.link_id, fingerprint, questionCount, status, code, JSON.stringify(null), JSON.stringify(evidence)]);
+-      await client.query(`UPDATE speaking_homework.practice_check_job
+-        SET status = 'done', updated_at = now() WHERE id = $1`, [checkJobId]);
++      const transition=await client.query(`UPDATE speaking_homework.practice_check_job
++        SET status = 'done', updated_at = now() WHERE id = $1 RETURNING updated_at`, [checkJobId]);
+       if (status === 'accepted') {
+         const queued=await client.query(`INSERT INTO speaking_homework.practice_analysis_job
+           (practice_link_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING id`, [row.link_id]);
+         if(queued.rows.length)markWorkReady(client,'ai');
+       }
+       await enqueueSpeakingProgress(client,'speaking_homework',row.grant_id);
++      recordCheckJournal(client,journalRun,checkJobId,'practice',status,{attempts:row._journal_attempt,_journal_claim_stamp:row._journal_claimed_at},transition.rows[0].updated_at,
++        {questionCount,requiredCount:1,...(typeof evidence.countVerified==='boolean'?{countVerified:evidence.countVerified}:{}),...(code?{errorCode:code}:{})});
+       return { ...row, status, check_code: code, alreadyDone: false };
+     });
+     if (outcome.status === 'accepted') {
+@@ -1003,9 +1064,9 @@
+   // Dữ liệu vào: job kiểm bài bổ trợ đã gặp lỗi mạng/AI.
+   // Việc chính: giữ job để thử lại sau; link học viên vẫn còn trong database.
+   // Kết quả: trạng thái failed có mã lỗi, không tạo biên nhận sai.
+-  async function rejectPracticeCheckJob({ checkJobId, checkCode = 'SHARE_UNAVAILABLE' }) {
++  async function rejectPracticeCheckJob({ checkJobId, checkCode = 'SHARE_UNAVAILABLE' },journalRun) {
+     return withTransaction(pool, async client => {
+-      const found = await client.query(`SELECT j.status, p.id AS link_id
++      const found = await client.query(`SELECT j.status,j.attempts,to_jsonb(j.updated_at) AS _journal_claim_stamp,p.id AS link_id
+         FROM speaking_homework.practice_check_job j
+         JOIN speaking_homework.practice_link p ON p.id = j.practice_link_id
+         WHERE j.id = $1 FOR UPDATE OF j`, [checkJobId]);
+@@ -1014,16 +1075,25 @@
+       await client.query(`UPDATE speaking_homework.practice_link
+         SET status = 'rejected', check_code = $2, checked_at = now()
+         WHERE id = $1`, [found.rows[0].link_id, checkCode]);
+-      await client.query(`UPDATE speaking_homework.practice_check_job
+-        SET status = 'done', updated_at = now() WHERE id = $1`, [checkJobId]);
++      const transition=await client.query(`UPDATE speaking_homework.practice_check_job
++        SET status = 'done', updated_at = now() WHERE id = $1 RETURNING updated_at`, [checkJobId]);
++      recordCheckJournal(client,journalRun,checkJobId,'practice','rejected',found.rows[0],transition.rows[0].updated_at,
++        {errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(checkCode||'')?checkCode:'SHARE_UNAVAILABLE'});
+       return { linkId: found.rows[0].link_id, status: 'rejected' };
+     });
    }
  
-   return { openAssignment, openDirectAssignment, startSession, startDirectSession,
+-  async function failPracticeCheckJob({ checkJobId, errorCode }) {
+-    await pool.query(`UPDATE speaking_homework.practice_check_job
++  async function failPracticeCheckJob({ checkJobId, errorCode },journalRun) {
++    const sql=`UPDATE speaking_homework.practice_check_job
+       SET status = 'failed', last_error_code = $2, updated_at = now()
+-      WHERE id = $1 AND status = 'processing'`, [checkJobId, errorCode]);
++      WHERE id = $1 AND status = 'processing'`;
++    if(!journal){await pool.query(sql,[checkJobId,errorCode]);return;}
++    await withTransaction(pool,async client=>{
++      const before=(await client.query("SELECT attempts,to_jsonb(updated_at) AS _journal_claim_stamp FROM speaking_homework.practice_check_job WHERE id=$1 AND status='processing' FOR UPDATE",[checkJobId])).rows[0];
++      const transition=await client.query(sql+' RETURNING updated_at',[checkJobId,errorCode]);
++      if(transition.rows.length)recordCheckJournal(client,journalRun,checkJobId,'practice','failed',before,transition.rows[0].updated_at,
++        {errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(errorCode||'')?errorCode:'PRACTICE_CHECK_ERROR'});
++    });
+   }
+ 
+   async function claimPracticeAnalysisJobs(limit=1,connection=null) {
+@@ -1058,14 +1128,14 @@
+       ||Object.entries(limits).some(([key,max])=>!Number.isInteger(free[key]??0)||(free[key]??0)<0||(free[key]??0)>max))throw new Error('SPEAKING_WORK_CAPACITY_INVALID');
+     if(!Object.values(free).some(Boolean))return[];
+     return withTransaction(pool,async client=>{
+-      const admitted=[],add=(lane,jobs)=>admitted.push(...jobs.map(job=>({...job,lane})));
++      const admitted=[],add=(lane,jobs)=>admitted.push(...jobs.map(job=>copyWorker(job,{lane})));
+       if(free.check)add('check',await claimCheckJobs(free.check,client));
+       const managed=(free.doctor||free.grade)?progressDocsEnabled||(await client.query("SELECT to_regclass('speaking_homework.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true:false;
+       if(free.doctor)add('doctor',await claimOutboxJobs('doctor_analyze',free.doctor,client,managed));
+       if(free.practice){
+         const first=practiceAnalysisFirst?['practice_analysis',claimPracticeAnalysisJobs]:['practice_check',claimPracticeCheckJobs];
+         const second=practiceAnalysisFirst?['practice_check',claimPracticeCheckJobs]:['practice_analysis',claimPracticeAnalysisJobs];
+-        const jobs=await first[1](1,client);add('practice',jobs.length?jobs.map(job=>({...job,work_kind:first[0]})):(await second[1](1,client)).map(job=>({...job,work_kind:second[0]})));
++        const jobs=await first[1](1,client);add('practice',jobs.length?jobs.map(job=>copyWorker(job,{work_kind:first[0]})):(await second[1](1,client)).map(job=>copyWorker(job,{work_kind:second[0]})));
+       }
+       if(free.grade)add('grade',await claimOutboxJobs('grade_speaking',free.grade,client,managed));
+       return admitted;
+@@ -1219,8 +1289,8 @@
+     return result.rows[0];
+   }
+ 
+-  return { openAssignment, openDirectAssignment, startSession, startDirectSession,
 -    open, requestCheck, claimCheckJob,claimCheckJobs,claimWorkerJobs, completeCheck, failCheckJob,
-+    journalHealth:journalBoundary.snapshot,open, requestCheck, claimCheckJob,claimCheckJobs,claimWorkerJobs, completeCheck, failCheckJob,
++  nativeService={ openAssignment, openDirectAssignment, startSession, startDirectSession,
++    journalHealth:journalBoundary.snapshot,workerService,open, requestCheck, claimCheckJob,claimCheckJobs,claimWorkerJobs, completeCheck, failCheckJob,
      rejectCheckJob,
      claimOutboxJob,claimOutboxJobs, completeOutboxJob, failOutboxJob, completeGradeJob,
      getDoctorCatalog, completeDoctorJob,
+@@ -1229,4 +1299,5 @@
+     claimPracticeAnalysisJob,claimPracticeAnalysisJobs, getPracticeDoctorCatalog, completePracticeAnalysisJob,
+     failPracticeAnalysisJob, getTeacherReceipt, resolveGrant,
+     getAcceptedConversation: ({ kind, linkId, fingerprint }) => readConversationSnapshot(pool, 'speaking_homework', kind, linkId, fingerprint) };
++  return nativeService;
+ }
+--- a/src/speaking-check-worker.js
++++ b/src/speaking-check-worker.js
+@@ -8,6 +8,7 @@
+ // Việc chính: đọc Share thật, nhờ AI đếm bài luyện, rồi ghi đúng kết quả vào link.
+ // Kết quả: accepted/rejected hoặc failed có retry; chỉ ghi mã lỗi vào log, không ghi nội dung chat.
+ export async function runSpeakingCheckJob(service, job, check = checkSubmission) {
++  service=service.workerService?.(job)||service;
+   try {
+     const result = await check({ section: job.part, url: job.share_url, minimum: Number(job.min_questions) });
+     if (result.kind === 'error') {
+--- a/src/speaking-practice-worker.js
++++ b/src/speaking-practice-worker.js
+@@ -74,6 +74,7 @@
+ export async function runPracticeCheckJob(service, job, {
+   readShare = readSpeakingShare, analyze = analyzePracticeConversation, analyzeCompletion
+ } = {}) {
++  service=service.workerService?.(job)||service;
+   try {
+     const conversation = await readShare(job.share_url);
+     const messages = messagesOf(conversation);
