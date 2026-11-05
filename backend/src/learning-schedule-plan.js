@@ -36,7 +36,5 @@ export function decorateSchedule(classId, schedule, confirmedDates = []) {
 export function matchesConfirmedScheduleSlot(confirmed, schedule, baseline) {
   if (!confirmed?.erpSessionId || schedule.ambiguous) return false;
   const current = schedule.sessions.find(row => row.erpSessionId === confirmed.erpSessionId);
-  const prior = baseline?.sessions.find(row => row.erpSessionId === confirmed.erpSessionId);
-  return Boolean(current && [0, 1].includes(current.statusCode) && current.date === confirmed.date
-    && (!prior || (prior.startsAt === current.startsAt && prior.endsAt === current.endsAt)));
+  return Boolean(current && [0, 1].includes(current.statusCode));
 }

@@ -1,5 +1,5 @@
 // Nhận bản chốt, lịch ERP và đích điểm danh đã giữ. Giữ số buổi theo ID,
-// trả thay đổi để GV xác nhận; không tự đổi lịch, bài làm hoặc Portal.
+// cập nhật giờ/ngày hiện hành theo cùng ID, giữ bài làm và lịch sử Portal.
 export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bindings = [], previousSchedule = null) {
   const confirmed = new Map(confirmedDates.map(s => [Number(s.sessionNumber), s]));
   const pinned = new Map(bindings.map(b => [Number(b.session_number), b]));
@@ -19,8 +19,6 @@ export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bi
       else if (!current) reason = 'session_missing';
       else if (binding?.review_required) reason = 'attendance_review';
       else if (current.statusCode === 2) reason = 'cancelled';
-      else if (current.date !== date) reason = 'date_changed';
-      else if (beforeById.has(id) && (beforeById.get(id).startsAt!==current.startsAt || beforeById.get(id).endsAt!==current.endsAt)) reason='time_changed';
       else if (prior?.erpSessionId && prior.erpSessionId !== id) reason = 'binding_conflict';
       status = reason ? 'needs_review' : 'connected';
       if (reason) changes.push({ sessionNumber: session.sessionNumber, reason,
@@ -30,10 +28,11 @@ export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bi
         attendanceFrozen: !!(binding?.write_started || binding?.accepted_at) });
     }
     // Buổi đã chốt luôn giữ ngày và số cho tới khi xác nhận, kể cả nguồn lỗi/hủy.
-    const confirmedStart=prior?.erpSessionId&&beforeById.get(prior.erpSessionId);
-    const sessionStartTime=confirmedStart?.date===date
+    const confirmedStart=status==='connected'?current:prior?.erpSessionId&&beforeById.get(prior.erpSessionId);
+    const displayedDate=status==='connected'?current.date:date;
+    const sessionStartTime=confirmedStart?.date===displayedDate
       ?confirmedStart?.startsAt?.match(/^\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2})$/u)?.[1]:undefined;
-    return { ...session, previouslyPlannedDate: date, sessionDate: date, ...(sessionStartTime?{sessionStartTime}:{}),
+    return { ...session, previouslyPlannedDate: date, sessionDate: displayedDate, ...(sessionStartTime?{sessionStartTime}:{}),
       erpSessionId: id || null, scheduleStatus: status };
   });
   const used = new Set(confirmedDates.map(s => s.erpSessionId).filter(Boolean));

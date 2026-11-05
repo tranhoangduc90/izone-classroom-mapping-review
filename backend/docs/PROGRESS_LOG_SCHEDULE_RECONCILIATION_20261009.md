@@ -1,5 +1,7 @@
 # Progress Log: đối chiếu lịch ERP và giữ đúng buổi
 
+**Cập nhật 05/11/2026:** [Mã buổi ERP cố định và lịch hiện hành](PROGRESS_LOG_STABLE_SESSION_20261105.md) thay yêu cầu đối chiếu thủ công mọi lần thay đổi ngày/giờ trong hồ sơ lịch sử bên dưới. Giữ chặn đổi mã/mất/hủy buổi, dữ liệu bài làm và lịch sử Portal; không áp lại cờ chung chỉ vì trạng thái 0→1.
+
 Khi giảng viên nghỉ và ERP chuyển ngày, Journey giữ số buổi cùng mã sự kiện đã xác nhận. Giảng viên mở **Hành trình lớp → Kế hoạch buổi học**, xem ngày trước/sau, chọn ngày hoặc buổi bù rồi lưu. Một buổi chuyển qua ngày của buổi khác vẫn giữ nội dung, link và số buổi.
 
 ## Phạm vi vận hành

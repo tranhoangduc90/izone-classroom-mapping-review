@@ -102,7 +102,10 @@ test('PostgreSQL learning_api: lọc buổi theo ngày Việt Nam, giao và nh�
         [upcoming.erpSessionId,upcoming.startsAt,upcoming.endsAt,0]]]);
     assert.equal((await f.pool.query("SELECT count(*)::int n FROM learning.outbox_job WHERE job_type='sync_portal_attendance'")).rows[0].n,1);
     slot.startsAt='2026-11-04 19:00:00';
-    await assert.rejects(()=>start(assignment.roster[1]),{code:'ERP_SESSION_REVIEW_REQUIRED'});
+    await start(assignment.roster[1]);
+    const journey=await service.getStudentCourseJourney({publicToken:delivery.delivery.publicToken,studentRef:assignment.roster[1].studentRef});
+    const lesson=journey.sessions.find(row=>row.assignmentId===assignment.assignmentId);
+    assert.equal(lesson.erpSessionId,'71901');assert.equal(lesson.sessionStartTime,'19:00:00');
     await assert.rejects(()=>f.clockPool.query('UPDATE learning.form_assignment_portal_target SET portal_session_id=71902'),{code:'42501'});
   }finally{await f.close();}
 });

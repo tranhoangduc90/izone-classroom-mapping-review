@@ -4,6 +4,7 @@ import { readCheckpointAttendance, recordCheckpointAttendance } from './learning
 import {createJourneyCommentService} from './learning-journey-comments.js';
 import { decorateSchedule, matchesConfirmedScheduleSlot } from './learning-schedule-plan.js';
 import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
+import {canRefreshBoundSchedule,currentConfirmedDates} from './learning-schedule-identity.js';
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
@@ -327,12 +328,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     }
     catch { if (!capture) return; }
     const target = schedule?.sessions.find(s => s.erpSessionId === confirmed.erpSessionId);
-    const baseline=pinned?null:(await database.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[row.class_id])).rows[0]?.erp_snapshot;
-    const priorTime=baseline?.sessions.find(s=>s.erpSessionId===confirmed.erpSessionId);
-    if (schedule && (schedule.ambiguous || !target || ![0, 1].includes(target.statusCode)
-      || target.date !== confirmed.date || (pinned && pinned.starts_at!==target.startsAt)
-      || (priorTime && (priorTime.startsAt!==target.startsAt || priorTime.endsAt!==target.endsAt)))) throw new LearningError('ERP_SESSION_REVIEW_REQUIRED',
-      'Lịch buổi học đã đổi. Bản nhập vẫn được giữ; giảng viên cần xác nhận lại lịch trước khi nhận bài.', 409);
+    if (schedule && (schedule.ambiguous || !target || ![0, 1].includes(target.statusCode))) throw new LearningError('ERP_SESSION_REVIEW_REQUIRED',
+      'Buổi học đã hủy, thiếu hoặc chưa xác định rõ. Bản nhập vẫn được giữ; giảng viên cần đối chiếu lịch.', 409);
     const binding = (await database.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id=$1::uuid', [assignmentId])).rows[0];
     if (binding && (String(binding.target_session_id) !== confirmed.erpSessionId || binding.review_required))
       throw new LearningError('ERP_SESSION_REVIEW_REQUIRED', 'Đích điểm danh cần đối chiếu. Bản nhập vẫn được giữ.', 409);
@@ -343,12 +340,15 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         .sort((a,b)=>a.startsAt.localeCompare(b.startsAt))
         .map(s=>[s.erpSessionId,s.startsAt,s.endsAt,s.statusCode])])
         : `confirmed-plan:${row.revision}:${confirmed.erpSessionId}`;
+      if(binding&&(binding.accepted_at||binding.write_started)&&binding.schedule_fingerprint!==fingerprint
+        &&!canRefreshBoundSchedule(binding,{targetSessionId:confirmed.erpSessionId,scheduleFingerprint:fingerprint}))
+        throw new LearningError('ERP_SESSION_REVIEW_REQUIRED','Chưa đối chiếu được lịch của đúng mã buổi. Bản nhập vẫn được giữ.',409);
       await database.query(`INSERT INTO learning.portal_attendance_binding
         (assignment_id,class_id,session_number,target_session_id,schedule_fingerprint,accepted_at)
         VALUES($1::uuid,$2::bigint,$3,$4::bigint,$5,clock_timestamp())
         ON CONFLICT(assignment_id) DO UPDATE SET
-          schedule_fingerprint=CASE WHEN learning.portal_attendance_binding.accepted_at IS NULL
-            AND NOT learning.portal_attendance_binding.write_started THEN EXCLUDED.schedule_fingerprint
+          schedule_fingerprint=CASE WHEN learning.portal_attendance_binding.target_session_id=EXCLUDED.target_session_id
+            AND NOT learning.portal_attendance_binding.review_required THEN EXCLUDED.schedule_fingerprint
             ELSE learning.portal_attendance_binding.schedule_fingerprint END,
           accepted_at=COALESCE(learning.portal_attendance_binding.accepted_at,EXCLUDED.accepted_at)`,
       [assignmentId,row.class_id,Number(row.session_number),confirmed.erpSessionId,fingerprint]);
@@ -369,16 +369,24 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       }
     } catch { result={ ...view, scheduleStatus: 'temporarily_unavailable' }; }
     if(!portalAssignmentReader)return result;
-    const direct=await pool.query(`SELECT a.id::text,t.starts_at FROM learning.form_assignment_portal_target t
+    const direct=await pool.query(`SELECT a.id::text,t.portal_session_id::text,t.starts_at FROM learning.form_assignment_portal_target t
       JOIN learning.form_assignment a ON a.id=t.assignment_id WHERE a.erp_course_class_id=$1::bigint
       AND a.status IN ('published','closed')`,[classId]);
     if(!direct.rowCount)return result;
-    const starts=new Map(direct.rows.map(row=>[row.id,row.starts_at]));
+    let portalSchedule;
+    try{portalSchedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{allowEmpty:true}));}
+    catch{return {...result,scheduleStatus:'temporarily_unavailable'};}
+    const starts=new Map(direct.rows.map(row=>[row.id,row]));
     const today=vietnamDate.format(new Date());
     return {...result,sessions:result.sessions.map(session=>{
       const assignmentId=session.assignmentId||(session.assignments?.length===1?session.assignments[0].assignmentId:null);
-      const start=starts.get(assignmentId);
-      return start?{...session,sessionDate:start.slice(0,10),sessionStartTime:start.slice(11),future:start.slice(0,10)>today}:session;
+      const pinned=starts.get(assignmentId);
+      if(!pinned)return session;
+      const current=portalSchedule.sessions.find(row=>row.erpSessionId===pinned.portal_session_id);
+      const connected=!portalSchedule.ambiguous&&current&&[0,1].includes(current.statusCode);
+      const start=connected?current.startsAt:pinned.starts_at;
+      return {...session,erpSessionId:pinned.portal_session_id,sessionDate:start.slice(0,10),sessionStartTime:start.slice(11),
+        future:start.slice(0,10)>today,scheduleStatus:connected?'connected':'needs_review'};
     })};
   }
 
@@ -1103,8 +1111,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       ]);
       const plan = planResult.rows[0];
       const baseline = baselineResult.rows[0]?.erp_snapshot;
-      const confirmed = normalizeJourneySessionDates(plan?.session_dates);
-      const byNumber = new Map(confirmed.map(slot => [slot.sessionNumber, slot]));
+      let confirmed = normalizeJourneySessionDates(plan?.session_dates);
       const booked = new Set(asArray(target.assignment_session_numbers).map(Number));
       const tests = new Set(asArray(plan?.test_session_numbers).map(Number));
       const rosterStatus = !roster.rowCount ? 'empty' : roster.rows.some(row => row.membership_verified !== true) ? 'unverified' : 'verified';
@@ -1114,6 +1121,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       } catch (error) {
         if (!['ERP_SCHEDULE_UNAVAILABLE', 'ERP_SCHEDULE_NOT_CONFIGURED'].includes(error.code)) throw error;
       }
+      confirmed=currentConfirmedDates(confirmed,schedule);
+      const byNumber = new Map(confirmed.map(slot => [slot.sessionNumber, slot]));
       const numbers = new Set(booked);
       for (let number = 1; number <= Number(plan?.total_sessions || 0); number++) numbers.add(number);
       const sessions = [...numbers].sort((a, b) => a - b).map(sessionNumber => {
@@ -1170,6 +1179,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const target = await authorizeJourneyTarget(pool, {assignmentId,classId,reviewer});
       const result = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
       const plan = result.rows[0];
+      let dates=plan?normalizeJourneySessionDates(plan.session_dates):[];
+      if(erpScheduleReader)try{dates=currentConfirmedDates(dates,decorateSchedule(target.class_id,await readErpSchedule(target.class_id)));}catch{/* Keep the confirmed ID/date while the source is unavailable. */}
       return {
         classId: target.class_id,
         className: target.class_name,
@@ -1177,7 +1188,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         totalSessions: plan ? Number(plan.total_sessions) : null,
         testSessionNumbers: plan ? asArray(plan.test_session_numbers).map(Number) : [],
         testSources: plan ? normalizeJourneyTestSources(plan.test_sources) : [],
-        sessionDates: plan ? normalizeJourneySessionDates(plan.session_dates) : [],
+        sessionDates: dates,
         revision: plan ? Number(plan.revision) : 0,
         confirmedBy: plan?.confirmed_by_email || null,
         confirmedAt: plan?.confirmed_at || null
@@ -1288,7 +1299,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           const beforeTime=oldTimes.get(old.erpSessionId),afterTime=newTimes.get(old.erpSessionId);
           const changed = !next || next.erpSessionId !== old.erpSessionId || next.date !== old.date
             || (beforeTime && afterTime && (beforeTime.startsAt!==afterTime.startsAt || beforeTime.endsAt!==afterTime.endsAt));
-          if (changed) {
+          if (changed && next?.erpSessionId!==old.erpSessionId) {
             const usage = await client.query(`SELECT 1 FROM learning.form_assignment a WHERE a.erp_course_class_id=$1::bigint AND a.session_number=$2
               AND (EXISTS(SELECT 1 FROM learning.attempt t WHERE t.assignment_id=a.id)
                 OR EXISTS(SELECT 1 FROM learning.portal_attendance_binding b WHERE b.assignment_id=a.id AND (b.write_started OR b.accepted_at IS NOT NULL)))`, [target.class_id,old.sessionNumber]);
@@ -1363,7 +1374,10 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
               const days=(Date.parse(next.date+'T00:00:00Z')-Date.parse(old.date+'T00:00:00Z'))/86400000;
               await client.query(`UPDATE learning.form_assignment SET
                 opens_at=opens_at+($3 * interval '1 day'),closes_at=closes_at+($3 * interval '1 day')
-                WHERE erp_course_class_id=$1::bigint AND session_number=$2`, [target.class_id,next.sessionNumber,days]);
+                WHERE erp_course_class_id=$1::bigint AND session_number=$2
+                AND NOT EXISTS(SELECT 1 FROM learning.attempt t WHERE t.assignment_id=learning.form_assignment.id)
+                AND NOT EXISTS(SELECT 1 FROM learning.portal_attendance_binding b WHERE b.assignment_id=learning.form_assignment.id
+                  AND (b.write_started OR b.accepted_at IS NOT NULL))`, [target.class_id,next.sessionNumber,days]);
             }
           }
           for (const next of datesToSave.filter(s=>s.erpSessionId)) await client.query(`UPDATE learning.portal_attendance_binding b

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { LearningJobIdentityError } from './learning-outbox.js';
 import { createAttendanceBindingStore } from './learning-attendance-binding.js';
+import {canRefreshBoundSchedule} from './learning-schedule-identity.js';
 
 const uuid = z.string().uuid();
 const submissionPayloadSchema = z.object({
@@ -85,7 +86,7 @@ function assertExactIdentity(job, payload, response) {
   return expected;
 }
 
-export function createLearningAttendanceSync({ config, pool, bindingStore, fetchImpl = fetch }) {
+export function createLearningAttendanceSync({ config, pool, bindingStore, fetchImpl = fetch, deliveryHandler = null }) {
   if (!config.learningAttendanceSyncUrl || !config.learningAttendanceSyncSecret) return null;
   const store = bindingStore || createAttendanceBindingStore(pool);
 
@@ -158,7 +159,13 @@ export function createLearningAttendanceSync({ config, pool, bindingStore, fetch
     }
 
     const prior = await store.read(payload.assignmentId);
-    const resolved = await callPortal(prior, false);
+    let resolved = await callPortal(prior, false);
+    // Re-read the pinned ID using the freshly observed full Portal fingerprint.
+    // A time/status/order change cannot choose another target by its ordinal.
+    if(prior&&!prior.reviewRequired&&prior.scheduleFingerprint!==resolved.scheduleFingerprint
+      &&canRefreshBoundSchedule(prior,resolved)){
+      resolved=await callPortal({...prior,scheduleFingerprint:resolved.scheduleFingerprint},false);
+    }
     const binding = await store.reserve(job, payload, resolved);
     if (binding.reviewRequired) {
       if (binding.canReadbackKnown) await store.record(job, payload, binding, resolved);
@@ -167,7 +174,14 @@ export function createLearningAttendanceSync({ config, pool, bindingStore, fetch
         reviewReason: binding.reason || 'schedule_changed' };
     }
     if (resolved.status === 'resolved') await store.assertDispatchAllowed(job, payload, binding);
-    const output = resolved.status === 'resolved' ? await callPortal(binding, true) : resolved;
+    // Preserve the already deployed standalone Hub transport when overlaying this module.
+    if(deliveryHandler)return deliveryHandler({job,payload,binding,expected});
+    let output = resolved.status === 'resolved' ? await callPortal(binding, true) : resolved;
+    if(output.scheduleChanged&&output.status==='synced'){
+      const observed=await callPortal(binding,false);
+      if(observed.status==='already_present'&&canRefreshBoundSchedule(binding,observed))
+        output={...output,scheduleFingerprint:observed.scheduleFingerprint,scheduleChanged:false};
+    }
     await store.record(job, payload, binding, output);
     return {
       ...expected,

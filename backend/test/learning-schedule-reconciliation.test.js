@@ -9,12 +9,12 @@ test('ID không trượt khi thêm buổi trước; cùng ngày khác giờ vẫ
  const schedule=decorateSchedule('1294',{sessions:[row('35818','2026-10-08'),row('35819','2026-10-12')]});
  const out=reconcileJourneySchedule(view,schedule,prior);
  assert.equal(out.sessions[0].erpSessionId,'35819');assert.equal(out.sessions[0].sessionDate,'2026-10-12');
- assert.equal(out.sessions[0].sessionStartTime,undefined);
+ assert.equal(out.sessions[0].sessionStartTime,'18:30:00');
  assert.equal(out.scheduleChanges.length,0);assert.equal(out.unassignedErpSessions.length,1);
  const earlier={...row('35819','2026-10-12'),startsAt:'2026-10-12 17:30:00'};
  const changed=reconcileJourneySchedule(view,schedule,prior,[],{sessions:[earlier]});
- assert.equal(changed.scheduleChanges[0].reason,'time_changed');
- assert.equal(changed.sessions[0].sessionStartTime,'17:30:00');
+ assert.equal(changed.scheduleChanges.length,0);
+ assert.equal(changed.sessions[0].sessionStartTime,'18:30:00');
 });
 for(const [name,sessions,reason] of [['hủy',[row('35819','2026-10-12',2)],'cancelled'],['dòng bị thay',[row('90000','2026-10-19')],'session_missing'],
  ['chưa rõ trạng thái',[row('35819','2026-10-12',3)],'ambiguous'],['trùng nguồn',[row('35819','2026-10-12'),row('35819','2026-10-12')],'ambiguous']])
