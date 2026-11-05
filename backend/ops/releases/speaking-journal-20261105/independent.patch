@@ -8,7 +8,7 @@
  import {markWorkReady} from './test-work-runtime.js';
  import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
  import { createPendingRoster } from './pending-roster.js';
-@@ -17,7 +18,13 @@
+@@ -17,7 +18,24 @@
  // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
  // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
  // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
@@ -20,10 +20,38 @@
 +    scope:{mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id},
 +    kind,operationId:id,committedAt:speakingJournalTime(createdAt),data,
 +  }));
++  // Chỉ projection từ SQL hiện hành; owner/attempt của claim cũ không cấp quyền ghi.
++  const recordWorkerJournal=(db,j,u,revision,phase,at,extra={})=>{
++    const checking=['check_main','check_practice'].includes(j.kind);
++    if(!journal||(!checking&&!['analyze_homework','analyze_practice'].includes(j.kind)))return;
++    return journalBoundary.record(db,()=>({
++      scope:{mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id},
++      kind:checking?'check.progress':'doctor.progress',operationId:j.id,committedAt:speakingJournalTime(at),
++      data:{phase,jobId:j.id,...(phase==='queued'?{}:{runHash:hash(JSON.stringify(['speaking-independent',j.id,j.owner]))}),jobAttempt:Number(j.attempts),
++        ...(checking?{linkId:j.link_id,linkRevision:Number(revision)}:{jobKind:j.kind,...(j.link_id?{linkId:j.link_id}:{})}),...extra},
++    }));
++  };
    const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
    const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
    if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
-@@ -187,6 +194,8 @@
+@@ -132,10 +150,13 @@
+     return u;
+   }
+   async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows.map(l=>({...l,linkId:l.id})); }
+-  async function queue(db,u,kind,key,link=null) {
++  async function queue(db,u,kind,key,link=null,auditUnit=null) {
+     const {rows}=await db.query(`INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key,link_id)
+-      VALUES($1,$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,[u,kind,key,link]);
+-    if(rows.length)markWorkReady(db,'ai');
++      VALUES($1,$2,$3,$4) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id,kind,link_id,attempts,created_at`,[u,kind,key,link]);
++    if(rows.length){
++      markWorkReady(db,'ai');
++      if(auditUnit)recordWorkerJournal(db,rows[0],auditUnit,null,'queued',rows[0].created_at);
++    }
+   }
+   async function open(identity) {
+     const u=await grant(identity);
+@@ -187,6 +208,8 @@
        markWorkReady(db,'state');
        if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
        await enqueueSpeakingProgress(db,'speaking_independent',u.id);
@@ -32,8 +60,12 @@
        return {id:l.id,status:l.status};
      });
    }
-@@ -212,6 +221,8 @@
-       await queue(db,u.id,'analyze_homework',`doctor:${r.id}`);
+@@ -209,9 +232,11 @@
+       catch(e) { if(e.code==='23505') fail('REUSED_CONVERSATION','Một hội thoại đã được nộp ở bài khác trong khóa. Hãy dùng hội thoại mới.'); throw e; }
+       const {rows:[r]}=await db.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1) RETURNING id,created_at',[u.id]);
+       await db.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[u.id]);
+-      await queue(db,u.id,'analyze_homework',`doctor:${r.id}`);
++      await queue(db,u.id,'analyze_homework',`doctor:${r.id}`,null,u);
        if (u.document_id) await queue(db,u.id,'write_doc',`doc:${r.id}:${u.document_id}`);
        await enqueueSpeakingProgress(db,'speaking_independent',u.id);
 +      recordJournal(db,u,'submit.accepted',r.id,r.created_at,{receiptId:r.id,
@@ -41,7 +73,110 @@
        return r;
      });
    }
-@@ -386,7 +397,7 @@
+@@ -244,21 +269,24 @@
+           WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
+         ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1), claimed AS (
+         UPDATE speaking_independent.job j SET status='processing',owner=gen_random_uuid(),lease_until=now()+interval '4 minutes',
+-          attempts=j.attempts+1,updated_at=now() FROM ready WHERE j.id=ready.id RETURNING j.id,j.owner)
+-        SELECT ready.*,claimed.owner AS claim_owner FROM ready JOIN claimed ON claimed.id=ready.id ORDER BY ready.created_at,ready.id`,[limit]);
++          attempts=j.attempts+1,updated_at=now() FROM ready WHERE j.id=ready.id RETURNING j.id,j.owner,j.attempts,j.updated_at)
++        SELECT ready.*,claimed.owner AS claim_owner,claimed.attempts AS _journal_attempt,claimed.updated_at AS _journal_at
++        FROM ready JOIN claimed ON claimed.id=ready.id ORDER BY ready.created_at,ready.id`,[limit]);
+       if(!jobs.length)return[];
+       const unitIds=[...new Set(jobs.map(j=>j.work_unit_id))],linkIds=[...new Set(jobs.map(j=>j.link_id).filter(Boolean))];
+-      const units=new Map((await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id FROM speaking_independent.work_unit u
++      const units=new Map((await db.query(`SELECT u.*,p.class_id,p.class_code,p.student_ref,p.kind AS profile_kind,p.course_id,p.identity_ref AS _journal_identity_ref FROM speaking_independent.work_unit u
+         JOIN speaking_independent.profile p ON p.id=u.profile_id WHERE u.id=ANY($1::uuid[])`,[unitIds])).rows.map(u=>[u.id,u]));
+       const selectedLinks=new Map((linkIds.length?(await db.query('SELECT * FROM speaking_independent.link WHERE id=ANY($1::uuid[])',[linkIds])).rows:[]).map(l=>[l.id,l]));
+       const receipts=new Map((await db.query('SELECT id,work_unit_id FROM speaking_independent.receipt WHERE work_unit_id=ANY($1::uuid[])',[unitIds])).rows.map(r=>[r.work_unit_id,r]));
+       const latest=(await db.query(`SELECT DISTINCT ON(work_unit_id,kind,part) * FROM speaking_independent.link
+         WHERE work_unit_id=ANY($1::uuid[]) ORDER BY work_unit_id,kind,part,revision DESC`,[unitIds])).rows;
+       const admitted=[],invalid=[];
+-      for(const {claim_owner:owner,...j} of jobs){
++      for(const {claim_owner:owner,_journal_attempt,_journal_at,...j} of jobs){
+         const u=units.get(j.work_unit_id),l=selectedLinks.get(j.link_id);
+         if(!u||(j.link_id&&(!l||l.work_unit_id!==u.id))){invalid.push(j.id);continue;}
+-        admitted.push({...j,...l,kind:j.kind,link_kind:l?.kind,id:j.id,job_id:j.id,link_id:j.link_id,owner,u,receipt_id:receipts.get(u.id)?.id,
++        const {_journal_identity_ref,...nativeUnit}=u;
++        recordWorkerJournal(db,{...j,owner,attempts:_journal_attempt},{...u,identity_ref:_journal_identity_ref},l?.revision,'started',_journal_at);
++        admitted.push({...j,...l,kind:j.kind,link_kind:l?.kind,id:j.id,job_id:j.id,link_id:j.link_id,owner,u:nativeUnit,receipt_id:receipts.get(u.id)?.id,
+           min_questions:u.template.parts.find(p=>p.part_key===l?.part)?.min_questions,
+           class_id:u.class_id,student_ref:u.student_ref,
+           links:Object.fromEntries(latest.filter(l=>l.work_unit_id===u.id&&l.kind==='main').map(l=>[l.part,{url:l.share_url,fingerprint:l.fingerprint,linkId:l.id}]))});
+@@ -273,8 +301,11 @@
+   async function claimJob(){return(await claimJobs(1))[0]||null;}
+   async function mutateJob(job,fn) {
+     return withTransaction(pool,async db=>{
+-      const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE id=$1 AND owner=$2
+-        AND status='processing' AND lease_until>now() FOR UPDATE`,[job.job_id,job.owner]);
++      const {rows:[j]}=await db.query(`SELECT j.*,jsonb_build_object('id',u.id,'assignment_code',u.assignment_code,
++        'class_id',p.class_id,'identity_ref',p.identity_ref) AS _journal_unit,l.revision AS _journal_revision
++        FROM speaking_independent.job j JOIN speaking_independent.work_unit u ON u.id=j.work_unit_id
++        JOIN speaking_independent.profile p ON p.id=u.profile_id LEFT JOIN speaking_independent.link l ON l.id=j.link_id
++        WHERE j.id=$1 AND j.owner=$2 AND j.status='processing' AND j.lease_until>now() FOR UPDATE OF j`,[job.job_id,job.owner]);
+       if (!j) fail('STALE_JOB','Lượt xử lý đã hết hạn; kết quả cũ không được ghi.');
+       const result=await fn(db,j);markWorkReady(db,'state');return result;
+     });
+@@ -288,8 +319,10 @@
+         if(current.attempts===4)console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code,jobId:job.job_id}));
+         return;
+       }
+-      await db.query(`UPDATE speaking_independent.job SET status=CASE WHEN attempts>=5 THEN 'review' ELSE 'failed' END,
+-        last_error=$2,available_at=now()+interval '30 seconds',lease_until=NULL,updated_at=now() WHERE id=$1`,[job.job_id,code]);
++      const {rows:[transition]}=await db.query(`UPDATE speaking_independent.job SET status=CASE WHEN attempts>=5 THEN 'review' ELSE 'failed' END,
++        last_error=$2,available_at=now()+interval '30 seconds',lease_until=NULL,updated_at=now() WHERE id=$1 RETURNING updated_at`,[job.job_id,code]);
++      recordWorkerJournal(db,current,current._journal_unit,current._journal_revision,'failed',transition.updated_at,
++        {errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(code||'')?code:'SPEAKING_JOB_FAILED'});
+     });
+   }
+   async function checkComplete(job,result) {
+@@ -297,7 +330,8 @@
+       await db.query('SELECT id FROM speaking_independent.work_unit WHERE id=$1 FOR UPDATE',[j.work_unit_id]);
+       const current=(await links(j.work_unit_id,db)).find(l=>l.part===job.part&&l.kind===job.link_kind);
+       if (current?.id!==j.link_id) {
+-        await db.query("UPDATE speaking_independent.job SET status='done',result='{\"superseded\":true}' WHERE id=$1",[j.id]);
++        const {rows:[transition]}=await db.query("UPDATE speaking_independent.job SET status='done',result='{\"superseded\":true}' WHERE id=$1 RETURNING now() AS at",[j.id]);
++        recordWorkerJournal(db,j,j._journal_unit,j._journal_revision,'superseded',transition.at);
+         return {status:'superseded'};
+       }
+       const valid=result.qualityPassed===true && Number.isInteger(result.questionCount)
+@@ -309,8 +343,8 @@
+       const all=await links(j.work_unit_id,db);
+       if (valid && all.some(l=>l.id!==j.link_id&&l.fingerprint===result.fingerprint)) code='REUSED_CONVERSATION';
+       let status=valid&&!code?'accepted':'rejected';
+-      await db.query(`UPDATE speaking_independent.link SET status=$2,check_code=$3,fingerprint=$4,
+-        question_count=$5,evidence=$6,checked_at=now() WHERE id=$1`,
++      const {rows:[checked]}=await db.query(`UPDATE speaking_independent.link SET status=$2,check_code=$3,fingerprint=$4,
++        question_count=$5,evidence=$6,checked_at=now() WHERE id=$1 RETURNING question_count`,
+       [j.link_id,status,code,result.fingerprint||null,result.questionCount||0,JSON.stringify(result.evidence||{})]);
+       if (status==='accepted'&&j.kind==='check_practice') {
+         await db.query('SAVEPOINT reserve_practice');
+@@ -322,10 +356,12 @@
+           await db.query("UPDATE speaking_independent.link SET status='rejected',check_code='REUSED_CONVERSATION' WHERE id=$1",[j.link_id]);
+         }
+         await db.query('RELEASE SAVEPOINT reserve_practice');
+-        if(status==='accepted') await queue(db,j.work_unit_id,'analyze_practice',`analyze:${j.link_id}`,j.link_id);
++        if(status==='accepted') await queue(db,j.work_unit_id,'analyze_practice',`analyze:${j.link_id}`,j.link_id,j._journal_unit);
+       }
+       if(status==='accepted') await saveConversationSnapshot(db,'speaking_independent',job.link_kind,j.link_id,result.fingerprint,result.snapshot);
+-      await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1",[j.id,JSON.stringify({status})]);
++      const {rows:[transition]}=await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1 RETURNING updated_at",[j.id,JSON.stringify({status})]);
++      recordWorkerJournal(db,j,j._journal_unit,j._journal_revision,status,transition.updated_at,
++        {questionCount:checked.question_count,...(code?{errorCode:/^[A-Z][A-Z0-9_]{1,79}$/.test(code)?code:'CHECK_REJECTED'}:{})});
+       await enqueueSpeakingProgress(db,'speaking_independent',j.work_unit_id);
+       return {status};
+     });
+@@ -360,7 +396,8 @@
+         fail('DOCTOR_RESULT_INVALID','Bằng chứng ghép bài luyện không hợp lệ.');
+       return mutateJob(job,async(db,j)=>{
+         for(const exerciseId of new Set(r.matches.map(m=>m.exerciseId))) await recordEvent(db,job.u,{sourceKey:`doctor:${j.id}:${exerciseId}`,exerciseId,kind:'recommendation',occurredAt:new Date(j.created_at).toISOString()});
+-        await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1",[j.id,JSON.stringify(r)]);
++        const {rows:[transition]}=await db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL,updated_at=now() WHERE id=$1 RETURNING updated_at",[j.id,JSON.stringify(r)]);
++        recordWorkerJournal(db,j,j._journal_unit,j._journal_revision,'completed',transition.updated_at,{receivedCount:r.matches.length});
+         return {status:'done'};
+       });
+     };
+@@ -386,7 +423,7 @@
        processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
        grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
    }

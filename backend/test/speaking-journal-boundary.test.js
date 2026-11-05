@@ -68,3 +68,16 @@ test('lỗi dựng projection metadata không rollback kết quả nghiệp vụ
  });
  assert.equal(result,'native-saved');assert.equal(boundary.snapshot().unknown,1);
 });
+
+test('gửi nhiều transaction theo hàng hữu hạn, không mở đồng thời tất cả request log',async t=>{
+ let release;const held=new Promise(resolve=>{release=resolve;});t.after(()=>release());
+ let active=0,peak=0;const sent=[];
+ const boundary=createSpeakingJournalBoundary({transaction:async(pool,work)=>work({}),journal:async row=>{
+  active++;peak=Math.max(peak,active);sent.push(row.id);await held;active--;return{persisted:true};
+ }});
+ const results=await Promise.all(Array.from({length:12},(_,id)=>boundary.transaction({},async db=>{boundary.record(db,{id});return id;})));
+ assert.equal(results.length,12,'nghiệp vụ không chờ mạng log');await nextTurn();
+ assert.equal(peak,1,'chỉ một callback đang gửi; phần còn lại nằm trong pending có giới hạn');
+ assert.equal(boundary.snapshot().pending,12);release();await nextTurn();await nextTurn();
+ assert.deepEqual(sent,results);assert.equal(boundary.snapshot().pending,0);assert.equal(boundary.snapshot().delivered,12);
+});

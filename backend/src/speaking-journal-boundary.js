@@ -9,7 +9,24 @@ export function createSpeakingJournalBoundary({transaction,journal,maxTransactio
   ||!Number.isInteger(maxPendingEvents)||maxPendingEvents<1||maxPendingEvents>4096)
   throw Error('SPEAKING_JOURNAL_OPTIONS_INVALID');
  const active=new WeakMap();
+ const delivery=[];let sending=false;
  const failure=code=>{try{onFailure({code});}catch{}};
+ function scheduleDelivery(){
+  if(sending)return;
+  sending=true;
+  setImmediate(async()=>{
+   while(delivery.length){
+    const row=delivery.shift();
+    try{
+     const receipt=await journal(row);
+     if(receipt?.persisted===true)stats.delivered++;
+     else{stats.unknown++;failure('SPEAKING_JOURNAL_PERSISTENCE_UNKNOWN');}
+    }catch{stats.unknown++;failure('SPEAKING_JOURNAL_PERSISTENCE_UNKNOWN');}
+    finally{stats.pending--;}
+   }
+   sending=false;
+  });
+ }
  function record(client,projection){
   const rows=active.get(client);
   if(!rows){stats.unknown++;failure('SPEAKING_JOURNAL_NO_TRANSACTION');return false;}
@@ -29,14 +46,9 @@ export function createSpeakingJournalBoundary({transaction,journal,maxTransactio
   stats.committed+=rows.length;
   for(const row of rows){
    if(stats.pending>=maxPendingEvents){stats.overflow++;failure('SPEAKING_JOURNAL_DELIVERY_FULL');continue;}
-   stats.pending++;
-   setImmediate(()=>{
-    void Promise.resolve().then(()=>journal(row)).then(receipt=>{
-     if(receipt?.persisted===true)stats.delivered++;
-     else{stats.unknown++;failure('SPEAKING_JOURNAL_PERSISTENCE_UNKNOWN');}
-    },()=>{stats.unknown++;failure('SPEAKING_JOURNAL_PERSISTENCE_UNKNOWN');}).finally(()=>{stats.pending--;});
-   });
+   stats.pending++;delivery.push(row);
   }
+  if(delivery.length)scheduleDelivery();
   return result;
  }
  return{transaction:observedTransaction,record,snapshot};
