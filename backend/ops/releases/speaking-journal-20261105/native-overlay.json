@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "state": "local_candidate_not_deployed",
+  "overlays": [
+    {
+      "mode": "independent",
+      "source": "src/speaking-independent.js",
+      "baseSha256": "26f21cb877f343c7624ad8b8c4100979f9da99b82b15c98651ade56b302eff13",
+      "candidateSha256": "c6b89a1aa4927218d776173d7aa089453e690ff25b8e4ec69361973befb6710a",
+      "patch": "independent.patch",
+      "reverseApplyCheck": true,
+      "extraModule": "src/speaking-journal-boundary.js"
+    },
+    {
+      "mode": "legacy",
+      "source": "src/speaking-homework.js",
+      "baseSha256": "587e115dabd7d6f029c8d045ee30d8b9cf765fc044d2738628b33eaae1c0f6e5",
+      "candidateSha256": "dc3dbe07a2a4d4e28db7a2875b8a77c61ed14696ff970dbe87d7a8824b792541",
+      "patch": "legacy.patch",
+      "reverseApplyCheck": true,
+      "extraModule": "src/speaking-journal-boundary.js"
+    }
+  ],
+  "canonicalHelper": "backend/src/speaking-journal-boundary.js",
+  "journalKinds": [
+    "link.saved",
+    "submit.accepted"
+  ],
+  "unitNamespaces": {
+    "independent": "work_unit",
+    "legacy": "access_grant"
+  },
+  "classRef": "ERP class_id string, or explicit null for unmapped document profile",
+  "subjectRef": "authenticated profile.identity_ref or verified legacy student_ref",
+  "generation": 0,
+  "maxTransactionEvents": 32,
+  "maxPendingEvents": 256,
+  "remaining": [
+    "checker/Doctor/Docs projections",
+    "client/tickets",
+    "durable producer/batching/startup",
+    "reports/P3/P4"
+  ],
+  "qualification": "PGlite SQL plus signed localhost Collector; checker accepted states seeded, no live PostgreSQL/AI/Google/production actions."
+}
