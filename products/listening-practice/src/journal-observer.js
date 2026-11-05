@@ -1,3 +1,4 @@
+import {queuedDocsReceipt,publishDocsProgress} from './docs-journal-observer.js';
 import {randomUUID} from 'node:crypto';
 
 // The native transaction owns the result. Logging sees only a small snapshot
@@ -5,8 +6,8 @@ import {randomUUID} from 'node:crypto';
 export function createJournalTransaction({pool,transaction,journal,clock}){
  if(!journal)return fn=>transaction(pool,db=>fn(db,()=>{}));
  return async fn=>{
-  let receipt;
-  const result=await transaction(pool,db=>fn(db,(b,state,action,operationId,{leaseIssued=false}={})=>{
+  let receipt;const docsReceipts=[];
+  const record=(b,state,action,operationId,{leaseIssued=false}={})=>{
    try{
    const a=state.attempts.at(-1);if(!a)return;
    receipt={scope:{code:b.code,classCode:b.class_code,studentRef:b.student_ref,attemptId:a.id,attemptNo:a.no},
@@ -14,7 +15,10 @@ export function createJournalTransaction({pool,transaction,journal,clock}){
      usedMs:Math.round(a.usedMs),activeMs:Math.round(a.draft.activeMs),audioPositionMs:Math.round(a.draft.audioPosition*1000),
      recoveryPending:Boolean(a.progressRecovery),leaseIssued,nativeOperation:Boolean(operationId)}};
    }catch{receipt=undefined;}
-  }));
+  };
+  record.docs=(b,job,a)=>{const value=queuedDocsReceipt(b,job,a);if(value)docsReceipts.push(value);};
+  const result=await transaction(pool,db=>fn(db,record));
+  for(const value of docsReceipts)publishDocsProgress(journal,value,clock);
   if(receipt){
    // Time observed after the database acknowledged COMMIT, not a claimed SQL
    // commit timestamp. Freeze it before asynchronous delivery/retries.

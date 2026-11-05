@@ -54,11 +54,14 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   return(await db.query('SELECT state FROM reading_practice.work WHERE binding_id=$1 FOR UPDATE',[b.id])).rows[0].state;
  }
  async function save(db,b,state){await db.query('UPDATE reading_practice.work SET state=$2,updated_at=now() WHERE binding_id=$1',[b.id,state]);}
- async function enqueue(db,b,state,a){
+ async function enqueue(db,b,state,a,record){
   const sequence=++state.sequence,message=statusMessage(a,state.firstCompleted);
   state.events.push({type:a.status==='submitted'?'completed':'started',attempt:a.no,message,at:new Date(clock()).toISOString(),sequence});
-  if(syncsHomework(b))await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,$3,'status',$4)`,
-   [uuid(),b.id,sequence,{text:message,link:a.submissionId?teacherUrl(a.submissionId):'',attemptId:a.id,attemptNo:a.no}]);
+  if(syncsHomework(b)){
+   const job=(await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,$3,'status',$4) RETURNING *`,
+    [uuid(),b.id,sequence,{text:message,link:a.submissionId?teacherUrl(a.submissionId):'',attemptId:a.id,attemptNo:a.no}])).rows[0];
+   record?.docs?.(b,job,a);
+  }
  }
  async function operation(input,kind,fn){
   if(!/^[0-9a-f-]{36}$/i.test(input.operationId||''))fail('OPERATION_REQUIRED','Thao tác thiếu mã chống gửi lặp.',400);
@@ -72,7 +75,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
     const lease=proof?.id===a?.lease?.id&&['running','paused'].includes(a.status)&&clock()-a.lease.lastSeen<=7000?proof:undefined;
     return view(db,b,state,{lease,definition:Boolean(old.response.definition)});
    }
-   const result=await fn(db,b,state);await save(db,b,state);
+   const result=await fn(db,b,state,record);await save(db,b,state);
    await db.query('INSERT INTO reading_practice.operation(binding_id,operation_id,fingerprint,response) VALUES($1,$2,$3,$4)',[b.id,input.operationId,fingerprint,result]);
    record(b,state,kind,input.operationId,{leaseIssued:Boolean(result.lease),recoverySupplied:Boolean(input.recovery),
     ...(kind==='reset'?{previousAttemptId:input.attemptId}:{})});
@@ -110,7 +113,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   const code=lessonFor(input.code||CODE).code;input={...input,code};
   if(!await context.student(input.classId,input.studentRef))fail('STUDENT_NOT_ELIGIBLE','UUID không thuộc hồ sơ đang học của lớp.',403);
   const proof=await verifyBinding(input);
-  return transaction(pool,async db=>{
+  return observedTransaction(async(db,record)=>{
    const content=(await db.query('SELECT id FROM reading_practice.content WHERE code=$1 AND version=$2',[code,input.contentVersion])).rows[0];
    if(!content)fail('CONTENT_NOT_FOUND','Chưa nạp nội dung của bài.',404);
    const assignment=(await db.query(`INSERT INTO reading_practice.assignment(id,class_id,class_code,content_id,status,source_course_id,source_work_id)
@@ -129,7 +132,8 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    if(!b)fail('DOCUMENT_BINDING_CONFLICT','Docs đã gắn với học viên/bài khác hoặc mã link khác.');
    const url=new URL(pageBase);url.searchParams.set('assignmentCode',code);url.searchParams.set('documentId',input.documentId);
    url.hash=`login?entry=${encodeURIComponent(token)}`;
-   await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),b.id,{url:url.href}]);
+   const queued=(await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING RETURNING *`,[uuid(),b.id,{url:url.href}])).rows[0];
+   record.docs?.({...b,code:input.code,class_code:input.classCode,student_ref:input.studentRef},queued);
    return{bindingId:b.id,assignmentId:assignment.id,entryUrl:url.href};
   });
  }
@@ -189,7 +193,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   const selected=(await context.classes()).find(c=>c.id===input.classId&&c.classCode===input.classCode);
   if(!selected||!await context.student(input.classId,input.studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc lớp đã đối chiếu.',403);
   const proof=await verifyBinding(input);
-  return transaction(pool,async db=>{
+  return observedTransaction(async(db,record)=>{
    const content=await sharedContent(db,input.code,{lock:true});
    const assignment=(await db.query(`INSERT INTO reading_practice.assignment(id,class_id,class_code,content_id,status)
     VALUES($1,$2,$3,$4,'open') ON CONFLICT(class_id,content_id) DO UPDATE SET class_code=EXCLUDED.class_code
@@ -211,9 +215,11 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    const previous=(await db.query("SELECT payload FROM reading_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta' FOR UPDATE",[bound.id])).rows[0];
    if(previous&&previous.payload.url!==url.href){
     if(previous.payload.url!==generic.href)fail('CTA_STORED_LINK_INVALID','Link đã lưu không phải đường chung được phép nâng cấp.');
-    await db.query("UPDATE reading_practice.doc_job SET payload=$2,status='pending',available_at=now(),attempts=0,verified_at=null WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id,{url:url.href}]);
+    const updated=(await db.query("UPDATE reading_practice.doc_job SET payload=$2,status='pending',available_at=now(),attempts=0,verified_at=null WHERE binding_id=$1 AND sequence=0 AND kind='cta' RETURNING *",[bound.id,{url:url.href}])).rows[0];
+    record.docs?.({...bound,code:input.code,class_code:input.classCode,student_ref:input.studentRef},updated);
    }
-   await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING`,[uuid(),bound.id,{url:url.href}]);
+   const queued=(await db.query(`INSERT INTO reading_practice.doc_job(id,binding_id,sequence,kind,payload) VALUES($1,$2,0,'cta',$3) ON CONFLICT DO NOTHING RETURNING *`,[uuid(),bound.id,{url:url.href}])).rows[0];
+   record.docs?.({...bound,code:input.code,class_code:input.classCode,student_ref:input.studentRef},queued);
    const stored=(await db.query("SELECT payload FROM reading_practice.doc_job WHERE binding_id=$1 AND sequence=0 AND kind='cta'",[bound.id])).rows[0];
    if(stored?.payload.url!==url.href)fail('CTA_STORED_LINK_INVALID','Link chung đã lưu không khớp bài.');
    return{bindingId:bound.id,assignmentId:assignment.id,entryUrl:url.href};
@@ -241,15 +247,15 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    return{token,...await view(db,b,state)};
   });
  }
- const begin=input=>operation(input,'begin',async(db,b,state)=>{
+ const begin=input=>operation(input,'begin',async(db,b,state,record)=>{
   if(b.assignment_status!=='open')fail('ASSIGNMENT_CLOSED','Bài chưa mở hoặc đã đóng.');
   if(state.attempts.length)fail('ATTEMPT_EXISTS','Bạn đã có lần làm bài. Dùng Tiếp tục hoặc Reset.');
-  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
  });
- const resume=input=>operation(input,'resume',async(db,b,state)=>{
+ const resume=input=>operation(input,'resume',async(db,b,state,record)=>{
   const a=active(state,input.attemptId);
   if(input.recovery){checkpoint(a,input.recovery.snapshot,input.recovery.lease,clock(),{recovery:true,code:b.code});}
-  if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);return view(db,b,state);}
+  if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a,record);return view(db,b,state);}
   const lease=issueLease(a,input.owner,clock());return view(db,b,state,{lease,definition:true});
  });
  async function activate(input){
@@ -267,14 +273,14 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    if(a.status==='paused'&&!pause)fail('ATTEMPT_PAUSED','Lần làm bài đang tạm dừng.');
    const priorStatus=a.status,contentChanged=Boolean(journal)&&readingDraftChanged(a.draft,input.snapshot);
    checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause,code:b.code});
-   if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a);}
+   if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a,record);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
    await save(db,b,state);
    if(contentChanged||a.status!==priorStatus)record(b,state,pause?'pause':'checkpoint',undefined,{contentChanged,recoverySupplied:pause});
    return view(db,b,state);
   });
  }
- const reset=input=>operation(input,'reset',async(db,b,state)=>{
+ const reset=input=>operation(input,'reset',async(db,b,state,record)=>{
   if(b.assignment_status!=='open')fail('ASSIGNMENT_CLOSED','Bài đã đóng, chưa thể tạo lượt mới.');
   const old=state.attempts.at(-1);if(!old||old.id!==input.attemptId)fail('ATTEMPT_CHANGED','Lần làm bài đã đổi.');
   if(old.status==='submitted'&&input.lease)fail('ATTEMPT_CLOSED','Lần này vừa được nộp. Xem kết quả trước khi reset.');
@@ -282,12 +288,12 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    checkLease(old,input.lease);if(input.snapshot)checkpoint(old,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
    old.status='reset';old.endedAt=new Date(clock()).toISOString();
   }
-  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
  });
- const submit=input=>operation(input,'submit',async(db,b,state)=>{
+ const submit=input=>operation(input,'submit',async(db,b,state,record)=>{
   const a=active(state,input.attemptId);checkpoint(a,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
   if(input.method==='timeout'&&a.usedMs<lessonFor(b.code).totalMs)fail('TIME_NOT_EXHAUSTED','Máy chủ chưa xác nhận dùng hết giờ.');
-  submitted(a,b,state,a.usedMs>=lessonFor(b.code).totalMs?'timeout':'manual');await enqueue(db,b,state,a);return view(db,b,state);
+  submitted(a,b,state,a.usedMs>=lessonFor(b.code).totalMs?'timeout':'manual');await enqueue(db,b,state,a,record);return view(db,b,state);
  });
  async function result({token,attemptId}){
   const b=await binding(pool,{token}),state=(await pool.query('SELECT state FROM reading_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state;
