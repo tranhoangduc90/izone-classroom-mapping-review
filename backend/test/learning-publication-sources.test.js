@@ -34,6 +34,7 @@ test('R30: giao lại nguồn đã phát và bản chụp đã duyệt, không l
     assert.equal((await db.query('SELECT count(*)::int n FROM learning.form_assignment')).rows[0].n,1);
     const assigned=await drafts.assignPublication({id:adopted.id,operationId:randomUUID(),reviewer:owner,targets:[{classId:'1295',sessionNumber:2}]});assert.equal(assigned.status,'success');
     assert.ok((await drafts.listPublications({reviewer:reader})).some(p=>p.id===adopted.id));
+    await db.exec("INSERT INTO learning.progress_log_admin(reviewer_email,status,grant_reference) VALUES('owner@example.test','active','Test shared catalog admin')");
     const original=await make(3),stored=await library.store({draftId:original.id,expectedRevision:1,expectedHash:original.contentHash,scope:'izone',operationId:randomUUID(),reviewer:owner});
     const edited=structuredClone(original.definition);edited.title='Nháp revision 2';edited.blocks[0].items[0].prompt='Câu mới khác bản chụp';
     await drafts.save({id:original.id,expectedRevision:1,sessionNumber:3,definition:edited,gradingKey:original.gradingKey,reviewer:owner});

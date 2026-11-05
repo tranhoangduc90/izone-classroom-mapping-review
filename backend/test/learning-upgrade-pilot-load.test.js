@@ -52,6 +52,11 @@ test('Pilot: 20 người nộp/retry dưới 60 giây, 620 ô overview và aggre
         draftRevision:0,responses:Object.fromEntries(assignment.definition.blocks.flatMap(block=>block.items).map(item=>[item.itemVersionId,'Nội dung học viên giả.']))};
     }));
     const started=performance.now();
+    for(let n=0;n<20;n++){
+      const resumed=await request(app).post('/api/learning/attempts/resume').send({publicToken:published.publicToken,
+        studentRef:assignment.roster[0].studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()}).expect(200);
+      assert.equal(resumed.body.attempt.attemptToken,inputs[0].attemptToken);
+    }
     const results=await Promise.all(inputs.map(input=>request(app).post('/api/learning/attempts/submit').send(input).expect(200)));
     const submitBatchMs=performance.now()-started;assert.ok(submitBatchMs<60000);
     assert.ok(results.every(result=>result.body.receipt.completeness==='complete'));
@@ -61,6 +66,12 @@ test('Pilot: 20 người nộp/retry dưới 60 giây, 620 ô overview và aggre
       (SELECT count(*)::integer FROM learning.attendance_record) AS attendance,
       (SELECT count(*)::integer FROM learning.outbox_job WHERE job_type='sync_portal_attendance') AS jobs;`)).rows[0];
     assert.deepEqual(readback,{submissions:20,attendance:20,jobs:20});
+    for(const student of assignment.roster){
+      const response=await request(app).post('/api/learning/student/course-journey').send({publicToken:published.publicToken,studentRef:student.studentRef,identityConfirmed:true,includeSkills:true}).expect(200);
+      assert.equal(response.body.journey.student.studentRef,student.studentRef);assert.equal(response.body.journey.skillForms.length,1);
+      assert.ok(response.body.journey.skillForms[0].submissionId);
+    }
+    assert.equal((await database.query('SELECT count(*)::int n FROM learning.attempt')).rows[0].n,20,'Resume and reads cannot create attempts');
     const overviewMs=[],analyticsMs=[];
     for(let i=0;i<20;i++) {
       const before=queries.length,t0=performance.now(),overview=await service.getCourseOverview({classId:'1294',reviewer});

@@ -17,6 +17,7 @@ test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa n
       INSERT INTO mapping.erp_class_membership_snapshot SELECT erp_course_class_id,erp_student_contact_id FROM mapping.student_mapping_review;
       INSERT INTO learning.course_content_authority(reviewer_email,course_code,can_self_approve_scored_forms,grant_reference)
         VALUES('teacher@example.test','56',true,'Native isolated fixture only');`);
+    await f.pool.query("INSERT INTO learning.progress_log_admin(reviewer_email,status,grant_reference) VALUES('teacher@example.test','active','Explicit shared catalog fixture authority')");
     const reviewer={email:'teacher@example.test',canAccessAllClasses:false},drafts=createLearningFormDraftService({pool:f.clockPool}),library=createLearningFormLibrary({pool:f.clockPool,drafts});
     const payload=previewFormImport('type,prompt,skill\nreflection,Câu của bản chụp,reading').payload;payload.definition.courseCode='56';
     const draft=await drafts.create({classId:'2139',sessionNumber:1,operationId:randomUUID(),...payload,reviewer});
@@ -30,7 +31,7 @@ test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa n
     const saving=slowDrafts.save({id:draft.id,expectedRevision:1,sessionNumber:1,definition,gradingKey:draft.gradingKey,reviewer});await beforeCommit;
     let completed=false;const adopting=drafts.publicationFromSource({source:'library',id:entry.id,operationId:randomUUID(),reviewer}).then(value=>{completed=true;return value;});
     const deadline=Date.now()+5000;let waiting=false;
-    while(Date.now()<deadline){const locks=await f.pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM learning.form_draft WHERE id=%'");if(locks.rowCount){waiting=true;break;}await new Promise(done=>setTimeout(done,20));}
+    while(Date.now()<deadline){const locks=await f.pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND (query LIKE '%FROM learning.form_draft WHERE id=%' OR query LIKE '%FROM learning.form_publication_lock%')");if(locks.rowCount){waiting=true;break;}await new Promise(done=>setTimeout(done,20));}
     assert.equal(waiting,true,'Adapter phải đợi khóa của save thật');assert.equal(completed,false);resume();await saving;const publication=await adopting;
     assert.notEqual(publication.formVersionId,draft.definition.formVersionId);
     const current=await drafts.get({id:draft.id,reviewer});assert.equal(current.revision,2);assert.equal(current.definition.title,definition.title);

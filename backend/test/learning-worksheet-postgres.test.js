@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {postgresFixture} from './learning-postgres-fixture.js';
 import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {previewFormImport} from '../src/learning-form-import.js';
+import {archiveCatalog} from '../src/learning-catalog-archive.js';
 
 test('Thẻ 22 PostgreSQL role API: hai edit/save đồng thời, một head, publication và assignment bất biến',{timeout:60000},async()=>{
  const f=await postgresFixture({asApplication:true});
@@ -23,5 +24,14 @@ test('Thẻ 22 PostgreSQL role API: hai edit/save đồng thời, một head, pu
   assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.form_assignment')).rows[0].n,1);assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.submission')).rows[0].n,0);assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.outbox_job')).rows[0].n,0);
   await f.pool.query(await readFile(new URL('../ops/learning-migrations/202610300001_worksheet_revisions.sql',import.meta.url),'utf8'));
   assert.equal((await service.list({classId:'2139',reviewer,worksheetHeads:true})).length,1);
+  const baseline=(await f.pool.query('SELECT id,public_definition,private_definition,content_hash FROM learning.form_draft ORDER BY id')).rows;
+  let release,atCommit;const reached=new Promise(done=>{atCommit=done;}),gate=new Promise(done=>{release=done;});
+  const slowPool={async connect(){const c=await f.clockPool.connect();return {release:()=>c.release(),async query(sql,args){if(sql.trim()==='COMMIT'){atCommit();await gate;}return c.query(sql,args);}};}};
+  const deleting=archiveCatalog({pool:slowPool,id:edited[0].id,source:'personal',operationId:randomUUID(),reviewer});await reached;
+  let finished=false;const assigning=service.assignPublication({id:pub.id,operationId:randomUUID(),targets:[{classId:'2139',sessionNumber:9}],reviewer,origin:{source:'draft',id:a.id}}).finally(()=>{finished=true;});
+  try{await new Promise(done=>setTimeout(done,150));assert.equal(finished,false,'Assign must wait for the delete transaction');}finally{release();}
+  await deleting;const rejected=await assigning;assert.equal(rejected.status,'failure');assert.equal(rejected.results[0].error,'PUBLICATION_NOT_FOUND');
+  assert.deepEqual((await f.pool.query('SELECT id,public_definition,private_definition,content_hash FROM learning.form_draft ORDER BY id')).rows,baseline);
+  assert.equal((await f.pool.query('SELECT count(*)::int n FROM learning.form_assignment')).rows[0].n,1);
  }finally{await f.close();}
 });

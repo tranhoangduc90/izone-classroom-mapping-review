@@ -413,7 +413,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       try{return await pending;}finally{pendingPublicAssignments.delete(publicToken);}
     },
 
-    async startAttempt({ publicToken, studentRef, clientIdempotencyKey, identityConfirmed }) {
+    async startAttempt({ publicToken, studentRef, clientIdempotencyKey, identityConfirmed, resumeOnly=false }) {
       if (identityConfirmed !== true) {
         throw new LearningError('IDENTITY_NOT_CONFIRMED', 'Bạn cần xác nhận đúng tên trước khi bắt đầu.');
       }
@@ -426,14 +426,15 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           'STUDENT_NOT_IN_ASSIGNMENT',
           'Không tìm thấy học viên trong đúng phiếu của lớp này.'
         );
-        const attemptResult = await client.query(insertLearningAttemptSql, [
+        const attemptResult = resumeOnly ? await client.query(`SELECT id::text AS attempt_id,attempt_token::text,assignment_id::text,form_version_id::text,
+          definition_hash,student_ref::text,draft,draft_revision,status FROM learning.attempt WHERE assignment_id=$1::uuid AND student_ref=$2::uuid AND status='active'`,[student.assignment_id,student.student_ref]) : await client.query(insertLearningAttemptSql, [
           student.assignment_id,
           student.form_version_id,
           student.definition_hash,
           student.student_ref,
           clientIdempotencyKey
         ]);
-        const attempt = assertSingleRow(attemptResult, 'ATTEMPT_NOT_CREATED', 'Chưa thể mở phiếu.', 409);
+        const attempt = assertSingleRow(attemptResult, resumeOnly?'ATTEMPT_NOT_FOUND':'ATTEMPT_NOT_CREATED', 'Chưa có phiên đang làm.', resumeOnly?404:409);
         if (attempt.student_ref !== student.student_ref || attempt.assignment_id !== student.assignment_id) {
           throw new LearningError('ATTEMPT_IDENTITY_MISMATCH', 'Phiên làm bài không khớp học viên.', 409);
         }
@@ -800,7 +801,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       };
     },
 
-    async getStudentCourseJourney({ accessToken, publicToken, studentRef }) {
+    async getStudentCourseJourney({ accessToken, publicToken, studentRef, includeSkills=false }) {
       const result = await pool.query(fetchStudentCourseJourneySql, [
         accessToken ? sha256(accessToken) : null, publicToken || null, studentRef || null
       ]);
@@ -812,6 +813,16 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         404
       );
       const journey = buildStudentCourseJourney(row);
+      if(includeSkills){
+        const forms=await pool.query(`SELECT a.id::text AS assignment_id,a.session_number,v.public_definition,s.id::text AS submission_id,s.response_payload
+          FROM learning.form_assignment a JOIN learning.form_version v ON v.id=a.form_version_id
+          JOIN learning.assignment_student_status st ON st.assignment_id=a.id AND st.student_ref=$2::uuid
+          JOIN learning.submission s ON s.id=st.submission_id WHERE a.erp_course_class_id=$1::bigint AND a.status IN ('published','closed')`,[row.class_id,row.student_ref]);
+        journey.skillForms=forms.rows.filter(form=>journey.sessions.some(s=>s.assignmentId===form.assignment_id&&s.sessionNumber===Number(form.session_number))).map(form=>({
+          sessionNumber:Number(form.session_number),submissionId:form.submission_id,responses:asObject(form.response_payload),
+          definition:{blocks:asObject(form.public_definition).blocks.map(block=>({...block,items:block.items.filter(item=>item.interactionType==='number_score'||item.skillCodes?.includes('speaking'))}))}
+        }));
+      }
       const mapped = normalizeJourneyTestSources(row.test_sources);
       if (mapped.length||testResultReader?.readStudent) {
         if (!testResultReader) {
