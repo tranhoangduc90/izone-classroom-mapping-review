@@ -6,11 +6,11 @@
       "mode": "independent",
       "source": "src/speaking-independent.js",
       "baseSha256": "26f21cb877f343c7624ad8b8c4100979f9da99b82b15c98651ade56b302eff13",
-      "candidateSha256": "8c0c7b9e40d83d5367574065decd3337d6f9524be81a77287d115597eb2090b2",
+      "candidateSha256": "81f0db19d6caa842b7ff0db1ee29d15f9ef58de699de93e2a062f099edef9a76",
       "patch": "independent.patch",
       "reverseApplyCheck": true,
       "extraModule": "src/speaking-journal-boundary.js",
-      "forwardAppliedSha256": "8c0c7b9e40d83d5367574065decd3337d6f9524be81a77287d115597eb2090b2",
+      "forwardAppliedSha256": "81f0db19d6caa842b7ff0db1ee29d15f9ef58de699de93e2a062f099edef9a76",
       "forwardExactBytes": true,
       "additionalFiles": [
         {
@@ -23,8 +23,8 @@
         {
           "source": "src/speaking-independent-server.js",
           "baseSha256": "8d06dcee90d1da7aa04534403f970b826caa25b1d0c19a67ee2cd5aa222ab592",
-          "candidateSha256": "c28f484b82640af8dbd209822355839ea9b948c00cea555e27a5191c7ae15bc3",
-          "forwardAppliedSha256": "c28f484b82640af8dbd209822355839ea9b948c00cea555e27a5191c7ae15bc3",
+          "candidateSha256": "854dd548bed1fe211bafeeb6d553b9d00bf4be69fdec4fd6c49494ca05cd4211",
+          "forwardAppliedSha256": "854dd548bed1fe211bafeeb6d553b9d00bf4be69fdec4fd6c49494ca05cd4211",
           "forwardExactBytes": true
         },
         {
@@ -139,7 +139,7 @@
   "maxTransactionEvents": 32,
   "maxPendingEvents": 256,
   "remaining": [
-    "current webapp client/tickets",
+    "current webapp browser adapter across three engines",
     "reports/P3/P4 and producer rollout"
   ],
   "qualification": "PGlite SQL plus signed localhost Collector; checker accepted states seeded, no live PostgreSQL/AI/Google/production actions.",
@@ -170,5 +170,9 @@
   "producerFactory": "tools/exam-journal/adapters/speaking-producer.mjs",
   "producerQualification": "Agent durableQueued is separate from Collector persisted. Batch capability correlates per-item UUIDs, normal callbacks remain serial. Reuses bounded RAM retry; no SQL outbox or guarantee before Agent ACK. Flush API/Docs callbacks after stopping producers, before closing the transport.",
   "startupQualification": "Opt-in EXAM_JOURNAL_ENABLED=1/config v1 with producerSpool. Startup config failure disables journal only; configured is not transport health/ACK. Stop emitters, drain API/Docs then close transport/pool. Shutdown with remaining RAM retry/pending is unknown. Whole-container SIGTERM and production not yet tested.",
-  "googleRequestQualification": "Counts gateway calls only; internal OAuth/retry wire requests remain unmeasured, not a new mandatory instrumentation layer."
+  "googleRequestQualification": "Counts gateway calls only; internal OAuth/retry wire requests remain unmeasured, not a new mandatory instrumentation layer.",
+  "canonicalRuntimeHelper": "backend/src/speaking-journal-runtime.js",
+  "canonicalRuntimeHelperSha256": "6aabf2a3b1a6fb5123282d3e7ddec11196e78ce5d8c55496d98b9e07d3d36fee",
+  "clientIntakeQualification": "Native grant issues append-only independent-scope ticket. Collector persisted ACK only; no browser queue ACK. Request UUID is diagnostic, not authority. Scope captured after native grant; HTTP finish/result IDs remain separate from committed SQL facts. No browser engine is wired yet.",
+  "nativeCoverageQualification": "46 unique qualified cases: 28 current unaffected native cases, 4 final HTTP cases, 14 unchanged provider/legacy cases. Combined run30/31 had a V8 fatal/Wasm crash after two HTTP subtests; not green or root cause fixed. Final HTTP file4/4 exits normally. Whole-container/Linux/browser/P3/P4 not proved."
 }

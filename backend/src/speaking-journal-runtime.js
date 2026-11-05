@@ -1,13 +1,25 @@
 // Logging is optional infrastructure: configuration/transport failures never stop Speaking.
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {randomUUID} from 'node:crypto';
+const requests=new AsyncLocalStorage();
+const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
+export function withSpeakingJournalRequest(requestId,work){
+ const frame={requestId:uuid(requestId)?requestId.toLowerCase():randomUUID(),started:performance.now()};
+ return requests.run(frame,()=>work(frame));
+}
+// Called only after the native grant has checked both SQL and current source membership.
+export function rememberSpeakingJournalScope(scope){
+ const frame=requests.getStore();if(frame)frame.scope=Object.freeze({...scope});
+}
 export async function startSpeakingJournalRuntime({env=process.env,
- load=()=>import('./exam-journal-runtime/adapters/speaking-producer.mjs'),onHealth=()=>{}}={}){
+ load=()=>import('./exam-journal-runtime/adapters/speaking-producer.mjs'),onHealth=()=>{},allowedOrigins=[]}={}){
  const enabled=env.EXAM_JOURNAL_ENABLED==='1';
  let journal=false,failures=0,closed=false,closing,shutdownUnknown=false;
  const notify=(status,errorCode)=>{try{onHealth({type:'speaking_journal_health',status,...errorCode?{errorCode}:{}});}catch{}};
  if(enabled){
   try{
    const module=await load();
-   journal=module.createSpeakingProducerJournalFromEnv({env,onFailure:()=>{failures++;}});
+   journal=module.createSpeakingProducerJournalFromEnv({env,allowedOrigins,onFailure:()=>{failures++;}});
    if(typeof journal!=='function'||typeof journal.close!=='function')throw Error('INVALID_JOURNAL');
    // Configuration exists; this is not an ACK from the Agent or Collector.
    notify('configured');
@@ -16,7 +28,7 @@ export async function startSpeakingJournalRuntime({env=process.env,
    journal=false;failures++;notify('degraded','SPEAKING_JOURNAL_START_FAILED');
   }
  }
- return {journal,
+ return {journal,intake:journal?.intake||null,
   snapshot:()=>({enabled,configured:Boolean(journal),failures,closed,shutdownUnknown}),
   close({flushers=[]}={}){return closing??=(async()=>{
    // Caller first stops HTTP/workers. Keep the transport open until both boundaries drain.

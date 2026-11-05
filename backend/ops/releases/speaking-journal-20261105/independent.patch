@@ -1,10 +1,11 @@
 --- a/src/speaking-independent.js
 +++ b/src/speaking-independent.js
-@@ -1,10 +1,11 @@
+@@ -1,10 +1,12 @@
  import { createHash, createHmac, randomUUID } from 'node:crypto';
 -import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
 +import {withSpeakingTransaction as nativeTransaction} from './speaking-work-runtime.js';
 +import {createSpeakingJournalBoundary,speakingJournalTime} from './speaking-journal-boundary.js';
++import {rememberSpeakingJournalScope} from './speaking-journal-runtime.js';
  import {markWorkReady} from './test-work-runtime.js';
  import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
  import { createPendingRoster } from './pending-roster.js';
@@ -14,7 +15,7 @@
  import {existingSpeakingDocsProgress,enqueueExistingSpeakingProgress} from './speaking-progress-docs.js';
  import { saveConversationSnapshot,readConversationSnapshot } from './speaking-conversation-snapshot.js';
  import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
-@@ -17,9 +18,33 @@
+@@ -17,9 +19,33 @@
  // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
  // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
  // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
@@ -51,7 +52,11 @@
    if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
    const token = u => createHmac('sha256',accessSecret).update(`${u.id}:${u.identity_ref}`).digest('base64url');
    async function context(input) { return source.context(input); }
-@@ -132,10 +157,13 @@
+@@ -129,13 +155,17 @@
+     if (!u) fail('SESSION_INVALID','Phiên làm bài không còn hợp lệ. Hãy mở lại bài.',403);
+     // Danh sách đã nhớ không cấp quyền: kiểm đăng ký hiện hành ở mỗi lượt.
+     await unitContext(u);
++    if(journal)rememberSpeakingJournalScope({mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id});
      return u;
    }
    async function links(id,db=pool) { return (await db.query(latestSql,[id])).rows.map(l=>({...l,linkId:l.id})); }
@@ -68,7 +73,7 @@
    }
    async function open(identity) {
      const u=await grant(identity);
-@@ -143,7 +171,7 @@
+@@ -143,7 +173,7 @@
      const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
      const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
      return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
@@ -77,7 +82,7 @@
        links:all.filter(l=>l.kind==='main').map(l=>speakingCheckView({...l,check_status:l.status},jobs.find(j=>j.link_id===l.id&&j.kind==='check_main'),'check_status')),
        practiceLinks:all.filter(l=>l.kind==='practice').map(l=>({...speakingCheckView(l,jobs.find(j=>j.link_id===l.id&&j.kind==='check_practice')),analysis_status:jobs.find(j=>j.link_id===l.id&&j.kind==='analyze_practice')?.status||null})),
        processing:Object.fromEntries(jobs.filter(j=>!j.link_id).map(j=>[j.kind,{status:j.status}]))};
-@@ -186,7 +214,9 @@
+@@ -186,7 +216,9 @@
        [u.id,kind,part,slot,exerciseId,title,(old?.revision||0)+1,share.url,share.shareId,linkOnly?'accepted':'pending',linkOnly?hash(`link-only:${share.shareId}`):null,linkOnly?0:null]);
        markWorkReady(db,'state');
        if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
@@ -88,7 +93,7 @@
        return {id:l.id,status:l.status};
      });
    }
-@@ -209,9 +239,11 @@
+@@ -209,9 +241,11 @@
        catch(e) { if(e.code==='23505') fail('REUSED_CONVERSATION','Một hội thoại đã được nộp ở bài khác trong khóa. Hãy dùng hội thoại mới.'); throw e; }
        const {rows:[r]}=await db.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1) RETURNING id,created_at',[u.id]);
        await db.query("UPDATE speaking_independent.work_unit SET status='submitted',submitted_at=now() WHERE id=$1",[u.id]);
@@ -102,7 +107,7 @@
        return r;
      });
    }
-@@ -244,24 +276,33 @@
+@@ -244,24 +278,33 @@
            WHERE d.unit_id=work_unit_id AND (d.status<>'verified' OR d.applied_sequence<>d.sequence)))`:''}
          ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $1), claimed AS (
          UPDATE speaking_independent.job j SET status='processing',owner=gen_random_uuid(),lease_until=now()+interval '4 minutes',
@@ -142,7 +147,7 @@
        }
        if(invalid.length){
          await db.query("UPDATE speaking_independent.job SET status='review',last_error='WORK_ITEM_INVALID',lease_until=NULL,updated_at=now() WHERE id=ANY($1::uuid[])",[invalid]);
-@@ -273,8 +314,11 @@
+@@ -273,8 +316,11 @@
    async function claimJob(){return(await claimJobs(1))[0]||null;}
    async function mutateJob(job,fn) {
      return withTransaction(pool,async db=>{
@@ -156,7 +161,7 @@
        if (!j) fail('STALE_JOB','Lượt xử lý đã hết hạn; kết quả cũ không được ghi.');
        const result=await fn(db,j);markWorkReady(db,'state');return result;
      });
-@@ -288,8 +332,10 @@
+@@ -288,8 +334,10 @@
          if(current.attempts===4)console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code,jobId:job.job_id}));
          return;
        }
@@ -169,7 +174,7 @@
      });
    }
    async function checkComplete(job,result) {
-@@ -297,7 +343,8 @@
+@@ -297,7 +345,8 @@
        await db.query('SELECT id FROM speaking_independent.work_unit WHERE id=$1 FOR UPDATE',[j.work_unit_id]);
        const current=(await links(j.work_unit_id,db)).find(l=>l.part===job.part&&l.kind===job.link_kind);
        if (current?.id!==j.link_id) {
@@ -179,7 +184,7 @@
          return {status:'superseded'};
        }
        const valid=result.qualityPassed===true && Number.isInteger(result.questionCount)
-@@ -309,8 +356,8 @@
+@@ -309,8 +358,8 @@
        const all=await links(j.work_unit_id,db);
        if (valid && all.some(l=>l.id!==j.link_id&&l.fingerprint===result.fingerprint)) code='REUSED_CONVERSATION';
        let status=valid&&!code?'accepted':'rejected';
@@ -190,7 +195,7 @@
        [j.link_id,status,code,result.fingerprint||null,result.questionCount||0,JSON.stringify(result.evidence||{})]);
        if (status==='accepted'&&j.kind==='check_practice') {
          await db.query('SAVEPOINT reserve_practice');
-@@ -322,11 +369,13 @@
+@@ -322,11 +371,13 @@
            await db.query("UPDATE speaking_independent.link SET status='rejected',check_code='REUSED_CONVERSATION' WHERE id=$1",[j.link_id]);
          }
          await db.query('RELEASE SAVEPOINT reserve_practice');
@@ -207,7 +212,7 @@
        return {status};
      });
    }
-@@ -349,6 +398,11 @@
+@@ -349,6 +400,11 @@
      }
    }
    function workerService(job) {
@@ -219,7 +224,7 @@
      const complete=r=>checkComplete(job,r);
      const failWorker=r=>failJob(job,r.errorCode);
      const completeAnalysis=async r=>{
-@@ -360,11 +414,12 @@
+@@ -360,11 +416,12 @@
          fail('DOCTOR_RESULT_INVALID','Bằng chứng ghép bài luyện không hợp lệ.');
        return mutateJob(job,async(db,j)=>{
          for(const exerciseId of new Set(r.matches.map(m=>m.exerciseId))) await recordEvent(db,job.u,{sourceKey:`doctor:${j.id}:${exerciseId}`,exerciseId,kind:'recommendation',occurredAt:new Date(j.created_at).toISOString()});
@@ -234,12 +239,18 @@
        rejectCheckJob:r=>complete({...r,qualityPassed:false}),rejectPracticeCheckJob:r=>complete({...r,qualityPassed:false}),
        failCheckJob:failWorker,failPracticeCheckJob:failWorker,failPracticeAnalysisJob:failWorker,failOutboxJob:failWorker,
        getDoctorCatalog:()=>catalog(job.u),getPracticeDoctorCatalog:()=>catalog(job.u),
-@@ -386,7 +441,7 @@
+@@ -386,7 +443,13 @@
        processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
        grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
    }
 -  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
-+  return {journalHealth:journalBoundary.snapshot,flushJournal:journalBoundary.flush,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
++  function observeJournalHttp(frame,route,httpStatus){
++    if(!journal||!frame.scope)return;
++    journalBoundary.recordCommitted(()=>({scope:frame.scope,kind:'api.request',operationId:frame.requestId,requestId:frame.requestId,
++      committedAt:new Date().toISOString(),data:{route,httpStatus,durationMs:Math.max(0,Math.round(performance.now()-frame.started)),outcome:'http_response_only',
++        ...(frame.linkId?{linkId:frame.linkId}:{}),...(frame.receiptId?{receiptId:frame.receiptId}:{})}}));
++  }
++  return {journalHealth:journalBoundary.snapshot,flushJournal:journalBoundary.flush,observeJournalHttp,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
      requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
      pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
  }
@@ -432,11 +443,71 @@
  import { runPracticeCheckJob,runPracticeAnalysisJob } from './speaking-practice-worker.js';
  import { runSpeakingDoctorJob } from './speaking-doctor-worker.js';
 +import {withSpeakingProviderJournal} from './speaking-provider-journal.js';
-+import {startSpeakingJournalRuntime} from './speaking-journal-runtime.js';
++import {startSpeakingJournalRuntime,withSpeakingJournalRequest} from './speaking-journal-runtime.js';
  import { timingSafeEqual,createHash } from 'node:crypto';
  import { createIndependentDocuments,createDocsGateway,writeIndependentDocument } from './speaking-independent-documents.js';
  import { createOpeningDocsGateway } from './speaking-docs-read.js';
-@@ -215,12 +217,14 @@
+@@ -29,7 +31,7 @@
+ // Đầu vào: cấu hình riêng và API nguồn chỉ đọc. Đường mới có container/pool/hàng việc riêng.
+ // Chạy bộ kiểm hiện hành với giới hạn bốn việc đồng thời; lỗi không mất biên nhận.
+ // Không khởi động các worker Writing, Progress Log hoặc Speaking bài cũ.
+-export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued',observation=null,teacherAdmission,teacherSessionCookieName='izone_teacher_session'}) {
++export function createIndependentApp({service,teacher,documents,workerSecret='',origin=speakingWebOrigin,docsReadMode='queued',observation=null,teacherAdmission,teacherSessionCookieName='izone_teacher_session',journalRuntime=null}) {
+   if(!/^[A-Za-z0-9_]+$/.test(teacherSessionCookieName))throw Error('TEACHER_SESSION_COOKIE_NAME_INVALID');
+   const app=express();
+   app.set('trust proxy',1);
+@@ -38,7 +40,8 @@
+     if(req.headers.origin===origin) {
+       res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');
+       res.set('Access-Control-Allow-Credentials','true');
+-      res.set('Access-Control-Allow-Headers','content-type,authorization');
++      res.set('Access-Control-Allow-Headers','content-type,authorization,x-exam-journal-request-id');
++      res.set('Access-Control-Expose-Headers','x-exam-journal-request-id');
+       res.set('Access-Control-Allow-Methods','GET,POST,OPTIONS');
+     }
+     if(req.method==='OPTIONS') return res.sendStatus(204);
+@@ -77,13 +80,38 @@
+   const code=z.string().trim().min(3).max(100);
+   const selected=z.object({assignmentCode:code,classCode:z.string().regex(/^[A-Za-z0-9_-]{2,32}$/),documentId:z.string().regex(/^[A-Za-z0-9_-]{5,120}$/).optional()}).strict();
+   const identity=z.object({accessToken:z.string().regex(/^[A-Za-z0-9_-]{32,200}$/),studentRef:z.string().uuid()}).strict();
++  const logRoutes={'/open':'open','/doctor/list':'doctor_list','/checks/request':'check_main',
++    '/doctor/practice/request':'check_practice','/doctor/practice/extra/request':'check_extra','/finish':'finish'};
+   function route(method,path,schema,fn,key='',status=200) {
+-    router[method](path,async(req,res,next)=>{try{
++    router[method](path,async(req,res,next)=>{
++      const run=async frame=>{try{
+       const data=schema.parse(method==='get'?req.query:req.body);
+       const result=await fn(data,req);
++      if(frame&&z.string().uuid().safeParse(result?.id).success){
++        if(key==='check')frame.linkId=result.id;
++        if(key==='receipt')frame.receiptId=result.id;
++      }
+       if(key==='assignment' && result.selfMatch) res.set('Cache-Control','no-store');
+       res.status(status).json(key?{ok:true,[key]:result}:{ok:true,...result});
+-    }catch(e){next(e);}});
++      }catch(e){next(e);}};
++      if(!journalRuntime?.journal||!logRoutes[path])return run();
++      return withSpeakingJournalRequest(req.get('x-exam-journal-request-id'),frame=>{
++        res.set('x-exam-journal-request-id',frame.requestId);
++        res.once('finish',()=>{try{service.observeJournalHttp(frame,logRoutes[path],res.statusCode);}catch{}});
++        return run(frame);
++      });
++    });
++  }
++  if(journalRuntime?.intake){
++    route('post','/journal-context',identity,async(input,req)=>{
++      if(req.get('origin')!==origin)throw new SpeakingHomeworkError('ORIGIN_DENIED','Nguồn gửi log không được phép.',403);
++      const u=await service.grant(input);
++      return journalRuntime.intake.context({mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id});
++    },'journalContext');
++    router.post('/journal-events',async(req,res,next)=>{try{
++      const reply=await journalRuntime.intake.collect({method:req.method,headers:req.headers,body:req.body});
++      res.set('Cache-Control','no-store');res.status(reply.status).json(reply.body);
++    }catch(error){next(error);}});
+   }
+   route('get','/classes',z.object({assignmentCode:code}).strict(),service.classes,'classes');
+   route('post','/assignment/roster',selected,service.roster,'assignment');
+@@ -215,12 +243,14 @@
    if(coordinated&&enabled){
      const run=async job=>{
        const adapter=service.workerService(job);
@@ -451,7 +522,7 @@
      };
      const loop=createDurableWorkLoop({...loopOptions,claim:n=>service.claimJobs(n),run,capacity:4,scanMs:pollMs,
        onError:error=>console.error('Hàng Speaking độc lập lỗi:',String(error.code||'WORKER_ERROR'))});
-@@ -235,12 +239,14 @@
+@@ -235,12 +265,14 @@
        for(let i=0;i<4;i++){const j=await service.claimJob();if(!j)break;jobs.push(j);}
        await Promise.all(jobs.map(async job=>{
          const adapter=service.workerService(job);
@@ -466,17 +537,17 @@
        }));
      } catch(e) { console.error('Hàng Speaking độc lập lỗi:',String(e.code||'WORKER_ERROR')); }
      finally {running=false;if(!stopped) timer=setTimeout(tick,pollMs).unref();}
-@@ -258,7 +264,8 @@
+@@ -258,7 +290,8 @@
    const gateway=env.SPEAKING_DOCS_GATEWAY_URL?createDocsGateway({url:env.SPEAKING_DOCS_GATEWAY_URL,secret:env.SPEAKING_DOCS_GATEWAY_SECRET}):null;
    const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
    const progressGateway=env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE}):null;
 -  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true'});
-+  const journalRuntime=await startSpeakingJournalRuntime({env,onHealth:row=>console.info(JSON.stringify(row))});
++  const journalRuntime=await startSpeakingJournalRuntime({env,allowedOrigins:[speakingWebOrigin],onHealth:row=>console.info(JSON.stringify(row))});
 +  const progressWorker=startSpeakingProgressDocsWorker({pool,schema:'speaking_independent',gateway:env.WORKER_ENABLED==='false'?null:progressGateway,coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',journal:journalRuntime.journal});
    const csv=value=>(value||'').split(',').map(item=>item.trim()).filter(Boolean);
    const selfMatch=env.SPEAKING_SELF_MATCH_ENABLED==='true'?createSpeakingSelfMatch({pool,secret:env.INDEPENDENT_ACCESS_SECRET,
      registeredDocsEnabled:env.SPEAKING_SELF_MATCH_REGISTERED_DOCS_ENABLED==='true',
-@@ -266,7 +273,7 @@
+@@ -266,7 +299,7 @@
      eligibleDocuments:z.array(z.string().regex(/^[A-Za-z0-9_-]{5,120}$/)).max(100).parse(csv(env.SPEAKING_SELF_MATCH_DOCUMENT_IDS))}):null;
    const selfMatchMailer=startSpeakingSelfMatchMailer({pool,send:env.SPEAKING_SELF_MATCH_MAIL_ENABLED==='true'?speakingSelfMatchMailFromEnv(env):null});
    const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway,selfMatch}):null;
@@ -485,9 +556,12 @@
    const observation=env.TEST_SERVICES_OBSERVATION_ENABLED==='true'?createSpeakingObservation({schema:'speaking_independent',
      data:createSpeakingObservationData({pool,schema:'speaking_independent'}),source,observeTeachers:actors=>source.observeTeachers(actors)}):null;
    const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',coordinated:env.TEST_SERVICES_COORDINATOR_ENABLED==='true',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
-@@ -278,6 +285,6 @@
+@@ -276,8 +309,8 @@
+   const teacher=createSpeakingTeacherProgress({pool,source,observationEnabled:Boolean(observation)});
+   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
      teacherSessionCookieName:env.TEACHER_SESSION_COOKIE_NAME||'izone_teacher_session',
-     observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
+-    observation,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
++    observation,journalRuntime,teacherAdmission:(input,headers)=>source.teacherAdmission([input.classId],headers),
      docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
 -  let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await selfMatchMailer.stop();await pool.end();})();
 +  let closing;const stop=()=>closing??=(async()=>{await observation?.close();await new Promise(resolve=>server.close(resolve));await worker.stop();await progressWorker.stop();await coordinator?.stop();await selfMatchMailer.stop();await journalRuntime.close({flushers:[service.flushJournal,progressWorker.flushJournal]});await pool.end();})();
