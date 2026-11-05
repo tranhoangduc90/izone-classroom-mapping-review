@@ -15,10 +15,29 @@
       "mode": "legacy",
       "source": "src/speaking-homework.js",
       "baseSha256": "587e115dabd7d6f029c8d045ee30d8b9cf765fc044d2738628b33eaae1c0f6e5",
-      "candidateSha256": "dc3dbe07a2a4d4e28db7a2875b8a77c61ed14696ff970dbe87d7a8824b792541",
+      "candidateSha256": "0723383d40fcc403f32f054699364d1364d7652dfb93082f697b5dfede9be755",
       "patch": "legacy.patch",
       "reverseApplyCheck": true,
-      "extraModule": "src/speaking-journal-boundary.js"
+      "extraModule": "src/speaking-journal-boundary.js",
+      "forwardAppliedSha256": "0723383d40fcc403f32f054699364d1364d7652dfb93082f697b5dfede9be755",
+      "forwardExactBytes": true,
+      "additionalFiles": [
+        {
+          "source": "src/speaking-check-worker.js",
+          "baseSha256": "9843e51a12fbc49edaac96d170a319da86872fc7afcd02aae62ec8bc0450123d",
+          "candidateSha256": "740da0c7bb32520abb5f8896f65082ea2625e73841e96379f793a88502e12bd8",
+          "forwardAppliedSha256": "a84445a3a0b0f8c9cf1411da7042f833d1ae49f74cc3dc384efbdde90f2d0285",
+          "forwardExactBytes": false
+        },
+        {
+          "source": "src/speaking-practice-worker.js",
+          "baseSha256": "7cf08d72b33b51c23d9c24d2394c06eacdff48de8e72583211fdaf4ed7ff0641",
+          "candidateSha256": "3d1087292857c048668ac2465d6530df32e6ef25fb7ec6c2b5f868b78fe01f2f",
+          "forwardAppliedSha256": "fdeed85a0017b015892a0616cf0148a6af2d80bd7d8b0f9691a1b92094313114",
+          "forwardExactBytes": false
+        }
+      ],
+      "forwardApplyCheck": true
     }
   ],
   "canonicalHelper": "backend/src/speaking-journal-boundary.js",
@@ -38,7 +57,7 @@
   "maxTransactionEvents": 32,
   "maxPendingEvents": 256,
   "remaining": [
-    "legacy checker/Doctor projections",
+    "legacy Doctor projections",
     "provider/Docs projections",
     "client/tickets",
     "durable producer/batching/startup",
@@ -54,7 +73,9 @@
     ],
     "legacy": [
       "link.saved",
-      "submit.accepted"
+      "submit.accepted",
+      "check.progress"
     ]
-  }
+  },
+  "legacyRunQualification": "Process-local captured claim; exact SQL timestamp and attempt comparison is diagnostic, not an ownership fence. Missing context increments unknown and never invents a run. Restart/retry durability remains pending."
 }

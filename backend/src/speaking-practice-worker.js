@@ -79,6 +79,7 @@ function validatePracticeAnalysis(messages,result){
 export async function runPracticeCheckJob(service, job, {
   readShare = readSpeakingShare, analyze = analyzePracticeConversation, analyzeCompletion
 } = {}) {
+  service=service.workerService?.(job)||service;
   try {
     const conversation = await readShare(job.share_url);
     const messages = messagesOf(conversation);

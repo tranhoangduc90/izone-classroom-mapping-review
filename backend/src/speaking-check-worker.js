@@ -8,6 +8,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Việc chính: đọc Share thật, nhờ AI đếm bài luyện, rồi ghi đúng kết quả vào link.
 // Kết quả: accepted/rejected hoặc failed có retry; chỉ ghi mã lỗi vào log, không ghi nội dung chat.
 export async function runSpeakingCheckJob(service, job, check = checkSubmission) {
+  service=service.workerService?.(job)||service;
   try {
     const result = await check({ section: job.part, url: job.share_url, minimum: Number(job.min_questions) });
     if (result.kind === 'error') {

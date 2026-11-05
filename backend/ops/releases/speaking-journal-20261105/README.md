@@ -1,5 +1,17 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Bổ sung checker legacy — chưa phát production
+
+Patch legacy gồm ba file native: speaking-homework.js và hai runner check/practice. Giữ overlay AI native; canonical practice runner có kiểm bằng chứng AI khác native nên không copy toàn file canonical đè runtime. Manifest ghi SHA từng file và kiểm áp xuôi/ngược; hai runner chỉ khác newline ở phép dựng patch, nội dung LF khớp ứng viên đã kiểm.
+
+Claim log lấy scope/access_grant, link revision, attempts và timestamp chính xác từ SQL đã UPDATE; DTO trả worker giữ nguyên. WeakMap giữ context theo đúng đối tượng job và chuyển qua các bản sao lane/work_kind nội bộ. Hai runner lấy adapter gắn context trước await. Kết quả accepted/rejected/failed chỉ phát sau COMMIT; job done gửi lại không phát thêm. Bốn khóa là grant/người, link+revision, job+runHash và ID sự kiện từ projection. Không ghép bằng vị trí hoặc tên.
+
+Legacy không có owner fence như bản mới. Kết quả cũ vẫn được native chấp nhận khi job đã được nhận lại; log giữ run gốc, currentJobAttempt và claimCurrent từ snapshot SQL, không gán kết quả cũ vào run mới. So timestamp ở độ chính xác JSON SQL, không làm tròn qua Date trước so sánh. Đây là tín hiệu chẩn đoán, không cấp quyền xử lý. Context mất hoặc job khác thì bộ đếm unknown tăng và không bịa run; nghiệp vụ vẫn giữ kết quả native. Context còn trong RAM, chưa khôi phục sau restart hoặc qua JSON/RPC; startup/producer vẫn phải nối đúng.
+
+Bộ cuối23/23ca nguồn native/PGlite/Collector ký, gồm9ca checker legacy, phủ main/practice, lỗi rồi retry, reset attempts, kết quả muộn, COMMIT lỗi, hai người trả ngược thứ tự, lỗi một phần, replay, tắt/lỗi logger và context mất. Contract10/10 và runner canonical25/25 đạt. Dùng fake Share/AI, không gọi nhà cung cấp. Giữ phần chưa làm: Doctor legacy, provider/Docs, client/vé, producer bền/retry/gom lô/startup, báo cáo/P3/P4. Không thay API hoặc runtime lớp đang thi.
+
+## Nền và các mốc kiểm trước đó
+
 Gói local cho Speaking mới và legacy, chưa phát production. Helper chỉ bọc transaction của Speaking, giữ nguyên `withSpeakingTransaction`/work-ready native; không sửa db.js dùng chung. Patch lấy scope từ grant đã xác thực, ghi link main/practice mới và receipt mới sau COMMIT; không thêm SELECT chỉ để lấy log. Legacy practice lấy submitted_at, main lấy created_at. Giá trị trả về API và việc gửi lại không tạo thêm link/job/receipt giữ nguyên.
 
 ClassRef là ERP class_id dạng chuỗi; profile document chưa có lớp giữ null tường minh, không tạo lớp giả chuỗi "null". SubjectRef là profile.identity_ref của bản mới hoặc student_ref đã xác minh của legacy. Session có namespace independent/work_unit và legacy/access_grant, generation0. Nếu lớp được gắn sau đó, công cụ đọc cần tìm unit/subject qua cả scope chưa gắn và đã gắn lớp. Dữ liệu chỉ gồm ID, phần/slot, revision, trạng thái, số lượng và thời điểm native; không ghi Share/Doc ID, tên/email, token hoặc payload AI. Gửi log không chặn request; rollback/COMMIT lỗi không phát. Hàng staging và delivery có giới hạn, bộ đếm unknown/overflow; chúng chưa phải producer bền.
