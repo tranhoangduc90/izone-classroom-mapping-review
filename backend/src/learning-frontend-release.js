@@ -12,6 +12,8 @@ export function createFrontendReleaseReader({fetcher=fetch,now=Date.now,storage}
   if(!/^[a-f0-9]{16}$/.test(version)||!Array.isArray(release.assets)||release.assets.length<6||release.assets.length>500)throw Error('Invalid release');
   if(active?.version===version)return;
   const prefix='/izone-ai-team-pages/progress-log/releases/'+version+'/';
+  const paths=new Set(release.assets.map(a=>a.path));
+  if(paths.size!==release.assets.length||!['index.html','thuy.html','teacher.html','teacher-thuy.html','student.html','journey.html'].every(entry=>paths.has(prefix+'progress-log/'+entry)))throw Error('Incomplete entry package');
   if(release.assets.reduce((n,a)=>n+a.bytes,0)>15000000)throw Error('Release too large');
   const assets=[...release.assets];
   await Promise.all(Array.from({length:6},async()=>{while(assets.length){

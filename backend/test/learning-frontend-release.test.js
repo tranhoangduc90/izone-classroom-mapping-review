@@ -6,7 +6,7 @@ test('Release pointer chỉ chuyển khi trọn gói hợp lệ; lỗi/thiếu f
  let clock=0,version='1111111111111111',broken=false,queries=0;
  const blob=Buffer.from('public fixture'),hash=createHash('sha256').update(blob).digest('hex');
  const read=createFrontendReleaseReader({now:()=>clock,fetcher:async url=>{
-  queries++;if(url.includes('release.json'))return new Response(JSON.stringify({version,assets:Array.from({length:6},(_,i)=>({path:'/izone-ai-team-pages/progress-log/releases/'+version+'/progress-log/'+i+'.js',sha256:hash,bytes:blob.length}))}));
+  queries++;if(url.includes('release.json'))return new Response(JSON.stringify({version,assets:['index.html','thuy.html','teacher.html','teacher-thuy.html','student.html','journey.html'].map(entry=>({path:'/izone-ai-team-pages/progress-log/releases/'+version+'/progress-log/'+entry,sha256:hash,bytes:blob.length}))}));
   return new Response(broken?'incomplete':blob);
  }});
  const settle=()=>new Promise(r=>setTimeout(r,30));
