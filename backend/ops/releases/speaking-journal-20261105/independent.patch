@@ -1,0 +1,52 @@
+--- a/src/speaking-independent.js
++++ b/src/speaking-independent.js
+@@ -1,5 +1,6 @@
+ import { createHash, createHmac, randomUUID } from 'node:crypto';
+-import {withSpeakingTransaction as withTransaction} from './speaking-work-runtime.js';
++import {withSpeakingTransaction as nativeTransaction} from './speaking-work-runtime.js';
++import {createSpeakingJournalBoundary,speakingJournalTime} from './speaking-journal-boundary.js';
+ import {markWorkReady} from './test-work-runtime.js';
+ import { parseSpeakingShareUrl, SpeakingHomeworkError } from './speaking-homework.js';
+ import { createPendingRoster } from './pending-roster.js';
+@@ -17,7 +18,13 @@
+ // Đầu vào: danh tính đã đối soát và mẫu bài từ nguồn sở hữu, không cần bài giao.
+ // Lưu bài/biên nhận/hàng xử lý riêng; phần kiểm hội thoại tiếp tục dùng bộ kiểm Speaking.
+ // Lỗi trả mã rõ ràng, transaction giữ bài cũ khi không thể chốt bài mới.
+-export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true'}) {
++export function createIndependentSpeaking({pool,accessSecret,source,documents,progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true',journal}) {
++  const journalBoundary=createSpeakingJournalBoundary({transaction:nativeTransaction,journal});
++  const withTransaction=journalBoundary.transaction;
++  const recordJournal=(db,u,kind,id,createdAt,data)=>journal&&journalBoundary.record(db,()=>({
++    scope:{mode:'independent',assignmentRef:u.assignment_code,classRef:u.class_id==null?null:String(u.class_id),subjectRef:u.identity_ref,unitId:u.id},
++    kind,operationId:id,committedAt:speakingJournalTime(createdAt),data,
++  }));
+   const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
+   const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
+   if (String(accessSecret).length < 32) throw new Error('INDEPENDENT_ACCESS_SECRET_REQUIRED');
+@@ -187,6 +194,8 @@
+       markWorkReady(db,'state');
+       if (!linkOnly) await queue(db,u.id,kind==='main'?'check_main':'check_practice',`check:${l.id}`,l.id);
+       await enqueueSpeakingProgress(db,'speaking_independent',u.id);
++      recordJournal(db,u,'link.saved',l.id,l.created_at,{linkId:l.id,linkKind:kind,part,
++        ...(slot===null?{}:{slot}),linkRevision:Number(l.revision),status:l.status});
+       return {id:l.id,status:l.status};
+     });
+   }
+@@ -212,6 +221,8 @@
+       await queue(db,u.id,'analyze_homework',`doctor:${r.id}`);
+       if (u.document_id) await queue(db,u.id,'write_doc',`doc:${r.id}:${u.document_id}`);
+       await enqueueSpeakingProgress(db,'speaking_independent',u.id);
++      recordJournal(db,u,'submit.accepted',r.id,r.created_at,{receiptId:r.id,
++        acceptedMainCount:main.length,acceptedPracticeCount:required.length});
+       return r;
+     });
+   }
+@@ -386,7 +397,7 @@
+       processing:Object.fromEntries(jobs.map(j=>[j.kind,{status:j.status}])),
+       grade_summary:{status:'done',partCounts:Object.fromEntries(all.filter(l=>l.kind==='main').map(l=>[l.part,l.question_count])),totalQuestions:all.filter(l=>l.kind==='main').reduce((n,l)=>n+l.question_count,0),typingWarningParts:[],voiceConfirmedParts:[]}};
+   }
+-  return {classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
++  return {journalHealth:journalBoundary.snapshot,classes,roster,resolveIdentity,startSelected,open,finish,listDoctor,teacherReceipt,claimJob,claimJobs,workerService,failJob,
+     requestCheck:i=>request(i,{...i,kind:'main'}),requestPracticeCheck:i=>request(i,{...i,kind:'practice'}),
+     pool,context,grant,links,queue,mutateJob,progressDocsEnabled};
+ }
