@@ -36,7 +36,12 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
  }
  async function view(db,b,state,{lease,definition=false}={}){
   const jobs=(await db.query('SELECT sequence,status,error_code FROM reading_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[b.id])).rows;
-  const events=state.events.map(e=>({...e,docs:syncsHomework(b)?jobs.find(j=>j.sequence===e.sequence)?.status||'pending':'not_applicable'}));
+  const head=jobs.find(job=>job.status!=='verified');
+  const events=state.events.map(event=>{
+   const job=jobs.find(job=>job.sequence===event.sequence);
+   const waitingForWrite=job&&job.status!=='verified'&&head?.error_code==='DOC_WRITE_UNAVAILABLE';
+   return {...event,docs:syncsHomework(b)?job?.status||'pending':'not_applicable',...(waitingForWrite?{docsIssue:'write_unavailable'}:{})};
+  });
   return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
    bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id,documentUrl:b.document_id?`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`:null},
    lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,

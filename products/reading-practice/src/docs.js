@@ -12,7 +12,7 @@ const text=cell=>runs(cell?.content).map(r=>r.text).join('').replace(/\n$/,'');
 function tabs(list){return(list||[]).flatMap(t=>[t,...tabs(t.childTabs)]);}
 function walk(content,visitor){for(const e of content||[]){visitor(e);for(const row of e.table?.tableRows||[])for(const cell of row.tableCells||[])walk(cell.content,visitor);}}
 function checkedTab(document,binding){
- if(document.documentId!==binding.document_id||!document.revisionId)fail('DOC_IDENTITY_MISMATCH','Docs không đúng bản đã gắn.');
+ if(document.documentId!==binding.document_id)fail('DOC_IDENTITY_MISMATCH','Docs không đúng bản đã gắn.');
  const tab=tabs(document.tabs).find(t=>t.tabProperties?.tabId===binding.tab_id);
  if(!tab)fail('DOC_TAB_NOT_FOUND','Không còn tab bài tập đã đăng ký.');
  const code=lessonFor(binding.code||CODE).code;
@@ -109,16 +109,22 @@ export function planDocWrite(document,binding,job){
  }
  return{revisionId:document.revisionId,requests,verified:false};
 }
+function requireDocsRevision(plan){
+ if(typeof plan.revisionId!=='string'||!plan.revisionId.trim())fail('DOC_WRITE_UNAVAILABLE','Google Docs chưa cho phép ghi bản này.');
+}
 export function createDocsAdapter(auth){
  async function call(documentId,suffix,body){
   const access=await auth.getAccessToken();
   const response=await fetch(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(documentId)}${suffix}`,{
    method:body?'POST':'GET',headers:{Authorization:`Bearer ${typeof access==='string'?access:access.token}`,'Content-Type':'application/json'},
    ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
-  if(!response.ok){const e=new Error('Google Docs request failed');e.code=[401,403,404].includes(response.status)?`DOC_HTTP_${response.status}`:'DOC_RETRY';throw e;}
+  if(!response.ok){const e=new Error('Google Docs request failed');e.code=[401,403,404,429].includes(response.status)||response.status>=500?`DOC_HTTP_${response.status}`:'DOC_RETRY';throw e;}
   return response.json();
  }
- return{read:id=>call(id,'?includeTabsContent=true'),write:(id,plan)=>call(id,':batchUpdate',{requests:plan.requests,writeControl:{requiredRevisionId:plan.revisionId}})};
+ return{read:id=>call(id,'?includeTabsContent=true'),write:(id,plan)=>{
+  requireDocsRevision(plan);
+  return call(id,':batchUpdate',{requests:plan.requests,writeControl:{requiredRevisionId:plan.revisionId}});
+ }};
 }
 // Hàng xử lý có thứ tự theo học viên. Ghi xong phải đọc lại chữ và link trước khi báo verified.
 export function createDocsWorker({pool,docs,resolveSharedHomework}){
@@ -149,7 +155,7 @@ export function createDocsWorker({pool,docs,resolveSharedHomework}){
     ||![refresh.previousText,job.payload.text].includes(b.last_doc_text)||b.last_doc_link!==job.payload.link))
     fail('DOC_STATUS_REFRESH_CONFLICT','Hồ sơ đã đổi; dừng làm mới trước khi ghi Docs.');
    let plan=planDocWrite(await docs.read(b.document_id),b,job);
-   if(!plan.verified){await docs.write(b.document_id,plan);plan=planDocWrite(await docs.read(b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
+   if(!plan.verified){requireDocsRevision(plan);await docs.write(b.document_id,plan);plan=planDocWrite(await docs.read(b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
    if(!plan.verified)fail('DOC_READBACK_FAILED','Google Docs chưa khớp chữ và link.');
    await transaction(pool,async db=>{
     const verified=(await db.query("UPDATE reading_practice.doc_job SET status='verified',verified_at=now(),error_code=NULL,lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId])).rows.length;
@@ -165,9 +171,14 @@ export function createDocsWorker({pool,docs,resolveSharedHomework}){
     else await db.query('UPDATE reading_practice.binding SET last_doc_sequence=$2,last_doc_text=$3,last_doc_link=$4 WHERE id=$1 AND last_doc_sequence<$2',[b.id,job.sequence,job.payload.text,job.payload.link]);
    });
   }catch(error){
-   const code=error.code||'DOC_RETRY',waitingHomework=code==='HOMEWORK_NOT_FOUND';
-   const blocked=!waitingHomework&&(/^DOC_(IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_)/.test(code)||job.attempts>=8);
-   await pool.query("UPDATE reading_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing'",[job.id,job.leaseId,blocked?'blocked':'pending',code,waitingHomework?300:Math.min(300,2**job.attempts)]);
+   const code=error.name==='TimeoutError'?'DOC_TIMEOUT':typeof error.code==='string'?error.code:'DOC_RETRY';
+   const missing=code==='HOMEWORK_NOT_FOUND';
+   const recoverable=/^(?:DOC_WRITE_UNAVAILABLE|DOC_TIMEOUT|OWNER_SOURCE_UNAVAILABLE|(?:DOC|HOMEWORK)_HTTP_(?:429|5\d\d)|HOMEWORK_LOOKUP_TIMEOUT)$/.test(code);
+   const hard=/^DOC_(?:IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_40[134])/.test(code);
+   const blocked=!missing&&!recoverable&&(hard||job.attempts>=8);
+   const delay=missing?300:recoverable?([60,300,900][job.attempts-1]||3600):Math.min(300,2**Math.min(job.attempts,9));
+   const updated=await pool.query("UPDATE reading_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId,blocked?'blocked':'pending',code,delay]);
+   if(recoverable&&job.attempts===4&&updated.rows.length)console.warn(JSON.stringify({event:'reading_practice_docs_recovery_delayed',code,jobId:job.id}));
   }
   return true;
  }

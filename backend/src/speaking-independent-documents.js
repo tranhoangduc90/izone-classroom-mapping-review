@@ -366,7 +366,7 @@ export async function writeIndependentDocument(service,job,gateway) {
     const state=await readSpeakingDocsProgress(service.pool,'speaking_independent',job.u.id);
     if(state?.status!=='verified')throw new Error('DOC_PROGRESS_PENDING');
     await service.mutateJob(job,db=>db.query("UPDATE speaking_independent.job SET status='done',result=$2,lease_until=NULL WHERE id=$1",[job.job_id,JSON.stringify({documentId:job.u.document_id,progressVerified:true})]));
-  }catch(e){await service.failJob(job,String(e.code||e.message||'DOC_WRITE_FAILED').slice(0,100));}
+  }catch(e){await service.failJob(job,e.name==='TimeoutError'?'DOC_TIMEOUT':String(e.code||e.message||'DOC_WRITE_FAILED').slice(0,100));}
 }
 
 export function createDocsGateway({url,secret,call=fetch}) {

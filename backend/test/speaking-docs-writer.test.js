@@ -54,3 +54,11 @@ test('writer legacy đang phát hành thay đúng vùng trạng thái bằng rev
   assert.equal(repair.status,'write');
   assert.equal(repair.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url,teacherBaseUrl+'?receipt='+receiptId);
 });
+
+test('legacy writer distinguishes a matching read-only document from a wrong target',()=>{
+  const document=fixture();
+  delete document.revisionId;
+  const input={document,documentId,receiptId,teacherBaseUrl};
+  assert.throws(()=>planSpeakingStatusWrite(input),/^Error: DOC_WRITE_UNAVAILABLE$/);
+  assert.throws(()=>planSpeakingStatusWrite({...input,documentId:'other'}),/^Error: DOC_IDENTITY_MISMATCH$/);
+});

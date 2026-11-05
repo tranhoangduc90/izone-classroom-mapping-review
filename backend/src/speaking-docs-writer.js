@@ -46,7 +46,7 @@ function statusCell(document, tabId) {
 // Việc chính: xóa mọi nội dung trong đúng ô vàng, giữ newline cuối và khóa revision.
 // Kết quả: batchUpdate có thể chạy một lần; khi đã ghi đúng thì trả no-op.
 export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', receiptId, teacherBaseUrl }) {
-  if (document.documentId !== documentId || !document.revisionId) throw new Error('DOC_IDENTITY_MISMATCH');
+  if (document.documentId !== documentId) throw new Error('DOC_IDENTITY_MISMATCH');
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(receiptId)) throw new Error('RECEIPT_ID_INVALID');
   const teacherUrl = new URL(teacherBaseUrl);
   if (teacherUrl.protocol !== 'https:' || teacherUrl.origin !== 'https://tranhoangduc90.github.io'
@@ -68,6 +68,7 @@ export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', r
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start
     || !finalRun?.endsWith('\n')) throw new Error('DOC_STATUS_RANGE_INVALID');
   // Xóa chữ, hình nội tuyến và bảng lồng; newline cuối giữ cấu trúc ô nguyên vẹn.
+  if (typeof document.revisionId !== 'string' || !document.revisionId.trim()) throw new Error('DOC_WRITE_UNAVAILABLE');
   const deleteEnd = end - 1;
   const linkStart = start + STATUS_TEXT.indexOf(LINK_TEXT);
   const messageRange = { startIndex: start, endIndex: start + STATUS_TEXT.length, tabId };

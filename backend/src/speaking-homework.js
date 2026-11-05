@@ -473,9 +473,12 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         FROM speaking_homework.outbox o
         WHERE ($1::text = '' OR o.kind = $1)
           AND (o.status = 'pending'
-          OR (o.status = 'failed' AND o.updated_at < now() - INTERVAL '30 seconds')
+          OR (o.status = 'failed' AND o.updated_at < now() - (CASE
+            WHEN o.kind='write_doc' AND o.last_error_code='DOC_WRITE_UNAVAILABLE'
+              THEN CASE o.attempts WHEN 1 THEN 60 WHEN 2 THEN 300 WHEN 3 THEN 900 ELSE 3600 END
+            ELSE 30 END)*interval '1 second')
           OR (o.status = 'processing' AND o.updated_at < now() - INTERVAL '5 minutes'))
-          AND o.attempts < 5 ${managed?progressClaimGuard:''}
+          AND (o.attempts < 5 OR (o.kind='write_doc' AND o.last_error_code='DOC_WRITE_UNAVAILABLE')) ${managed?progressClaimGuard:''}
         ORDER BY o.created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [kind]);
       if (!found.rows.length) return null;
       const details = await client.query(`
@@ -516,8 +519,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
   async function failOutboxJob({ jobId, errorCode }) {
     const result = await pool.query(`UPDATE speaking_homework.outbox
       SET status = 'failed', last_error_code = $2, updated_at = now()
-      WHERE id = $1 AND status = 'processing' RETURNING id`, [jobId, errorCode]);
+      WHERE id = $1 AND status = 'processing' RETURNING id,kind,attempts`, [jobId, errorCode]);
     if (!result.rows.length) throw new SpeakingHomeworkError('OUTBOX_NOT_ACTIVE', 'Việc này chưa được nhận.');
+    if(errorCode==='DOC_WRITE_UNAVAILABLE'&&result.rows[0].kind==='write_doc'&&result.rows[0].attempts===4)
+      console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code:errorCode,jobId}));
   }
 
   // Dữ liệu vào: một biên nhận có đủ bốn link đã được AI kiểm nội dung.

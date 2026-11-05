@@ -37,7 +37,12 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
  }
  async function view(db,b,state,{lease,definition=false}={}){
   const jobs=(await db.query('SELECT sequence,status,error_code FROM listening_practice.doc_job WHERE binding_id=$1 ORDER BY sequence',[b.id])).rows;
-  const events=state.events.map(e=>({...e,docs:jobs.find(j=>j.sequence===e.sequence)?.status||'pending'}));
+  const head=jobs.find(job=>job.status!=='verified');
+  const events=state.events.map(event=>{
+   const job=jobs.find(job=>job.sequence===event.sequence);
+   const waitingForWrite=job&&job.status!=='verified'&&head?.error_code==='DOC_WRITE_UNAVAILABLE';
+   return {...event,docs:job?.status||'pending',...(waitingForWrite?{docsIssue:'write_unavailable'}:{})};
+  });
   return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
    bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id||b.owner_proof?.homework?.documentId||null,documentUrl:(b.document_id||b.owner_proof?.homework?.documentId)?`https://docs.google.com/document/d/${b.document_id||b.owner_proof.homework.documentId}/edit?tab=${encodeURIComponent(b.tab_id||b.owner_proof.homework.tabId)}`:null},
    lesson:authoredLesson(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
