@@ -1,23 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync} from 'node:fs';
+import {mkdtempSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import * as modern from './fixture-independent.mjs';
 import {withSpeakingProviderJournal,speakingProviderCall} from '../independent/src/speaking-provider-journal.js';
-import {createSpeakingProgressDocsWorker} from '../independent/src/speaking-progress-docs.js';
+import {createSpeakingProgressDocsWorker,startSpeakingProgressDocsWorker} from '../independent/src/speaking-progress-docs.js';
+import {startSpeakingJournalRuntime} from '../independent/src/speaking-journal-runtime.js';
 import {startSpeakingSpoolAgent} from './spool-agent.mjs';
 const libraryRoot=process.env.SPEAKING_JOURNAL_LIBRARY_ROOT;
 if(!libraryRoot)throw Error('SPEAKING_JOURNAL_LIBRARY_ROOT_REQUIRED');
 const library=relative=>import(pathToFileURL(resolve(libraryRoot,relative)).href);
-const {createSpeakingProducerJournal}=await library('adapters/speaking-producer.mjs');
+const {createSpeakingProducerJournal,createSpeakingProducerJournalFromEnv}=await library('adapters/speaking-producer.mjs');
 const {speakingHomeworkBinding,speakingHomeworkSchemas}=await library('adapters/speaking-homework.mjs');
 const {createJournalService}=await library('src/service.mjs');
 const {ProductLogRegistry,storageScope}=await library('src/product-record.mjs');
 const product='speaking-homework',registry=new ProductLogRegistry({product,schemas:speakingHomeworkSchemas});
 
-async function fixture(t,{loseEnqueueAck=false}={}){
+async function fixture(t,{loseEnqueueAck=false,startup=false}={}){
  const key=Buffer.alloc(32,7),collector=await createJournalService({version:1,role:'primary',
   dataRoot:mkdtempSync(join(tmpdir(),'speaking-spool-collector-')),maxPhysicalBytes:64*1024*1024,incrementalAccounting:true,
   products:{[product]:{storageEngine:'scoped-drive-v2',encryptionKeys:{fixture:Buffer.alloc(32,4)},currentKeyId:'fixture',
@@ -26,15 +27,24 @@ async function fixture(t,{loseEnqueueAck=false}={}){
  await new Promise(r=>collector.server.listen(0,'127.0.0.1',r));
  const port=collector.server.address().port,root=mkdtempSync(join(tmpdir(),'journal-producer-e2e-speaking-'));
  let agent=await startSpeakingSpoolAgent(libraryRoot,root,port),dropped=false;
- const journal=createSpeakingProducerJournal({endpoint:`http://127.0.0.1:${port}/rpc/${product}`,key,fixtureMode:true,
+ const options={endpoint:`http://127.0.0.1:${port}/rpc/${product}`,key,fixtureMode:true,
   producerSpool:{version:1,endpoint:agent.ready.endpoint},fetcher:async(url,options)=>{
    const response=await fetch(url,options);
    if(loseEnqueueAck&&!dropped&&String(url).includes('/producer-spool/')){dropped=true;await response.arrayBuffer();throw Error('fake lost enqueue ACK');}
    return response;
-  }});
+  }};
+ let runtime;
+ if(startup){
+  const file=join(root,'api.json'),encoded=key.toString('base64');
+  writeFileSync(file,JSON.stringify({version:1,identityKey:encoded,ticketKeys:{fixture:encoded},currentTicketKeyId:'fixture',
+   rpc:{endpoint:options.endpoint,key:encoded,producerSpool:options.producerSpool}}));
+  runtime=await startSpeakingJournalRuntime({env:{EXAM_JOURNAL_ENABLED:'1',EXAM_JOURNAL_CONFIG_FILE:file},
+   load:async()=>({createSpeakingProducerJournalFromEnv:input=>createSpeakingProducerJournalFromEnv({...input,fixtureMode:true,fetcher:options.fetcher})})});
+ }
+ const journal=runtime?runtime.journal:createSpeakingProducerJournal(options);
  const f=await modern.fixture({journal});
- t.after(async()=>{await f.service.flushJournal();await journal.close();await agent.close();await collector.close();await f.db.close();});
- return{...f,journal,collector,agent:()=>agent,async restart(){await agent.exit;await agent.close();agent=await startSpeakingSpoolAgent(libraryRoot,root,port);return agent;},
+ t.after(async()=>{if(runtime)await runtime.close({flushers:[f.service.flushJournal]});else{await f.service.flushJournal();await journal.close();}await agent.close();await collector.close();await f.db.close();});
+ return{...f,journal,runtime,collector,agent:()=>agent,async restart(){await agent.exit;await agent.close();agent=await startSpeakingSpoolAgent(libraryRoot,root,port);return agent;},
   async read(unitId){
    const binding=speakingHomeworkBinding({mode:'independent',assignmentRef:modern.code,classRef:'1293',subjectRef:modern.ref,unitId});
    const scope=storageScope(binding),events=await collector.stores.get(product).read(scope);
@@ -113,4 +123,24 @@ test('Docs readback metadata uses the same durable spool and remains separate fr
  await drain(f.agent());const rows=await f.read(id),events=rows.filter(row=>row.kind==='docs.progress');
  assert.deepEqual(events.map(row=>row.data.phase).sort(),['queued','started','write_attempt','write_received','verified'].sort());
  assert.ok(!JSON.stringify(rows).includes(docId));assert.equal(events.find(row=>row.data.phase==='verified').data.status,'verified');
+});
+
+test('configured native Speaking startup drains late committed callbacks before transport closes',async t=>{
+ const f=await fixture(t,{startup:true});assert.equal(f.runtime.snapshot().configured,true);
+ const result=await f.service.requestCheck({...f.identity,part:'reason_action',rawUrl:modern.url(94)});
+ const id=(await f.pool.query('SELECT id FROM speaking_independent.work_unit')).rows[0].id;
+ assert.ok(result);await f.runtime.close({flushers:[f.service.flushJournal]});
+ assert.equal(f.runtime.snapshot().closed,true);assert.equal(f.runtime.snapshot().shutdownUnknown,false);
+ assert.equal(f.service.journalHealth().unknown,0);assert.equal(f.service.journalHealth().delivered,0);
+ assert.equal(f.service.journalHealth().durableQueued,1);
+ await drain(f.agent());const rows=await f.read(id);assert.equal(rows.length,1);
+ assert.equal(rows[0].kind,'link.saved');
+});
+
+test('native Docs startup exposes boundary drain in both existing dispatcher modes while disabled',async()=>{
+ for(const coordinated of [false,true]){
+  let queries=0;const worker=startSpeakingProgressDocsWorker({pool:{query(){queries++;throw Error('MUST_NOT_QUERY');}},schema:'speaking_independent',gateway:null,coordinated,journal:false});
+  assert.equal(typeof worker.flushJournal,'function');await worker.stop();const stats=await worker.flushJournal();
+  assert.equal(queries,0);assert.equal(stats.enabled,false);
+ }
 });

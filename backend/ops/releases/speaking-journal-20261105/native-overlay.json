@@ -16,15 +16,15 @@
         {
           "source": "src/speaking-progress-docs.js",
           "baseSha256": "ea35562439e004c0e65a3fd307b70624e926f48b032b26e4a85f83789b5efa72",
-          "candidateSha256": "867319797988251321a848d2eee657458a80c794a5c98c6dc6397c4e32e3a571",
-          "forwardAppliedSha256": "867319797988251321a848d2eee657458a80c794a5c98c6dc6397c4e32e3a571",
+          "candidateSha256": "9efece478a58ca0f41e6fe90e1bea02f003dbb89db30974535777059ccc36c6b",
+          "forwardAppliedSha256": "9efece478a58ca0f41e6fe90e1bea02f003dbb89db30974535777059ccc36c6b",
           "forwardExactBytes": true
         },
         {
           "source": "src/speaking-independent-server.js",
           "baseSha256": "8d06dcee90d1da7aa04534403f970b826caa25b1d0c19a67ee2cd5aa222ab592",
-          "candidateSha256": "fce6d215d7045b75889287c33674d5edc7a7fd48052d0de989288df86a15c00e",
-          "forwardAppliedSha256": "fce6d215d7045b75889287c33674d5edc7a7fd48052d0de989288df86a15c00e",
+          "candidateSha256": "c28f484b82640af8dbd209822355839ea9b948c00cea555e27a5191c7ae15bc3",
+          "forwardAppliedSha256": "c28f484b82640af8dbd209822355839ea9b948c00cea555e27a5191c7ae15bc3",
           "forwardExactBytes": true
         },
         {
@@ -87,7 +87,8 @@
       "forwardApplyCheck": true,
       "extraModules": [
         "src/speaking-journal-boundary.js",
-        "src/speaking-provider-journal.js"
+        "src/speaking-provider-journal.js",
+        "src/speaking-journal-runtime.js"
       ]
     },
     {
@@ -138,9 +139,8 @@
   "maxTransactionEvents": 32,
   "maxPendingEvents": 256,
   "remaining": [
-    "startup/configuration and producer rollout",
-    "current webapp client/tickets and Google HTTP/auth",
-    "reports/P3/P4"
+    "current webapp client/tickets",
+    "reports/P3/P4 and producer rollout"
   ],
   "qualification": "PGlite SQL plus signed localhost Collector; checker accepted states seeded, no live PostgreSQL/AI/Google/production actions.",
   "modeCoverage": {
@@ -168,5 +168,7 @@
   "canonicalProviderHelperSha256": "dbb0feb7428ee05046b96547efc76343f4810bf66abaa159213644a64aff62b7",
   "providerQualification": "Counts explicit fetch/https.get calls from the current webapp worker. End is response headers, not body validation/AI completion/SQL commit. Internal redirects/retries, n8n/upstream and Google auth/HTTP are not counted. No external provider or production proof.",
   "producerFactory": "tools/exam-journal/adapters/speaking-producer.mjs",
-  "producerQualification": "Agent durableQueued is separate from Collector persisted. Batch capability correlates per-item UUIDs, normal callbacks remain serial. Reuses bounded RAM retry; no SQL outbox or guarantee before Agent ACK. Flush API/Docs callbacks after stopping producers, before closing the transport."
+  "producerQualification": "Agent durableQueued is separate from Collector persisted. Batch capability correlates per-item UUIDs, normal callbacks remain serial. Reuses bounded RAM retry; no SQL outbox or guarantee before Agent ACK. Flush API/Docs callbacks after stopping producers, before closing the transport.",
+  "startupQualification": "Opt-in EXAM_JOURNAL_ENABLED=1/config v1 with producerSpool. Startup config failure disables journal only; configured is not transport health/ACK. Stop emitters, drain API/Docs then close transport/pool. Shutdown with remaining RAM retry/pending is unknown. Whole-container SIGTERM and production not yet tested.",
+  "googleRequestQualification": "Counts gateway calls only; internal OAuth/retry wire requests remain unmeasured, not a new mandatory instrumentation layer."
 }
