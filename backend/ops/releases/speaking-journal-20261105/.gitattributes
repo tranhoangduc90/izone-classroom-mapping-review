@@ -1,1 +1,3 @@
 *.patch text eol=lf -whitespace
+# This native patch also contains CRLF context from pinned source modules.
+independent.patch -text !eol

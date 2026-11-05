@@ -6,11 +6,11 @@
       "mode": "independent",
       "source": "src/speaking-independent.js",
       "baseSha256": "26f21cb877f343c7624ad8b8c4100979f9da99b82b15c98651ade56b302eff13",
-      "candidateSha256": "ea76d68ca8b107e914e46248ba61d67a98663269d6736b91ec8b8cf24a6f8044",
+      "candidateSha256": "cdd0fbab5b1b2b99976fbd4417900eccf09c70a1f576a23cc7fe373a03282898",
       "patch": "independent.patch",
       "reverseApplyCheck": true,
       "extraModule": "src/speaking-journal-boundary.js",
-      "forwardAppliedSha256": "ea76d68ca8b107e914e46248ba61d67a98663269d6736b91ec8b8cf24a6f8044",
+      "forwardAppliedSha256": "cdd0fbab5b1b2b99976fbd4417900eccf09c70a1f576a23cc7fe373a03282898",
       "forwardExactBytes": true,
       "additionalFiles": [
         {
@@ -19,9 +19,76 @@
           "candidateSha256": "beb20936ef8c855dc4a6458b48b7276e8b041be55f897f58c1ebe6311b68f930",
           "forwardAppliedSha256": "beb20936ef8c855dc4a6458b48b7276e8b041be55f897f58c1ebe6311b68f930",
           "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-independent-server.js",
+          "baseSha256": "8d06dcee90d1da7aa04534403f970b826caa25b1d0c19a67ee2cd5aa222ab592",
+          "candidateSha256": "fce6d215d7045b75889287c33674d5edc7a7fd48052d0de989288df86a15c00e",
+          "forwardAppliedSha256": "fce6d215d7045b75889287c33674d5edc7a7fd48052d0de989288df86a15c00e",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-share-reader.js",
+          "baseSha256": "c99898f9cabe7af5f05229a239a79e724ed3dddcc5b2964050a4dac9b30290a9",
+          "candidateSha256": "e224fbc7be396b22c6aeae4fdf7f4973232fd644e372e931c008bd2129775cb2",
+          "forwardAppliedSha256": "e224fbc7be396b22c6aeae4fdf7f4973232fd644e372e931c008bd2129775cb2",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-ai-verification.js",
+          "baseSha256": "a0506dcd9978627f1e2ce40f08635fe034680a4da1a568c884902732d58bcfe0",
+          "candidateSha256": "39bec4c2240aa5d5630e23ad538234b325abd82116ff3673c7c3720fd3dc3372",
+          "forwardAppliedSha256": "39bec4c2240aa5d5630e23ad538234b325abd82116ff3673c7c3720fd3dc3372",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-doctor-worker.js",
+          "baseSha256": "bb43ea22707c89cefaacd99fb9da17f1baf3cb83f35c6126c0fbd565a1991d07",
+          "candidateSha256": "e35574072c22c32a5c7c745b1b5e111ad30b2be3cb1497d10c02b68b37a22297",
+          "forwardAppliedSha256": "e35574072c22c32a5c7c745b1b5e111ad30b2be3cb1497d10c02b68b37a22297",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-checker.js",
+          "baseSha256": "b6605c1176423cbf04b6f97e6e630e2c14ade21c9b239b0e4832638581fe2c87",
+          "candidateSha256": "51f0d1868064dbc32bfb67d9ab9626ae4b71eba1f8bd065760a34516e8da2705",
+          "forwardAppliedSha256": "51f0d1868064dbc32bfb67d9ab9626ae4b71eba1f8bd065760a34516e8da2705",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-comparison-checker.js",
+          "baseSha256": "f02abb4ef39545bfd3a197d9f3573299aaa704c1cb7dc44b2658cc74af179d63",
+          "candidateSha256": "cd4e280278eb0f2615bcdff209e1f5c61c628f35f5f78247d17e3f5067690260",
+          "forwardAppliedSha256": "cd4e280278eb0f2615bcdff209e1f5c61c628f35f5f78247d17e3f5067690260",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-person-checker.js",
+          "baseSha256": "5d95fa2875f75576a32eedf67c93e63e650d4e5c4a79ea2297d0a1200b4d7420",
+          "candidateSha256": "396495af4db5932f57d5998844957b325945a48bed133eda3930066634cb92d6",
+          "forwardAppliedSha256": "396495af4db5932f57d5998844957b325945a48bed133eda3930066634cb92d6",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-object-checker.js",
+          "baseSha256": "977f3873e2237e675c968476883fbe66730f72a9f9d27c8669862c1f97d454fe",
+          "candidateSha256": "80745e613921b0d09112a69719031a9a929fbc729f6dffe9eaa9e7016d735d17",
+          "forwardAppliedSha256": "80745e613921b0d09112a69719031a9a929fbc729f6dffe9eaa9e7016d735d17",
+          "forwardExactBytes": true
+        },
+        {
+          "source": "src/speaking-how-to-checker.js",
+          "baseSha256": "87a6615ff8bc4bfebc11710401597f1282024b2b779de8e6a5def67b2dd96285",
+          "candidateSha256": "0365f3a4e94cb6b0e6c5bd8bdf733b83301816946bc2d531a1c476f25bb598ee",
+          "forwardAppliedSha256": "0365f3a4e94cb6b0e6c5bd8bdf733b83301816946bc2d531a1c476f25bb598ee",
+          "forwardExactBytes": true
         }
       ],
-      "forwardApplyCheck": true
+      "forwardApplyCheck": true,
+      "extraModules": [
+        "src/speaking-journal-boundary.js",
+        "src/speaking-provider-journal.js"
+      ]
     },
     {
       "mode": "legacy",
@@ -58,7 +125,8 @@
     "submit.accepted",
     "check.progress",
     "doctor.progress",
-    "docs.progress"
+    "docs.progress",
+    "provider.progress"
   ],
   "unitNamespaces": {
     "independent": "work_unit",
@@ -70,8 +138,8 @@
   "maxTransactionEvents": 32,
   "maxPendingEvents": 256,
   "remaining": [
-    "current webapp provider/client/tickets",
-    "durable producer/batching/startup",
+    "current webapp client/tickets and Google HTTP/auth",
+    "durable producer/batching/retry/startup",
     "reports/P3/P4"
   ],
   "qualification": "PGlite SQL plus signed localhost Collector; checker accepted states seeded, no live PostgreSQL/AI/Google/production actions.",
@@ -81,7 +149,8 @@
       "submit.accepted",
       "check.progress",
       "doctor.progress",
-      "docs.progress"
+      "docs.progress",
+      "provider.progress"
     ],
     "legacy": [
       "link.saved",
@@ -94,5 +163,8 @@
   "legacyRemainingRequired": false,
   "legacyScopeQualification": "User excluded further legacy integration05/11; existing legacy source and evidence retained as history, not a completion prerequisite.",
   "docsQualification": "Auto-commit SQL/provider facts use bounded asynchronous journal boundary; only native readback plus current SQL status can emit verified. Gateway call counts exclude internal Google token refresh/retries. No live Google or production proof.",
-  "canonicalHelperSha256": "09be6740d2fdd7d071f7bf72908b996e8dc8b737ffa4656e899bfe21e141aa4b"
+  "canonicalHelperSha256": "09be6740d2fdd7d071f7bf72908b996e8dc8b737ffa4656e899bfe21e141aa4b",
+  "canonicalProviderHelper": "backend/src/speaking-provider-journal.js",
+  "canonicalProviderHelperSha256": "dbb0feb7428ee05046b96547efc76343f4810bf66abaa159213644a64aff62b7",
+  "providerQualification": "Counts explicit fetch/https.get calls from the current webapp worker. End is response headers, not body validation/AI completion/SQL commit. Internal redirects/retries, n8n/upstream and Google auth/HTTP are not counted. No external provider or production proof."
 }
