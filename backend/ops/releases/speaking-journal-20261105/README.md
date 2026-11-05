@@ -1,5 +1,13 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Share/AI của Speaking webapp —06/11, chưa phát
+
+Patch independent thêm provider.progress tại ranh giới fetch/https.get của source native. WeakMap lấy định danh từ claim SQL đã commit, không đổi attempts cũ trong DTO nghiệp vụ. Worker coordinated và nhịp cũ đặt AsyncLocalStorage riêng từng job; các phần Doctor chia sẻ counter nhưng giữ part riêng. Lời gọi cũ hoàn tất sau khi job đã retry vẫn thuộc run cũ; job sao chép không tự tạo quyền gắn nhãn provider. Ghi mốc này không cấp quyền chốt job hoặc thay guard owner/lease SQL.
+
+Helper speaking-provider-journal.js quan sát started, headers/failed/outcome_unknown; trả nguyên response/error. Đếm lần gọi từ runtime, tách initial/retry/redirect/correction và đo đến headers. Không coi headers là đọc xong body, AI đã xong hoặc đã commit kết quả. Fetch redirect/retry ngầm và request bên trong n8n/provider/Google không được đếm. Không log URL, prompt, Share, headers, body, token hoặc exception message.
+
+Chỉ copy hai helper được kê trong manifest rồi áp toàn patch lên11file native đúng SHA; không chép canonical cả backend lên live. Leaf dùng chung chỉ phát log trong context của worker webapp mới; phần legacy giữ nguyên và chưa bật. Kiểm mới gồm helper5ca, contract12ca và source-native/PGlite/Collector ký với HTTP giả, thêm5ca provider vào30ca nền hiện có. Bằng chứng/full TAP và giới hạn ở gói private homework-p2-speaking-provider-r1 của dự án chính. Còn producer bền/gom lô/retry, client/vé/startup, Google HTTP/auth, báo cáo/P3/P4; không nhận Speaking đã hoàn tất hoặc đã mở production.
+
 ## Phạm vi hiện hành và log Docs webapp —06/11
 
 Đức chỉ yêu cầu Speaking webapp hiện hành; phần legacy bên dưới giữ làm lịch sử/tương thích, không làm tiếp hoặc dùng làm điều kiện hoàn thành. Patch independent nay gồm speaking-independent.js và speaking-progress-docs.js của đúng native. Không copy toàn module Docs canonical: native có claim/run, coordinator và work-ready khác bản canonical cũ. Patch đã áp xuôi/ngược, khớp byte nguồn thử ở cả hai file; helper chung vẫn lấy từ src/speaking-journal-boundary.js.
