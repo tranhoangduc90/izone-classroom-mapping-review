@@ -1,5 +1,6 @@
 // Full test giả 40 câu kiểm giờ/lượt/nháp bằng SQL thật, không chứa nội dung Cambridge.
 import test from 'node:test';import assert from 'node:assert/strict';
+import {setImmediate as nextTurn} from 'node:timers/promises';
 import {fixture} from './helpers.js';import {registerAuthoredLesson} from '../src/authored-content.js';
 import {validateContent,uuid} from '../src/domain.js';
 function content(code){
@@ -10,7 +11,8 @@ function content(code){
  return {code,version:'full-fixture-v1',totalMs:3600000,definition:{authored:true,lesson,passage:Object.fromEntries(passages.map(p=>[p.paragraphs[0],'The river flows here.'])),groups,mcq:[]},key:Object.fromEntries(Array.from({length:40},(_,i)=>[i+1,['river']])),explanations:{entries:Object.fromEntries(Array.from({length:40},(_,i)=>{const n=i+1,part=passages.find(p=>n>=p.start&&n<=p.end);return[n,{number:n,kind:'completion',answer:['river'],prompt:p('The place is a ___.'),reason:[p('The source identifies a river.')],evidenceGroups:[{paragraph:part.paragraphs[0],speaker:'',paragraphs:[p('The river flows here.')],marks:[{start:4,end:9,background:'#fff2cc'}]}]}];}))}};
 }
 test('40 câu: pause giữ giờ, tiếp tục giữ passage/annotation, nộp lặp và reset không sửa lịch sử',async t=>{
- const b=content('full-reading-40-fixture'),f=await fixture(b);t.after(f.close);
+ const receipts=[];
+ const b=content('full-reading-40-fixture'),f=await fixture(b,{journal:{recordReceipt:(scope,receipt)=>receipts.push({scope,receipt})}});t.after(f.close);
  const start=await f.begin(),a=start.attempts.at(-1);assert.equal(a.remainingMs,3600000);assert.equal('key' in start,false);
  const d=f.draft();Object.assign(d,{answers:Object.fromEntries(Array.from({length:40},(_,i)=>[i+1,'river'])),activeQuestion:40,sequence:1,activeMs:5000,scroll:{passage:250,questions:{'passage:p1':100,'questions:p3':400,'active:p3':40}},annotations:[{id:'one',kind:'highlight',rootKey:'reading-passage-p3',skill:'reading',start:4,end:9,quote:'river',questionRef:'40'}]});
  f.advance(5000);await f.service.pause({token:f.token,attemptId:a.id,lease:start.lease,snapshot:d});f.advance(3600000);
@@ -21,11 +23,18 @@ test('40 câu: pause giữ giờ, tiếp tục giữ passage/annotation, nộp l
  const done=await f.service.submit(input),again=await f.service.submit(input);assert.equal(done.attempts.at(-1).finalScore,40);assert.equal(again.attempts.length,1);
  const result=await f.service.result({token:f.token,attemptId:a.id});assert.equal(result.attempt.result.rows.length,40);
  const reset=await f.service.reset({token:f.token,attemptId:a.id,owner:'device1',operationId:uuid()});assert.equal(reset.attempts.length,2);assert.equal(reset.attempts[1].remainingMs,3600000);assert.equal(reset.attempts[0].finalScore,40);
+ await nextTurn();const doneReceipt=receipts.find(r=>r.receipt.data.status==='submitted');
+ assert.equal(doneReceipt.scope.attemptId,a.id);assert.equal(doneReceipt.receipt.data.answeredCount,40);assert.equal(doneReceipt.receipt.data.expectedQuestions,40);
+ assert.equal(receipts.filter(r=>r.receipt.data.action==='submit').length,1);
+ assert.equal(receipts.at(-1).receipt.data.previousAttemptId,a.id);assert.equal(receipts.at(-1).scope.attemptNo,2);
 });
 test('full test đủ 60 phút đang làm tự chốt đúng một bản toàn bài',async t=>{
- const b=content('full-reading-timeout-fixture'),f=await fixture(b);t.after(f.close);const start=await f.begin(),a=start.attempts.at(-1),d=f.draft();d.answers={'40':'river'};let state;
+ const receipts=[];
+ const b=content('full-reading-timeout-fixture'),f=await fixture(b,{journal:{recordReceipt:(_scope,receipt)=>receipts.push(receipt)}});t.after(f.close);const start=await f.begin(),a=start.attempts.at(-1),d=f.draft();d.answers={'40':'river'};let state;
  for(let i=0;i<720;i++){f.advance(5000);d.sequence++;d.activeMs+=5000;state=await f.service.pulse({token:f.token,attemptId:a.id,lease:start.lease,snapshot:d});}
  const done=state.attempts.at(-1);assert.equal(done.status,'submitted');assert.equal(done.method,'timeout');assert.equal(done.finalScore,1);assert.equal(done.remainingMs,0);assert.equal(state.events.filter(e=>e.type==='completed').length,1);
+ await nextTurn();assert.ok(receipts.length<10);const closed=receipts.filter(r=>r.data.status==='submitted');
+ assert.equal(closed.length,1);assert.equal(closed[0].data.method,'timeout');assert.equal(closed[0].data.expectedQuestions,40);
 });
 test('không nhận dẫn chứng ở passage khác hoặc cấu trúc passage thiếu câu',()=>{
  const b=content('full-reading-invalid-fixture');validateContent(b);const wrong=structuredClone(b);wrong.explanations.entries['1'].evidenceGroups[0].paragraph='p2_A';assert.throws(()=>validateContent(wrong),/passage khác/);
