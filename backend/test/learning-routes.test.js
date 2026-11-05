@@ -21,6 +21,16 @@ function failIfQueriedPool() {
     async connect() { throw new Error('Không được mở transaction khi request chưa qua validation.'); }
   };
 }
+test('Thẻ 26: 20 lần mở lại và 20 học viên chung Wi-Fi không dùng chung quota đọc nhỏ',async()=>{
+ const app=appWithPool({query:async()=>({rows:[],rowCount:0})});
+ const body={publicToken:'40000000-0000-4000-8000-000000000026',studentRef:'50000000-0000-4000-8000-000000000026',identityConfirmed:true};
+ for(let n=0;n<20;n++){
+  for(const path of ['/student/course-journey','/student/course-session-detail','/student/session-comments']){
+   const response=await request(app).post('/api/learning'+path).send({...body,...(path.endsWith('detail')?{sessionNumber:1}:{})});assert.notEqual(response.status,429,path);
+  }
+ }
+ for(let n=0;n<60;n++)assert.equal((await request(app).get('/api/learning/student/portal-classes')).status,200);
+});
 
 test('đọc biên nhận không dùng quota nộp; mỗi học viên có quota riêng khi cùng IP',async()=>{
   const app=appWithPool({query:async()=>({rows:[],rowCount:0})});

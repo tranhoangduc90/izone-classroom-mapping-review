@@ -76,6 +76,7 @@ export async function openLearningDemoDatabase(dataDir) {
 }
 
 export async function initializeLearningDemoDatabase(database) {
+  // An additive catalog migration; does not alter or reset demo attempts.
   const marker = await database.query(`SELECT to_regclass('learning_demo.environment_marker') AS marker,
     to_regclass('learning.form_template') AS learning_table`);
   if (marker.rows[0].marker) {
@@ -92,6 +93,7 @@ export async function initializeLearningDemoDatabase(database) {
     await database.exec(await readFile(new URL('../ops/learning-migrations/202610060001_attendance_binding_and_submission_deadline.sql', import.meta.url), 'utf8'));
     await database.exec(await readFile(new URL('../ops/learning-migrations/202610190001_checkpoint_attendance_source.sql', import.meta.url), 'utf8'));
     await database.exec(await readFile(new URL('../ops/learning-migrations/202610220001_assignment_management.sql', import.meta.url), 'utf8'));
+    await database.exec(await readFile(new URL('../ops/learning-migrations/202611050002_form_catalog_archive.sql', import.meta.url),'utf8'));
     return;
   }
   if (marker.rows[0].learning_table) throw new Error('Từ chối biến kho dữ liệu khác thành kho demo.');
@@ -103,6 +105,7 @@ export async function initializeLearningDemoDatabase(database) {
   }
   const runSql = await readFile(new URL('../ops/learning-demo/demo-run.sql', import.meta.url), 'utf8');
   await database.exec(runSql);
+  await database.exec(await readFile(new URL('../ops/learning-migrations/202611050002_form_catalog_archive.sql', import.meta.url),'utf8'));
 }
 
 export function createDemoSourceFetcher({ url, secret, fetchImpl = fetch }) {

@@ -1,6 +1,7 @@
 // Nhận nháp của giảng viên đã đăng nhập: kiểm đúng chủ/lớp, revision và danh mục trước mọi lần ghi.
 // Key chỉ trả vào phiên của người sở hữu; mọi save/import không tạo phiếu, roster hoặc Portal job.
 import crypto from 'node:crypto';
+import {catalogVisible,assertCatalogSource,lockCatalog} from './learning-catalog-archive.js';
 import {sha256,stableStringify} from './learning-domain.js';
 import {withTransaction} from './db.js';
 import {authorizeLearningClassSql,authorizeLearningJourneyPlanAssignmentSql} from './learning-sql.js';
@@ -26,9 +27,11 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
     return result.rows[0];
   }
   async function owned(database,id,reviewer,{lock=false}={}) {
+    if(lock)await lockCatalog(database);
     const result=await database.query(`SELECT * FROM learning.form_draft WHERE id=$1::uuid
       AND lower(owner_email)=lower($2)${lock?' FOR UPDATE':''};`,[id,reviewer.email]);
     if(result.rowCount!==1) throw error('DRAFT_NOT_FOUND','Không tìm thấy nháp thuộc phiên của bạn.',404);
+    await assertCatalogSource(database,id,reviewer.email);
     await authorizeClass(database,result.rows[0].erp_course_class_id,reviewer);
     return result.rows[0];
   }
@@ -103,7 +106,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       const result=await pool.query(`SELECT d.id,d.erp_course_class_id,d.session_number,d.revision,d.status,d.content_hash,
         d.public_definition->>'title' AS title,d.updated_at${worksheetHeads?',COALESCE(r.worksheet_id,d.id) AS worksheet_id':''} FROM learning.form_draft d
         ${worksheetHeads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=d.id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id':''}
-        WHERE d.erp_course_class_id=$1::bigint AND lower(d.owner_email)=lower($2)
+        WHERE d.erp_course_class_id=$1::bigint AND lower(d.owner_email)=lower($2) AND ${catalogVisible('d.id','d.owner_email')}
         ${worksheetHeads?'AND (w.id IS NULL OR w.current_draft_id=d.id)':''} ORDER BY d.updated_at DESC,d.id LIMIT 100;`,[classId,reviewer.email]);
       return result.rows.map(row=>({id:row.id,classId:String(row.erp_course_class_id),sessionNumber:Number(row.session_number),
         revision:Number(row.revision),status:row.status,title:row.title,updatedAt:row.updated_at,...(worksheetHeads?{worksheetId:row.worksheet_id}:{})}));

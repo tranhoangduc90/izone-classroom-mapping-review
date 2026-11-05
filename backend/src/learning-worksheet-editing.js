@@ -1,5 +1,6 @@
 // Chỉnh sửa cùng phiếu logic; mọi bản đã xuất bản và assignment tiếp tục bất biến.
 import {randomUUID} from 'node:crypto';
+import {lockCatalog} from './learning-catalog-archive.js';
 import {withTransaction} from './db.js';
 import {copyAuthoringPayload,FormAuthoringError,importReviewContent,validateAuthoringPayload} from './learning-form-authoring.js';
 import {sha256} from './learning-domain.js';
@@ -7,6 +8,7 @@ import {sha256} from './learning-domain.js';
 export function createWorksheetEditing({pool,owned,dto}){
  return async function editWorksheet({id,operationId,reviewer}){
   return withTransaction(pool,async db=>{
+   await lockCatalog(db);
    const source=await owned(db,id,reviewer);
    const relation=(await db.query('SELECT worksheet_id FROM learning.form_worksheet_revision WHERE draft_id=$1::uuid',[id])).rows[0];
    const root=relation?.worksheet_id||source.id;

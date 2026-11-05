@@ -5,6 +5,7 @@ import {copyAuthoringPayload,validateAuthoringPayload,FormAuthoringError} from '
 import {sha256,stableStringify} from './learning-domain.js';
 import {createHash} from 'node:crypto';
 import {withTransaction} from './db.js';
+import {catalogVisible,isCatalogAdmin,assertCatalogSource,lockCatalog} from './learning-catalog-archive.js';
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.sharing_scope,createdAt:row.created_at,
   sourceDraftId:row.source_draft_id,
@@ -15,8 +16,8 @@ const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.
   ...(row.current_title?{title:row.current_title}:{})});
 export function createLearningFormLibrary({pool,drafts}){
  async function get(id,reviewer){
-  const row=(await pool.query(`SELECT * FROM learning.form_library_entry WHERE id=$1::uuid
-    AND (sharing_scope='izone' OR lower(owner_email)=lower($2))`,[id,reviewer.email])).rows[0];
+  const row=(await pool.query(`SELECT e.* FROM learning.form_library_entry e WHERE e.id=$1::uuid
+    AND (e.sharing_scope='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')}`, [id,reviewer.email])).rows[0];
   if(!row)throw fail('LIBRARY_ENTRY_NOT_FOUND','Không tìm thấy phiếu trong kho bạn được mở.',404);
   return row;
  }
@@ -43,7 +44,7 @@ export function createLearningFormLibrary({pool,drafts}){
    const heads=worksheetHeads&&scope==='personal';
    const rows=(await pool.query(`SELECT e.*${heads?',w.id AS worksheet_id,w.current_draft_id,d.revision AS current_revision,d.status AS current_status,d.public_definition->>\'title\' AS current_title':''}
      FROM learning.form_library_entry e ${heads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=e.source_draft_id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id AND lower(w.owner_email)=lower(e.owner_email) LEFT JOIN learning.form_draft d ON d.id=w.current_draft_id':''}
-     WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
+     WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')} ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
    return rows.map(dto).filter(r=>!skill||r.skills.includes(skill));
   },
   async get({id,reviewer}){const row=await get(id,reviewer);return {...dto(row),definition:row.public_definition};},
@@ -54,12 +55,11 @@ export function createLearningFormLibrary({pool,drafts}){
    if(scope==='izone'){
     if(!['approved','published'].includes(draft.status)||draft.approvedRevision!==draft.revision||!draft.definition.courseCode)
       throw fail('LIBRARY_APPROVAL_REQUIRED','Kho IZONE chỉ nhận đúng bản đã duyệt và có mã khóa học.');
-    const authority=await pool.query(`SELECT 1 FROM mapping.reviewer_account a WHERE lower(a.email)=lower($1) AND a.status='active'
-      AND (EXISTS(SELECT 1 FROM learning.progress_log_admin p WHERE lower(p.reviewer_email)=lower(a.email) AND p.status='active')
-      OR EXISTS(SELECT 1 FROM learning.course_content_authority c WHERE lower(c.reviewer_email)=lower(a.email) AND c.course_code=$2 AND c.status='active'))`,[reviewer.email,draft.definition.courseCode]);
-    if(authority.rowCount!==1)throw fail('LIBRARY_APPROVAL_DENIED','Chỉ người phụ trách chuyên môn của khóa hoặc quản trị được đưa bài vào Kho IZONE.',403);
+    if(!await isCatalogAdmin(pool,reviewer.email))throw fail('LIBRARY_APPROVAL_DENIED','Chỉ quản trị được tạo bài trong Kho chung.',403);
    }
    return withTransaction(pool,async database=>{
+   await lockCatalog(database);await assertCatalogSource(database,draft.id,reviewer.email,scope);
+   if(scope==='izone'&&!await isCatalogAdmin(database,reviewer.email))throw fail('LIBRARY_APPROVAL_DENIED','Quyền quản trị đã thay đổi.',403);
    const current=(await database.query('SELECT revision,content_hash,status,approved_by_email,approved_hash,approved_at FROM learning.form_draft WHERE id=$1::uuid FOR UPDATE',[draft.id])).rows[0];
    if(!current||Number(current.revision)!==expectedRevision||current.content_hash!==expectedHash
      ||(scope==='izone'&&!['approved','published'].includes(current.status)))throw fail('DRAFT_STALE','Nháp đã đổi; đọc lại trước khi lưu vào kho.');

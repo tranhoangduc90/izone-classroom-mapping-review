@@ -31,7 +31,7 @@ export async function postgresFixture({ clock = null, asApplication = false, dea
     '202609280001_progress_log_admin_scope.sql', '202609290001_teacher_confirmed_journey_plan.sql',
     '202610060001_attendance_binding_and_submission_deadline.sql',
     '202610090001_journey_schedule_changes.sql', '202610190001_checkpoint_attendance_source.sql',
-    '202610220001_assignment_management.sql']) {
+    '202610220001_assignment_management.sql','202611050002_form_catalog_archive.sql']) {
     await pool.query(await readFile(new URL(`../ops/learning-migrations/${filename}`, import.meta.url), 'utf8'));
   }
   if (deadlineGrant) await pool.query(await readFile(new URL('../ops/learning-migrations/202610080001_submission_deadline_permissions.sql', import.meta.url), 'utf8'));

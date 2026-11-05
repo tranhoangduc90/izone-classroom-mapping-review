@@ -11,6 +11,8 @@ import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 import {createProgressLinkCipher} from './learning-journey-comments.js';
 import {createLearningAssignmentManagement} from './learning-assignment-management.js';
 import {createLearningFormLibrary} from './learning-form-library.js';
+import {archiveCatalog,isCatalogAdmin} from './learning-catalog-archive.js';
+import {createFrontendReleaseReader} from './learning-frontend-release.js';
 import {withAssignmentOrigins} from './learning-assignment-origin.js';
 import {createLearningPortalTestReader} from './learning-portal-tests.js';
 import {createLearningLiveUpdates} from './learning-realtime.js';
@@ -57,11 +59,11 @@ const submitSchema = z.object({
 }).strict();
 const resultSchema = z.object({ attemptToken: uuidSchema }).strict();
 const studentJourneySchema = z.union([
-  z.object({ accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/) }).strict(),
+  z.object({ accessToken: z.string().trim().regex(/^[A-Za-z0-9_-]{32,200}$/),includeSkills:z.boolean().optional() }).strict(),
   z.object({
     publicToken: uuidSchema,
     studentRef: uuidSchema,
-    identityConfirmed: z.literal(true)
+    identityConfirmed: z.literal(true),includeSkills:z.boolean().optional()
   }).strict()
 ]);
 const studentSessionDetailSchema = z.union([
@@ -319,18 +321,32 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   });
   const journeyLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 30,
+    limit: req=>(req.body?.accessToken||req.body?.studentRef)?90:600,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     keyGenerator: req => {
       const scope = req.body?.accessToken || (req.body?.publicToken && req.body?.studentRef
         ? `${req.body.publicToken}:${req.body.studentRef}` : '');
-      if (!scope) return `journey-ip:${ipKeyGenerator(req.ip)}`;
-      return `journey:${createHash('sha256').update(scope, 'utf8').digest('hex')}`;
+      if (!scope) return `journey-ip:${req.path}:${ipKeyGenerator(req.ip)}`;
+      return `journey:${req.path}:${createHash('sha256').update(scope, 'utf8').digest('hex')}`;
     },
     message: { ok: false, error: 'RATE_LIMITED', message: 'Link đang được mở quá nhiều lần; hãy chờ một phút.' }
   });
 
+  const frontendRelease=createFrontendReleaseReader({storage:{
+    read:async()=>(await pool.query('SELECT version FROM learning.frontend_release_state WHERE id=true')).rows[0],
+    write:async({version})=>pool.query(`INSERT INTO learning.frontend_release_state(id,version) VALUES(true,$1)
+      ON CONFLICT(id) DO UPDATE SET version=EXCLUDED.version,verified_at=now()`,[version])
+  }});
+  // Public, tiny release pointer; only promote after every immutable asset is available.
+  router.get('/frontend-release',asyncRoute(async(_req,res)=>{
+    res.set('Cache-Control','no-store');
+    try{
+      const release=frontendRelease();
+      if(!/^[a-f0-9]{16}$/.test(release.version))throw Error('Invalid release');
+      return res.json({ok:true,version:release.version});
+    }catch{return res.status(503).json({ok:false,error:'FRONTEND_RELEASE_UNAVAILABLE'});}
+  }));
   router.use(coarseLimiter);
 
   if (demoSourceSecret) router.post('/assignments/demo-source', asyncRoute(async (req, res) => {
@@ -388,6 +404,10 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     const attempt = await service.startAttempt(input);
     res.set('Cache-Control', 'no-store');
     return res.status(201).json({ ok: true, attempt });
+  }));
+  router.post('/attempts/resume',journeyLimiter,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(startAttemptSchema,req.body,res,'INVALID_ATTEMPT_START');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,attempt:await service.startAttempt({...input,resumeOnly:true})});
   }));
 
   router.patch('/attempts/draft', draftLimiter, asyncRoute(async (req, res) => {
@@ -592,11 +612,16 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }));
   router.get('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({scope:z.enum(['personal','izone']).default('personal'),skill:z.enum(['','listening','reading','speaking','writing']).default('')}).strict(),req.query,res,'INVALID_LIBRARY_QUERY');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
+    res.set('Cache-Control','no-store');return res.json({ok:true,canManageShared:await isCatalogAdmin(pool,req.reviewer.email),entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
   }));
   router.get('/teacher/form-library/:id',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,entry:await formLibrary.get({...input,reviewer:req.reviewer})});
+  }));
+  router.post('/teacher/form-catalog/:id/archive',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_CATALOG_ID');if(!path)return;
+    const input=parseOrReply(z.object({source:z.enum(['personal','izone']),operationId:uuidSchema}).strict(),req.body,res,'INVALID_CATALOG_ARCHIVE');if(!input)return;
+    res.set('Cache-Control','no-store');return res.json({ok:true,...await archiveCatalog({pool,...path,...input,reviewer:req.reviewer})});
   }));
   router.post('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({draftId:uuidSchema,expectedRevision:z.number().int().positive(),expectedHash:z.string().regex(/^[0-9a-f]{64}$/u),

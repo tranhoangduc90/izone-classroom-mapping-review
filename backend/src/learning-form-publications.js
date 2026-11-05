@@ -1,6 +1,7 @@
 // Nhận nháp đã duyệt hoặc bản xuất bản; không tạo bài nộp/điểm danh khi xuất bản hay giao.
 // Mỗi đích giao có transaction và mã retry riêng; lỗi một đích không nhân các đích đã thành công.
 import {withTransaction} from './db.js';
+import {catalogVisible,lockCatalog,assertCatalogSource} from './learning-catalog-archive.js';
 import {assignmentOrigin} from './learning-assignment-origin.js';
 import crypto from 'node:crypto';
 import {validateAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
@@ -26,14 +27,19 @@ function validatePublishedSource({definition,gradingKey}){
   return {definition:structuredClone(definition),gradingKey:structuredClone(gradingKey),contentHash:sha256(stableStringify({definition,gradingKey}))};
 }
 function accessSql(email,all){
-  return `((publication.source_draft_id IS NOT NULL AND lower(publication.owner_email)=lower(${email}))
-    OR EXISTS(SELECT 1 FROM learning.form_library_entry entry WHERE
+  const activeEntry=`EXISTS(SELECT 1 FROM learning.form_library_entry entry WHERE
       ((entry.id=publication.source_library_id AND entry.content_hash=publication.source_content_hash)
         OR (entry.source_draft_id=publication.source_draft_id AND entry.source_revision=publication.source_revision AND entry.content_hash=publication.content_hash)
         OR (entry.public_definition->>'formVersionId'=publication.form_version_id::text AND entry.content_hash=publication.content_hash))
-      AND (entry.sharing_scope='izone' OR lower(entry.owner_email)=lower(${email})))
+      AND ${catalogVisible('entry.source_draft_id','entry.owner_email','entry.sharing_scope')}
+      AND (entry.sharing_scope='izone' OR lower(entry.owner_email)=lower(${email})))`;
+  return `((${activeEntry} OR (${catalogVisible('publication.source_draft_id','publication.owner_email')} AND NOT EXISTS(
+      SELECT 1 FROM learning.form_library_entry archived_entry JOIN learning.form_catalog_archive archived ON
+      archived.source_draft_id=archived_entry.source_draft_id AND lower(archived.owner_email)=lower(archived_entry.owner_email) AND archived.sharing_scope=archived_entry.sharing_scope
+      WHERE archived_entry.id=publication.source_library_id))) AND ((publication.source_draft_id IS NOT NULL AND lower(publication.owner_email)=lower(${email}))
+    OR ${activeEntry}
     OR EXISTS(SELECT 1 FROM learning.form_assignment source_assignment WHERE source_assignment.form_version_id=publication.form_version_id
-      AND (${all}::boolean OR ${buildLearningClassAccessPredicate({reviewerEmailSql:email,classIdSql:'source_assignment.erp_course_class_id'})})))`;
+      AND (${all}::boolean OR ${buildLearningClassAccessPredicate({reviewerEmailSql:email,classIdSql:'source_assignment.erp_course_class_id'})}))))`;
 }
 function targetOperation(operationId,classId,sessionNumber){
   const h=sha256(operationId+':'+classId+':'+sessionNumber);
@@ -124,6 +130,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     },
     async publicationFromSource({source,id,operationId,reviewer}){
       return withTransaction(pool,async database=>{
+        await lockCatalog(database);
         let row,definition,key,approver,owner,revision,sourceHash;
         if(source==='assignment'){
           const access=await database.query(authorizeLearningJourneyPlanAssignmentSql,[id,reviewer.email,reviewer.canAccessAllClasses]);
@@ -149,6 +156,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             FROM learning.form_draft WHERE id=$1::uuid FOR UPDATE`,[row.source_draft_id])).rows[0];
           Object.assign(row,currentDraft||{});
           const checked=validatePublishedSource({definition:row.public_definition,gradingKey:row.private_definition});
+          await assertCatalogSource(database,row.source_draft_id,row.owner_email,row.sharing_scope);
           if(checked.contentHash!==row.content_hash)throw fail('LIBRARY_CONTENT_MISMATCH','Bản chụp trong kho chưa khớp nội dung.',500);
           const approved=row.approval_hash===row.content_hash&&row.approved_by_email
             ||row.draft_approval_hash===row.content_hash&&Number(row.draft_approved_revision)===Number(row.source_revision)&&['approved','published'].includes(row.draft_status);
@@ -230,6 +238,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         const operation=targetOperation(operationId,target.classId,target.sessionNumber);
         try{
           const delivered=await withTransaction(pool,async database=>{
+            await lockCatalog(database);
             const source=await publication(database,id,reviewer),classInfo=await authorizeClass(database,target.classId,reviewer);
             const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
             await database.query('INSERT INTO learning.form_draft_class_lock VALUES($1::bigint) ON CONFLICT DO NOTHING',[target.classId]);
