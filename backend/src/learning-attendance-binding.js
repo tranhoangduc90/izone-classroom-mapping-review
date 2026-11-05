@@ -1,5 +1,6 @@
 import { withTransaction } from './db.js';
 import { LearningJobIdentityError } from './learning-outbox.js';
+import {canRefreshBoundSchedule} from './learning-schedule-identity.js';
 
 const normalize = row => row ? { targetSessionId: String(row.target_session_id),
   bindingRevision: Number(row.revision), scheduleFingerprint: row.schedule_fingerprint,
@@ -36,8 +37,9 @@ export function createAttendanceBindingStore(pool) {
         const found = await db.query('SELECT * FROM learning.portal_attendance_binding WHERE assignment_id = $1::uuid FOR UPDATE', [payload.assignmentId]);
         let binding = found.rows[0];
         const priorOperation = await db.query('SELECT status FROM learning.portal_attendance_operation WHERE operation_key = $1', [job.operationKey]);
-        const changed = binding && String(binding.target_session_id) !== resolved.resolvedSessionId;
-        const acceptedScheduleChanged = binding?.accepted_at && binding.schedule_fingerprint !== resolved.scheduleFingerprint;
+        const refresh = binding && canRefreshBoundSchedule(binding,resolved);
+        const changed = binding && !refresh && String(binding.target_session_id) !== resolved.resolvedSessionId;
+        const acceptedScheduleChanged = binding?.accepted_at && !refresh && binding.schedule_fingerprint !== resolved.scheduleFingerprint;
         if (binding?.review_required || acceptedScheduleChanged || (changed && (binding?.write_started || binding?.accepted_at))) {
           await db.query('UPDATE learning.portal_attendance_binding SET review_required = true, updated_at = now() WHERE assignment_id = $1::uuid', [payload.assignmentId]);
           return { ...normalize(binding), reviewRequired: true,
@@ -58,6 +60,11 @@ export function createAttendanceBindingStore(pool) {
             SET target_session_id = $2::bigint, schedule_fingerprint = $3, revision = revision + 1, updated_at = now()
             WHERE assignment_id = $1::uuid RETURNING *`, [payload.assignmentId, resolved.resolvedSessionId, resolved.scheduleFingerprint]);
           binding = updated.rows[0];
+        }
+        if(refresh&&binding.schedule_fingerprint!==resolved.scheduleFingerprint){
+          await db.query('UPDATE learning.portal_attendance_binding SET schedule_fingerprint=$2,updated_at=now() WHERE assignment_id=$1::uuid',
+            [payload.assignmentId,resolved.scheduleFingerprint]);
+          binding={...binding,schedule_fingerprint:resolved.scheduleFingerprint};
         }
         if (resolved.targetSessionId !== String(binding.target_session_id)) {
           throw new LearningJobIdentityError('Đích đọc lại không khớp liên kết chung của phiếu.');
@@ -110,7 +117,7 @@ export function createAttendanceBindingStore(pool) {
         AND lease_until > clock_timestamp() FOR UPDATE`, [job.id, job.workerId, job.attemptCount]);
       if (owned.rowCount !== 1) throw new LearningJobIdentityError('Job đã mất quyền ghi kết quả điểm danh.');
       const result = await db.query(`UPDATE learning.portal_attendance_operation
-        SET status = $5, session_date = COALESCE($6::date, session_date),
+        SET status = $5, session_date = COALESCE(session_date, $6::date),
           readback_at = CASE WHEN $5 IN ('synced', 'already_present') THEN clock_timestamp() ELSE NULL END,
           updated_at = now()
         WHERE operation_key = $1 AND assignment_id = $2::uuid AND target_session_id = $3::bigint
@@ -118,7 +125,13 @@ export function createAttendanceBindingStore(pool) {
       [job.operationKey, payload.assignmentId, binding.targetSessionId, binding.bindingRevision,
         output.status, output.sessionDate, payload.studentRef]);
       if (result.rowCount !== 1) throw new LearningJobIdentityError('Không lưu được kết quả tại đúng đích điểm danh.');
-      if (output.status === 'target_changed' || output.scheduleChanged) {
+      const refresh=canRefreshBoundSchedule(binding,output)
+        &&(!output.scheduleChanged||binding.scheduleFingerprint!==output.scheduleFingerprint);
+      if(refresh&&binding.scheduleFingerprint!==output.scheduleFingerprint){
+        await db.query('UPDATE learning.portal_attendance_binding SET schedule_fingerprint=$2,updated_at=now() WHERE assignment_id=$1::uuid',
+          [payload.assignmentId,output.scheduleFingerprint]);
+      }
+      if ((output.status === 'target_changed' || output.scheduleChanged)&&!refresh) {
         await db.query('UPDATE learning.portal_attendance_binding SET review_required = true WHERE assignment_id = $1::uuid', [payload.assignmentId]);
       }
       });

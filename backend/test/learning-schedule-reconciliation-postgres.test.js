@@ -45,15 +45,15 @@ test('S09: audit lỗi rollback cả kế hoạch và cửa sổ nộp',async()=
   assert.equal((await f.pool.query('SELECT opens_at FROM learning.form_assignment')).rows[0].opens_at.toISOString(),'2026-10-19T11:25:00.000Z');
  }finally{await f.close();}
 });
-test('S10: start giữ khóa phiếu, đổi lịch đến sau không vượt kiểm usage',async()=>{
+test('S10: start giữ khóa phiếu; dời lịch cùng ID không làm mất lượt hoặc đổi mã buổi',async()=>{
  const f=await setup();let release;try{
   let entered;const gate=new Promise(r=>{release=r;});const ready=new Promise(r=>{entered=r;});
   const opening=createLearningService({pool:f.clockPool,erpScheduleReader:async()=>{entered();await gate;return {sessions:[row('2026-10-12')]};}});
   const start=opening.startAttempt(f.startInput);await ready;
   f.setRows([row('2026-10-19')]);const input=await f.movedInput();
   const applying=f.service.saveTeacherJourneyPlan(input);
-  release();await start;await assert.rejects(()=>applying,e=>e.code==='ERP_SESSION_IN_USE');
-  assert.equal((await f.pool.query('SELECT revision FROM learning.class_journey_plan')).rows[0].revision,1);
+  release();await start;assert.equal((await applying).revision,2);
+  assert.equal((await f.pool.query('SELECT revision FROM learning.class_journey_plan')).rows[0].revision,2);
   assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM learning.attempt')).rows[0].n,1);
  }finally{release?.();await f.close();}
 });

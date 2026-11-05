@@ -176,9 +176,9 @@ test('đổi lịch: giữ ID/số/ngày đã chốt, xác nhận có audit, ret
     sessions=[row('35820','2026-10-15'),row('35819','2026-10-19')];
     const overview=await service.getCourseOverview({classId:'2139',reviewer});
     const slot=overview.sessions.find(s=>s.sessionNumber===8);
-    assert.equal(slot.sessionDate,'2026-10-12');assert.equal(slot.erpSessionId,'35819');
-    assert.equal(slot.scheduleStatus,'needs_review');
-    assert.equal(overview.scheduleChanges[0].after.date,'2026-10-19');
+    assert.equal(slot.sessionDate,'2026-10-19');assert.equal(slot.erpSessionId,'35819');
+    assert.equal(slot.scheduleStatus,'connected');
+    assert.equal(overview.scheduleChanges.length,0);
     const schedule=await service.getTeacherErpSchedule({classId:'2139',reviewer});
     const input={classId:'2139',totalSessions:9,testSessionNumbers:[7],sessionDates:[{sessionNumber:8,date:'2026-10-19',erpSessionId:'35819'},plan.sessionDates[1]],
       expectedRevision:1,expectedScheduleFingerprint:schedule.fingerprint,operationId:crypto.randomUUID(),reviewer};
@@ -192,11 +192,11 @@ test('đổi lịch: giữ ID/số/ngày đã chốt, xác nhận có audit, ret
     sessions=[row('35820','2026-10-15'),row('35819','2026-10-22')];
     const fresh=await service.getTeacherErpSchedule({classId:'2139',reviewer});
     assert.deepEqual(fresh.usedSessionNumbers,[8]);
-    await assert.rejects(()=>service.saveTeacherJourneyPlan({...input,expectedRevision:2,expectedScheduleFingerprint:fresh.fingerprint,
-      operationId:crypto.randomUUID(),sessionDates:[{...input.sessionDates[0],date:'2026-10-22'},input.sessionDates[1]]}),e=>e.code==='ERP_SESSION_IN_USE');
+    await service.saveTeacherJourneyPlan({...input,expectedRevision:2,expectedScheduleFingerprint:fresh.fingerprint,
+      operationId:crypto.randomUUID(),sessionDates:[{...input.sessionDates[0],date:'2026-10-22'},input.sessionDates[1]]});
     assert.equal((await database.query('SELECT status FROM learning.attempt WHERE attempt_token=$1::uuid',[attempt.attemptToken])).rows[0].status,'active');
-    assert.equal((await service.getTeacherJourneyPlan({classId:'2139',reviewer})).revision,2);
-    await assert.rejects(()=>service.startAttempt({publicToken:published.publicToken,studentRef:assignment.roster[1].studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()}),e=>e.code==='ERP_SESSION_REVIEW_REQUIRED');
+    assert.equal((await service.getTeacherJourneyPlan({classId:'2139',reviewer})).revision,3);
+    await service.startAttempt({publicToken:published.publicToken,studentRef:assignment.roster[1].studentRef,identityConfirmed:true,clientIdempotencyKey:crypto.randomUUID()});
   }finally{await database.close();}
 });
 
