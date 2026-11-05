@@ -36,7 +36,12 @@ export function createLearningClassPolicy({pool,directoryReader,now=()=>new Date
 
   async function courseClass(actor,classId) {
     if(!actor.canReadCourse56)return null;
-    const entry=(await load())?.get(String(classId));
+    const catalog=await load();
+    if(!catalog)throw new LearningError('CLASS_STATUS_UNAVAILABLE',
+      'Chưa xác minh được trạng thái lớp trên ERP. Hãy tải lại danh sách.',503);
+    const entry=catalog.get(String(classId));
+    if(entry?.course_id===readCourseId&&!isRunning(entry,localDate.format(now())))
+      throw new LearningError('CLASS_ACCESS_DENIED','Bạn chỉ được xem các lớp khóa 56 đang học.',403);
     return entry?.course_id===readCourseId?entry:null;
   }
 
@@ -53,10 +58,14 @@ export function createLearningClassPolicy({pool,directoryReader,now=()=>new Date
 
   async function options(actor,query) {
     const catalog=await load();
+    if(actor.canReadCourse56&&!catalog)throw new LearningError('CLASS_STATUS_UNAVAILABLE',
+      'Chưa xác minh được trạng thái lớp trên ERP. Hãy tải lại danh sách.',503);
+    const today=localDate.format(now());
     const courseClasses=actor.canReadCourse56&&catalog
-      ?[...catalog.values()].filter(row=>row.course_id===readCourseId):[];
+      ?[...catalog.values()].filter(row=>row.course_id===readCourseId&&isRunning(row,today)):[];
     const result=await query({...actor,readClassIds:courseClasses.map(row=>row.class_id)});
-    const classes=result.classes.map(row=>{
+    const classes=result.classes.filter(row=>!actor.canReadCourse56
+      ||catalog.get(row.class_id)?.course_id!==readCourseId||isRunning(catalog.get(row.class_id),today)).map(row=>{
       const entry=catalog?.get(row.class_id);
       return entry?{...row,class_status:entry.class_status,class_started_at:entry.class_started_at}:row;
     });
@@ -64,7 +73,6 @@ export function createLearningClassPolicy({pool,directoryReader,now=()=>new Date
     for(const row of courseClasses)if(!mapped.has(row.class_id)){
       classes.push({...row,can_manage:false,student_count:null,progress_log_mapped:false});
     }
-    const today=localDate.format(now());
     const assignmentClasses=classes.filter(row=>row.can_manage===true&&isRunning(catalog?.get(row.class_id),today))
       .sort((a,b)=>b.class_started_at.localeCompare(a.class_started_at)
         || b.class_id.length-a.class_id.length || b.class_id.localeCompare(a.class_id));
