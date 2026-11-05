@@ -1,5 +1,11 @@
 # Ghi mốc Speaking sau khi SQL commit
 
+## Gom lượt đọc thành công —06/11, ứng viên chưa phát
+
+Runtime gom open/doctor_list HTTP2xx theo scope native và route trong cửa sổ60giây, tối đa256nhóm RAM. api.summary chỉ gồm số request, tổng/max thời gian và độ dài cửa sổ, không là biên nhận SQL. Ghi/lỗi vẫn phát api.request riêng và được xếp trước tổng kết; flushJournal drain cả tổng kết trước boundary. Thất bại emit có bộ đếm riêng; RAM tổng kết chưa phải dữ liệu bền qua crash. Không sửa native SQL, quyền, payload hoặc nhịp polling.
+
+10ca runtime và5ca HTTP/PGlite/Collector ký đạt, gồm12lượt open→một summary với count12 và finish409 vẫn là fact HTTP riêng, không tạo receipt. Native47ID duy nhất theo hợp28direct-service,5HTTP cuối và14provider/legacy không đổi; không gọi lượt tổng cũ lỗi child V8 là đạt hoặc đã sửa nguyên nhân V8. Pages đã nối ba engine qua module chung, cờ false, browser cô lập8+1ca đạt; chưa mở production, còn cross-origin/Linux/P3/P4. Các mục bên dưới ghi mốc lịch sử, không thay trạng thái mới này.
+
 ## Vé client và mốc HTTP —06/11, nền API chưa phát
 
 Runtime nhận intake từ factory cấu hình với allowedOrigins cố định. Chỉ khi logger bật mới có POST journal-context và journal-events. Context dùng service.grant native kiểm SQL/token và nguồn thành viên hiện hành, rồi tạo scope từ assignment_code/class_id/identity_ref/work_unit. Không tạo bài để cấp vé và không nhận các trường scope client tự khai. Vé append-only mặc định7ngày, không là quyền đọc hoặc nghiệp vụ; quyền nguồn đã thu hồi không cấp vé mới, backlog có vé cũ chỉ gắn scope cũ đến hạn. collect trả persisted chỉ sau ACK Collector; sai vé/phạm vi/source/schema bị từ chối.

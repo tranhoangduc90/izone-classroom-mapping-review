@@ -77,3 +77,14 @@ test('native logging off leaves HTTP behavior and session access independent of 
  await client.post(prefix+'/journal-context').set('Origin',origin).send(f.identity).expect(404);
  assert.equal(f.service.journalHealth().enabled,false);
 });
+
+test('native repeated successful reads are one server summary, while a rejected write remains an individual HTTP fact',async t=>{
+ const f=await fixture(t);
+ for(let n=0;n<12;n++)await f.post('/open',f.identity,randomUUID()).expect(200);
+ assert.equal(f.service.journalHealth().readSummary.pendingGroups,1);
+ await f.post('/finish',f.identity,randomUUID()).expect(409);
+ const rows=await f.rows(),summary=rows.filter(row=>row.kind==='api.summary');assert.equal(summary.length,1);assert.equal(summary[0].data.requests,12);
+ assert.equal(summary[0].data.route,'open');assert.ok(summary[0].data.sumDurationMs>=summary[0].data.maxDurationMs);
+ assert.equal(rows.filter(row=>row.kind==='api.request'&&row.data.route==='open').length,0);
+ assert.equal(rows.filter(row=>row.kind==='api.request'&&row.data.route==='finish'&&row.data.httpStatus===409).length,1);
+});
