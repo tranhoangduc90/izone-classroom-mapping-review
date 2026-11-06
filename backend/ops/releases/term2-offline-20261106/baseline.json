@@ -1,0 +1,9 @@
+{
+  "image": "sha256:eb6b8dd98fd1c560304008b6315f584523338f0059895023ca1b4403fd6a2a14",
+  "files": {
+    "src/app.js": "f6403791c0d7241e2f11184a8beae5ddbba8214f7a06f6a70e7b2811deb9473f",
+    "src/k56-exam-order.js": "d09dd2a584a424a751a6b70c3048d7bd8663727e0b5204c80af5cdab89a99746",
+    "src/term-test-writing-grading.js": "65a6eab1e1011c056304ee65fb5affbc49f9ade20cbbec28fa6a3f37022bc40c",
+    "src/exam-journal-runtime/adapters/term.mjs": "92c6d370df56170c8fd902112c75d2179f5174b5aaf6e984c9c548c6dcef70a6"
+  }
+}
