@@ -46,3 +46,35 @@ Worktree `E:/wt/r2-presigned-pilot-20261106/classroom-mapping-review`, nền `38
 Kho local riêng: `E:/Codex-Data/r2-presigned-pilot-20261106/`: `benchmark.json`, `browser-benchmark.json`, `slow4g.json`, `access-results.json`, `fault-results.json`, `browser-recovery.json`, các log native/owner/direct/baseline và baseline modules. Credential chỉ ở kho riêng dưới dạng RSA ciphertext; private key không vào Git. Không dùng `run.mjs --grant` trong log rộng vì lệnh trả link tạm.
 
 Đường quay lui: gói này không được import bởi production. Nếu làm lát triển khai sau, dùng cờ mặc định tắt, giữ loader cũ/fallback và quyền native; không thay timer/pin/owner/deadline hoặc database để chuyển transport. Cần kiểm grant refresh qua native trên đủ consumer rồi mới chọn rollout, không chỉ đổi URL trong manifest.
+
+## Bổ sung: so sánh GitHub Pages — 06/11/2026
+
+Yêu cầu tiếp theo của Đức: đo cả nguồn GitHub Pages. Không cấp lại khóa R2, không đổi CORS/bucket/runtime. R2 trong bảng là tham chiếu từ lượt thử trước, **không phải phép đo bốn phương án xen kẽ trong cùng đợt**. Không dùng chênh lệch giữa hai đợt để khẳng định Pages luôn nhanh hơn R2.
+
+Ba phương án mới được đo xen kẽ ba vòng trong Chrome cách ly, cùng origin Pages, cùng file Term 1 27.757.131 byte. Bộ tải nguyên file Pages là bản thử của cùng thuật toán direct: chỉ thay allowlist origin sang đúng Pages và dùng URL asset public; giữ hash từng phần, hash toàn file, timeout, cache Map mới và điều kiện trả Blob. Mọi fetch ở cả ba phương án đều ép `cache: no-store`, tránh ưu thế HTTP cache ở bộ tải fallback Pages vốn dùng `cache: default`. Không thêm cache-busting query: CDN, DNS/TLS và điều kiện mạng vẫn tự nhiên, không phải cache lạnh toàn cầu. Nguồn hiện tại ghi nhận đủ 53 phần Cloudflare mỗi lượt; ép Pages ghi nhận đủ 53 phần Pages.
+
+| Phương án | 27,8 MB, trung vị 3 lượt | Mini 2,2 MB, Slow 4G, 1 lượt | Fetch ứng dụng, mạng thường |
+|---|---:|---:|---:|
+| Cloudflare chia phần hiện tại | 3.744 ms | 20.227 ms | 54 |
+| Pages chia phần qua bộ tải hiện tại | 1.406 ms | 14.122 ms | 54 |
+| Pages nguyên file bằng bộ tải thử | 757 ms | 13.051 ms | 1 |
+| R2 link tạm, lượt trước | 1.429 ms | 13.001 ms | 1 |
+
+Chi tiết mạng thường: Cloudflare 3.872/3.744/3.442 ms; Pages nguyên file 757/845/748 ms; Pages chia phần 1.488/1.360/1.406 ms. Chín lượt đều đúng hash, không fallback lẫn nguồn trong phép đo thường. Slow 4G: Cloudflare có 1 phần Cloudflare/4 Pages, 10 fetch; ép Pages có 5 phần Pages/6 fetch; Pages nguyên file 1 fetch. Fetch ép Pages vẫn có một request lấy vé Worker trước khi tùy chọn preferFallback được áp dụng; không nhận 54 request đều là GET Pages. Các số không đếm OPTIONS tự động.
+
+Lượt thăm dò trước khi ép no-store có Pages nguyên file 4.420/668/967 ms và Pages chia phần 3.842/3.523/529 ms. Đã giữ ở `pages-uncontrolled-cache.json` nhưng không trộn vào trung vị trong bảng: cache HTTP và độ ấm kết nối/CDN làm thay đổi kết quả đáng kể. Ba lượt thành công không chứng minh xác suất sẵn sàng dài hạn; một cặp Slow 4G chỉ là minh họa.
+
+### Tải tiếp và quyền
+
+- Ngắt luồng Pages thật sau ngưỡng khoảng 800 KB: packet đến lớn nên đã xác minh được 1.572.864 byte; retry gửi `bytes=1572864-`, nhận 206 và Content-Range đúng `bytes 1572864-27757130/27757131`, ghép đủ file đúng hash sau hai request, 986 ms trong lượt này.
+- Hủy sau phần đầu rồi gọi bộ tải mới với cùng Map: giữ một phần, tải tiếp `bytes=524288-` và đúng hash. Đây là hai lượt tải trong harness, không phải reload browser với IndexedDB và không phải chạy lại end-to-end bài thi.
+- Pages public không có link ký/hết hạn hoặc kiểm danh tính ở nguồn file. Ai biết URL đều tải được; quyền vào bài thi vẫn nằm ở API. Đó là tính chất của các MP3 đã public hiện hành, không mở thêm file riêng trong phép thử.
+- R2 private có thể kiểm quyền khi cấp link, nhưng link đã cấp vẫn dùng được đến hết hạn. Nếu còn bản Pages public của cùng audio, không được tuyên bố toàn bộ audio đã riêng tư.
+
+### Đánh giá sử dụng
+
+Trong mẫu này, Pages tải nguyên file nhanh và đơn giản; việc chia nhiều request và mã hóa lại lúc tải là chi phí đáng kể của tuyến hiện tại. Không có bằng chứng Pages kém hơn R2 về tốc độ trong mọi trường hợp. Tuy nhiên, tốc độ chưa đủ để chọn Pages làm kho audio chính khi mở rộng: GitHub Pages có soft bandwidth limit 100 GB/tháng và có thể rate-limit. Khoảng 3.600 lượt tải đầy đủ file 27,8 MB đã xấp xỉ 100 GB, chưa tính bài khác, HTML/JS/ảnh hoặc tải lại. Đây là phép tính dung lượng minh họa, không phải số đo sử dụng thực tế hoặc ngưỡng cắt cứng. Nguồn chính thức: https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
+
+Kết luận cho lát triển khai sau: R2 tải trực tiếp vẫn đáng thử làm nguồn chính cho nhu cầu quy mô/quyền, Pages có thể giữ dự phòng. Nếu nhu cầu nhỏ và audio vốn public, Pages nguyên file là phương án đơn giản và đã thể hiện tốc độ tốt trong thử nghiệm này; cần đối chiếu lưu lượng tháng thực tế trước khi chọn. Không đổi production chỉ vì bảng tốc độ.
+
+Bằng chứng bổ sung cùng kho local: `pages-network-benchmark.json`, `pages-slow4g.json`, `pages-recovery.json`, `pages-uncontrolled-cache.json`. Không thay đổi code đã đo của production, native timer/owner/deadline hoặc dữ liệu bài làm.
