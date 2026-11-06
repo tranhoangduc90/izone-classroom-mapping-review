@@ -233,9 +233,24 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
   if(!selected||!await context.student(classId,studentRef))fail('STUDENT_NOT_ELIGIBLE','Học viên không thuộc danh sách hợp lệ của lớp đã chọn.',403);
   return transaction(pool,async db=>{
    const content=await sharedContent(db,code,{lock:true});
+   // Link chung của bài cũ dùng lại đúng bản Homework đã có, không tạo bài/nháp khác.
+   if(code===CODE){
+    const existing=(await db.query(`SELECT b.id,b.cta_verified_at FROM listening_practice.binding b
+     JOIN listening_practice.assignment a ON a.id=b.assignment_id
+     WHERE a.class_id=$1 AND a.content_id=$2 AND b.student_ref=$3 AND b.document_id IS NOT NULL AND a.status='open'
+     FOR SHARE OF a,b`,[classId,content.id,studentRef])).rows;
+    if(existing.length>1)fail('ASSIGNMENT_CONFLICT','Có nhiều bản Homework; cần đối chiếu trước khi mở.');
+    if(existing.length){
+     if(!existing[0].cta_verified_at)fail('ASSIGNMENT_NOT_READY','Link bài chưa được kiểm trong Google Docs.');
+     const b=await binding(db,{bindingId:existing[0].id}),token=secret();
+     await db.query('INSERT INTO listening_practice.student_session(token_hash,binding_id,expires_at) VALUES($1,$2,$3)',[hash(token),b.id,new Date(clock()+30*86400000).toISOString()]);
+     const state=(await db.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state||initialState();
+     return{token,...await view(db,b,state)};
+    }
+   }
    const assignment=(await db.query(`INSERT INTO listening_practice.assignment(id,class_id,class_code,content_id,status)
     VALUES($1,$2,$3,$4,'open') ON CONFLICT(class_id,content_id) DO UPDATE SET class_code=EXCLUDED.class_code
-    WHERE listening_practice.assignment.source_course_id IS NULL AND listening_practice.assignment.status='open' RETURNING id`,[uuid(),classId,selected.classCode,content.id])).rows[0];
+    WHERE (listening_practice.assignment.source_course_id IS NULL OR $5) AND listening_practice.assignment.status='open' RETURNING id`,[uuid(),classId,selected.classCode,content.id,code===CODE])).rows[0];
    if(!assignment)fail('ASSIGNMENT_CONFLICT','Bài của lớp đang dùng đường Homework riêng hoặc đã đóng.');
    const bound=(await db.query(`INSERT INTO listening_practice.binding(id,assignment_id,student_ref,document_id,tab_id,entry_hash,owner_proof)
     VALUES($1,$2,$3,NULL,NULL,$4,$5) ON CONFLICT(assignment_id,student_ref) DO UPDATE SET student_ref=EXCLUDED.student_ref
