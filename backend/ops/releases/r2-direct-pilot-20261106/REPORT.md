@@ -1,5 +1,7 @@
 # Thử tải audio R2 bằng link tạm — 06/11/2026
 
+Kế hoạch triển khai riêng cho hai sản phẩm Listening: [PLAN_LISTENING_R2.md](PLAN_LISTENING_R2.md). Đây là bản đề xuất sau benchmark, chưa phải kết quả triển khai.
+
 ## Kết luận
 
 Tải trực tiếp có lợi rõ trong mẫu đo, nhưng **chưa đủ bằng chứng để đổi production**. Không thay code/cờ của runtime học viên. CORS được thêm tạm cho phép đo rồi đã đưa về không có policy. Bucket giữ private, không bật r2.dev/custom domain. Khóa thử chỉ đọc một bucket, TTL 24 giờ, đã xóa sau thử; request ký lại bằng khóa đó bị R2 từ chối HTTP 401. Worker cuối lượt vẫn enabled, 18 audio, 512 KiB, đúng revision ban đầu.
