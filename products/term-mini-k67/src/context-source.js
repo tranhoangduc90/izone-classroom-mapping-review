@@ -32,6 +32,16 @@ export function createContextSourceApp({ pool, secret }) {
   const app = express();
   app.disable('x-powered-by');
   app.get('/health', (_req, res) => res.json({ ok: true, product: 'K67-context-v1' }));
+  app.get('/v1/homework/class-scope', async (req,res) => {
+    const supplied=Buffer.from(req.get('x-k67-context-key')||'');
+    if(supplied.length!==expected.length||!crypto.timingSafeEqual(supplied,expected))return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
+    res.set('Cache-Control','no-store');
+    try {
+      const {rows}=await pool.query('SELECT class_id AS "classId",class_code AS "classCode",course_id AS "courseId" FROM k67_context_api_v1.homework_class_scope ORDER BY class_id');
+      const payload={apiVersion:1,erpCourseId:'5',classes:rows};
+      return res.json({...payload,capturedAt:new Date().toISOString(),sourceRevision:crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex')});
+    } catch {return res.status(503).json({ok:false,error:'HOMEWORK_CLASS_SCOPE_UNAVAILABLE'});}
+  });
   app.get('/v1/snapshot', async (req, res) => {
     const supplied = Buffer.from(req.get('x-k67-context-key') || '');
     if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
