@@ -34,7 +34,9 @@ export function createJournalTransaction({pool,transaction,journal,clock}){
   if(receipt)try{
    // Mốc quan sát sau ACK COMMIT; không tự nhận đây là timestamp commit SQL.
    receipt.occurredAt=new Date(clock()).toISOString();
-   setImmediate(()=>{void Promise.resolve().then(()=>journal.recordReceipt(receipt.scope,receipt)).catch(()=>{});});
+   const work=()=>journal.recordReceipt(receipt.scope,receipt);
+   if(typeof journal.scheduleSource==='function')journal.scheduleSource(work);
+   else setImmediate(()=>{void Promise.resolve().then(work).catch(()=>{});});
   }catch{}
   return result;
  };

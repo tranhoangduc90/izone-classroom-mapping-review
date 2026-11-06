@@ -1,0 +1,61 @@
+--- a/src/docs.js
++++ b/src/docs.js
+@@ -1,3 +1,4 @@
++import {readDocsBinding,createDocsObserver} from './docs-journal-observer.js';
+ import {CODE,fail,uuid} from './domain.js';
+ import {lessonFor} from './lessons.js';
+ import {transaction} from './service.js';
+@@ -141,7 +142,7 @@
+  }};
+ }
+ // Hàng xử lý có thứ tự theo học viên. Ghi xong phải đọc lại chữ và link trước khi báo verified.
+-export function createDocsWorker({pool,docs,resolveSharedHomework}){
++export function createDocsWorker({pool,docs,resolveSharedHomework,journal=null,clock=Date.now}){
+  async function claim(limit=1){
+   if(!Number.isInteger(limit)||limit<1||limit>16)throw Error('DOC_CLAIM_LIMIT_INVALID');
+   const rows=(await pool.query(`WITH ready AS MATERIALIZED (SELECT j.id FROM reading_practice.doc_job j WHERE
+@@ -154,8 +155,10 @@
+  }
+  async function run(job){
+   if(!job?.id||!job.leaseId)throw Error('DOC_CLAIM_REQUIRED');
++  let observer;
+   try{
+-   let b=(await pool.query('SELECT b.*,a.class_id,c.code FROM reading_practice.binding b JOIN reading_practice.assignment a ON a.id=b.assignment_id JOIN reading_practice.content c ON c.id=a.content_id WHERE b.id=$1',[job.binding_id])).rows[0];
++   let b=await readDocsBinding(pool,'reading_practice',job,journal);
++   observer=createDocsObserver({journal,job,binding:b,clock});observer.emit('started');
+    if(!b.document_id){
+     if(b.owner_proof?.mode!=='shared'||!resolveSharedHomework)fail('DOC_OWNER_UNAVAILABLE','Chưa cấu hình đối chiếu Homework cho link chung.');
+     const target=await resolveSharedHomework(b);
+@@ -169,10 +172,11 @@
+     ||typeof refresh.previousText!=='string'||b.last_doc_sequence!==job.sequence
+     ||![refresh.previousText,job.payload.text].includes(b.last_doc_text)||b.last_doc_link!==job.payload.link))
+     fail('DOC_STATUS_REFRESH_CONFLICT','Hồ sơ đã đổi; dừng làm mới trước khi ghi Docs.');
+-   let plan=planDocWrite(await docs.read(b.document_id),b,job);
+-   if(!plan.verified){requireDocsRevision(plan);await docs.write(b.document_id,plan);plan=planDocWrite(await docs.read(b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
++   observer.target(b);
++   let plan=planDocWrite(await observer.read(docs,b.document_id),b,job);
++   if(!plan.verified){requireDocsRevision(plan);await observer.write(docs,b.document_id,plan);plan=planDocWrite(await observer.read(docs,b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
+    if(!plan.verified)fail('DOC_READBACK_FAILED','Google Docs chưa khớp chữ và link.');
+-   await transaction(pool,async db=>{
++   const committed=await transaction(pool,async db=>{
+     const verified=(await db.query("UPDATE reading_practice.doc_job SET status='verified',verified_at=now(),error_code=NULL,lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId])).rows.length;
+     if(!verified)return;
+     markWorkReady(db,'state');
+@@ -185,7 +189,9 @@
+      if(stored.rows.length!==1)fail('DOC_STATUS_REFRESH_CONFLICT','Không xác nhận được dấu vết làm mới.');
+     }
+     else await db.query('UPDATE reading_practice.binding SET last_doc_sequence=$2,last_doc_text=$3,last_doc_link=$4 WHERE id=$1 AND last_doc_sequence<$2',[b.id,job.sequence,job.payload.text,job.payload.link]);
++    return true;
+    });
++   observer.emit(committed?'verified':'outcome_unknown',committed?{}:{errorCode:'DOC_LEASE_LOST'});
+   }catch(error){
+    const code=error.name==='TimeoutError'?'DOC_TIMEOUT':typeof error.code==='string'?error.code:'DOC_RETRY';
+    const missing=code==='HOMEWORK_NOT_FOUND';
+@@ -194,6 +200,7 @@
+    const blocked=!missing&&!recoverable&&(hard||job.attempts>=8);
+    const delay=missing?300:recoverable?([60,300,900][job.attempts-1]||3600):Math.min(300,2**Math.min(job.attempts,9));
+    const updated=await pool.query("UPDATE reading_practice.doc_job SET status=$3,error_code=$4,available_at=now()+$5*interval '1 second',lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId,blocked?'blocked':'pending',code,delay]);
++   observer?.failure(code,blocked,delay,updated.rows.length>0);
+    if(recoverable&&job.attempts===4&&updated.rows.length)console.warn(JSON.stringify({event:'reading_practice_docs_recovery_delayed',code,jobId:job.id}));
+    if(updated.rows.length)announceCommittedWork(pool,'state');
+   }

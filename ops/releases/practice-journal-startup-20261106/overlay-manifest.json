@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "productionDeployed": false,
+  "products": {
+    "reading-practice": {
+      "nativeImage": "sha256:1d5a29bd3d72d5157787b73175a28695ac4386d8ed03d1971027664819b43cb1",
+      "changedFiles": {
+        "src/app.js": {
+          "baseSha256": "3a4b6995171983279eee53dde46958284512fef7048bdbc4baafb34d5f330685",
+          "candidateSha256": "5be03c01778b4ac15563de3532bd8c3336b23b0cb17d89e8de9ba498444e01cc",
+          "bytes": 12561,
+          "patchSha256": "3b0250d44dffe851cae35cd6666e0d7c89372584f3d48ef15941c40d6bccfd29"
+        },
+        "src/docs.js": {
+          "baseSha256": "2593a1091affe060f001a659918f1f90bd01235c9c43ccb214d6106a66dc2a87",
+          "candidateSha256": "6ac17eccb341e174eb8b4d74b9c22a5b2e0330aef20e374c3dfb9e67970dc2dc",
+          "bytes": 16145,
+          "patchSha256": "585234b23f0a8fb9b23b9edd148238a4e5185e1c8fc6abb5c197c409acd2c2fd"
+        },
+        "src/server.js": {
+          "baseSha256": "ca1a26db63ab67a8b10719e946bae3165d2ead153dd758e948c4602c58f0dd32",
+          "candidateSha256": "a819eb6344c0fcc984de989b1dfe7be1aac64b6496f603204a4eec927bd5192e",
+          "bytes": 4734,
+          "patchSha256": "00e31ef17a7753827f88b683427c4887cd27a681cf41a42eaf44d7e34b3dad76"
+        },
+        "src/service.js": {
+          "baseSha256": "f3999a79da8da6658a17bb0db012fb0a248c293a5d87b36e364e94a0364bf7d1",
+          "candidateSha256": "003d847b33c16a07689ddc1196dde986aac6212a3bc8b05dd3fe3a3b3f0e946f",
+          "bytes": 31605,
+          "patchSha256": "0a427e89ed6ba3b0b0e474f0806f8ec89ad86e884b62ffe6774308382cb4abe9"
+        },
+        "src/journal-observer.js": {
+          "baseSha256": null,
+          "candidateSha256": "d7b95d901b695fb5e04b7f3af89d4749c5deab4894c65928ff7412e6bbf103e6",
+          "bytes": 2321,
+          "patchSha256": "b6ddea140f805e3811a480b93b3749c586621dd8e6f7d68d066015fb9457fbc5"
+        },
+        "src/docs-journal-observer.js": {
+          "baseSha256": null,
+          "candidateSha256": "68e5768a00bd70ba229bd7d002a6d86fa257fe340971a4d5df0858f38aecb9d7",
+          "bytes": 4678,
+          "patchSha256": "126cd32db496c916673eb7cd1c41bd40aec0c6d7bba6c1a11a5f0bc51fd01009"
+        },
+        "src/learning-journal-runtime.js": {
+          "baseSha256": null,
+          "candidateSha256": "9cdae20c4373910311f62edc6c296517c5f5a25b92831d273a6e5336a2810fed",
+          "bytes": 1016,
+          "patchSha256": "8ec8e23247597990af2a900b95d7a64208cd57f67015030df621367081dc7a29"
+        }
+      },
+      "unchangedFiles": {
+        "src/authored-content.js": "dd54993b4258af9f707f42f98db595cf457471b927fa3284a66e55b3212e794a",
+        "src/authored-lessons.json": "390f48f287899bf0991d335246858ec06d382e5b082101e4c8acbc04da791bdc",
+        "src/canary-server.mjs": "f39696e0c3b85b7a387801b461d5a6cde83e8dfa4accce1c81c0c747184a2b18",
+        "src/config.js": "7efcb9d08f1428b6485f460956f097ae0a2159428d497828601856d5a6cf5599",
+        "src/context-contract.js": "9902a0de7567df0a3f4e016da690f02caad04698cb4d9b8ac5db1949a7d2bb2f",
+        "src/context.js": "2689205776da7267a6b588cd94d78aeaca005852c91ca4ded4fd67463d657b46",
+        "src/cta-confirmation-client.js": "379c1be9f8f6af1790da87c01a7fc09b42b48791f461c4c79753f2722ec1a10f",
+        "src/cta-registration.js": "d8244165ed63a695244d3e4e5eb562b1bc269fa65b863a919d527b7f94107038",
+        "src/doc-score-refresh.js": "8d4f943661fae33d43adf8d7a729ae0fc6624e2e776b4baed293b9f9243cbcbc",
+        "src/domain.js": "8db595eaf7e7631755cb1ea929d53e93e7d967027564687106badd2d482039cc",
+        "src/entry-context.js": "a3d80d09f7f576c16f57bf4f1709e23e43cea25314ac5289661188902e1795de",
+        "src/lessons.js": "e6cb379345f1874007abe6fe03d49e6c9222725f30f74354629c62e9a5f1e998",
+        "src/owner-source-server.js": "89fa4d409c9b93c826511e69b73962c610a44194f2ddc5f3b7dc37dd364ced5f",
+        "src/owner.js": "30ec9db0e1f4b614d33a46497f31ece0f71660eb4e70a6c31fb338acdc4fd994",
+        "src/shared-homework-backfill.js": "f71f2ea78720b4a29acc2d8582a83cb77c2ff89013de081545667c5c855eafd7",
+        "src/shared-homework.js": "473e221995205c51b3e626647f8fe30cec7161dea9856d6aee16f85339c49d42",
+        "src/teacher-progress.js": "32a4c724a2efca4618b2a8a6f0fd2597fdcecc606b36ccb50f50d070f29f68b2",
+        "src/teacher-session.js": "f070bc607cd48444c737fb9f4ffe877371dfbe70e1fa72b990ba28c6f949ad98",
+        "src/test-practice-history.js": "85da1a55ef52419b6b001a68e864d54623da3511261c47c9cd651ddc25025516",
+        "src/test-practice-observation.js": "11db991433d97f7dadeaf07f4f5e2adbd4c59ec6eef17a68953a616574b24cdd",
+        "src/test-practice-student-progress.js": "daa9db29ba4813209cc4aa425bb671ceedbed2af101656b8666b8373f6ff352e",
+        "src/test-state-runtime.js": "d6423bede29f255dce1f82a724998be1cd20f9cd3787fcd7f093ba4e0042bb55",
+        "src/test-work-runtime.js": "0236bb25d6175bf11251aeac5e62fdb3721ced50e29949bb998bcaebc689b52a",
+        "package.json": "0394f0bc624129d76b62ba31c9eb7f764d451d4a5c6def6e0cc388f7fffb7f72"
+      },
+      "patchRoundtrip": "all candidate hashes match; all untouched source hashes preserved",
+      "serviceMerge": "LF-normalized three-way; native shared-login change retained",
+      "serviceThreeWay": {
+        "baseSha256": "dc06767446f046592bd0524cf8e0bf1152a396652809051350713da254e8302b",
+        "qualifiedSha256": "1fbe36b6ddda1d664c5dde78fb34a562365daaa07f075ce18859dd845a3d3f5d",
+        "nativeSha256": "f3999a79da8da6658a17bb0db012fb0a248c293a5d87b36e364e94a0364bf7d1",
+        "conflicts": false
+      }
+    },
+    "listening-practice": {
+      "nativeImage": "sha256:2ad8bf7b5d7e3b86b3212e67e64f8f54c609fb9715047ac70585b2ccf0c73f4f",
+      "changedFiles": {
+        "src/app.js": {
+          "baseSha256": "6535a948e5d8b0799edb1ac22ade7dec5172810d47b5423bef0f6220527c782d",
+          "candidateSha256": "d62e37c8a897de036896fc99f7957c05c1b997381424e85f500851eafc426fbe",
+          "bytes": 14694,
+          "patchSha256": "bd4893a9831a31cb4383fe5a495cb368afc1b52e1d18181698f8bdf87692b4fe"
+        },
+        "src/docs.js": {
+          "baseSha256": "50bc4cf3fbbe308d2525147ff6aab322cdc0b7a8e669dd06a8fc534320cb298c",
+          "candidateSha256": "2ac2cec2a1bba8155396a5c383d8fa85e68ca049d654b06ad817397295d258dc",
+          "bytes": 14689,
+          "patchSha256": "9d281b256557eb2600d3fd7e0383fee34f863dbd8dc8d435c9a38853b5d57563"
+        },
+        "src/server.js": {
+          "baseSha256": "e3ff291b7c49d222c46865913df661693fe66859bdc14d29fdb83ad9a60f777e",
+          "candidateSha256": "6ba6008a856197d6d7536bc64897b824612f1b857b6e8ebb882a2b8b1c633ac2",
+          "bytes": 5340,
+          "patchSha256": "9a5435e6154e5c750cc39d3e4a78f52dfd317958a9d723ca0a6dcddf03d3b1ab"
+        },
+        "src/service.js": {
+          "baseSha256": "b26ef2dbd0612182121abbb9c0f90734205172964ea8a067c21820d88305ff8e",
+          "candidateSha256": "31b666580c28ec46c684fcac3de33efdbcae61e0d8e8790fb4c3579abd23ce98",
+          "bytes": 32068,
+          "patchSha256": "120bf89943d2533e6a1d8263ca3ced3e5b6a5afd74c586f381658418a5a7475c"
+        },
+        "src/journal-observer.js": {
+          "baseSha256": null,
+          "candidateSha256": "9ebc9ac0554ab7432e35df90742bbd193c040ead6891a070b01ddafc48f50d0e",
+          "bytes": 1784,
+          "patchSha256": "41df7b2d85531699e88ba020934dd03de0a4ddae80ef35b730637951df75308b"
+        },
+        "src/docs-journal-observer.js": {
+          "baseSha256": null,
+          "candidateSha256": "68e5768a00bd70ba229bd7d002a6d86fa257fe340971a4d5df0858f38aecb9d7",
+          "bytes": 4678,
+          "patchSha256": "126cd32db496c916673eb7cd1c41bd40aec0c6d7bba6c1a11a5f0bc51fd01009"
+        },
+        "src/learning-journal-runtime.js": {
+          "baseSha256": null,
+          "candidateSha256": "9cdae20c4373910311f62edc6c296517c5f5a25b92831d273a6e5336a2810fed",
+          "bytes": 1016,
+          "patchSha256": "8ec8e23247597990af2a900b95d7a64208cd57f67015030df621367081dc7a29"
+        }
+      },
+      "unchangedFiles": {
+        "src/authored-content.js": "b0b2b10ec44dca5fcb4ca6408c27efc969d424780c35f9e403313f71b7f38c6e",
+        "src/authored-lessons.json": "48abc3b60adf68613fd8f6ee928c9f5597fb3c42559a008c53cebe33ff129f98",
+        "src/canary-server.mjs": "10f9728a5164446b26fd607de94c5da5352cfec4773f446c700f6c9231f56f74",
+        "src/cloudflare-audio.mjs": "d6decfcc61efba17a72514e0ebb73b8e5d5fc113ef6b08b4bf57aa440bcae60f",
+        "src/config.js": "e92ef2864a4f7bb3e146c09ad912efaf657d9e12c713f032f8a749fae3337af3",
+        "src/context-contract.js": "e4b3ea42c7d3263e7bdadc4cfc1fcbcbd68c6cfb30513791c0adc93a3455d0ba",
+        "src/context.js": "9104028734e81810d95e60981636374f799473a1228f5af11802d7fc65ce6b37",
+        "src/cta-confirmation-client.js": "379c1be9f8f6af1790da87c01a7fc09b42b48791f461c4c79753f2722ec1a10f",
+        "src/cta-registration.js": "81482292a1eeba4f1d6ac2f4df4a2a981f95cca5de868e238e0ea6acfab3aaa6",
+        "src/domain.js": "0245ba13e6579ba5b218ed5bab5fb6c5680b57b4a8d557b37fa695387685ff43",
+        "src/entry-context.js": "a3d80d09f7f576c16f57bf4f1709e23e43cea25314ac5289661188902e1795de",
+        "src/lessons.js": "b494f16cbeaed7ddd99933ad32f1ef293fb0844103ca830ed5afcbc1e9cfc098",
+        "src/media-catalog.js": "ff17fc4c5b8314df6a84b06562c5d291882554772242db3c7d24d6b62d1fe555",
+        "src/owner-source-server.js": "5c7dea1e2a7eb767ddc1c9f7273f69a3e2dd20938f32a776094a76ae812b3353",
+        "src/owner-source.js": "ec47b127b9122e65f8fb51c91f217b5bbf8ee52ff20674bc3224457b000fc7f7",
+        "src/owner.js": "39194944e73b12d9c01fcdc759f6f90ac4e36d8366ae3319c32803a9a012d22e",
+        "src/public-audio-catalog.json": "38912fd39521fa662fe834efacb9bacea7567b44c49f2ec363661fb974f53fdc",
+        "src/public-audio.js": "e3f13debc4b57e40c99afff3924eddccdd59d304b99a668eb3c3988e9984ea89",
+        "src/review.js": "8d7c40b49ff51e4600931b8fccdf5ed04bc4c450f80a3d2ebb3d6d0aac18be43",
+        "src/shared-homework.js": "d33977d31678aeca0fad7091306218a599a32b3e9a2feac4b344776bf7b9e0eb",
+        "src/teacher-progress.js": "9045562249d10445b1b604fd4c6062e04091b05607e331160bce5d591166310b",
+        "src/teacher-session.js": "272d9f86d6b71fe0c26372a158838a4aea07e36b93211ce70bad200f98da5d4c",
+        "src/test-practice-history.js": "85da1a55ef52419b6b001a68e864d54623da3511261c47c9cd651ddc25025516",
+        "src/test-practice-observation.js": "11db991433d97f7dadeaf07f4f5e2adbd4c59ec6eef17a68953a616574b24cdd",
+        "src/test-practice-student-progress.js": "daa9db29ba4813209cc4aa425bb671ceedbed2af101656b8666b8373f6ff352e",
+        "src/test-state-runtime.js": "d6423bede29f255dce1f82a724998be1cd20f9cd3787fcd7f093ba4e0042bb55",
+        "src/test-work-runtime.js": "0236bb25d6175bf11251aeac5e62fdb3721ced50e29949bb998bcaebc689b52a",
+        "package.json": "e5d9b0c61750ffb3e24d1d7d889b34397a49844fe528eac6d9028800e636ffdd"
+      },
+      "patchRoundtrip": "all candidate hashes match; all untouched source hashes preserved",
+      "serviceMerge": "LF-normalized three-way; native shared-login change retained",
+      "serviceThreeWay": {
+        "baseSha256": "305b1103f65d8aa2f09e15d40f64a5903aac31b0943c07c69b944423ac532ea4",
+        "qualifiedSha256": "9401b8f3309808aa84a2d4552be0ea96046147c8e6f5856292982a6a25b75bbf",
+        "nativeSha256": "b26ef2dbd0612182121abbb9c0f90734205172964ea8a067c21820d88305ff8e",
+        "conflicts": false
+      }
+    }
+  }
+}

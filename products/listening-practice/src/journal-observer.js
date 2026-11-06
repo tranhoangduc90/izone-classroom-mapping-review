@@ -24,7 +24,9 @@ export function createJournalTransaction({pool,transaction,journal,clock}){
    // commit timestamp. Freeze it before asynchronous delivery/retries.
    try{
     receipt.occurredAt=new Date(clock()).toISOString();
-    setImmediate(()=>{void Promise.resolve().then(()=>journal.recordReceipt(receipt.scope,receipt)).catch(()=>{});});
+   const work=()=>journal.recordReceipt(receipt.scope,receipt);
+   if(typeof journal.scheduleSource==='function')journal.scheduleSource(work);
+   else setImmediate(()=>{void Promise.resolve().then(work).catch(()=>{});});
    }catch{}
   }
   return result;
