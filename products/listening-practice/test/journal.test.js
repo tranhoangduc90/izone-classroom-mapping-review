@@ -62,3 +62,23 @@ test('stalled or failed logging does not block the native pause and resume',asyn
  fail=true;const resumed=await f.service.resume({token:f.token,attemptId:a.id,owner:'device1',operationId:uuid()});
  await nextTurn();assert.ok(resumed.lease);assert.equal(calls,3);
 });
+
+
+test('post-COMMIT metadata registers before deferred execution; a full barrier never falls back outside it',async t=>{
+ const scheduled=[],calls=[];let reject=false,f;
+ const journal={scheduleSource(work){if(reject)return false;scheduled.push(work);return true;},recordProgress(){return{ok:true};},
+  async recordReceipt(scope,receipt){
+   const saved=(await f.pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[f.registered.bindingId])).rows[0].state;
+   calls.push({scope,receipt,committedAttempt:saved.attempts.at(-1).id});return{ok:true};
+  }};
+ f=await fixture({journal});t.after(()=>f.close());
+ while(scheduled.length)await scheduled.shift()();calls.length=0;
+ const started=await f.begin(),attempt=started.attempts.at(-1);
+ assert.ok(scheduled.length>0,'registered before native begin response');
+ await nextTurn();assert.equal(calls.length,0,'no callback starts outside source barrier');
+ while(scheduled.length)await scheduled.shift()();
+ assert.ok(calls.length>0);assert.ok(calls.every(value=>value.scope.attemptId===attempt.id&&value.committedAttempt===attempt.id));
+ calls.length=0;reject=true;
+ const paused=await f.service.pause({token:f.token,attemptId:attempt.id,lease:started.lease,snapshot:f.draft()});
+ assert.equal(paused.attempts.at(-1).status,'paused');await nextTurn();assert.equal(calls.length,0,'rejected scheduling must not use setImmediate fallback');
+});
