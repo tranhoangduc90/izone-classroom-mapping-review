@@ -16,6 +16,35 @@ function document(id=event.doc_id){
  return{documentId:id,revisionId:'revision1',tabs:[{tabProperties:{tabId:'parent'},childTabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[p('Reading','https://reading.test/unchanged'),p('Speaking','https://speaking.test/unchanged'),p(CTA),p(CODE)]}}}]}]};
 }
 const body=d=>d.tabs[0].childTabs[0].documentTab.body.content;
+
+test('Legacy MCQ CTA: eligibility checks class, pinned content and exact Classroom copy without creating work',async()=>{
+ let verified=0,writes=0;
+ const make=(classes,content=[{id:'content-fixture'}],verify=async()=>{verified++;})=>createCtaRegistrar({
+  pool:{query:async(sql,args)=>{assert.deepEqual(args,[CODE,'fixture-v1']);return {rows:content};}},
+  context:{classes:async()=>classes},service:{},docs:{read:async()=>document(),write:async()=>{writes++;}},
+  verifyClassroomCopy:verify,contentVersion:'fixture-v1',resolveOwner:async()=>{throw Error('must not resolve owner during check');}
+ });
+ const good=[{id:'1124',classCode:event.class_name}];
+ assert.equal((await make(good)({...event,check_only:true})).status,'eligible');
+ assert.equal(verified,1);assert.equal(writes,0);
+ await assert.rejects(make([{id:'other',classCode:'OTHER'}])({...event,check_only:true}),e=>e.code==='CTA_CLASS_MISMATCH');
+ await assert.rejects(make(good,[])({...event,check_only:true}),e=>e.code==='CONTENT_NOT_FOUND');
+ await assert.rejects(make(good,undefined,async()=>{throw Error('WRONG_SOURCE');})({...event,check_only:true}),/WRONG_SOURCE/);
+});
+
+test('Legacy MCQ CTA without mapped owner publishes self confirmation, preserving Doc, code and class',async()=>{
+ let published;
+ const registrar=createCtaRegistrar({pool:{query:async()=>({rows:[{id:'content-fixture'}]})},
+  context:{classes:async()=>[{id:'1124',classCode:event.class_name}]},service:{},docs:{read:async()=>document()},
+  contentVersion:'fixture-v1',pageBase:'https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/',
+  resolveOwner:async()=>{throw Object.assign(Error('unmatched'),{code:'OWNER_NOT_MAPPED'});},
+  publishPending:async input=>{published=input;return{status:'verified',entryMode:'self-confirmation'};}
+ });
+ const result=await registrar(event);assert.equal(result.entryMode,'self-confirmation');
+ assert.equal(published.event.doc_id,event.doc_id);assert.equal(published.binding.code,CODE);
+ const u=new URL(published.fallbackUrl);assert.equal(u.searchParams.get('assignmentCode'),CODE);assert.equal(u.searchParams.get('class'),event.class_name);
+ assert.equal(u.searchParams.has('documentId'),false);
+});
 test('API đăng ký CTA: bắt quyền, identity và chuyển đúng một sự kiện',async()=>{
  const adminKey=secret();let seen;
  const app=createApp({pool:{query:async()=>({rows:[]})},service:{},origins:[],adminKey,registerCta:async value=>{seen=value;return{documentId:value.doc_id,status:'verified'};}});
@@ -44,6 +73,9 @@ test('Đăng ký và chạy lại: một binding/job/link, giữ Reading/Speakin
  const make=(entryKey=secret(),waitMs=5000,sleep=async()=>{await worker.once();})=>createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs,resolveOwner:async()=>({classId:'1124',studentRef:f.studentRef}),entryKey,contentVersion:f.content.version,waitMs,sleep});
  await assert.rejects(make(secret(),0)(event),e=>e.code==='CTA_PENDING');
  const first=await make()(event);assert.equal(first.status,'verified');assert.equal(writes,1);
+ assert.equal(first.studentRef,f.studentRef);
+ const redirect=new URL(first.entryUrl);assert.equal(redirect.searchParams.get('class'),event.class_name);
+ assert.equal(redirect.searchParams.get('mode'),'student');assert.equal(redirect.searchParams.get('documentId'),event.doc_id);
  const jobs=(await f.pool.query('SELECT id,payload FROM listening_practice.doc_job WHERE binding_id=$1',[first.bindingId])).rows;
  const repeated=await Promise.all([make()(event),make()(event)]);assert.ok(repeated.every(r=>r.bindingId===first.bindingId));
  assert.deepEqual((await f.pool.query('SELECT id,payload FROM listening_practice.doc_job WHERE binding_id=$1',[first.bindingId])).rows,jobs);assert.equal(writes,1);

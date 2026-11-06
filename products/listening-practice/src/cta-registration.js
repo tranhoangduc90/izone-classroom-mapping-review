@@ -38,8 +38,15 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publi
   const target=findListeningCta(document,selectedCode);
   if(!target)return{documentId:event.doc_id,status:'not_applicable',code};
   const checkOpen=async()=>{
+   if(!shared){
+    const classes=await context.classes();
+    if(classes.filter(c=>c.classCode===event.class_name).length!==1)fail('CTA_CLASS_MISMATCH','Lớp chưa có nguồn quyền Listening.',403);
+    const content=(await pool.query('SELECT id FROM listening_practice.content WHERE code=$1 AND version=$2',[selectedCode,contentVersion])).rows;
+    if(content.length!==1)fail('CONTENT_NOT_FOUND','Chưa nạp đúng phiên bản bài Listening.',404);
+    return;
+   }
    const catalog=await service.lessonCatalog({code:selectedCode});
-   if(!shared||!catalog.classes.some(c=>c.classCode===event.class_name))fail('CTA_CLASS_MISMATCH','Lớp chưa mở bài Listening.',403);
+   if(!catalog.classes.some(c=>c.classCode===event.class_name))fail('CTA_CLASS_MISMATCH','Lớp chưa mở bài Listening.',403);
   };
   if(event.check_only){
    await checkOpen();
@@ -49,10 +56,10 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publi
   let owner;
   try { owner=await resolveOwner({courseId:event.classroom_course_id,googleUserId:event.student_id}); }
   catch(error){
-   if(!shared||!publishPending||error.code!=='OWNER_NOT_MAPPED')throw error;
+   if(!publishPending||error.code!=='OWNER_NOT_MAPPED')throw error;
    await checkOpen();
    const fallback=new URL(pageBase);
-   fallback.search=new URLSearchParams({lesson:selectedCode,mode:'student',class:event.class_name}).toString();
+   fallback.search=new URLSearchParams({[shared?'lesson':'assignmentCode']:selectedCode,mode:'student',class:event.class_name}).toString();
    return publishPending({event,document,binding:{document_id:event.doc_id,tab_id:target.tabId,code:selectedCode},fallbackUrl:fallback.href});
   }
   const snapshot=await context.snapshot();
@@ -101,7 +108,8 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publi
    if(state?.status==='blocked')fail('CTA_WRITE_BLOCKED','Chưa gắn được CTA: '+state.error_code,409);
    if(state?.status==='verified'){
     if(!planDocWrite(await docs.read(event.doc_id),binding,job).verified)fail('DOC_READBACK_FAILED','CTA đọc lại chưa khớp link đã đăng ký.',503);
-    return{documentId:event.doc_id,status:'verified',code,bindingId:registered.bindingId,assignmentId:registered.assignmentId};
+    const entry=new URL(registered.entryUrl);entry.searchParams.set('class',event.class_name);entry.searchParams.set('mode','student');
+    return{documentId:event.doc_id,status:'verified',code,bindingId:registered.bindingId,assignmentId:registered.assignmentId,studentRef:owner.studentRef,entryUrl:entry.href};
    }
    if(Date.now()>=deadline)break;
    await sleep(250);
