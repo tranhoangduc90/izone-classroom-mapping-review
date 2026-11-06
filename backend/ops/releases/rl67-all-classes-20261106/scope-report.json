@@ -1,0 +1,1400 @@
+{
+  "summary": {
+    "phase": "final",
+    "lessons": 22,
+    "active_classes": 11,
+    "requests": 275,
+    "roster_checks": 242,
+    "failures": []
+  },
+  "erp_classes": [
+    {
+      "id": "1199",
+      "classCode": "IC2213"
+    },
+    {
+      "id": "1216",
+      "classCode": "IC2228"
+    },
+    {
+      "id": "1226",
+      "classCode": "IC2238"
+    },
+    {
+      "id": "1250",
+      "classCode": "IC2262"
+    },
+    {
+      "id": "1258",
+      "classCode": "IC2270"
+    },
+    {
+      "id": "1261",
+      "classCode": "IC2273"
+    },
+    {
+      "id": "1293",
+      "classCode": "IC2304"
+    },
+    {
+      "id": "1307",
+      "classCode": "IC2314"
+    },
+    {
+      "id": "1333",
+      "classCode": "IC2340"
+    },
+    {
+      "id": "1345",
+      "classCode": "IC2353"
+    },
+    {
+      "id": "1356",
+      "classCode": "IC2363"
+    }
+  ],
+  "lessons": [
+    {
+      "code": "67-listening-horton-castle",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-listening-natural-dyes",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-listening-origami",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-listening-paper-on-public-libraries",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-listening-scandinavian-studies",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-listening_c19_t4_p4_tree_planting",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-listening_c20_t3_p4_inclusive_design",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-listening_c21_t1_full_test",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-listening_mcq_flowchart",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_c19_t4_p2_deep_sea_mining",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_c20_t3_p1_frozen_food",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_c21_t1_full_test",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_c21_t2_full_test",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_c21_t3_full_test",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_matching_heading_mcq",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-practice-reading_matching_names_sentence_endings_mcq",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-athletes-and-stress",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-green-roofs",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-homework-butterflies-britain-tfng",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-materials-beyond-concrete-matching-information-nen-cap-1",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-materials-to-take-us-beyond-concrete-matching-people",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    },
+    {
+      "code": "67-reading-the-desolenator",
+      "catalog_http": 200,
+      "rosters": [
+        {
+          "class_id": "1199",
+          "http": 200,
+          "student_count": 18
+        },
+        {
+          "class_id": "1216",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1226",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1250",
+          "http": 200,
+          "student_count": 10
+        },
+        {
+          "class_id": "1258",
+          "http": 200,
+          "student_count": 13
+        },
+        {
+          "class_id": "1261",
+          "http": 200,
+          "student_count": 14
+        },
+        {
+          "class_id": "1293",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1307",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1333",
+          "http": 200,
+          "student_count": 16
+        },
+        {
+          "class_id": "1345",
+          "http": 200,
+          "student_count": 17
+        },
+        {
+          "class_id": "1356",
+          "http": 200,
+          "student_count": 7
+        }
+      ]
+    }
+  ]
+}
