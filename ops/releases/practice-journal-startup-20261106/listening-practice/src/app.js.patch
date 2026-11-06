@@ -1,0 +1,54 @@
+--- a/src/app.js
++++ b/src/app.js
+@@ -14,7 +14,7 @@
+ import {sendPublicAudioMetadata} from './public-audio.js';
+ 
+ // API của Reading: kiểm đầu vào và quyền trước khi gọi dịch vụ. Lỗi chỉ trả mã và thông điệp an toàn.
+-export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api',stateStreamEnabled=false}){
++export function createApp({service,pool,origins,googleClientId,verifyGoogle,adminKey,registerCta,staticRoot,audioFile,audioHash,review=null,mediaCatalog={},teacherCookiePath='/listening-practice-api/api',stateStreamEnabled=false,journal=null}){
+  const teacherSessions=createTeacherSessions({pool,cookiePath:teacherCookiePath});
+  const observationHub=stateStreamEnabled?createTestObservationHub({read:service.observation?.read||service.teacherProgress.readObservations}):null;
+  const projectPracticeHistory=(value,options)=>projectHistory(withStudentStateCapabilities(value,Boolean(observationHub)),options);
+@@ -32,6 +32,20 @@
+  app.use('/api',rateLimit({windowMs:60000,limit:3000,standardHeaders:'draft-8',legacyHeaders:false}));
+  const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+  const historyRequested=req=>req.query.history===undefined?false:z.literal(PRACTICE_HISTORY_MODE).parse(req.query.history)===PRACTICE_HISTORY_MODE;
++ const withJournal=value=>{
++  if(!journal)return value;
++  try{
++   const a=value.attempts?.at(-1),identity=value.identity;
++   if(!a||!identity)return value;
++   const listeningJournal=journal.context({code:value.lesson?.code||CODE,classCode:identity.classCode,
++    studentRef:identity.studentRef,attemptId:a.id,attemptNo:a.no});
++   return listeningJournal?{...value,listeningJournal}:value;
++  }catch{return value;}
++ };
++ if(journal)app.post('/api/journal-events',wrap(async(req,res)=>{
++  const reply=await journal.collect({method:req.method,headers:req.headers,body:req.body});
++  res.set(reply.headers).status(reply.status).json(reply.body);
++ }));
+  const token=req=>/^Bearer ([\w-]{43})$/.exec(req.headers.authorization||'')?.[1];
+  // Chỉ ghép transcript sau khi dịch vụ gốc đã xác nhận đúng người và bài đã nộp.
+  const mediaFor=hash=>mediaCatalog[hash]||(hash===audioHash?{audioFile,review}:null);
+@@ -71,7 +85,7 @@
+  app.post('/api/shared-login',wrap(async(req,res)=>{
+   const history=historyRequested(req);
+   const input=z.object({code:z.string().min(1).max(100),classId:z.string().regex(/^-?\d{1,19}$/),studentRef:z.uuid()}).strict().parse(req.body);
+-  res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.sharedLogin({...input,code:lessonFor(input.code).code,...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}),{enabled:history}));
++  res.set('Cache-Control','no-store');res.json(withJournal(projectPracticeHistory(await service.sharedLogin({...input,code:lessonFor(input.code).code,...(req.headers['x-izone-document']?{documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document'])}:{})}),{enabled:history})));
+  }));
+  const documentContext=req=>({documentId:z.string().regex(/^[\w-]{20,150}$/).parse(req.headers['x-izone-document']),code:z.string().min(1).max(100).parse(req.headers['x-izone-assignment'])});
+  app.get('/api/entry-context',wrap(async(req,res)=>{
+@@ -84,9 +98,10 @@
+  });
+  for(const action of Object.keys(schemas))app.post(`/api/${action}`,wrap(async(req,res)=>{
+   const history=historyRequested(req),input=schemas[action].parse(req.body);res.set('Cache-Control','no-store');
+-  res.json(projectPracticeHistory(await service[action]({...input,token:token(req),...(action==='pulse'&&req.query.ack==='compact-v1'?{compactAck:true}:{})}),{enabled:history}));
++  const value=projectPracticeHistory(await service[action]({...input,token:token(req),...(action==='pulse'&&req.query.ack==='compact-v1'?{compactAck:true}:{})}),{enabled:history});
++  res.json(['login','begin','resume','reset'].includes(action)?withJournal(value):value);
+  }));
+- app.get('/api/state',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(projectPracticeHistory(await service.read({token:token(req)}),{enabled:history}));}));
++ app.get('/api/state',wrap(async(req,res)=>{const history=historyRequested(req);res.set('Cache-Control','no-store');res.json(withJournal(projectPracticeHistory(await service.read({token:token(req)}),{enabled:history})));}));
+  app.get('/api/result/:attemptId',wrap(async(req,res)=>{
+   const history=historyRequested(req),id=z.uuid().parse(req.params.attemptId),result=await service.result({token:token(req),attemptId:id});
+   res.set('Cache-Control','no-store');res.json(projectPracticeHistory(withReview(result,`review-audio/${id}`),{enabled:history}));

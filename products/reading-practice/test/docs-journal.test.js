@@ -105,3 +105,19 @@ test('legacy payload thiếu ID vẫn nối theo sequence; payload sai không đ
  assert.equal(f.records.filter(r=>r.data.phase==='verified').length,before);assert.ok(f.failures>0);
  assert.equal((await f.pool.query(`SELECT status FROM ${schema}.doc_job ORDER BY sequence DESC LIMIT 1`)).rows[0].status,'verified');
 });
+
+
+test('Docs source callbacks register synchronously and stay inside the drain barrier',async t=>{
+ const{f,b,started}=await statusSetup(t),scheduled=[];const before=f.records.length;
+ f.journal.scheduleSource=work=>{scheduled.push(work);return true;};
+ const fake=fakeDocs(b);await createDocsWorker({pool:f.pool,docs:fake.docs,journal:f.journal}).once();
+ assert.ok(scheduled.length>0);await tick();assert.equal(f.records.length,before);
+ assert.equal((await f.pool.query(`SELECT status FROM ${schema}.doc_job`)).rows[0].status,'verified');
+ while(scheduled.length)await scheduled.shift()();
+ assert.equal(f.records.filter(r=>r.data.phase==='verified').length,1);
+ f.journal.scheduleSource=()=>false;const records=f.records.length;
+ const old=started.attempts.at(-1);
+ await f.service.reset({token:f.token,attemptId:old.id,lease:started.lease,owner:'device1',operationId:uuid()});
+ await createDocsWorker({pool:f.pool,docs:fake.docs,journal:f.journal}).once();await tick();
+ assert.equal(f.records.length,records,'full/closed barrier must never start untracked callbacks');
+});

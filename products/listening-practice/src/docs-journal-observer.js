@@ -13,7 +13,9 @@ export function publishDocsProgress(journal,receipt,clock=Date.now){
  if(!journal?.recordProgress||!receipt)return;
  try{
   const captured={...receipt,occurredAt:new Date(clock()).toISOString()};
-  setImmediate(()=>{void Promise.resolve().then(()=>journal.recordProgress(captured.scope,captured)).catch(()=>{});});
+  const work=()=>journal.recordProgress(captured.scope,captured);
+  if(typeof journal.scheduleSource==='function')journal.scheduleSource(work);
+  else setImmediate(()=>{void Promise.resolve().then(work).catch(()=>{});});
  }catch{}
 }
 export function queuedDocsReceipt(b,job,a){
