@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { findStudentForTermTestSql, insertProtectedListeningAttemptSql } from './sql.js';
 import { parseStoredTest, gradeSection, buildListeningResult, buildCombinedResult } from './term-tests.js';
+import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
 
 const slug = 'mini-test-lesson-5';
 const prefix = `/api/term-tests/${slug}/answer-sheet`;
@@ -34,7 +35,7 @@ function serialize(row, session=false) {
     portalSyncStatus:'not_applicable', serverNow:new Date().toISOString(),
     result:row.combined_result||null };
 }
-export function mountMiniAnswerSheet(app, {pool, requireContext, readLimiter, writeLimiter, draftLimiter}) {
+export function mountMiniAnswerSheet(app, {pool, config = {}, requireContext, readLimiter, writeLimiter, draftLimiter}) {
   // Lỗi giữ nháp trên máy; không trả thành công khi chưa xác nhận giao dịch.
   const route = fn => async (req,res,next) => { try { await fn(req,res); } catch(error) {
     if(error.status) res.status(error.status).json({ok:false,error:error.code,message:error.message}); else next(error);
@@ -73,7 +74,7 @@ export function mountMiniAnswerSheet(app, {pool, requireContext, readLimiter, wr
         [slug,student.definition_version,student.class_id,student.class_name,student.student_id,student.student_name])).rows[0];
       return {...serialize(session,true),studentRef:parsed.data.studentRef};
     });
-    res.json(out);
+    res.json({...out,...(offerMiniPaperOffline(config, parsed.data.classCode)?{offlinePaper:true}:{})});
   }));
   // Mọi ghi kiểm thế hệ ngay trong giao dịch; tab trước khi mở lại không thể ghi bài mới.
   async function locked(client, data, session=false, history=false) {
@@ -90,6 +91,7 @@ export function mountMiniAnswerSheet(app, {pool, requireContext, readLimiter, wr
     const row=(await client.query(`SELECT * FROM assessment.${table} WHERE id=$1 AND test_slug=$2 FOR UPDATE`,[id,slug])).rows[0];
     if(!row||row.superseded_at||(row.attempt_mode!=='answer_sheet'&&!(history&&row.completed_at))) throw problem('MODE_CONFLICT','Lượt này không thuộc trang nhập đáp án hoặc đã được thay thế.');
     if(Number(row.generation)!==data.generation) throw problem('STALE_GENERATION','Lượt bài đã được mở lại. Giữ nháp và xác nhận lại tên để đọc bản hiện tại.');
+    if (!history) await guardMiniPaperOfflineWrite(client, config, session ? row.id : row.exam_session_id, row.generation);
     return row;
   }
   function parse(req) {const p=requestSchema.safeParse(req.body);if(!p.success) throw problem('INVALID_REQUEST','Dữ liệu lưu bài không hợp lệ.',400);return p.data;}

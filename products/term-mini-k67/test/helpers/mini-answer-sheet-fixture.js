@@ -5,7 +5,7 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   if(process.env.K67_ORDER_NATIVE_URL) {
     const {db,pool}=await createNativeOrderFixture({examOrder});
     return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
@@ -41,6 +41,10 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   await db.exec(await readFile(new URL('../../db/011-audio-asset-pin.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../db/012-audio-owner.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../db/014-audio-preparation-without-owner.sql',import.meta.url),'utf8'));
+  if (miniPaperOffline) {
+    await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
+    await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
+  }
   const section=(count,start)=>({questions:Array.from({length:count},(_,i)=>({number:i+start,type:'Câu thử',accepted:['A']}))});
   await db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
     VALUES('mini-test-lesson-5','Đề mô phỏng',1,$1,$2,true)`,[JSON.stringify(section(20,11)),JSON.stringify(section(13,14))]);
@@ -49,5 +53,7 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
   return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
-    config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
+    config:{audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
+      miniPaperOfflineMode:miniPaperOffline,termTestSessionSecret:miniPaperOffline?'synthetic-paper-offline-secret-at-least-32-bytes':undefined,
+      allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
 }

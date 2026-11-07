@@ -15,6 +15,7 @@ import { createAuthService } from "./auth.js";
 import { createContextGuard } from './context-guard.js';
 import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
+import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -323,7 +324,7 @@ function addCors(config) {
     }
     res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-term2-permit, x-exam-journal-request-id');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
     return next();
@@ -494,8 +495,10 @@ export function createApp({
   mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,logEvent:logTermTestEvent,
     syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
-  mountMiniAnswerSheet(app, { pool, requireContext, readLimiter:testReadLimiter,
+  mountMiniAnswerSheet(app, { pool, config, requireContext, readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
+  mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
+    writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
