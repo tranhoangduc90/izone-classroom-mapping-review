@@ -1,4 +1,4 @@
-import {createHash,createHmac,timingSafeEqual} from 'node:crypto';
+import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {z} from 'zod';
 import {audioTransaction} from './audio-incidents.js';
 import {term1JourneyR2Audio} from './mini-r2-audio.js';
@@ -22,13 +22,25 @@ const statusInput=scope.extend({section:z.literal('listening'),operationId:z.uui
 const sealInput=scope.extend({operationId:z.uuid(),section:z.literal('listening'),previousOperationId:z.null(),startedAt:ts,capturedAt:ts,revision:ts,automatic:z.boolean(),
   eofAt:ts.nullable(),heardSeconds:z.number().min(0).max(7200),answers:z.record(z.string().regex(/^([1-9]|[1-3]\d|40)$/),z.string().max(120))});
 const problem=(code,message,status=409)=>Object.assign(new Error(message),{code,status});
+const mac=(secret,body)=>createHmac('sha256',secret).update(`izone-listening-retake-v1:${body}`);
+
+export function issueTerm1RetakeGrant(owner, secret, {sessionToken=randomUUID(), validHours=24,
+  now=Math.floor(Date.now()/1000)}={}) {
+  if(typeof secret!=='string'||secret.length<32||!Number.isInteger(validHours)||validHours<1||validHours>72) {
+    throw new Error('Cấu hình vé thi bù hoặc thời hạn không hợp lệ.');
+  }
+  const grant=ticket.parse({v:1,purpose:'listening-retake',testSlug:slug,classCode:owner.classCode,
+    studentRef:owner.studentRef,sessionToken,expiresAt:now+validHours*3600});
+  const body=Buffer.from(JSON.stringify(grant)).toString('base64url');
+  return `${body}.${mac(secret,body).digest('base64url')}`;
+}
 
 export function verifyTerm1RetakeGrant(value,owner,secret,now=Math.floor(Date.now()/1000)) {
   if(typeof secret!=='string'||secret.length<32||typeof value!=='string')return null;
   const parts=/^([A-Za-z0-9_-]{40,1800})\.([A-Za-z0-9_-]{43})$/.exec(value);
   if(!parts)return null;
   const signature=Buffer.from(parts[2],'base64url');
-  const expected=createHmac('sha256',secret).update(`izone-listening-retake-v1:${parts[1]}`).digest();
+  const expected=mac(secret,parts[1]).digest();
   if(signature.length!==expected.length||signature.toString('base64url')!==parts[2]||!timingSafeEqual(signature,expected))return null;
   try{
     const grant=ticket.parse(JSON.parse(Buffer.from(parts[1],'base64url').toString('utf8')));

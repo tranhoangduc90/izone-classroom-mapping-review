@@ -4,6 +4,7 @@ import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import request from 'supertest';
 import {createApp} from '../src/app.js';
+import {issueTerm1RetakeGrant,verifyTerm1RetakeGrant} from '../src/term1-listening-retake.js';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 
 const root='/api/term-tests/term-test-1';
@@ -48,7 +49,11 @@ test('Term 1 retake verifies scope and seals only its own Listening attempt',asy
     assert.equal(reject.status,403,reject.text);
     assert.equal(reject.body.examSessionToken,undefined);
   }
-  const grant=signedTicket(id);
+  const now=Math.floor(Date.now()/1000);
+  const grant=issueTerm1RetakeGrant(identity,signingKey,{sessionToken:id,validHours:1,now});
+  assert.equal(verifyTerm1RetakeGrant(grant,identity,signingKey,now).expiresAt,now+3600);
+  assert.equal(verifyTerm1RetakeGrant(grant,identity,signingKey,now+3600),null);
+  assert.throws(()=>issueTerm1RetakeGrant(identity,signingKey,{validHours:73}),/thời hạn/);
   const prepare=(client=api,body={})=>client.post(retake+'/prepare').send({...identity,deviceProof,retakeGrant:grant,...body});
   assert.equal((await prepare(api,{retakeGrant:signedTicket(id,{expiresAt:1})})).status,403);
   assert.equal((await prepare(api,{retakeGrant:signedTicket(id,{testSlug:'term-test-2'})})).status,403);
