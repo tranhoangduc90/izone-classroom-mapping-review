@@ -60,6 +60,7 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
     assert.equal(saved.body.receipt.completed,previousOperationId!==null);
     assert.deepEqual((await post('status',{section,operationId:operation.operationId})).body.receipt,saved.body.receipt);
     assert.deepEqual((await post('seal',operation)).body.receipt,saved.body.receipt);
+    if(!saved.body.receipt.completed)assert.equal(portal.length,0,'Chưa gửi điểm khi mới nộp một phần.');
     previousOperationId=operation.operationId;
     startedAt=operation.capturedAt+500;
   }
@@ -79,5 +80,7 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
   assert.equal(portal[0].attemptToken,row.id);
   assert.equal(portal[0].classId,'1293');
   assert.equal(portal[0].studentId,'900001');
+  assert.equal(typeof portal[0].grades.listening,'number');
+  assert.equal(typeof portal[0].grades.reading,'number');
   assert.equal(portal[0].grades.writing,undefined);
 });
