@@ -58,7 +58,8 @@ if (miniAudio) {
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
-  publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+  publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
+  allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
@@ -89,7 +90,27 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
   if(recoveryUsed!==undefined)await fixture.db.query('UPDATE assessment.term_test_exam_session SET listening_recovery_seconds=$2 WHERE id=$1',[id,recoveryUsed]);
   res.json({ok:true,fixtureOnly:true});
 });
-outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(`window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`));
+const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`;
+outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
+if (process.env.K67_PREVIEW_MINI_CBT_OFFLINE === 'on') {
+  // The isolated server replaces only the origin config. Production digests are
+  // checked separately against Git bytes, while this fixture still checks its cache.
+  outer.get('/term-tests/mini-test-lesson-5-computer-based/offline-assets.mjs', async (_req,res,next) => {
+    try {
+      const source = await readFile(path.join(pages,'term-tests/mini-test-lesson-5-computer-based/offline-assets.mjs'),'utf8');
+      const hash = createHash('sha256').update(fixtureConfig).digest('hex');
+      res.type('application/javascript').send(source.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
+        (_match, before, after) => before + hash + after));
+    } catch (error) { next(error); }
+  });
+  outer.get(/^\/(?:term-tests|shared|speaking-homework)\//, async (req,res,next) => {
+    if (typeof req.query.examBuild !== 'string' || !/^[a-f0-9]{64}$/.test(req.query.examBuild)) return next();
+    const file = path.resolve(pages, '.' + req.path);
+    if (!file.startsWith(pages + path.sep) || !/\.(?:js|mjs|css|svg|html)$/.test(file)) return next();
+    try { res.type(path.extname(file)).send((await readFile(file,'utf8')).replace(/\r\n/g, '\n')); }
+    catch { next(); }
+  });
+}
 outer.get('/preview-tone.wav',(_req,res)=>res.type('audio/wav').send(wav));
 outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-banner{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 20px;background:#fff6d8;color:#694b00;font:14px system-ui}.preview-banner button{padding:8px;border:1px solid #eed48b;border-radius:6px;cursor:pointer}@media(max-width:700px){.preview-banner{align-items:flex-start;flex-direction:column}}`));
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));

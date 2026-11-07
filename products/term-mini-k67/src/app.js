@@ -16,6 +16,7 @@ import { createContextGuard } from './context-guard.js';
 import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
+import { mountMiniCbtOffline } from './mini-cbt-offline.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -499,6 +500,8 @@ export function createApp({
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
   mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
     writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
+  mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
