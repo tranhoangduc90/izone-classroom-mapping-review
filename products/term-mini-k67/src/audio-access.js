@@ -64,7 +64,8 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
         const {row,now}=await authorizeDownload(db,input.data,slug);
         let listeningEofVersion = Number(row.listening_eof_version) || 0;
         const eofEnabled = (slug === 'mini-test-lesson-5' && config.miniListeningEofEnabled)
-          || (slug === 'term-test-1' && config.term1ListeningEofEnabled);
+          || (slug === 'term-test-1' && config.term1ListeningEofEnabled)
+          || (slug === 'term-test-2' && config.term2ListeningEofEnabled);
         if (!listeningEofVersion && !row.listening_started_at && eofEnabled
             && config.audioIncidentEnabled && input.data.listeningEofVersion === 1) {
           await db.query('UPDATE assessment.term_test_exam_session SET listening_eof_version=1 WHERE id=$1', [row.id]);

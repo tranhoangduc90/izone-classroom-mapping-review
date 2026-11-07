@@ -19,7 +19,7 @@ function response(row, granted=0) {
 // previous acknowledged checkpoint constrain the official player's end position.
 async function confirmListeningEnd(db, row, { slug, heardSeconds, durationSeconds, reviewSeconds }) {
   const pending = () => fail('AUDIO_END_NOT_CONFIRMED', 'Chưa xác nhận đã phát hết audio. Bài vẫn được giữ.');
-  if (!['mini-test-lesson-5','term-test-1'].includes(slug) || Number(row.listening_eof_version) !== 1
+  if (!['mini-test-lesson-5','term-test-1','term-test-2'].includes(slug) || Number(row.listening_eof_version) !== 1
       || Number(row.listening_audio_protocol_version) !== 1 || row.listening_audio_incident_id) throw pending();
   if (row.listening_eof_at) return;
   const elapsed = (new Date(row.server_now).getTime() - new Date(row.listening_started_at).getTime()) / 1_000;
