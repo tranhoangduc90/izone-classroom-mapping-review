@@ -51,6 +51,7 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
+const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
 const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
 const term1R2ConfigFile=process.env.K67_PREVIEW_TERM1_R2_CONFIG;
@@ -59,7 +60,7 @@ const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],
     listeningReviewSeconds:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
   getJourneyManifest:slug=>{
-    if(!((slug==='term-test-1'&&term1JourneyMode==='on')||(slug==='term-test-2'&&term2JourneyMode==='on')))return null;
+    if(!((slug==='term-test-1'&&(term1JourneyMode==='on'||retakeMode==='on'))||(slug==='term-test-2'&&term2JourneyMode==='on')))return null;
     const bytes=audioBytes(slug);
     return {url:slug==='term-test-1'&&term1Audio&&term1R2ConfigFile
         ?'https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-1-128kbps-9af027eaaf402acc.mp3'
@@ -85,7 +86,7 @@ if(journeyMode==='on'){
   mini.listeningTotalSeconds=mini.listeningDurationSeconds+miniReview;
   if(process.env.K67_PREVIEW_MINI_READING_MINUTES)mini.readingDurationMinutes=Number(process.env.K67_PREVIEW_MINI_READING_MINUTES);
 }
-if(term1JourneyMode==='on'){
+if(term1JourneyMode==='on'||retakeMode==='on'){
   if(term1Audio){
     if(createHash('sha256').update(term1Audio).digest('hex')!=='9af027eaaf402acc230fdaeff11bcc1b792b62e55d75067f1a2bcf2392b485f8')throw new Error('Sai bản audio Term 1 K67.');
     Object.assign(timing['term-test-1'],{listeningDurationSeconds:1735,listeningTotalSeconds:1855});
@@ -106,6 +107,7 @@ const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
+  term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
@@ -150,6 +152,7 @@ if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEn
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');
 if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
 if(term2JourneyMode==='on'&&rescueClass)offlineEntries.push('term-test-2-rescue');
+if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
