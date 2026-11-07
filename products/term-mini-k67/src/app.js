@@ -99,7 +99,7 @@ const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
 const audioProgressSchema = z.object({examSessionToken:z.uuid(),heardSeconds:z.number().min(0).max(7200),
-  state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered']),eventId:z.uuid().optional(),
+  state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered','ended']),eventId:z.uuid().optional(),
   generation:z.number().int().nonnegative().optional()});
 
 const attemptResumeSchema = z.object({
@@ -937,7 +937,8 @@ export function createApp({
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
-    const data=await checkpointListeningAudio(pool,{...parsed.data,slug:slug.data,durationSeconds:termTestAssetService.getTiming(slug.data).listeningDurationSeconds});
+    const timing=termTestAssetService.getTiming(slug.data);
+    const data=await checkpointListeningAudio(pool,{...parsed.data,slug:slug.data,durationSeconds:timing.listeningDurationSeconds,reviewSeconds:timing.listeningReviewSeconds});
     if(parsed.data.state!=='playing'||data.grantedRecoverySeconds>0)logTermTestEvent('audio_'+parsed.data.state,slug.data,parsed.data.examSessionToken,
       {section:'listening',heardSeconds:data.listeningResumeAtSeconds,grantedRecoverySeconds:data.grantedRecoverySeconds,totalRecoverySeconds:data.listeningRecoverySeconds});
     res.json(data);

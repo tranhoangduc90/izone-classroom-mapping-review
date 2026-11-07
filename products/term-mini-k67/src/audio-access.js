@@ -50,7 +50,7 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
     return value;
   };
   const schema=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonnegative(),publicAudioVersion:z.literal(1).optional(),
-    audioTransport:z.literal(R2_POLICY).optional()});
+    audioTransport:z.literal(R2_POLICY).optional(),listeningEofVersion:z.literal(1).optional()});
   app.post('/api/term-tests/:testSlug/session/audio-access',limiter,async(req,res,next)=>{
     try {
       const input=schema.safeParse(req.body),slug=req.params.testSlug;
@@ -62,9 +62,16 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
       const value=await audioTransaction(pool,async db=>{
         // Xác thực lại sau bước đọc file: quyền/owner có thể đã đổi trong lúc chờ hash.
         const {row,now}=await authorizeDownload(db,input.data,slug);
+        let listeningEofVersion = Number(row.listening_eof_version) || 0;
+        if (!listeningEofVersion && !row.listening_started_at && slug === 'mini-test-lesson-5'
+            && config.miniListeningEofEnabled && config.audioIncidentEnabled && input.data.listeningEofVersion === 1) {
+          await db.query('UPDATE assessment.term_test_exam_session SET listening_eof_version=1 WHERE id=$1', [row.id]);
+          listeningEofVersion = 1;
+        }
         return {ok:true,audioCacheSupported:true,examSessionToken:row.id,generation:Number(row.generation),
           audioManifest:withCloudflareAudio(manifest),cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
           ...miniR2Audio({config,slug,row,manifest,requested:input.data.audioTransport}),
+          ...(listeningEofVersion ? { listeningEofVersion } : {}),
           listeningDurationSeconds:assets.getTiming(slug).listeningDurationSeconds,
           serverNow:new Date(now).toISOString(),listeningStartedAt:row.listening_started_at,
           ...(row.listening_started_at?await listeningAudioSnapshot(db,row.id):{}),

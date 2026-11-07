@@ -46,6 +46,8 @@ function snapshot(row,incident,granted=0){
       openedAt:new Date(incident.opened_at).toISOString(),remainingMs:Number(incident.remaining_ms)}:null,
     needsTeacher:Boolean(incident?.needs_teacher),canSubmit:!incident&&!row.listening_submitted_at,
     listeningDeadlineAt:row.listening_deadline_at?new Date(row.listening_deadline_at).toISOString():null,
+    ...(Number(row.listening_eof_version)===1?{listeningEofVersion:1,
+      listeningEofAt:row.listening_eof_at?new Date(row.listening_eof_at).toISOString():null}:{}),
     listeningResumeAtSeconds:Number(row.listening_audio_checkpoint_seconds)||0,
     listeningRecoverySeconds:Number(row.listening_recovery_seconds)||0,
     recoveryRemainingSeconds:Math.max(0,900-Number(row.listening_recovery_seconds||0)),

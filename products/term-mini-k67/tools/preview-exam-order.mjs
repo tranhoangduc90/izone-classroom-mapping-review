@@ -56,8 +56,9 @@ if (miniAudio) {
   Object.assign(timing['mini-test-lesson-5'], { listeningDurationSeconds: 972, listeningTotalSeconds: 1092 });
 }
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
+const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
-  publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+  publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
