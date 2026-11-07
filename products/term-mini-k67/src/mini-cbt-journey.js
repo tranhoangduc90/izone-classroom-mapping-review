@@ -12,6 +12,7 @@ const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1
 const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true};
 const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true};
+const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
@@ -148,6 +149,7 @@ export function mountMiniCbtJourney(app, services) {mountCbtJourney(app,services
 export function mountTerm1CbtJourney(app, services) {mountCbtJourney(app,services,term1);}
 export function mountTerm1PaperJourney(app, services) {mountCbtJourney(app,services,term1Paper);}
 export function mountTerm2CbtJourney(app, services) {mountCbtJourney(app,services,term2);}
+export function mountTerm2PaperJourney(app, services) {mountCbtJourney(app,services,term2Paper);}
 
 async function preparePaper(db, profile, student, body, secret, timing, allowNew) {
   const {slug,table,version}=profile;
@@ -291,7 +293,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,receipt};
     });
     if(body.section==='writing')writingAccepted?.(result.receipt.attemptToken);
-    if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken);
+    if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);
     return result;
   }));
 }

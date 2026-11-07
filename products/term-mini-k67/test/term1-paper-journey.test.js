@@ -5,21 +5,23 @@ import {setTimeout as delay} from 'node:timers/promises';
 import request from 'supertest';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 
-const root='/api/term-tests/term-test-1';
 const identity={classCode:'IC2304',studentRef:'11111111-1111-4111-8111-111111111111',identityConfirmed:true};
 const deviceProof='a'.repeat(64);
 const assets={supports:()=>true,getTiming:()=>({readingDurationMinutes:60}),getContent:()=>{
   throw new Error('Paper must not load CBT content');
 }};
 
-for(const examMode of ['lis_first','read_first'])test(`Term 1 paper preserves both section policies · ${examMode}`,async t=>{
+for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_first','read_first'])test(`${slug} paper preserves both section policies · ${examMode}`,async t=>{
+  const root='/api/term-tests/'+slug;
+  const otherRoot='/api/term-tests/'+(slug==='term-test-1'?'term-test-2':'term-test-1');
   const portal=[];
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1PaperJourneyMode:'on',term1CbtJourneyMode:'on',
+    term2PaperJourneyMode:'on',term2CbtJourneyMode:'on',
     syncErpGrades:async payload=>portal.push(payload)});
   t.after(()=>f.db.close());
-  await f.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
-    SELECT 'term-test-1','Đề giả Term 1',1,listening_definition,reading_definition,true
-    FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
+  await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+    SELECT $1,'Đề giả Term',1,listening_definition,reading_definition,true
+    FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`,[slug]);
   const api=request(f.app);
   const prepare=body=>api.post(root+'/paper-journey/prepare').send({...identity,deviceProof,examMode,...body});
   assert.equal((await prepare({classCode:'WRONG'})).status,403);
@@ -36,6 +38,9 @@ for(const examMode of ['lis_first','read_first'])test(`Term 1 paper preserves bo
   const scope={examSessionToken:ready.body.examSessionToken,generation:ready.body.generation,deviceProof};
   const wrongMode=await api.post(root+'/cbt-journey/prepare').send({...identity,...scope});
   assert.equal(wrongMode.status,403);
+  const wrongTest=await api.post(otherRoot+'/paper-journey/status').set('x-term2-permit',ready.body.permit)
+    .send({...scope,section:'reading',operationId:randomUUID()});
+  assert.equal(wrongTest.status,403);
   const post=(route,body)=>api.post(root+'/paper-journey/'+route).set('x-term2-permit',ready.body.permit).send({...scope,...body});
   const start=(await f.db.query(`UPDATE assessment.term_k67_cbt_journey SET activated_at=clock_timestamp()-interval '61 minutes'
     WHERE session_id=$1 RETURNING activated_at`,[scope.examSessionToken])).rows[0].activated_at;
@@ -70,7 +75,7 @@ for(const examMode of ['lis_first','read_first'])test(`Term 1 paper preserves bo
   assert.equal(session.listening_eof_at,null);
   for(let n=0;n<30&&!portal.length;n++)await delay(10);
   assert.ok(portal.length>0);
-  assert.equal(portal[0].testSlug,'term-test-1');
+  assert.equal(portal[0].testSlug,slug);
   assert.equal(portal[0].attemptToken,row.id);
   assert.equal(portal[0].classId,'1293');
   assert.equal(portal[0].studentId,'900001');
