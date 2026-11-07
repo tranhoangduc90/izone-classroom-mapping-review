@@ -5,8 +5,30 @@ import {fixture} from './helpers.js';
 import {createApp} from '../src/app.js';
 import {AUDIO_MANIFEST_TYPE,publicAudioCatalog} from '../src/public-audio.js';
 import {secret,uuid} from '../src/domain.js';
+import fs from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 
 const cf=process.env.TEST_CF_AUDIO==='1';
+
+test('R2 opt-in preserves old attempt and pins policy only for newly created native attempts',async t=>{
+ const sha='0454a5b56ce8e7645a5aaa33cfc01be4b1b4fa81de768d20ec5f70bf17d3cfbb';
+ const file=tmpdir()+'/practice-r2-'+uuid()+'.json',prior={enabled:process.env.AUDIO_R2_DIRECT_ENABLED,file:process.env.AUDIO_R2_DIRECT_CONFIG_FILE};
+ const config={enabled:false,assets:[sha],accountId:'e340869dcc6ff285504947407d148104',bucket:'izone-audio-r2-lab-20261023',accessKeyId:'fixture-key',secretAccessKey:'fixture-secret'};
+ await fs.writeFile(file,JSON.stringify(config));process.env.AUDIO_R2_DIRECT_ENABLED='true';process.env.AUDIO_R2_DIRECT_CONFIG_FILE=file;
+ t.after(async()=>{for(const [k,v] of [['AUDIO_R2_DIRECT_ENABLED',prior.enabled],['AUDIO_R2_DIRECT_CONFIG_FILE',prior.file]])if(v===undefined)delete process.env[k];else process.env[k]=v;await fs.unlink(file);});
+ const build=async()=>{const f=await fixture();t.after(f.close);await f.pool.query(`UPDATE listening_practice.content SET definition=jsonb_set(definition,'{audio,sha256}',to_jsonb($1::text))`,[sha]);const review={audioSha256:sha,contentVersion:'fixture-v1'};const app=createApp({pool:f.pool,service:f.service,mediaCatalog:{[sha]:{audioFile:'/no-local-mp3',review}},origins:['https://page.test'],googleClientId:'fixture',adminKey:secret(),verifyGoogle:async()=>({email:'teacher@example.test',sub:'google-fixture',email_verified:true})});const start=await f.begin();return{f,app,start,id:start.attempts.at(-1).id};};
+ const old=await build();config.enabled=true;await fs.writeFile(file,JSON.stringify(config));
+ const get=(x,path,token=x.f.token)=>request(x.app).get(path).set('Accept',AUDIO_MANIFEST_TYPE).set('X-Izone-Audio-Transport','r2-direct-v1').set('Authorization','Bearer '+token);
+ assert.equal((await get(old,'/api/audio/'+old.id)).body.audioDownload,undefined);
+ const fresh=await build(),before=await fresh.f.service.read({token:fresh.f.token});
+ const reply=await get(fresh,'/api/audio/'+fresh.id);assert.equal(reply.status,200);assert.equal(reply.body.audioDownload.sha256,sha);
+ assert.equal((await get(fresh,'/api/audio/'+uuid())).status,409);assert.equal((await get(fresh,'/api/audio/'+fresh.id,secret())).status,401);
+ assert.equal((await get(fresh,'/api/review-audio/'+fresh.id)).status,404);
+ assert.deepEqual(await fresh.f.service.read({token:fresh.f.token}),before);
+ await fresh.f.service.submit({token:fresh.f.token,attemptId:fresh.id,lease:fresh.start.lease,snapshot:fresh.f.draft(),operationId:uuid(),method:'manual'});
+ assert.equal((await get(fresh,'/api/review-audio/'+fresh.id)).body.audioDownload.sha256,sha);
+ config.enabled=false;await fs.writeFile(file,JSON.stringify(config));assert.equal((await get(fresh,'/api/review-audio/'+fresh.id)).body.audioDownload,undefined);
+});
 if(cf)process.env.AUDIO_CLOUDFLARE_ENABLED='true';
 // Real service/SQL authorization with a deliberately absent local file: the
 // successful manifest path proves that no audio file bytes are served by VPS.
