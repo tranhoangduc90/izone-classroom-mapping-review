@@ -44,7 +44,11 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
   reading:{instructions:['Đề giả; thời gian và thứ tự dùng chính sách K67.'],sections:[{label:'Reading thử',title:'Bài đọc mô phỏng',range:'Questions',passageHtml:'<p>Đây là bài đọc thử. Không phải nội dung đề thi đang chạy.</p>',questionsHtml:questions(slug,'reading')}]},
   writing:slug==='mini-test-lesson-5'?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
-const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],listeningReviewSeconds:120}),
+const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
+const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
+const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],listeningReviewSeconds:slug==='mini-test-lesson-5'?miniReview:120}),
+  getMiniJourneyManifest:()=>{const bytes=audioBytes('mini-test-lesson-5');return {url:`http://127.0.0.1:${port}/preview-mini-audio`,
+    envelopeVersion:'MP3',byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};},
   getAudioManifest:async slug=>{const bytes=audioBytes(slug);const sha256=createHash('sha256').update(bytes).digest('hex');return{assetVersion:`sha256-${sha256}`,sha256,byteLength:bytes.length,encryptedByteLength:bytes.length+33,envelopeVersion:'IZTT1'};},
   getContent:async slug=>content(slug),getSessionAudioKey:()=>key,getPreview:async()=>wav,
   streamEncryptedAudio:async(slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
@@ -55,10 +59,16 @@ if (miniAudio) {
   if (createHash('sha256').update(miniAudio).digest('hex') !== '182526cd0c3357a4b963ea1cf84a9b72a9a6f6d968324c8905895bcce74088cd') throw new Error('Sai bản audio Mini K67.');
   Object.assign(timing['mini-test-lesson-5'], { listeningDurationSeconds: 972, listeningTotalSeconds: 1092 });
 }
+if(journeyMode==='on'){
+  const mini=timing['mini-test-lesson-5'];
+  mini.listeningTotalSeconds=mini.listeningDurationSeconds+miniReview;
+  if(process.env.K67_PREVIEW_MINI_READING_MINUTES)mini.readingDurationMinutes=Number(process.env.K67_PREVIEW_MINI_READING_MINUTES);
+}
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
+  miniCbtJourneyMode:journeyMode,
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
@@ -92,7 +102,7 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
 });
 const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`;
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
-if (process.env.K67_PREVIEW_MINI_CBT_OFFLINE === 'on') {
+if (process.env.K67_PREVIEW_MINI_CBT_OFFLINE === 'on' || journeyMode==='on') {
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   outer.get('/term-tests/mini-test-lesson-5-computer-based/offline-assets.mjs', async (_req,res,next) => {
@@ -112,6 +122,7 @@ if (process.env.K67_PREVIEW_MINI_CBT_OFFLINE === 'on') {
   });
 }
 outer.get('/preview-tone.wav',(_req,res)=>res.type('audio/wav').send(wav));
+outer.get('/preview-mini-audio',(_req,res)=>res.type(miniAudio?'audio/mpeg':'audio/wav').send(audioBytes('mini-test-lesson-5')));
 outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-banner{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 20px;background:#fff6d8;color:#694b00;font:14px system-ui}.preview-banner button{padding:8px;border:1px solid #eed48b;border-radius:6px;cursor:pointer}@media(max-width:700px){.preview-banner{align-items:flex-start;flex-direction:column}}`));
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));
 outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-lesson-5(?:-computer-based)?)\/)(?:index.html)?$/,async(req,res,next)=>{

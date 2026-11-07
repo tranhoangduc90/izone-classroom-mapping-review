@@ -17,6 +17,7 @@ import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
+import { mountMiniCbtJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -501,6 +502,8 @@ export function createApp({
   mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
     writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
   mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+  mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
@@ -1649,6 +1652,7 @@ export function createApp({
   app.use((error, _req, res, _next) => {
     if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});
     if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
+    if(error?.code==='P6721')return res.status(409).json({ok:false,error:'MINI_OFFLINE_JOURNEY_ACTIVE',message:'Lượt đang được giữ ở chế độ offline. Hãy mở lại trên thiết bị đã bắt đầu.'});
     if(error?.code==='P6702')return res.status(409).json({ok:false,error:'AUDIO_SESSION_REQUIRED',message:'Hãy dùng đúng phiên Listening đang mở để nộp bài.'});
     if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     if (error instanceof TermTestWritingGradingError) {

@@ -82,7 +82,7 @@ async function storedSeal(db, body) {
     WHERE session_id=$1 AND section=$2`, [body.examSessionToken, body.section])).rows[0];
 }
 
-async function seal(db, state, body) {
+export async function sealMiniCbtSection(db, state, body) {
   const { session, attempt, record, start, deadline, listening } = state;
   const observed = Date.parse(body.capturedAt);
   const serverNow = asTime(session.server_now);
@@ -178,7 +178,7 @@ export function mountMiniCbtOffline(app, { pool, config, requireContext, readStu
         return { ok: true, persisted: true, receipt: saved.receipt };
       }
       if (state.sealed) throw fail('OFFLINE_ALREADY_SEALED', 'Phần thi đã được nộp trước khi đồng bộ.');
-      const result = await seal(db, state, body);
+      const result = await sealMiniCbtSection(db, state, body);
       const receipt = { version, payloadHash, examSessionToken: body.examSessionToken, operationId: body.operationId,
         section: body.section, revision: body.revision, generation: body.generation, studentName: state.session.student_name_snapshot,
         examMode: state.session.exam_mode, listeningSubmitted: state.listening || Boolean(state.session.listening_submitted_at),
