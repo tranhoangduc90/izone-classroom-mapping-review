@@ -108,6 +108,12 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
+const rescueClass=process.env.K67_PREVIEW_RESCUE_CLASS;
+if(rescueClass){
+  if(!['IC2213','IC2207'].includes(rescueClass))throw new Error('Mã lớp thử cứu hộ không hợp lệ.');
+  await fixture.db.query('UPDATE mapping.classroom_course_mapping SET erp_class_name_snapshot=$1 WHERE erp_class_name_snapshot=$2',
+    [rescueClass,'IC2304']);
+}
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});
@@ -141,6 +147,7 @@ const offlineEntries=[];
 if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEntries.push('mini-test-lesson-5-computer-based');
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');
 if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
+if(term2JourneyMode==='on'&&rescueClass)offlineEntries.push('term-test-2-rescue');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
