@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { sealMiniCbtSection } from './mini-cbt-offline.js';
@@ -9,11 +9,15 @@ const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
 const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true};
+const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
   deviceProof: z.string().regex(/^[a-f0-9]{64}$/) });
 const open = scope.extend({ classCode: z.string().regex(/^[A-Z0-9._-]{2,32}$/), studentRef: z.uuid() });
+const openPaper = open.omit({examSessionToken:true,generation:true}).extend({
+  examMode:z.enum(['lis_first','read_first']),identityConfirmed:z.literal(true)
+});
 const attemptSection = scope.extend({ operationId: z.uuid(), section: z.enum(['listening','reading']), previousOperationId: z.uuid().nullable(),
   startedAt: ts, capturedAt: ts, revision: ts, automatic: z.boolean(), eofAt: ts.nullable(),
   heardSeconds: z.number().min(0).max(7200), answers: z.record(z.string().regex(/^\d{1,2}$/), z.string().max(120)) });
@@ -27,20 +31,25 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
 const peer = section => section === 'reading' ? 'listening' : 'reading';
 
-async function lock(db, body, {slug,table}) {
+async function lock(db, body, {slug,table,paper}) {
   const owner = (await db.query(`SELECT erp_course_class_id,erp_student_contact_id FROM assessment.term_test_exam_session
     WHERE id=$1 AND test_slug=$2`, [body.examSessionToken, slug])).rows[0];
   if (!owner) throw problem('OFFLINE_SCOPE', 'Không tìm thấy đúng lượt thi.', 403);
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${slug}:${owner.erp_course_class_id}:${owner.erp_student_contact_id}`]);
   const session = (await db.query('SELECT * FROM assessment.term_test_exam_session WHERE id=$1 FOR UPDATE', [body.examSessionToken])).rows[0];
   if (!session || session.test_slug !== slug || session.superseded_at || Number(session.generation) !== body.generation
-      || !['legacy','cbt'].includes(session.attempt_mode)) throw problem('OFFLINE_SCOPE', 'Lượt thi đã thay đổi.', 403);
+      || !['legacy','cbt'].includes(session.attempt_mode)) {
+    throw problem('OFFLINE_SCOPE', 'Lượt thi đã thay đổi.', 403);
+  }
   const attempt = session.attempt_id ? (await db.query('SELECT * FROM assessment.term_test_attempt WHERE id=$1 FOR UPDATE', [session.attempt_id])).rows[0] : null;
   if ((session.attempt_id && !attempt) || (attempt && (attempt.test_slug !== slug || attempt.superseded_at || attempt.exam_session_id !== session.id
-      || Number(attempt.generation) !== body.generation || attempt.attempt_mode === 'answer_sheet'))) {
+      || Number(attempt.generation) !== body.generation || attempt.attempt_mode==='answer_sheet'))) {
     throw problem('OFFLINE_SCOPE', 'Không khớp bài thi đang lưu.', 403);
   }
   const journey = (await db.query(`SELECT * FROM ${table} WHERE session_id=$1 FOR UPDATE`, [session.id])).rows[0];
+  if ((journey?.audio_hash==='paper')!==Boolean(paper)) {
+    throw problem('OFFLINE_SCOPE','Không khớp cách làm bài đã chọn.',403);
+  }
   const now = (await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
   return { session, attempt, journey, now };
 }
@@ -60,13 +69,13 @@ function authorize(body, state, supplied, secret, version) {
   }
 }
 
-function timeline(body, state, timing) {
+function timeline(body, state, timing, paper) {
   const { session, journey, now } = state;
   if (!journey.activated_at) throw problem('OFFLINE_NOT_STARTED', 'Chưa bắt đầu bài trên máy chủ.');
   const first = initial(session);
   const previous = journey.sections[body.section==='writing'?peer(first):first];
   const activation = clock(journey.activated_at);
-  if ((body.section === first && (body.previousOperationId !== null || body.startedAt !== activation))
+  if ((body.section === first && (body.previousOperationId !== null || (paper?body.startedAt<activation:body.startedAt!==activation)))
       || (body.section !== first && (!previous || body.previousOperationId !== previous.operationId || body.startedAt < previous.capturedAt))
       || body.capturedAt < body.startedAt || body.capturedAt > Math.min(clock(now) + 3_000, activation + recovery)) {
     throw problem('OFFLINE_TIMELINE', 'Thứ tự hoặc mốc làm bài không khớp. Bản trên máy vẫn được giữ.');
@@ -76,6 +85,12 @@ function timeline(body, state, timing) {
     return body.startedAt + timing.readingDurationMinutes * 60_000;
   }
   if (body.section==='writing') return body.startedAt+timing.writingDurationMinutes*60_000;
+  if (paper) {
+    if (body.automatic || body.eofAt!==null || body.heardSeconds!==0) {
+      throw problem('PAPER_MANUAL_ONLY', 'Phiếu Listening chỉ nộp khi học viên xác nhận.');
+    }
+    return body.capturedAt;
+  }
   const duration = timing.listeningDurationSeconds;
   if (body.heardSeconds > duration + 1 || (body.eofAt !== null && (body.heardSeconds < duration - 0.25
       || body.eofAt < body.startedAt + duration * 1000 - 500 || body.eofAt > body.capturedAt))) {
@@ -87,7 +102,7 @@ function timeline(body, state, timing) {
 }
 
 async function commit(db, state, body, timing, profile) {
-  const deadline = timeline(body, state, timing);
+  const deadline = timeline(body, state, timing, profile.paper);
   const listening = body.section === 'listening';
   const { session, attempt } = state;
   if(body.section==='writing'){
@@ -111,7 +126,7 @@ async function commit(db, state, body, timing, profile) {
   let row;
   if (listening) {
     row = (await db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=$2,listening_deadline_at=$3,
-      listening_eof_at=$4 WHERE id=$1 RETURNING *`, [session.id,...dates,body.eofAt === null ? null : new Date(body.eofAt).toISOString()])).rows[0];
+      listening_eof_at=$4 WHERE id=$1 RETURNING *`, [session.id,dates[0],profile.paper?null:dates[1],body.eofAt === null ? null : new Date(body.eofAt).toISOString()])).rows[0];
     row.server_now = state.now;
   } else {
     if (!attempt) throw problem('OFFLINE_CONFLICT', 'Chưa gắn được phần Reading vào lượt.');
@@ -121,15 +136,66 @@ async function commit(db, state, body, timing, profile) {
   }
   const result=await sealMiniCbtSection(db, { session: listening ? row : session, attempt: listening ? attempt : row,
     record: row, start: body.startedAt, deadline, listening }, { ...body, capturedAt: new Date(body.capturedAt).toISOString() },profile.slug);
+  if(profile.paper&&!attempt)await db.query(`UPDATE assessment.term_test_attempt
+    SET exam_delivery='answer_sheet',writing_scope='lr_only' WHERE id=$1`,[result.attemptToken]);
   return profile.writing&&result.completed?{...result,completed:false,nextSection:'writing'}:result;
 }
 
 export function mountMiniCbtJourney(app, services) {mountCbtJourney(app,services,mini);}
 export function mountTerm1CbtJourney(app, services) {mountCbtJourney(app,services,term1);}
+export function mountTerm1PaperJourney(app, services) {mountCbtJourney(app,services,term1Paper);}
 
-function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted }, profile) {
+async function preparePaper(db, profile, student, body, secret, timing, allowNew) {
   const {slug,table,version}=profile;
-  const prefix=`/api/term-tests/${slug}/cbt-journey`;
+  const {class_id:classId,student_id:studentId,definition_version:definition}=student;
+  const owner=[slug,classId,studentId,definition];
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${slug}:${classId}:${studentId}`]);
+  const session=(await db.query(`SELECT * FROM assessment.term_test_exam_session
+    WHERE test_slug=$1 AND erp_course_class_id=$2 AND erp_student_contact_id=$3 AND definition_version=$4
+    AND superseded_at IS NULL ORDER BY prepared_at DESC LIMIT 1 FOR UPDATE`,owner)).rows[0];
+  let row;
+  if(session?.attempt_mode==='legacy') {
+    row=(await db.query(`SELECT * FROM ${table} WHERE session_id=$1 FOR UPDATE`,[session.id])).rows[0];
+  }
+  const deviceHash=sha(body.deviceProof);
+  let current=session;
+  if(row) {
+    if(row.audio_hash!=='paper'||row.student_ref!==body.studentRef||row.device_hash!==deviceHash
+        || Number(row.generation)!==Number(session.generation)) {
+      throw problem('OFFLINE_SCOPE','Lượt phiếu đã gắn với thiết bị hoặc thế hệ khác.',403);
+    }
+  } else {
+    const oldAttempt=(await db.query(`SELECT 1 FROM assessment.term_test_attempt
+      WHERE test_slug=$1 AND erp_course_class_id=$2 AND erp_student_contact_id=$3 AND definition_version=$4
+      AND superseded_at IS NULL LIMIT 1`,owner)).rowCount;
+    if (session || oldAttempt || !allowNew) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
+    current=(await db.query(`INSERT INTO assessment.term_test_exam_session
+      (test_slug,erp_course_class_id,erp_student_contact_id,definition_version,class_name_snapshot,student_name_snapshot,attempt_mode,exam_mode)
+      VALUES($1,$2,$3,$4,$5,$6,'legacy',$7) RETURNING *`,[...owner,student.class_name,student.student_name,body.examMode])).rows[0];
+    if(body.examMode==='read_first') {
+      const attempt=(await db.query(`INSERT INTO assessment.term_test_attempt
+        (test_slug,erp_course_class_id,erp_student_contact_id,definition_version,class_name_snapshot,student_name_snapshot,
+         exam_session_id,client_submission_id,attempt_mode,exam_mode,exam_delivery,writing_scope)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'legacy','read_first','answer_sheet','lr_only') RETURNING id`,
+        [...owner,student.class_name,student.student_name,current.id,randomUUID()])).rows[0];
+      await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[current.id,attempt.id]);
+      current.attempt_id=attempt.id;
+    }
+    // Reserve native writes as soon as the permit is issued. The Reading clock starts separately.
+    row=(await db.query(`INSERT INTO ${table}
+      (session_id,generation,student_ref,device_hash,audio_hash,activated_at)
+      VALUES($1,$2,$3,$4,'paper',clock_timestamp()) RETURNING *`,[current.id,current.generation,body.studentRef,deviceHash])).rows[0];
+  }
+  const now=(await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
+  return {ok:true,version,examSessionToken:current.id,generation:Number(row.generation),attemptToken:current.attempt_id||current.id,
+    studentRef:body.studentRef,studentName:current.student_name_snapshot,className:current.class_name_snapshot,
+    examMode:current.exam_mode,activatedAt:clock(row.activated_at),serverNow:clock(now),permit:signature(secret,row,version),
+    timing:{readingDurationMinutes:timing.readingDurationMinutes}};
+}
+
+function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted }, profile) {
+  const {slug,table,version}=profile;
+  const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
   const mode=config[profile.mode];
   if (!['on','drain'].includes(mode)) return;
   const secret = config.termTestSessionSecret;
@@ -145,7 +211,16 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       res.status(error.status).json({ok:false,error:error.code,message:error.message});
     }
   };
-  app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
+  if(profile.paper)app.get(prefix+'/availability',readLimiter,(_req,res)=>{
+    res.set('Cache-Control','no-store').json({ok:true,enabled:mode==='on'});
+  });
+  if(profile.paper)app.post(prefix+'/prepare',writeLimiter,requireContext,route(openPaper,async (body,req)=>{
+    const selected=(await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
+    if(!selected)throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
+    const allowNew=mode==='on'&&(body.examMode!=='read_first'||config.readFirstNewEnabled);
+    return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),allowNew));
+  }));
+  else app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     const manifest = assets.getJourneyManifest?.(slug) || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
     return audioTransaction(pool,async db => {
@@ -171,7 +246,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         content:await assets.getContent(slug),timing:assets.getTiming(slug),audioManifest:manifest,...audio};
     });
   }));
-  app.post(prefix+'/begin',writeLimiter,route(scope,(body,req)=>audioTransaction(pool,async db => {
+  if(!profile.paper)app.post(prefix+'/begin',writeLimiter,route(scope,(body,req)=>audioTransaction(pool,async db => {
     const state=await lock(db,body,profile);
     authorize(body,state,req.get('x-term2-permit'),secret,version);
     if (!state.journey.activated_at && (state.session.listening_started_at || state.attempt?.reading_started_at || state.session.audio_owner_id)) {
@@ -181,7 +256,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile.writing)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
+  if(profile.writing||profile.paper)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
     const receipt=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
@@ -189,7 +264,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       if(saved&&saved.operationId!==body.operationId)throw problem('OFFLINE_CONFLICT','Phần này đã nhận mã nộp khác.');
       return saved;
     });
-    if(body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
+    if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
     return {ok:true,persisted:Boolean(receipt),receipt};
   }));
   app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,async(body,req)=>{
@@ -212,6 +287,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,receipt};
     });
     if(body.section==='writing')writingAccepted?.(result.receipt.attemptToken);
+    if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken);
     return result;
   }));
 }

@@ -17,7 +17,7 @@ import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
-import { mountMiniCbtJourney, mountTerm1CbtJourney } from './mini-cbt-journey.js';
+import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm1PaperJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -505,6 +505,14 @@ export function createApp({
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+  mountTerm1PaperJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:attemptToken=>{
+      void pool.query(fetchTermTestResultSql,[attemptToken]).then(({rows:[row]})=>{
+        if(row?.test_slug==='term-test-1'&&row.writing_scope==='lr_only'&&row.combined_result) {
+          return trySyncErpGrades(syncErpGrades,row,row.combined_result);
+        }
+      }).catch(()=>logger.error('Term 1 offline paper grade sync will retry on result read'));
+    }});
   mountTerm1CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
       if(!termTestWritingGradingService)return;
