@@ -4,6 +4,7 @@ import {AudioRecoveryError} from './audio-recovery.js';
 import {assertAudioOwner} from './audio-owner.js';
 import {publicAudioCatalog} from './public-audio-catalog.js';
 import {withCloudflareAudio} from './cloudflare-audio.mjs';
+import {miniR2Audio, R2_POLICY} from './mini-r2-audio.js';
 
 // Nhận mã phiên từ POST; kiểm quyền hiện tại trước khi cấp metadata hoặc khóa trong RAM.
 // Metadata ghim một lần: thay file trên server không được đổi nội dung của phiên đang thi.
@@ -42,13 +43,14 @@ export async function authorizeAudioSession(db,input,slug,skipOwner=false,onlyOw
   return {row,now};
 }
 
-export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=false}) {
+export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=false,config={}}) {
   const authorizeDownload=async(db,input,slug)=>{
     const value=await authorizeAudioSession(db,input,slug,true);
     if(value.row.listening_started_at)assertAudioOwner(value.row);
     return value;
   };
-  const schema=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonnegative(),publicAudioVersion:z.literal(1).optional()});
+  const schema=z.object({examSessionToken:z.uuid(),generation:z.number().int().nonnegative(),publicAudioVersion:z.literal(1).optional(),
+    audioTransport:z.literal(R2_POLICY).optional()});
   app.post('/api/term-tests/:testSlug/session/audio-access',limiter,async(req,res,next)=>{
     try {
       const input=schema.safeParse(req.body),slug=req.params.testSlug;
@@ -62,6 +64,7 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
         const {row,now}=await authorizeDownload(db,input.data,slug);
         return {ok:true,audioCacheSupported:true,examSessionToken:row.id,generation:Number(row.generation),
           audioManifest:withCloudflareAudio(manifest),cacheExpiresAt:new Date(new Date(now).getTime()+24*3600_000).toISOString(),
+          ...miniR2Audio({config,slug,row,manifest,requested:input.data.audioTransport}),
           listeningDurationSeconds:assets.getTiming(slug).listeningDurationSeconds,
           serverNow:new Date(now).toISOString(),listeningStartedAt:row.listening_started_at,
           ...(row.listening_started_at?await listeningAudioSnapshot(db,row.id):{}),

@@ -4,7 +4,7 @@ import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {readFile} from 'node:fs/promises';
 
-// Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên/đề/audio đều giả.
+// Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên và đề đều giả.
 // API và giao diện thật dùng cùng origin; không nối Portal, n8n hoặc database production.
 // Khi đóng tiến trình, dữ liệu thử mất; lỗi hiện ở terminal và thông báo của trang.
 const pages=path.resolve(process.argv[2]||'');
@@ -26,6 +26,9 @@ const wav=Buffer.alloc(44+toneSamples*2);wav.write('RIFF');wav.writeUInt32LE(wav
 wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);
 wav.writeUInt32LE(16000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);
 for(let i=0;i<toneSamples;i++)wav.writeInt16LE(Math.round(Math.sin(i*440*2*Math.PI/8000)*1000),44+i*2);
+const miniAudio = process.env.K67_PREVIEW_REAL_MINI_AUDIO === 'true'
+  ? await readFile(path.join(pages, 'term-tests/k67-audio-assets/mini-test-lesson-5-128kbps-182526cd0c3357a4.mp3')) : null;
+const audioBytes = slug => slug === 'mini-test-lesson-5' && miniAudio ? miniAudio : wav;
 const definition=async slug=>{
   const file=path.join(pages,'term-tests',slug,'test-config.js');
   const src=await readFile(file,'utf8');
@@ -42,13 +45,19 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
   writing:slug==='mini-test-lesson-5'?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],listeningReviewSeconds:120}),
-  getAudioManifest:async()=>{const sha256=createHash('sha256').update(wav).digest('hex');return{assetVersion:`sha256-${sha256}`,sha256,byteLength:wav.length,encryptedByteLength:wav.length+33,envelopeVersion:'IZTT1'};},
+  getAudioManifest:async slug=>{const bytes=audioBytes(slug);const sha256=createHash('sha256').update(bytes).digest('hex');return{assetVersion:`sha256-${sha256}`,sha256,byteLength:bytes.length,encryptedByteLength:bytes.length+33,envelopeVersion:'IZTT1'};},
   getContent:async slug=>content(slug),getSessionAudioKey:()=>key,getPreview:async()=>wav,
-  streamEncryptedAudio:async(_slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
-    res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(wav),cipher.final(),cipher.getAuthTag()]));}};
+  streamEncryptedAudio:async(slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
+    res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(audioBytes(slug)),cipher.final(),cipher.getAuthTag()]));}};
 const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
 if(protection)for(const value of Object.values(timing)){value.listeningDurationSeconds=toneSeconds;value.listeningTotalSeconds=toneSeconds+120;}
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if (miniAudio) {
+  if (createHash('sha256').update(miniAudio).digest('hex') !== '182526cd0c3357a4b963ea1cf84a9b72a9a6f6d968324c8905895bcce74088cd') throw new Error('Sai bản audio Mini K67.');
+  Object.assign(timing['mini-test-lesson-5'], { listeningDurationSeconds: 972, listeningTotalSeconds: 1092 });
+}
+const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+  publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
@@ -86,7 +95,7 @@ outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send
 outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-lesson-5(?:-computer-based)?)\/)(?:index.html)?$/,async(req,res,next)=>{
   try {const file=path.join(pages,req.path.replace(/^\//,''),req.path.endsWith('/')?'index.html':'');
     const html=(await readFile(file,'utf8')).replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
-      .replace(/(<body[^>]*>)/,'$1<aside class="preview-banner" role="status"><span><strong>Bản thử K67</strong> · Đề, tên và audio giả · Không gửi điểm hoặc chấm AI bên ngoài</span><button id="resetPreview" type="button">Làm lại bản thử</button></aside>')
+      .replace(/(<body[^>]*>)/,`$1<aside class="preview-banner" role="status"><span><strong>Bản thử K67</strong> · Đề và tên giả · ${miniAudio?'Audio Mini thật':'Audio giả'} · Không gửi điểm hoặc chấm AI bên ngoài</span><button id="resetPreview" type="button">Làm lại bản thử</button></aside>`)
       .replace('</body>','<script src="/preview-only.js"></script></body>');res.type('html').send(html);
   }catch(e){next(e);}
 });
