@@ -7,6 +7,8 @@ const positive = (min, max, fallback) => z.coerce.number().int().min(min).max(ma
 const schema = z.object({
   K67_ENV: z.enum(['production', 'test', 'development']).default('production'),
   K67_READ_FIRST_NEW_ENABLED: z.enum(['true','false']).default('false'),
+  K67_MINI_PAPER_OFFLINE_MODE: z.enum(['off','drain','on']).default('off'),
+  K67_MINI_PAPER_OFFLINE_CLASSES: z.string().regex(/^(?:[A-Z0-9._-]{2,32}(?:,[A-Z0-9._-]{2,32})*)?$/).default(''),
   K67_AUDIO_INCIDENT_ENABLED: z.enum(['true','false']).default('false'),
   K67_AUDIO_CACHE_ENABLED: z.enum(['true','false']).default('false'),
   K67_PUBLIC_AUDIO_ENABLED: z.enum(['true','false']).default('false'),
@@ -72,6 +74,8 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv: p.K67_ENV, port: p.K67_PORT,
     readFirstNewEnabled: p.K67_READ_FIRST_NEW_ENABLED === 'true',
+    miniPaperOfflineMode: p.K67_MINI_PAPER_OFFLINE_MODE,
+    miniPaperOfflineClasses: new Set(p.K67_MINI_PAPER_OFFLINE_CLASSES.split(',').filter(Boolean)),
     audioIncidentEnabled: p.K67_AUDIO_INCIDENT_ENABLED === 'true',
     audioCacheEnabled: p.K67_AUDIO_CACHE_ENABLED === 'true',
     publicAudioEnabled: p.K67_PUBLIC_AUDIO_ENABLED === 'true',

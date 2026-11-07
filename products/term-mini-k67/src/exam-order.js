@@ -6,6 +6,7 @@ import {recordListeningAudio} from './audio-recovery.js';
 import {activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
+import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -173,6 +174,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       return next();
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
+      ...(paper && offerMiniPaperOffline(config, data.classCode) ? { offlinePaper: true } : {}),
       encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
       previewAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/preview`});
   }
@@ -255,6 +257,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const r=await locked(db,row);clientCheck(data,r,paper);
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
+      if (paper) await guardMiniPaperOfflineWrite(db, config, r.exam_session_id, r.generation);
       if(action.endsWith('start')) {
         if(action==='listening/start'&&r.exam_delivery==='cbt'){
           const deferred=data.ownerStartVersion===2;
