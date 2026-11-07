@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
+import {mkdtemp,writeFile,unlink,rmdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import request from 'supertest';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
+import {publicAudioCatalog} from '../src/public-audio-catalog.js';
 
 const slug='/api/term-tests/term-test-1';
 const identity={classCode:'IC2304',studentRef:'11111111-1111-4111-8111-111111111111'};
@@ -13,10 +17,15 @@ const assets={supports:()=>true,getContent:()=>({title:'Fixture',writing:{tasks:
   getTiming:()=>({readingDurationMinutes:1,listeningDurationSeconds:6,listeningTotalSeconds:8,
     listeningReviewSeconds:2,writingDurationMinutes:1}),getSessionAudioKey:()=>Buffer.alloc(32)};
 
-for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order and one Writing receipt · ${mode}`,async()=>{
+for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order and one Writing receipt · ${mode}`,async t=>{
   let grading;
   const gradingCalls=[];
-  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',
+  const directory=await mkdtemp(join(tmpdir(),'term1-r2-test-'));
+  const term1R2ConfigFile=join(directory,'config.json');
+  await writeFile(term1R2ConfigFile,JSON.stringify({enabled:true,accountId:'0'.repeat(32),bucket:'synthetic',
+    accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-1'].sha256]}));
+  t.after(async()=>{await unlink(term1R2ConfigFile);await rmdir(directory);});
+  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',term1R2ConfigFile,
     termTestWritingGradingService:{ensureSubmission:input=>{
       const job=grading.ensureSubmission(input);gradingCalls.push(job);return job;
     }}});
@@ -29,10 +38,15 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     const prepared=await api.post(slug+'/session/prepare').send({...identity,examMode:mode,examDelivery:'cbt',orderClientVersion:1});
     assert.ok(prepared.ok,prepared.text);
     const scope={examSessionToken:prepared.body.examSessionToken,generation:0,deviceProof:'a'.repeat(64)};
+    const wrongOwner=await api.post(slug+'/cbt-journey/prepare').send({...identity,...scope,studentRef:'44444444-4444-4444-8444-444444444444'});
+    assert.equal(wrongOwner.status,403);
+    assert.equal(wrongOwner.body.audioDownload,undefined);
     const offer=await api.post(slug+'/cbt-journey/prepare').send({...identity,...scope});
     assert.ok(offer.ok,offer.text);
     assert.equal(offer.body.examMode,mode);
     assert.equal(offer.body.version,'term1-k67-cbt-journey-v1');
+    assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-1'].sha256);
+    assert.equal(offer.body.audioDownload?.validForSeconds,600);
     const post=(route,body)=>api.post(slug+'/cbt-journey/'+route).set('x-term2-permit',offer.body.permit).send({...scope,...body});
     assert.ok((await post('begin',{})).ok);
     assert.equal((await post('begin',{deviceProof:'b'.repeat(64)})).status,403);
@@ -66,7 +80,8 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     }
     const native=await api.post('/api/term-tests/writing').send({attemptToken,action:'start',task1:'',task2:''});
     assert.equal(native.body.error,'TERM_OFFLINE_JOURNEY_ACTIVE',native.text);
-    const essay=mode==='lis_first'?'':'This is a synthetic essay.';
+    const essay=mode==='lis_first'?'\u200b\u2060\u200d':'This is a synthetic essay.';
+    const shouldDispatch=mode==='read_first';
     Object.assign(writing,{previousOperationId,startedAt:nextAt,capturedAt:nextAt+60_000,answers:{task1:'',task2:essay}});
     assert.equal((await post('seal',{...writing,capturedAt:writing.capturedAt-1})).body.error,'OFFLINE_REVIEW_REQUIRED');
     assert.equal((await post('status',{section:'writing',operationId:writing.operationId})).body.persisted,false);
@@ -85,8 +100,8 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     for(let n=0;n<40&&gradingCalls.length<3;n++)await delay(10);
     assert.equal(gradingCalls.length,3);
     const results=await Promise.all(gradingCalls);
-    if(!essay)assert.equal(results[0].writingScore,0);
+    if(!shouldDispatch)assert.equal(results[0].writingScore,0);
     const jobs=await f.db.query("SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job WHERE job_type='dispatch'");
-    assert.equal(jobs.rows[0].n,essay?1:0);
+    assert.equal(jobs.rows[0].n,shouldDispatch?1:0);
   }finally{await f.db.close();}
 });

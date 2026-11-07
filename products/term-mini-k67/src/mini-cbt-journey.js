@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { sealMiniCbtSection } from './mini-cbt-offline.js';
-import { miniR2Audio, R2_POLICY } from './mini-r2-audio.js';
+import { miniR2Audio, term1JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
@@ -147,7 +147,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   };
   app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
-    const manifest = (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
+    const manifest = assets.getJourneyManifest?.(slug) || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
     return audioTransaction(pool,async db => {
       const {session,attempt,journey,now} = await lock(db,body,profile);
       if (!selected || String(selected.class_id) !== String(session.erp_course_class_id)
@@ -163,11 +163,12 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         (session_id,generation,student_ref,device_hash,audio_hash) VALUES($1,$2,$3,$4,$5) RETURNING *`,
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
+      const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
+        term1JourneyR2Audio({config,row:session,manifest});
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
-        content:await assets.getContent(slug),timing:assets.getTiming(slug),audioManifest:manifest,
-        ...miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY})};
+        content:await assets.getContent(slug),timing:assets.getTiming(slug),audioManifest:manifest,...audio};
     });
   }));
   app.post(prefix+'/begin',writeLimiter,route(scope,(body,req)=>audioTransaction(pool,async db => {
