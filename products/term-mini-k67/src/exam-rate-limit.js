@@ -15,7 +15,7 @@ export function examRateIdentity(pool){
     try{
       const asset=req.method==='GET'?req.path.match(/^\/api\/term-tests\/(term-test-1|term-test-2|mini-test-lesson-5)\/session\/([^/]+)\/(?:audio|preview)$/):null;
       if(req.method!=='POST'&&!asset)return next();
-      const route=req.path.match(/^\/api\/term-tests\/(term-test-1|term-test-2|mini-test-lesson-5)\/(?:session\/(?:start|prepare|resume-attempt|audio-(?:progress|state|incident|resume|access|owner))|listening(?:\/draft)?|reading(?:\/(?:start|draft))?|client-event)$/);
+      const route=req.path.match(/^\/api\/term-tests\/(term-test-1|term-test-2|mini-test-lesson-5)\/(?:session\/(?:start|prepare|resume-attempt|audio-(?:progress|state|incident|resume|access|owner))|listening(?:\/draft)?|reading(?:\/(?:start|draft))?|client-event|(?:paper|cbt)-journey\/(?:seal|status)|cbt-journey\/begin)$/);
       const result=/^\/api\/term-tests\/(?:result(?:\/review)?|writing)$/.test(req.path);
       if(!route&&!result&&!asset)return next();
       const body=asset?{examSessionToken:asset[2]}:req.body||{},slug=asset?.[1]||route?.[1]||null;
