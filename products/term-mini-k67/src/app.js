@@ -19,6 +19,7 @@ import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
 import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
+import { mountTerm1ListeningRetake } from './term1-listening-retake.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
@@ -495,6 +496,8 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
+  mountTerm1ListeningRetake(app,{pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter});
   mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,logEvent:logTermTestEvent,
     syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
