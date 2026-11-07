@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { sealMiniCbtSection } from './mini-cbt-offline.js';
-import { miniR2Audio, term1JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
+import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
@@ -10,6 +10,8 @@ const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'
 const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true};
 const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true};
+const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
+  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
@@ -23,7 +25,7 @@ const attemptSection = scope.extend({ operationId: z.uuid(), section: z.enum(['l
   heardSeconds: z.number().min(0).max(7200), answers: z.record(z.string().regex(/^\d{1,2}$/), z.string().max(120)) });
 const termSection = z.discriminatedUnion('section', [attemptSection.extend({section:z.literal('listening')}),
   attemptSection.extend({section:z.literal('reading')}),attemptSection.extend({section:z.literal('writing'),
-    eofAt:z.null(),heardSeconds:z.literal(0),answers:z.object({task1:z.literal(''),task2:z.string().max(12_000)}).strict()})]);
+    eofAt:z.null(),heardSeconds:z.literal(0),answers:z.object({task1:z.string().max(12_000),task2:z.string().max(12_000)}).strict()})]);
 const termStatus=scope.extend({section:z.enum(['listening','reading','writing']),operationId:z.uuid()});
 const problem = (code, message, status = 409) => Object.assign(new Error(message), { code, status });
 const clock = value => new Date(value).getTime();
@@ -106,15 +108,16 @@ async function commit(db, state, body, timing, profile) {
   const listening = body.section === 'listening';
   const { session, attempt } = state;
   if(body.section==='writing'){
+    if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
     if(!attempt?.completed_at||attempt.writing_scope!=='exam'||attempt.writing_started_at||attempt.writing_submitted_at
         || Number(attempt.writing_draft_revision)>0)throw problem('OFFLINE_CONFLICT','Phiên Writing đã thay đổi. Giữ bài để đối soát.');
     if(!Number.isSafeInteger(deadline)||body.capturedAt>deadline||(body.automatic&&(body.capturedAt!==deadline||clock(state.now)<deadline))) {
       throw problem('OFFLINE_REVIEW_REQUIRED','Mốc chốt Writing chưa khớp giờ thi. Bài vẫn được giữ.');
     }
     await db.query('SELECT set_config($1,$2,true)',[profile.guard,session.id]);
-    await db.query(`UPDATE assessment.term_test_attempt SET writing_task_1='',writing_task_2=$2,writing_started_at=$3,
-      writing_deadline_at=$4,writing_draft_revision=$5,writing_submitted_at=$6,writing_updated_at=clock_timestamp(),updated_at=clock_timestamp()
-      WHERE id=$1`,[attempt.id,body.answers.task2,new Date(body.startedAt).toISOString(),new Date(deadline).toISOString(),
+    await db.query(`UPDATE assessment.term_test_attempt SET writing_task_1=$2,writing_task_2=$3,writing_started_at=$4,
+      writing_deadline_at=$5,writing_draft_revision=$6,writing_submitted_at=$7,writing_updated_at=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE id=$1`,[attempt.id,body.answers.task1,body.answers.task2,new Date(body.startedAt).toISOString(),new Date(deadline).toISOString(),
       body.revision,new Date(body.capturedAt).toISOString()]);
     return {attemptToken:attempt.id,completed:true,nextSection:'result'};
   }
@@ -144,6 +147,7 @@ async function commit(db, state, body, timing, profile) {
 export function mountMiniCbtJourney(app, services) {mountCbtJourney(app,services,mini);}
 export function mountTerm1CbtJourney(app, services) {mountCbtJourney(app,services,term1);}
 export function mountTerm1PaperJourney(app, services) {mountCbtJourney(app,services,term1Paper);}
+export function mountTerm2CbtJourney(app, services) {mountCbtJourney(app,services,term2);}
 
 async function preparePaper(db, profile, student, body, secret, timing, allowNew) {
   const {slug,table,version}=profile;
@@ -239,7 +243,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
       const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
-        term1JourneyR2Audio({config,row:session,manifest});
+        profile===term1?term1JourneyR2Audio({config,row:session,manifest}):term2JourneyR2Audio({config,row:session,manifest});
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),

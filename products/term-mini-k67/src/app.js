@@ -17,7 +17,7 @@ import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
-import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm1PaperJourney } from './mini-cbt-journey.js';
+import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -521,6 +521,14 @@ export function createApp({
         FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-1' AND superseded_at IS NULL`,[attemptToken])
         .then(result=>ensureTermTestWritingGrading(result.rows[0]))
         .catch(()=>logger.error('Term 1 offline Writing grading will retry on result read'));
+    }});
+  mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
+      if(!termTestWritingGradingService)return;
+      void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
+        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-2' AND superseded_at IS NULL`,[attemptToken])
+        .then(result=>ensureTermTestWritingGrading(result.rows[0]))
+        .catch(()=>logger.error('Term 2 offline Writing grading will retry on result read'));
     }});
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });

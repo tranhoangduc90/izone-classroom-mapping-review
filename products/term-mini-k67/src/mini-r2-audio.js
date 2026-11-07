@@ -11,6 +11,9 @@ export function miniR2Audio({ config, slug, row, manifest, requested }) {
 export function term1JourneyR2Audio({config,row,manifest}) {
   return scopedR2Audio({configFile:config.term1R2ConfigFile,slug:'term-test-1',row,manifest,requested:R2_POLICY});
 }
+export function term2JourneyR2Audio({config,row,manifest}) {
+  return scopedR2Audio({configFile:config.term2R2ConfigFile,slug:'term-test-2',row,manifest,requested:R2_POLICY});
+}
 
 function scopedR2Audio({configFile,slug,row,manifest,requested}) {
   const expected = publicAudioCatalog[slug];

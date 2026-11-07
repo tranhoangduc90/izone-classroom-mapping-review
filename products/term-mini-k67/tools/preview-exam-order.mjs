@@ -30,7 +30,9 @@ const miniAudio = process.env.K67_PREVIEW_REAL_MINI_AUDIO === 'true'
   ? await readFile(path.join(pages, 'term-tests/k67-audio-assets/mini-test-lesson-5-128kbps-182526cd0c3357a4.mp3')) : null;
 const term1Audio = process.env.K67_PREVIEW_REAL_TERM1_AUDIO === 'true'
   ? await readFile(path.join(pages,'term-tests/k67-audio-assets/term-test-1-128kbps-9af027eaaf402acc.mp3')) : null;
-const audioBytes = slug => (slug==='mini-test-lesson-5'?miniAudio:slug==='term-test-1'?term1Audio:null)||wav;
+const term2Audio = process.env.K67_PREVIEW_REAL_TERM2_AUDIO === 'true'
+  ? await readFile(path.join(pages,'term-tests/k67-audio-assets/term-test-2-96kbps-656921dc9888dcfe.mp3')) : null;
+const audioBytes = slug => (slug==='mini-test-lesson-5'?miniAudio:slug==='term-test-1'?term1Audio:slug==='term-test-2'?term2Audio:null)||wav;
 const definition=async slug=>{
   const file=path.join(pages,'term-tests',slug,'test-config.js');
   const src=await readFile(file,'utf8');
@@ -48,14 +50,19 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
 });
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
+const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
 const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
+const term2Review=term2JourneyMode==='on'&&!term2Audio?3:120;
+const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],
-    listeningReviewSeconds:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:120}),
+    listeningReviewSeconds:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
   getJourneyManifest:slug=>{
-    if(slug!=='term-test-1'||term1JourneyMode!=='on')return null;
+    if(!((slug==='term-test-1'&&term1JourneyMode==='on')||(slug==='term-test-2'&&term2JourneyMode==='on')))return null;
     const bytes=audioBytes(slug);
-    return {url:`http://127.0.0.1:${port}/${term1Audio?'preview-term1-audio':'preview-tone.wav'}`,
+    return {url:slug==='term-test-2'&&term2Audio&&term2R2ConfigFile
+        ?'https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-2-96kbps-656921dc9888dcfe.mp3'
+        :`http://127.0.0.1:${port}/${slug==='term-test-1'&&term1Audio?'preview-term1-audio':slug==='term-test-2'&&term2Audio?'preview-term2-audio':'preview-tone.wav'}`,
       envelopeVersion:'MP3',byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
   },
   getMiniJourneyManifest:()=>{const bytes=audioBytes('mini-test-lesson-5');return {url:`http://127.0.0.1:${port}/preview-mini-audio`,
@@ -82,11 +89,18 @@ if(term1JourneyMode==='on'){
   }else Object.assign(timing['term-test-1'],{listeningDurationSeconds:toneSeconds,
     listeningTotalSeconds:toneSeconds+term1Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
 }
+if(term2JourneyMode==='on'){
+  if(term2Audio){
+    if(createHash('sha256').update(term2Audio).digest('hex')!=='656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e')throw new Error('Sai bản audio Term 2 K67.');
+    Object.assign(timing['term-test-2'],{listeningDurationSeconds:1844,listeningTotalSeconds:1964});
+  }else Object.assign(timing['term-test-2'],{listeningDurationSeconds:toneSeconds,
+    listeningTotalSeconds:toneSeconds+term2Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
+}
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
-  miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,
+  miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term2R2ConfigFile,
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
@@ -123,6 +137,7 @@ outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/j
 const offlineEntries=[];
 if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEntries.push('mini-test-lesson-5-computer-based');
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');
+if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
@@ -144,6 +159,7 @@ for(const entry of offlineEntries){
 }
 outer.get('/preview-tone.wav',(_req,res)=>res.type('audio/wav').send(wav));
 if(term1Audio)outer.get('/preview-term1-audio',(_req,res)=>res.type('audio/mpeg').send(term1Audio));
+if(term2Audio)outer.get('/preview-term2-audio',(_req,res)=>res.type('audio/mpeg').send(term2Audio));
 outer.get('/preview-mini-audio',(_req,res)=>res.type(miniAudio?'audio/mpeg':'audio/wav').send(audioBytes('mini-test-lesson-5')));
 outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-banner{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 20px;background:#fff6d8;color:#694b00;font:14px system-ui}.preview-banner button{padding:8px;border:1px solid #eed48b;border-radius:6px;cursor:pointer}@media(max-width:700px){.preview-banner{align-items:flex-start;flex-direction:column}}`));
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));
