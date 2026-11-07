@@ -5,15 +5,21 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,syncErpGrades,completeSchema=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,termTestWritingGradingService,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
+  const termTestSessionSecret=miniPaperOffline||miniCbtOfflineMode||miniCbtJourneyMode||term1CbtJourneyMode
+    ?'synthetic-mini-offline-secret-at-least-32-bytes':undefined;
+  const installTermJourney=async db=>{
+    if(term1CbtJourneyMode)await db.exec(await readFile(new URL('../../db/023-term1-cbt-journey.sql',import.meta.url),'utf8'));
+  };
   if(process.env.K67_ORDER_NATIVE_URL) {
     const {db,pool}=await createNativeOrderFixture({examOrder});
-    if(miniListeningEofEnabled||miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/019-mini-listening-eof.sql',import.meta.url),'utf8'));
+    if(miniListeningEofEnabled||miniCbtJourneyMode||term1CbtJourneyMode)await db.exec(await readFile(new URL('../../db/019-mini-listening-eof.sql',import.meta.url),'utf8'));
     if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
     if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
-    return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
-      config:{...miniR2,miniListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,termTestSessionSecret:miniCbtOfflineMode||miniCbtJourneyMode?'synthetic-mini-offline-secret-at-least-32-bytes':undefined,
+    await installTermJourney(db);
+    return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,
+      config:{...miniR2,miniListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,termTestSessionSecret,
         audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
@@ -46,9 +52,10 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   await db.exec(await readFile(new URL('../../db/011-audio-asset-pin.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../db/012-audio-owner.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../db/014-audio-preparation-without-owner.sql',import.meta.url),'utf8'));
-  if(miniListeningEofEnabled||miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/019-mini-listening-eof.sql',import.meta.url),'utf8'));
+  if(miniListeningEofEnabled||miniCbtJourneyMode||term1CbtJourneyMode)await db.exec(await readFile(new URL('../../db/019-mini-listening-eof.sql',import.meta.url),'utf8'));
   if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
   if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
+  await installTermJourney(db);
   if (miniPaperOffline) {
     await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
     await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
@@ -60,8 +67,8 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   let queue=Promise.resolve();
   const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
-  return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,
+  return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,
     config:{...miniR2,miniListeningEofEnabled,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
-      miniPaperOfflineMode:miniPaperOffline,miniCbtOfflineMode,miniCbtJourneyMode,termTestSessionSecret:miniPaperOffline||miniCbtOfflineMode||miniCbtJourneyMode?'synthetic-mini-offline-secret-at-least-32-bytes':undefined,
+      miniPaperOfflineMode:miniPaperOffline,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,termTestSessionSecret,
       allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
 }
