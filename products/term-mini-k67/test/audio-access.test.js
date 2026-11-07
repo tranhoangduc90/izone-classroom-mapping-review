@@ -21,7 +21,10 @@ before(async()=>{
   for(const slug of slugs){await mkdir(path.join(dir,slug));await writeFile(path.join(dir,slug,'listening-audio.mp3'),original);
     await writeFile(path.join(dir,slug,'content.json'),JSON.stringify({baseTestSlug:slug}));}
   assets=createTermTestAssetService({assetDir:dir,sessionSecret:'fixture-only-secret-audio-cache-32-characters'});
-  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true,publicAudio:true});api=request(f.app);
+  const miniR2ConfigFile=path.join(dir,'r2.fixture.json');
+  await writeFile(miniR2ConfigFile,JSON.stringify({enabled:true,accountId:'f'.repeat(32),bucket:'fixture',
+    accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog[slugs[2]].sha256]}));
+  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true,publicAudio:true,miniR2ConfigFile,miniListeningEofEnabled:true});api=request(f.app);
   for(const slug of slugs.slice(0,2))await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,created_at,updated_at,is_active)
     SELECT $1,title,version,listening_definition,reading_definition,created_at,updated_at,is_active
     FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`,[slug]);
@@ -42,6 +45,43 @@ async function prepare(slug='term-test-1',mode='lis_first'){
   return{base,token};
 }
 const begin=(base,token)=>post(base,'start',{...token,audioProtocolVersion:1,audioEventId:randomUUID()});
+for(const mode of ['lis_first','read_first']) test(`Mini K67 native EOF rejects early or skipped playback and makes review replay-safe, ${mode}`, async()=>{
+  const {base,token}=await prepare(slugs[2],mode);
+  const access=await post(base,'audio-access',{...token,publicAudioVersion:1,listeningEofVersion:1});
+  assert.equal(access.body.listeningEofVersion,1);
+  assert.equal((await begin(base,token)).status,200);
+  const end=()=>post(base,'audio-progress',{...token,heardSeconds:972.048,state:'ended'});
+  assert.equal((await end()).body.error,'AUDIO_END_NOT_CONFIRMED');
+  await f.db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=now()-interval '973 seconds' WHERE id=$1`,[token.examSessionToken]);
+  assert.equal((await end()).body.error,'AUDIO_END_NOT_CONFIRMED');
+  await f.db.query(`UPDATE assessment.term_test_exam_session SET listening_audio_checkpoint_seconds=969 WHERE id=$1`,[token.examSessionToken]);
+  const accepted=await end();
+  assert.equal(accepted.status,200,JSON.stringify(accepted.body));
+  assert.ok(Date.parse(accepted.body.listeningDeadlineAt)-Date.parse(accepted.body.listeningEofAt)>=119_999);
+  const replay=await end();
+  assert.equal(replay.body.listeningDeadlineAt,accepted.body.listeningDeadlineAt);
+  assert.equal(replay.body.listeningEofAt,accepted.body.listeningEofAt);
+});
+for(const mode of ['lis_first','read_first']) test(`Mini K67 R2 uses native authorization and pins one file, ${mode}`, async()=>{
+  const {base,token}=await prepare(slugs[2],mode);
+  const optIn={...token,publicAudioVersion:1,audioTransport:'r2-direct-v1'};
+  const denied=await post(base,'audio-access',{...optIn,generation:7});
+  assert.equal(denied.status,409);
+  assert.equal(denied.body.audioDownload,undefined);
+  const lobby=await post(base,'audio-access',optIn);
+  assert.equal(lobby.status,200);
+  assert.equal(lobby.body.listeningStartedAt,null);
+  assert.equal(lobby.body.audioTransport,'r2-direct-v1');
+  const grant=lobby.body.audioDownload;
+  const pinned=publicAudioCatalog[slugs[2]];
+  assert.equal(grant.sha256,pinned.sha256);
+  assert.equal(grant.byteLength,pinned.byteLength);
+  const url=new URL(grant.url);
+  assert.match(url.pathname,new RegExp('/'+pinned.sha256+'\\.mp3$'));
+  assert.equal(url.searchParams.get('X-Amz-Expires'),'600');
+  assert.equal((await begin(base,token)).status,200);
+  assert.equal((await post(base,'audio-access',optIn)).body.audioDownload,undefined);
+});
 for(const slug of slugs)for(const mode of ['lis_first','read_first'])test(`${slug}/${mode}: client MP3 nhận đúng bản Pages, ghim qua start/reload, không mở giờ trong phòng chờ`,async()=>{
   const{base,token}=await prepare(slug,mode);
   const lobby=await post(base,'audio-access',{...token,publicAudioVersion:1});

@@ -16,6 +16,8 @@ import { createContextGuard } from './context-guard.js';
 import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
+import { mountMiniCbtOffline } from './mini-cbt-offline.js';
+import { mountMiniCbtJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -99,7 +101,7 @@ const examSessionStartSchema = z.object({ examSessionToken: z.string().uuid(),
   audioProtocolVersion:z.union([z.literal(0),z.literal(1)]).optional(),
   heardSeconds:z.number().min(0).max(7200).optional(),audioEventId:z.uuid().optional() });
 const audioProgressSchema = z.object({examSessionToken:z.uuid(),heardSeconds:z.number().min(0).max(7200),
-  state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered']),eventId:z.uuid().optional(),
+  state:z.enum(['playing','pause','waiting','stalled','pagehide','recovered','ended']),eventId:z.uuid().optional(),
   generation:z.number().int().nonnegative().optional()});
 
 const attemptResumeSchema = z.object({
@@ -499,6 +501,10 @@ export function createApp({
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
   mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
     writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
+  mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+  mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
@@ -931,13 +937,14 @@ export function createApp({
   const audioProgressLimiter=rateLimit({windowMs:60_000,limit:300,standardHeaders:'draft-8',legacyHeaders:false,
     keyGenerator:examRateKey,message:{ok:false,error:'AUDIO_PROGRESS_RATE_LIMITED'}});
   mountAudioIncidents(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter});
-  mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled,publicEnabled:config.publicAudioEnabled});
+  mountAudioAccess(app,{pool,assets:termTestAssetService,limiter:audioProgressLimiter,enabled:config.audioCacheEnabled,publicEnabled:config.publicAudioEnabled,config});
   mountAudioOwner(app,{pool,limiter:audioProgressLimiter,authorize:authorizeAudioSession,transaction:audioTransaction,enabled:config.audioOwnerEnabled,
     onRecovery:({testSlug,sessionId,ownerEpoch})=>logTermTestEvent('audio_preparation_recovered',testSlug,sessionId,{ownerEpoch})});
   app.post('/api/term-tests/:testSlug/session/audio-progress',audioProgressLimiter,asyncRoute(async(req,res)=>{
     const slug=testSlugSchema.safeParse(req.params.testSlug),parsed=audioProgressSchema.safeParse(req.body);
     if(!slug.success||!parsed.success||!supportsProtectedTest(slug.data))return res.status(400).json({ok:false,error:'INVALID_AUDIO_PROGRESS',message:'Mốc nghe audio không hợp lệ.'});
-    const data=await checkpointListeningAudio(pool,{...parsed.data,slug:slug.data,durationSeconds:termTestAssetService.getTiming(slug.data).listeningDurationSeconds});
+    const timing=termTestAssetService.getTiming(slug.data);
+    const data=await checkpointListeningAudio(pool,{...parsed.data,slug:slug.data,durationSeconds:timing.listeningDurationSeconds,reviewSeconds:timing.listeningReviewSeconds});
     if(parsed.data.state!=='playing'||data.grantedRecoverySeconds>0)logTermTestEvent('audio_'+parsed.data.state,slug.data,parsed.data.examSessionToken,
       {section:'listening',heardSeconds:data.listeningResumeAtSeconds,grantedRecoverySeconds:data.grantedRecoverySeconds,totalRecoverySeconds:data.listeningRecoverySeconds});
     res.json(data);
@@ -1645,6 +1652,7 @@ export function createApp({
   app.use((error, _req, res, _next) => {
     if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});
     if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
+    if(error?.code==='P6721')return res.status(409).json({ok:false,error:'MINI_OFFLINE_JOURNEY_ACTIVE',message:'Lượt đang được giữ ở chế độ offline. Hãy mở lại trên thiết bị đã bắt đầu.'});
     if(error?.code==='P6702')return res.status(409).json({ok:false,error:'AUDIO_SESSION_REQUIRED',message:'Hãy dùng đúng phiên Listening đang mở để nộp bài.'});
     if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     if (error instanceof TermTestWritingGradingError) {

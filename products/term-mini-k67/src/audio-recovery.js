@@ -15,8 +15,29 @@ function response(row, granted=0) {
     grantedRecoverySeconds:granted, serverNow:new Date(row.server_now).toISOString()};
 }
 
+// The session is locked and its owner verified. Native elapsed time and the
+// previous acknowledged checkpoint constrain the official player's end position.
+async function confirmMiniListeningEnd(db, row, { slug, heardSeconds, durationSeconds, reviewSeconds }) {
+  const pending = () => fail('AUDIO_END_NOT_CONFIRMED', 'Chưa xác nhận đã phát hết audio. Bài vẫn được giữ.');
+  if (slug !== 'mini-test-lesson-5' || Number(row.listening_eof_version) !== 1
+      || Number(row.listening_audio_protocol_version) !== 1 || row.listening_audio_incident_id) throw pending();
+  if (row.listening_eof_at) return;
+  const elapsed = (new Date(row.server_now).getTime() - new Date(row.listening_started_at).getTime()) / 1_000;
+  const recovery = Number(row.listening_recovery_seconds) || 0;
+  const checkpoint = Number(row.listening_audio_checkpoint_seconds) || 0;
+  if (!Number.isFinite(elapsed) || !Number.isFinite(durationSeconds) || !Number.isFinite(reviewSeconds)
+      || heardSeconds < durationSeconds - 0.25 || heardSeconds > durationSeconds + 1
+      || elapsed - recovery < durationSeconds - 2 || checkpoint < durationSeconds - 12) throw pending();
+  await db.query(`UPDATE assessment.term_test_exam_session
+    SET listening_eof_at=clock_timestamp(),listening_audio_checkpoint_seconds=$2,
+        listening_audio_checkpoint_at=clock_timestamp(),
+        listening_deadline_at=greatest(listening_deadline_at,clock_timestamp()+make_interval(secs=>$3::double precision)),
+        listening_audio_revision=listening_audio_revision+1
+    WHERE id=$1`, [row.id, durationSeconds, reviewSeconds]);
+}
+
 // Hàm này chạy trong giao dịch của bên gọi: RF giữ khóa cùng giao dịch mở kỹ năng.
-export async function recordListeningAudio(db, {examSessionToken, slug, heardSeconds, state, eventId, generation, durationSeconds}) {
+export async function recordListeningAudio(db, {examSessionToken, slug, heardSeconds, state, eventId, generation, durationSeconds, reviewSeconds}) {
   const result=await db.query(`SELECT s.*,a.superseded_at AS bound_superseded_at,
     a.generation AS bound_generation,a.exam_mode AS bound_mode,a.reading_submitted_at,
     a.listening_submitted_at AS bound_listening_submitted_at,clock_timestamp() AS server_now
@@ -33,8 +54,12 @@ export async function recordListeningAudio(db, {examSessionToken, slug, heardSec
   }
   // Phiên bảo vệ mới chỉ được bù qua sự cố tường minh; playing/recovered cũ không đóng hold.
   assertAudioOwner(row);
+  if(state==='ended') {
+    await confirmMiniListeningEnd(db,row,{slug,heardSeconds,durationSeconds,reviewSeconds});
+    return {ok:true,...await listeningAudioSnapshot(db,row.id)};
+  }
   if(Number(row.listening_audio_protocol_version)===1){
-    if(!row.listening_audio_incident_id&&state==='playing'){
+    if(!row.listening_audio_incident_id&&!row.listening_eof_at&&state==='playing'){
       const now=new Date(row.server_now).getTime(),maximum=Math.max(0,(now-new Date(row.listening_started_at).getTime())/1000-Number(row.listening_recovery_seconds||0)+3);
       const accepted=Math.max(Number(row.listening_audio_checkpoint_seconds)||0,Math.min(heardSeconds,maximum,durationSeconds||7200));
       await db.query(`UPDATE assessment.term_test_exam_session SET listening_audio_checkpoint_seconds=$2,
