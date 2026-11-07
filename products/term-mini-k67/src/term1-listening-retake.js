@@ -179,7 +179,9 @@ export function mountTerm1ListeningRetake(app,{pool,config,assets,readStudent,re
   app.post(prefix+'/result',readLimiter,route(async req=>{
     const row=await authorized(pool,req,parse(scope,req.body));
     if(!row.receipt)throw problem('RETAKE_PENDING','Máy chủ chưa nhận bài Listening.');
+    const ack=(await pool.query("SELECT to_regclass('assessment.term_k67_listening_retake_portal_ack') IS NOT NULL AS ready")).rows[0];
+    const portalSyncStatus=ack.ready?(await pool.query('SELECT status FROM assessment.term_k67_listening_retake_portal_ack WHERE id=$1',[row.id])).rows[0]?.status:null;
     return {ok:true,attemptToken:row.id,studentName:row.student_name,className:row.class_code,testSlug:slug,
-      completed:true,completedAt:row.sealed_at,result:row.result,portalSyncStatus:'pending'};
+      completed:true,completedAt:row.sealed_at,result:row.result,portalSyncStatus:portalSyncStatus||'pending'};
   }));
 }
