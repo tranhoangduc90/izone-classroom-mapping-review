@@ -11,6 +11,20 @@ const assets={supports:()=>true,getTiming:()=>({readingDurationMinutes:60}),getC
   throw new Error('Paper must not load CBT content');
 }};
 
+for(const slug of ['term-test-1','term-test-2'])test(`${slug} paper can open while CBT and EOF remain off`,async t=>{
+  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,
+    [slug==='term-test-1'?'term1PaperJourneyMode':'term2PaperJourneyMode']:'on'});
+  t.after(()=>f.db.close());
+  await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+    SELECT $1,'Đề giả Term',1,listening_definition,reading_definition,true
+    FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`,[slug]);
+  const api=request(f.app),root='/api/term-tests/'+slug;
+  assert.equal((await api.get(root+'/paper-journey/availability')).body.enabled,true);
+  assert.equal((await api.post(root+'/cbt-journey/prepare').send({})).status,404);
+  const ready=await api.post(root+'/paper-journey/prepare').send({...identity,deviceProof,examMode:'lis_first'});
+  assert.equal(ready.status,200,ready.text);
+});
+
 for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_first','read_first'])test(`${slug} paper preserves both section policies · ${examMode}`,async t=>{
   const root='/api/term-tests/'+slug;
   const otherRoot='/api/term-tests/'+(slug==='term-test-1'?'term-test-2':'term-test-1');
