@@ -63,8 +63,10 @@ export function mountAudioAccess(app,{pool,assets,limiter,enabled,publicEnabled=
         // Xác thực lại sau bước đọc file: quyền/owner có thể đã đổi trong lúc chờ hash.
         const {row,now}=await authorizeDownload(db,input.data,slug);
         let listeningEofVersion = Number(row.listening_eof_version) || 0;
-        if (!listeningEofVersion && !row.listening_started_at && slug === 'mini-test-lesson-5'
-            && config.miniListeningEofEnabled && config.audioIncidentEnabled && input.data.listeningEofVersion === 1) {
+        const eofEnabled = (slug === 'mini-test-lesson-5' && config.miniListeningEofEnabled)
+          || (slug === 'term-test-1' && config.term1ListeningEofEnabled);
+        if (!listeningEofVersion && !row.listening_started_at && eofEnabled
+            && config.audioIncidentEnabled && input.data.listeningEofVersion === 1) {
           await db.query('UPDATE assessment.term_test_exam_session SET listening_eof_version=1 WHERE id=$1', [row.id]);
           listeningEofVersion = 1;
         }

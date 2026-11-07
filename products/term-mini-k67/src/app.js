@@ -1677,6 +1677,8 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error?.code==='P6730')return res.status(409).json({ok:false,error:'AUDIO_END_NOT_CONFIRMED',message:'Audio chưa được xác nhận phát hết. Bài làm vẫn được giữ.'});
+    if(error?.code==='P6731')return res.status(409).json({ok:false,error:'LISTENING_REVIEW_ACTIVE',message:'Bạn vẫn còn thời gian rà bài Listening sau khi nghe hết audio.'});
     if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});
     if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
     if(error?.code==='P6721')return res.status(409).json({ok:false,error:'MINI_OFFLINE_JOURNEY_ACTIVE',message:'Lượt đang được giữ ở chế độ offline. Hãy mở lại trên thiết bị đã bắt đầu.'});
