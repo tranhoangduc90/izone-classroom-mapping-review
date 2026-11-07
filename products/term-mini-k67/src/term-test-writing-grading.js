@@ -98,7 +98,8 @@ export function calculateTermTestWritingOverall(task1Score, task2Score) {
 }
 
 function countWords(value) {
-  const normalized = cleanText(value).trim();
+  // Ký tự định dạng vô hình không phải nội dung bài làm và không được tạo việc chấm AI.
+  const normalized = cleanText(value).replace(/\p{Default_Ignorable_Code_Point}/gu, '').trim();
   return normalized ? normalized.split(/\s+/u).length : 0;
 }
 
