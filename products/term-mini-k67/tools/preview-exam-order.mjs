@@ -53,6 +53,7 @@ const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
 const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
+const term1R2ConfigFile=process.env.K67_PREVIEW_TERM1_R2_CONFIG;
 const term2Review=term2JourneyMode==='on'&&!term2Audio?3:120;
 const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],
@@ -60,7 +61,9 @@ const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[s
   getJourneyManifest:slug=>{
     if(!((slug==='term-test-1'&&term1JourneyMode==='on')||(slug==='term-test-2'&&term2JourneyMode==='on')))return null;
     const bytes=audioBytes(slug);
-    return {url:slug==='term-test-2'&&term2Audio&&term2R2ConfigFile
+    return {url:slug==='term-test-1'&&term1Audio&&term1R2ConfigFile
+        ?'https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-1-128kbps-9af027eaaf402acc.mp3'
+        :slug==='term-test-2'&&term2Audio&&term2R2ConfigFile
         ?'https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-2-96kbps-656921dc9888dcfe.mp3'
         :`http://127.0.0.1:${port}/${slug==='term-test-1'&&term1Audio?'preview-term1-audio':slug==='term-test-2'&&term2Audio?'preview-term2-audio':'preview-tone.wav'}`,
       envelopeVersion:'MP3',byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
@@ -100,7 +103,7 @@ const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
-  miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term2R2ConfigFile,
+  miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
