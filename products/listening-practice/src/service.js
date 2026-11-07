@@ -2,6 +2,7 @@ import {CODE,TOTAL_MS,ListeningError,fail,hash,secret,uuid,emptyDraft,validateCo
  issueLease,checkpoint,recoverCheckpoint,publicAttempt,checkLease,canonical} from './domain.js';
 import {timingFor} from './domain.js';
 import {authoredLesson} from './authored-content.js';
+import {r2Eligible,R2_POLICY} from './audio-r2.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
@@ -264,7 +265,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
  const begin=input=>operation(input,'begin',async(db,b,state,record)=>{
   if(b.assignment_status!=='open')fail('ASSIGNMENT_CLOSED','Bài chưa mở hoặc đã đóng.');
   if(state.attempts.length)fail('ATTEMPT_EXISTS','Bạn đã có lần làm bài. Dùng Tiếp tục hoặc Reset.');
-  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);if(r2Eligible(b.definition.audio.sha256))a.audioDeliveryPolicy=R2_POLICY;await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
  });
  const resume=input=>operation(input,'resume',async(db,b,state,record)=>{
   const a=active(state,input.attemptId);
@@ -301,7 +302,7 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
    checkLease(old,input.lease);if(input.snapshot)recoverCheckpoint(old,input.snapshot,input.lease,clock());
    old.status='reset';old.endedAt=new Date(clock()).toISOString();
   }
-  const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
+  const{a,lease}=createAttempt(state,input.owner,b.code);if(r2Eligible(b.definition.audio.sha256))a.audioDeliveryPolicy=R2_POLICY;await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
  });
  const submit=input=>operation(input,'submit',async(db,b,state,record)=>{
   const a=active(state,input.attemptId);if(!recoverCheckpoint(a,input.snapshot,input.lease,clock()))return view(db,b,state);
@@ -325,8 +326,8 @@ export function createListeningService({pool,context,clock=Date.now,pageBase,res
  }
  async function audioAccess({token,attemptId}){
   const b=await binding(pool,{token}),state=(await pool.query('SELECT state FROM listening_practice.work WHERE binding_id=$1',[b.id])).rows[0]?.state;
-  active(state||initialState(),attemptId);
-  return{sha256:b.definition.audio.sha256};
+  const a=active(state||initialState(),attemptId);
+  return{sha256:b.definition.audio.sha256,r2Direct:a.audioDeliveryPolicy===R2_POLICY};
  }
  async function configureAssignment({assignmentId,status}){
   return transaction(pool,async db=>{

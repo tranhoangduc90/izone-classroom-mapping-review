@@ -19,7 +19,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const origin=req.headers.origin;
   if(origin&&!origins.includes(origin))return res.status(403).json({error:{code:'ORIGIN_DENIED',message:'Trang gọi API không được phép.'}});
   if(origin){res.set('Access-Control-Allow-Origin',origin);res.set('Vary','Origin');res.set('Access-Control-Allow-Credentials','true');}
-  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Izone-Document, X-Izone-Assignment, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers','Content-Type, Authorization, X-Izone-Audio-Transport, X-Izone-Document, X-Izone-Assignment, X-Listening-Admin, X-Izone-Csrf');res.set('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   if(req.method==='OPTIONS')return res.sendStatus(204);next();
  });
  app.use(express.json({limit:'512kb'}));
@@ -46,7 +46,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  const sendReviewAudio=(result,res,req)=>{
   const media=mediaFor(result.definition?.audio?.sha256),review=media?.review,audioFile=media?.audioFile;
   if(!matchingReview(review,result)||!audioFile)throw new ListeningError('REVIEW_UNAVAILABLE','Audio xem lại chưa sẵn sàng.',503);
-  if(sendPublicAudioMetadata(req,res,result.definition?.audio?.sha256))return;
+  if(sendPublicAudioMetadata(req,res,result.definition?.audio?.sha256,result.attempt?.audioDeliveryPolicy==='r2-direct-v1'))return;
   res.set('Cache-Control','private, no-store');res.sendFile(audioFile);
  };
  const entry=z.object({entryToken:z.string().regex(/^[\w-]{43}$/)}).strict();
@@ -65,7 +65,7 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
   const access=await service.audioAccess({token:token(req),attemptId:z.uuid().parse(req.params.attemptId)});
   const file=mediaFor(access.sha256)?.audioFile;
   if(!file)throw new ListeningError('AUDIO_UNAVAILABLE','Audio chưa sẵn sàng.',503);
-  if(sendPublicAudioMetadata(req,res,access.sha256))return;
+  if(sendPublicAudioMetadata(req,res,access.sha256,access.r2Direct))return;
   res.set('Cache-Control','private, no-store');res.sendFile(file);
  }));
  app.get('/api/config',(req,res)=>res.json({googleClientId}));
