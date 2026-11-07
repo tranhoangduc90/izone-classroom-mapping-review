@@ -21,6 +21,7 @@ const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid
   generation:z.number().int().nonnegative().optional(),orderClientVersion:z.literal(1).optional(),
   revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   draftRevision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  submissionIntent:z.enum(['manual','automatic']).optional(),
   clientSubmissionId:z.uuid().optional(),
   answers:z.record(z.string().regex(/^(?:[1-9]|[1-3][0-9]|40)$/),z.string().max(120)).optional()});
 const error = (code,message,status=409) => Object.assign(new Error(message),{code,status});

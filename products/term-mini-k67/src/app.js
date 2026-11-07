@@ -69,6 +69,7 @@ const listeningSubmissionSchema = z.object({
   clientSubmissionId: z.string().uuid(),
   examSessionToken: z.string().uuid().optional(),
   draftRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  submissionIntent: z.enum(['manual','automatic']).optional(),
   answers: answersSchema
 });
 

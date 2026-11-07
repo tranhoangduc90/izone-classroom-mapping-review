@@ -51,13 +51,15 @@ for(const mode of ['lis_first','read_first']) test(`Term 1 native EOF và 120 gi
   assert.equal(access.status,200,JSON.stringify(access.body));
   assert.equal(access.body.listeningEofVersion,1);
   assert.equal((await begin(base,token)).status,200);
-  const submission=()=>api.post(base+'/listening').send({
+  const submission=submissionIntent=>api.post(base+'/listening').send({
     ...token,orderClientVersion:1,classCode:'IC2304',studentRef,
-    clientSubmissionId:randomUUID(),answers:{1:'A'},draftRevision:1
+    clientSubmissionId:randomUUID(),answers:{1:'A'},draftRevision:1,
+    ...(submissionIntent?{submissionIntent}:{})
   });
   const early=await submission();
   assert.equal(early.status,409,JSON.stringify(early.body));
   assert.equal(early.body.error,'AUDIO_END_NOT_CONFIRMED');
+  assert.equal((await submission('automatic')).body.error,'AUDIO_END_NOT_CONFIRMED');
   assert.equal((await f.db.query('SELECT listening_submitted_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0].listening_submitted_at,null);
   const premature=await post(base,'audio-progress',{...token,heardSeconds:1735,state:'ended'});
   assert.equal(premature.body.error,'AUDIO_END_NOT_CONFIRMED');
@@ -77,6 +79,20 @@ for(const mode of ['lis_first','read_first']) test(`Term 1 native EOF và 120 gi
   assert.equal(submitted.body.listeningSubmitted??submitted.body.resultAvailable,true);
   const saved=(await f.db.query('SELECT listening_submitted_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
   assert.ok(saved.listening_submitted_at);
+});
+for(const mode of ['lis_first','read_first'])test(`Term 1 ${mode}: nộp tay có xác nhận được phép trước EOF`,async()=>{
+  const {base,token}=await prepare('term-test-1',mode);
+  const access=await post(base,'audio-access',{...token,listeningEofVersion:1});
+  assert.equal(access.body.listeningEofVersion,1);
+  assert.equal((await begin(base,token)).status,200);
+  const submitted=await api.post(base+'/listening').send({
+    ...token,orderClientVersion:1,classCode:'IC2304',studentRef,
+    clientSubmissionId:randomUUID(),answers:{1:'A'},submissionIntent:'manual'
+  });
+  assert.ok([200,201].includes(submitted.status),JSON.stringify(submitted.body));
+  const session=(await f.db.query('SELECT listening_submitted_at,listening_eof_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  assert.ok(session.listening_submitted_at);
+  assert.equal(session.listening_eof_at,null);
 });
 test('Term 1 lượt không opt-in và Term 2 không đổi chính sách thu bài',async()=>{
   for(const slug of ['term-test-1','term-test-2']){

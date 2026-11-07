@@ -42,9 +42,10 @@ export function assertAudioOwner(row,input=context.getStore()||{}){
 // tránh request cũ vượt qua bước kiểm API rồi ghi nháp/nộp sau khi đã chuyển chủ.
 export function audioOwnerPool(pool){
   const set=async(db,c)=>db.query(`SELECT set_config('k67.owner_id',$1,true),set_config('k67.owner_proof',$2,true),
-    set_config('k67.owner_epoch',$3,true),set_config('k67.owner_generation',$4,true)`,
-    [String(c.ownerId||''),String(c.ownerProof||''),String(c.ownerEpoch??''),String(c.generation??'')]);
-  const active=()=>{const c=context.getStore();return c?.ownerId&&c?.ownerProof&&c?.ownerEpoch!==undefined?c:null;};
+    set_config('k67.owner_epoch',$3,true),set_config('k67.owner_generation',$4,true),
+    set_config('k67.submit_intent',$5,true)`,
+    [String(c.ownerId||''),String(c.ownerProof||''),String(c.ownerEpoch??''),String(c.generation??''),String(c.submissionIntent||'')]);
+  const active=()=>{const c=context.getStore();return c?.submissionIntent==='manual'||(c?.ownerId&&c?.ownerProof&&c?.ownerEpoch!==undefined)?c:null;};
   return new Proxy(pool,{get(target,key){
     if(key==='connect')return async()=>{
       const db=await pool.connect(),c=active();if(!c)return db;
