@@ -12,6 +12,7 @@ const identity = z.object({ classCode: z.string().trim().toUpperCase().regex(/^[
 const issueInput = identity.extend({ oldDeviceStopped: z.boolean().default(false) }).strict();
 const revokeInput = identity.extend({ grantId: z.string().uuid() }).strict();
 const openInput = identity.extend({ ownerId: z.string().uuid(), activationCode: z.string().max(30).optional() }).strict();
+const identifyInput = openInput.omit({ studentRef: true });
 const resultInput = z.object({ ownerId: z.string().uuid(), grantId: z.string().uuid() }).strict();
 
 function fail(status, code, message) {
@@ -71,6 +72,17 @@ export function registerTerm1SkillRoutes(router, {
       const attempt = await teacherAttempt(client, input, req, false);
       const grant = await revokeSkillGrant(client, scopeOf(attempt, input), input.grantId);
       return { ok: true, grantId: grant.id, revokedAt: grant.revoked_at };
+    })));
+
+  router.post(PATH + '/identify', limiter, route(identifyInput, (input, req) =>
+    transaction(async client => {
+      const target = await resolveSkillTargetForOpen(client, req.get('x-term1-skill-grant'), input.ownerId, input.activationCode);
+      if (target.section !== input.section) denied();
+      const attempt = await load(client, SLUG, target.attempt_id, false, true);
+      assertCbt(attempt);
+      const student = await findStudent(client, { ...input, studentRef: target.student_ref });
+      if (!student || String(student.class_id) !== attempt.class_id || String(student.student_id) !== attempt.student_id) denied();
+      return { ok: true, studentRef: target.student_ref, studentName: attempt.student_name, classCode: input.classCode };
     })));
 
   router.post(PATH + '/open', limiter, route(openInput, (input, req) =>

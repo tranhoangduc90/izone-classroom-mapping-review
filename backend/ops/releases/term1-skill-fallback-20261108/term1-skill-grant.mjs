@@ -154,7 +154,7 @@ export async function resolveSkillTargetForOpen(client, token, ownerId, activati
   const code = typeof activationCode === 'string' ? activationCode.trim().toUpperCase() : '';
   const activationHash = activationPattern.test(code) ? sha(code) : null;
   const { rows } = await client.query(`
-    SELECT attempt_id, owner_id, issued_at FROM assessment.term1_skill_grant
+    SELECT attempt_id, owner_id, issued_at, student_ref, section FROM assessment.term1_skill_grant
     WHERE id=$1 AND secret_hash=$2 AND revoked_at IS NULL
       AND (owner_id=$3 OR (owner_id IS NULL AND clock_timestamp()<expires_at AND activation_hash=$4))
   `, [...credential(token), ownerId, activationHash]);
