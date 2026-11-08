@@ -185,6 +185,26 @@ export async function withMainListeningSession(pool, slug, sessionId, work) {
   }
 }
 
+export async function withMainWritingAttempt(pool, slug, attemptId, work) {
+  if (slug !== 'term-test-1-k56') return work(pool);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [attempt] } = await client.query(`SELECT id::text AS attempt_token, exam_session_id::text AS exam_session_token,
+      generation, erp_course_class_id::text AS class_id, writing_submitted_at FROM assessment.term_test_attempt
+      WHERE id=$1 AND test_slug=$2 AND superseded_at IS NULL FOR UPDATE`, [attemptId, slug]);
+    if (attempt && !attempt.writing_submitted_at) await rejectMainSkillIfBound(client, attempt, 'writing');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // Used before binding. Return only the attempt key to the server and do not
 // reveal that it exists unless the independently supplied activation code matches.
 export async function resolveSkillTargetForOpen(client, token, ownerId, activationCode) {

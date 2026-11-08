@@ -89,7 +89,7 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   assert.equal((await post('/manage', scope)).status, 401);
   assert.equal((await post('/issue', scope, { 'x-fixture-teacher': 'wrong-class' })).status, 403);
   assert.equal((await post('/manage', scope, { 'x-fixture-teacher': 'wrong-class' })).status, 403);
-  assert.equal((await post('/issue', { ...scope, section: 'writing' }, teacher)).status, 400);
+  assert.equal((await post('/issue', { ...scope, section: 'speaking' }, teacher)).status, 400);
   const beforeGrant = await post('/manage', scope, teacher);
   assert.equal(beforeGrant.attemptExists, attemptExists);
   assert.equal(beforeGrant.activeGrant, null);
@@ -252,3 +252,83 @@ test('Listening fallback protects a native run and does not accept an early auto
   const dispatch = await f.db.query('SELECT field FROM assessment.k56_portal_field_dispatch WHERE attempt_id=$1', [f.a]);
   assert.deepEqual(dispatch.rows, [{ field: 'listening' }]);
 });
+
+for (const essay of [' \u200b\u00a0', 'A real Task 2 draft.']) {
+test(`Standalone Writing seals before the other skills and grades exactly once (${essay.trim() === 'A real Task 2 draft.' ? 'text' : 'blank'})`, async t => {
+  const blank = essay !== 'A real Task 2 draft.';
+  const f = await fixture('lis_first', { skipPrepare: true });
+  t.after(f.close);
+  const root = process.env.TERM2_RUNTIME_ROOT + '/src/';
+  const { studentWritingGrading, WRITING_RELEASE_DELAY_MS } = await import(pathToFileURL(root + 'k56-student-writing-release.mjs'));
+  const { createTermTestWritingGradingService } = await import(pathToFileURL(root + 'term-test-writing-grading.js'));
+  const { withMainWritingAttempt } = await import(pathToFileURL(root + 'term1-skill-grant.mjs'));
+  const { completeFakeResult } = await import('../term1-offline-20261107/fake-grading.mjs');
+  const studentRef = randomUUID(), ownerId = randomUUID();
+  const identity = { classCode: 'FIXTURE', studentRef, section: 'writing' };
+  const noop = (_req, _res, next) => next();
+  const app = express(), router = express.Router();
+  let advanceRelease = 0;
+  app.use(express.json());
+  registerTerm1SkillRoutes(router, { authenticate: noop, limiter: noop, readLimiter: noop,
+    allowNew: section => section === 'writing', readTeacherScope: async () => {}, transaction: work => f.db.transaction(work),
+    prepare: (_slug, _input, _create, db) => f.load(db, 'term-test-1-k56', f.a), load: f.load,
+    findStudent: async () => ({ class_id: '5601', student_id: '5602' }), assets: {}, policy: 'term1-offline-v1',
+    readWriting: async (client, attempt) => studentWritingGrading(attempt.test_slug,
+      await f.grading.getStatus(attempt.attempt_token, client), Date.now() + advanceRelease) });
+  app.use('/api/term-tests', router);
+  const request = require('supertest')(app);
+  const prefix = '/api/term-tests/term-test-1-k56/skill-fallback/';
+  const { body: issued } = await request.post(prefix + 'issue').send(identity).expect(200);
+  const header = { 'x-term1-skill-grant': issued.token };
+  const { body: opened } = await request.post(prefix + 'open').set(header)
+    .send({ ...identity, ownerId, activationCode: issued.activationCode }).expect(200);
+  assert.deepEqual(Object.keys(opened.content), ['writing']);
+  assert.deepEqual(opened.content.writing.tasks.map(task => task.id), ['task2']);
+  assert.equal(opened.durationMinutes, 55);
+  await assert.rejects(withMainWritingAttempt(f.pool, 'term-test-1-k56', f.a, () => assert.fail('Conflicting write')),
+    error => error.code === 'TERM1_SKILL_OWNED_BY_FALLBACK');
+  const read = () => request.post(prefix + 'result').set(header)
+    .send({ ownerId, grantId: issued.grantId, section: 'writing' }).expect(200);
+  assert.equal((await read()).body.writing, null);
+  const scope = { ...f.scope, ownerId, attemptToken: issued.grantId, examSessionToken: issued.grantId };
+  const send = async body => {
+    const response = await fetch(f.base + '/offline/operation', { method: 'POST',
+      headers: { 'content-type': 'application/json', ...header }, body: JSON.stringify({ ...body, ...scope }) });
+    return (await response.json()).receipt;
+  };
+  const start = op(f, 'writing', 'start');
+  assert.equal((await send(start)).status, 'accepted');
+  const seal = op(f, 'writing', 'seal', { startedAt: start.payload.startedAt, revision: 1, task1: essay });
+  const receipt = await send(seal);
+  assert.equal(receipt.status, 'accepted');
+  assert.deepEqual(await send(seal), receipt);
+  const row = await f.load(f.pool, 'term-test-1-k56', f.a);
+  assert.equal(row.completed_at, null);
+  assert.equal(row.writing_task_2, essay);
+  const jobs = await f.db.query('SELECT job_type FROM assessment.term_test_writing_grading_job');
+  assert.deepEqual(jobs.rows, blank ? [] : [{ job_type: 'dispatch' }]);
+  if (!blank) {
+    assert.equal((await read()).body.writing.grading.ready, false);
+    await f.db.exec("ALTER TABLE assessment.term_test_attempt ADD COLUMN class_name_snapshot text DEFAULT 'FIXTURE'");
+    const scores = [];
+    const grading = createTermTestWritingGradingService({ pool: f.pool, syncErpGrades: async payload => {
+      scores.push(payload.grades);
+      return { status: 'synced' };
+    } });
+    await completeFakeResult({ ...f, grading });
+    assert.deepEqual(scores, [{ writing: 6 }]);
+  } else {
+    const grades = await f.db.query('SELECT field,grade FROM assessment.k56_portal_field_dispatch WHERE attempt_id=$1', [f.a]);
+    assert.deepEqual(grades.rows.map(entry => [entry.field, Number(entry.grade)]), [['writing', 0]]);
+  }
+  const held = (await read()).body.writing.grading;
+  assert.equal(held.status, 'awaiting_release');
+  assert.equal(held.writingScore, undefined);
+  advanceRelease = WRITING_RELEASE_DELAY_MS + 1000;
+  const available = (await read()).body.writing;
+  assert.equal(available.grading.writingScore, blank ? 0 : 6);
+  assert.equal(available.grading.tasks.length, 1);
+  assert.equal(available.grading.tasks[0].taskNumber, 2);
+  assert.ok(!JSON.stringify(available).includes(f.a));
+});
+}
