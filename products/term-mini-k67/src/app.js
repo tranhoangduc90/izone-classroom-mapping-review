@@ -38,6 +38,12 @@ import { buildErpGradePayload } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
 
+// The journal runtime is mounted separately on the server. An unavailable
+// journal must not prevent the exam API from starting.
+const mountTermJournal = process.env.EXAM_JOURNAL_ENABLED === '1'
+  ? (await import('./exam-journal-runtime/adapters/term.mjs').catch(() => ({}))).mountTermJournal
+  : undefined;
+
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
 
 const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
@@ -337,7 +343,7 @@ export function createApp({
   config, pool, verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   termTestWritingGradingService = null, termTestAssetService = null, logger = console,
-  resultStreamOptions = {}, readinessAudioSource
+  resultStreamOptions = {}, readinessAudioSource, journalEnv = process.env, mountJournal = mountTermJournal
 }) {
   const rateIdentity=examRateIdentity(pool);
   pool=audioOwnerPool(pool);
@@ -348,6 +354,22 @@ export function createApp({
   app.use(helmet());
   app.use(addCors(config));
   app.use(express.json({ limit: '768kb', strict: true }));
+  let termJournal;
+  if (journalEnv.EXAM_JOURNAL_ENABLED === '1') {
+    if (!mountJournal) {
+      logger.warn?.(JSON.stringify({ type: 'exam_journal_startup', code: 'ADAPTER_UNAVAILABLE' }));
+    } else {
+      try {
+        termJournal = mountJournal(app, {
+          config, pool, logger, env: journalEnv,
+          productId: journalEnv.EXAM_JOURNAL_PRODUCT_ID || 'term-mini-k67',
+          schema: journalEnv.EXAM_JOURNAL_ASSESSMENT_SCHEMA || 'assessment',
+        });
+      } catch {
+        logger.warn?.(JSON.stringify({ type: 'exam_journal_startup', code: 'ADAPTER_MOUNT_FAILED' }));
+      }
+    }
+  }
   // Đăng ký lối đọc GV trước catch-all của bài làm quen; thêm handler sau khi có auth.
   const readinessTeacherRoutes=express.Router();
   app.use(readinessTeacherRoutes);
@@ -368,7 +390,7 @@ export function createApp({
     version: config.appVersion || '1.0.0',
     sha: config.buildSha || 'unknown'
   });
-  function logTermTestEvent(event, testSlug, token, details = {}) {
+  function logTermTestEvent(event, testSlug, token, details = {}, content) {
     const correlation = crypto
       .createHash('sha256')
       .update(`${testSlug}:${token}`)
@@ -382,6 +404,7 @@ export function createApp({
       serverOccurredAt: new Date().toISOString(),
       ...details
     }));
+    try { termJournal?.business(event, testSlug, token, details, content); } catch {}
   }
   app.get('/health', (_req, res) => res.json({ ok: true, build }));
   const requireContext = createContextGuard({ pool });
@@ -971,7 +994,7 @@ export function createApp({
       revision: Number(row.listening_draft_revision) || 0,
       answeredCount: countAnswered(parsed.data.answers),
       accepted: Boolean(row.accepted)
-    });
+    }, termJournal && { 'server:listening:answers': JSON.stringify(row.listening_draft || {}) });
     return res.json({
       ok: true,
       accepted: Boolean(row.accepted),
@@ -1155,7 +1178,7 @@ export function createApp({
       revision: Number(row.reading_draft_revision) || 0,
       answeredCount: countAnswered(parsed.data.answers),
       accepted: Boolean(row.accepted)
-    });
+    }, termJournal && { 'server:reading:answers': JSON.stringify(row.reading_draft || {}) });
     return res.json({
       ok: true,
       accepted: Boolean(row.accepted),
@@ -1283,6 +1306,17 @@ export function createApp({
     const grading = shouldEnsureGrading
       ? await ensureTermTestWritingGrading(row)
       : null;
+    try {
+      termJournal?.business(parsed.data.action === 'submit' && row.writing_submitted_at ? 'submission_completed' : 'draft_saved',
+        attemptSlug, parsed.data.attemptToken, {
+          section: 'writing', revision: Number(row.writing_draft_revision || 0),
+          accepted: row.writing_accepted === true, reason: row.writing_reason,
+        }, {
+          'server:writing:task1': String(row.writing_task_1 || ''),
+          'server:writing:task2': String(row.writing_task_2 || ''),
+          'server:writing:outline': String(row.writing_outline || ''),
+        });
+    } catch {}
     return res.json({
       ok: true,
       attemptToken: saved.rows[0].attempt_token,
@@ -1469,6 +1503,11 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_GRADING_CLAIM', message: 'Yêu cầu nhận việc chấm không hợp lệ.' });
     }
     const jobs = await termTestWritingGradingService.claimJobs(parsed.data);
+    try {
+      for (const job of jobs) termJournal?.job('job_claimed', {
+        jobId: job.jobId, workerId: parsed.data.workerId, attemptNumber: job.attemptCount,
+      }, { status: 'claimed' });
+    } catch {}
     if (config.termTestPublicApiBaseUrl && config.writingTestSyncSecret) {
       for (const job of jobs) {
         if (!String(job.imageUrl || '').startsWith('data:image/')) continue;
@@ -1506,6 +1545,7 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_GRADING_DISPATCH', message: 'Kết quả gửi bài chấm không hợp lệ.' });
     }
     const result = await termTestWritingGradingService.completeDispatch(parsed.data);
+    try { termJournal?.job('callback_received', parsed.data, result); } catch {}
     return res.json({ ok: true, ...result });
   }));
 
@@ -1516,6 +1556,7 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_GRADING_RESULT', message: 'Bài chấm Writing không đủ dữ liệu bắt buộc.' });
     }
     const result = await termTestWritingGradingService.completeResult(parsed.data);
+    try { termJournal?.job('job_completed', parsed.data, result); } catch {}
     return res.json({ ok: true, ...result });
   }));
 
@@ -1526,6 +1567,7 @@ export function createApp({
       return res.status(400).json({ ok: false, error: 'INVALID_GRADING_FAILURE', message: 'Thông tin lỗi chấm Writing không hợp lệ.' });
     }
     const result = await termTestWritingGradingService.failJob(parsed.data);
+    try { termJournal?.job('job_failed', parsed.data, result); } catch {}
     return res.json({ ok: true, ...result });
   }));
 
