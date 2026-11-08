@@ -30,8 +30,9 @@ test('K56 app boots with the real teacher authentication middleware on the fallb
   assert.match(response.headers['access-control-allow-headers'], /\bx-term1-skill-grant\b/i);
 });
 
-test('Teacher link → learner activation → isolated Reading content and result → original exam receipt', async t => {
-  const f = await fixture('lis_first', { skipPrepare: true });
+for (const mode of ['lis_first', 'read_first']) {
+test(`Teacher link → Reading result → original exam resumes (${mode})`, async t => {
+  const f = await fixture(mode, { skipPrepare: true });
   t.after(f.close);
   const app = express();
   app.use(express.json());
@@ -105,6 +106,9 @@ test('Teacher link → learner activation → isolated Reading content and resul
   assert.equal(first.receipt.status, 'accepted');
   const reopened = await post('/open', input, header);
   assert.equal(reopened.startedAt, start.payload.startedAt);
+  const mainInput = { ...f.scope, classCode: 'FIXTURE', studentRef, mode };
+  const mainBefore = mode === 'read_first' ? await f.request('/offline/prepare', mainInput) : null;
+  if (mainBefore) assert.deepEqual(mainBefore.completedElsewhere, {});
   const seal = { ...op(f, 'reading', 'seal', { startedAt: start.payload.startedAt, revision: 1 }), ...publicScope };
   const saved = await post('/offline/operation', seal, header, f.base);
   const restored = await post('/offline/status', { ...publicScope, operationId: seal.operationId }, header, f.base);
@@ -115,12 +119,29 @@ test('Teacher link → learner activation → isolated Reading content and resul
   assert.equal((await post('/result', { grantId: issued.grantId, ownerId: randomUUID() }, header)).status, 403);
 
   // The fallback-created run did not take ownership of the regular exam.
-  const main = await f.request('/offline/prepare', { ...f.scope, classCode: 'FIXTURE', studentRef, mode: 'lis_first' });
+  const main = mainBefore ?? await f.request('/offline/prepare', mainInput);
   assert.equal(main.status, 200);
-  const listening = await f.request('/offline/operation', op(f, 'listening', 'start'), main.offline.permit);
-  assert.equal(listening.receipt.status, 'accepted');
+  const marker = { operationId: seal.operationId, startedAt: seal.payload.startedAt,
+    deadlineAt: seal.payload.deadlineAt, revision: 1 };
+  if (!mainBefore) assert.deepEqual(main.completedElsewhere, { reading: marker });
+  const progress = await f.request('/offline/resume', f.scope, main.offline.permit);
+  assert.deepEqual(progress.completedElsewhere, { reading: marker });
+  assert.equal((await f.request('/offline/resume', f.scope, 'bad-permit')).status, 403);
+  assert.equal((await post('/offline/resume', publicScope, header, f.base)).status, 404);
+  const mainReceipt = await f.request('/offline/status', { ...f.scope, operationId: seal.operationId }, main.offline.permit);
+  assert.equal(mainReceipt.persisted, false);
   const dispatch = await f.db.query('SELECT field, grade FROM assessment.k56_portal_field_dispatch WHERE attempt_id=$1', [f.a]);
   assert.deepEqual(dispatch.rows.map(row => [row.field, Number(row.grade)]), [['reading', 1]]);
+
+  const dependency = mode === 'read_first' ? marker.operationId : null;
+  const listenStart = op(f, 'listening', 'start', { dependency });
+  const listening = await f.request('/offline/operation', listenStart, main.offline.permit);
+  assert.equal(listening.receipt.status, 'accepted');
+  const listenSeal = op(f, 'listening', 'seal', { dependency, startedAt: listenStart.payload.startedAt });
+  assert.equal((await f.request('/offline/operation', listenSeal, main.offline.permit)).receipt.status, 'accepted');
+  const writing = op(f, 'writing', 'start', { dependency: mode === 'read_first' ? listenSeal.operationId : marker.operationId });
+  assert.equal((await f.request('/offline/operation', writing, main.offline.permit)).receipt.status, 'accepted');
   assert.equal((await post('/revoke', { ...scope, grantId: issued.grantId }, teacher)).status, 200);
   assert.equal((await post('/result', { grantId: issued.grantId, ownerId }, header)).status, 403);
 });
+}

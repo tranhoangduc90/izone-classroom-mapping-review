@@ -58,7 +58,9 @@ def build(runtime):
     core = edit(core, """await admitted(client,b,req.get('x-term2-permit'));
    return (await client.query(tables('SELECT receipt FROM assessment.term2_offline_operation WHERE operation_id=$1 AND attempt_id=$2'),[b.operationId,b.attemptToken]))""",
                 """const {a,grant}=await admitted(client,b,req.get('x-term2-permit'),req.get('x-term1-skill-grant'));
-   return (await client.query(tables('SELECT receipt FROM assessment.term2_offline_operation WHERE operation_id=$1 AND attempt_id=$2 AND ($3::text IS NULL OR section=$3)'),[b.operationId,a.attempt_token,grant?.section??null]))""")
+   return (await client.query(tables(`SELECT receipt FROM assessment.term2_offline_operation
+     WHERE operation_id=$1 AND attempt_id=$2 AND ($3::text IS NULL OR section=$3)
+       AND receipt->>'attemptToken'=$4`),[b.operationId,a.attempt_token,grant?.section??null,b.attemptToken]))""")
     core = edit(core, "let {a,run}=await admitted(client,b,req.get('x-term2-permit'));",
                 "let {a,run,grant}=await admitted(client,b,req.get('x-term2-permit'),req.get('x-term1-skill-grant'));")
     core = edit(core, "previous.attempt_id!==b.attemptToken||previous.payload_hash!==hash",
@@ -78,6 +80,34 @@ def build(runtime):
     row=(await client.query(tables('UPDATE assessment.term2_offline_run SET owner_id=$2,main_owner_pending=false WHERE attempt_id=$1 RETURNING *'),[a.attempt_token,body.ownerId])).rows[0];
    }
    if(row.owner_id!==body.ownerId)""")
+    core = edit(core, '  const run=await transaction(async client=>{', '  const {current,run}=await transaction(async client=>{')
+    core = edit(core, '   return row;\n  });\n  const content=a.', '   return {current,run:row};\n  });\n  const content=current.')
+    core = edit(core, 'timing=a.mini_definition_snapshot?.timing||assets.getTiming(SLUG);\n  res.json({...serialize(a),content,timing,',
+                'timing=current.mini_definition_snapshot?.timing||assets.getTiming(SLUG);\n'
+                '  res.json({...serialize(current),content,timing,...mainProgress(current,run),')
+    core = edit(core, " router.post('/:testSlug/offline/status'",
+                """ function mainProgress(a,run){
+  const completedElsewhere={};
+  for(const section of ['listening','reading','writing']){
+   const item=run.state?.[section];
+   if(item?.fallbackSeal&&item.sealed&&a[section+'_submitted_at']){
+    completedElsewhere[section]={operationId:item.operationId,startedAt:item.startedAt,deadlineAt:item.deadlineAt,
+     revision:item.revision};
+   }
+  }
+  return {completedElsewhere};
+ }
+ router.post('/:testSlug/offline/resume',onlyThis,readLimiter,route(async(req,res)=>{
+  const b=parse(scope.strict(),req.body);
+  const progress=await transaction(async client=>{
+   const {a,run}=await admitted(client,b,req.get('x-term2-permit'));
+   return mainProgress(a,run);
+  });
+  res.json({ok:true,...progress});
+ }));
+ router.post('/:testSlug/offline/status'""")
+    core = edit(core, "operationId:b.kind==='seal'?b.operationId:null};",
+                "operationId:b.kind==='seal'?b.operationId:null,...(grant&&b.kind==='seal'?{fallbackSeal:true}:{})};")
     order = "import {registerTerm1SkillRoutes} from './term1-skill-routes.mjs';\n" + order
     order = "import {rejectMainSkillIfBound} from './term1-skill-grant.mjs';\n" + order
     order = edit(order, 'import {registerTerm1Offline}', 'import {registerTerm1Offline,POLICY as TERM1_OFFLINE_POLICY}')
@@ -95,6 +125,13 @@ def build(runtime):
       return rows.length===1?rows[0]:null;
     }
   });""")
+    order = edit(order, '    // Bộ nạp cũ hiểu attemptToken là Listening đã nộp.',
+                 """    if(a.test_slug==='term-test-1-k56'&&response.nextSection==='listening'&&a.reading_submitted_at){
+      const {rows:[run]}=await pool.query(`SELECT state->'reading'->>'fallbackSeal'='true' AS done
+        FROM assessment.term1_offline_run WHERE attempt_id=$1 AND generation=$2`,[a.attempt_token,a.generation]);
+      if(run?.done)response.resumeTerm1Offline=true;
+    }
+    // Bộ nạp cũ hiểu attemptToken là Listening đã nộp.""")
     order = edit(order, "      if (row.reading_submitted_at) throw failure('READING_LOCKED'",
                  "      if(row.test_slug==='term-test-1-k56')await rejectMainSkillIfBound(client,row,'reading');\n"
                  "      if (row.reading_submitted_at) throw failure('READING_LOCKED'")
