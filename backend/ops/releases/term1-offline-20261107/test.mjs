@@ -10,11 +10,15 @@ const runtime=process.env.TERM2_RUNTIME_ROOT;
 assert.ok(runtime,'Cần TERM2_RUNTIME_ROOT trỏ source K56 đã ghép trong kho thử.');
 const require=createRequire(process.env.TERM2_DEPS_PACKAGE||new URL('../../../package.json',import.meta.url));
 const pgUrl=process.env.TERM2_TEST_PG_URL,express=require('express');
-if(pgUrl){const u=new URL(pgUrl);assert.equal(u.hostname,'izone-term1-fixture-pg-20261107');assert.equal(u.pathname,'/fixture');}
+if(pgUrl){
+ const u=new URL(pgUrl),local=u.hostname==='127.0.0.1'&&u.pathname==='/term1_fallback_race'
+  &&u.username==='term1_fixture'&&u.searchParams.get('application_name')==='term1-fallback-race';
+ if(!local){assert.equal(u.hostname,'izone-term1-fixture-pg-20261107');assert.equal(u.pathname,'/fixture');}
+}
 const mod=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-offline.mjs`));
 const blank=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-blank.mjs`));const isBlank=blank.isBlank,storeTerm2Blank=blank[`storeTerm${PRODUCT}Blank`];
 const {createTermTestWritingGradingService}=await import(pathToFileURL(runtime+'/src/term-test-writing-grading.js'));
-export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false}={}){
+export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false,beforeReceipt}={}){
  let db,pool,dispose;
  if(pgUrl){
   const {Pool}=require('pg'),raw=new Pool({connectionString:pgUrl,max:10}),schema='term2_fixture_'+randomUUID().replaceAll('-','');
@@ -52,15 +56,21 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
  const readingSection=PRODUCT===1?{questions:section.questions.slice(0,26)}:section;
  const content={baseTestSlug:mod.SLUG,writing:{tasks:[{id:taskId,prompt:'Fixture chart'}]},listening:{sections:[]},reading:{sections:[]}};
  const timing={listeningDurationSeconds:audioSeconds,listeningReviewSeconds:0,readingDurationMinutes:minutesR,writingDurationMinutes:minutesW};
- const load=async(client,slug,id)=>{
+ const load=async(client,slug,id,bySession=false,lock=false)=>{
   const row=(await client.query(`SELECT a.*,a.id::text AS attempt_token,a.exam_session_id::text AS exam_session_token,a.erp_course_class_id::text AS class_id,a.erp_student_contact_id::text AS student_id,
    s.listening_started_at,s.listening_deadline_at,s.listening_draft,s.listening_draft_revision FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
-   WHERE a.id=$1 AND a.superseded_at IS NULL`,[id])).rows[0];
+   WHERE a.${bySession?'exam_session_id':'id'}=$1 AND a.superseded_at IS NULL${lock?' FOR UPDATE OF a':''}`,[id])).rows[0];
   if(!row||row.test_slug!==slug)throw Object.assign(Error('not found'),{status:404,code:'ATTEMPT_NOT_FOUND'});
   return {...row,server_now:new Date(realtime?Date.now():clock).toISOString(),student_name:'Học viên giả',definition_version:1,test_title:'Term 2 fixture',listening_definition:section,reading_definition:readingSection,listening_band_adjustment:0,
    mini_definition_snapshot:{content,timing},...(PRODUCT===1?{score_mode:'raw'}:{})};
  };
- const transaction=async work=>{const c=await pool.connect(),proxy={query:(sql,...args)=>{if(sql.startsWith(`INSERT INTO assessment.term${PRODUCT}_offline_operation`)&&receiptFailures-->0)throw Error('Fixture receipt insert failed');return c.query(sql,...args);}};await c.query('BEGIN');try{const r=await work(proxy);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
+ const transaction=async work=>{const c=await pool.connect(),proxy={query:async(sql,...args)=>{
+  if(sql.startsWith(`INSERT INTO assessment.term${PRODUCT}_offline_operation`)){
+   if(receiptFailures-->0)throw Error('Fixture receipt insert failed');
+   await beforeReceipt?.(args[0]);
+  }
+  return c.query(sql,...args);
+ }};await c.query('BEGIN');try{const r=await work(proxy);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
  const app=express();app.use(express.json({limit:'1mb'}));const router=express.Router();
  const grading=createTermTestWritingGradingService({pool});
  const stop=mod[`registerTerm${PRODUCT}Offline`](router,{pool,secret:'x'.repeat(40),assets:{getSessionAudioKey:()=>Buffer.alloc(32)},prepare:async(slug,b)=>load(pool,slug,b.attemptToken),load,transaction,...(defaultPolicy?{}:{allowNew:()=>newEnabled}),
@@ -76,7 +86,7 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
  const newRun=async()=>{const next={attemptToken:randomUUID(),examSessionToken:randomUUID(),generation:0,ownerId:randomUUID()};
   await db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',[next.attemptToken,mod.SLUG,next.examSessionToken,mode]);await db.query('INSERT INTO assessment.term_test_exam_session(id) VALUES($1)',[next.examSessionToken]);
   const p=await request('/offline/prepare',{...next,classCode:'FIXTURE',studentRef:randomUUID(),mode});assert.equal(p.status,200);return {scope:next,permit:p.offline.permit};};
- return {base,db,a,s,scope,request,grading,timing,content,load,pool,newRun,setEnrollment:value=>{newEnabled=value;},get clock(){return realtime?Date.now():clock;},advance:ms=>clock+=ms,get calls(){return calls;},close:async()=>{stop();await new Promise(ok=>server.close(ok));await dispose();}};
+ return {base,db,a,s,scope,request,grading,timing,content,load,pool,transaction,newRun,setEnrollment:value=>{newEnabled=value;},get clock(){return realtime?Date.now():clock;},advance:ms=>clock+=ms,get calls(){return calls;},close:async()=>{stop();await new Promise(ok=>server.close(ok));await dispose();}};
 }
 export function op(f,section,kind,{dependency=null,startedAt=new Date(f.clock).toISOString(),revision=0,reason='manual',task1='',audioEnded=false,heardSeconds=0,timeValid=true}={}){
  const minutes=section==='reading'?minutesR:minutesW;
