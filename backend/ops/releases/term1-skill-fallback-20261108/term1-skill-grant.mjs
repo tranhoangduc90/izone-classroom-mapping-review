@@ -156,6 +156,35 @@ export async function rejectMainSkillIfBound(client, attempt, section) {
   });
 }
 
+// Call while the native listening session is locked. Grant binding takes the same session lock.
+export async function rejectListeningSessionIfBound(client, sessionId) {
+  const { rows } = await client.query(`SELECT 1 FROM assessment.term1_skill_grant g
+    JOIN assessment.term_test_attempt a ON a.id=g.attempt_id AND a.generation=g.generation
+    WHERE g.session_id=$1 AND g.section='listening' AND g.owner_id IS NOT NULL AND g.revoked_at IS NULL
+      AND a.superseded_at IS NULL AND a.listening_submitted_at IS NULL`, [sessionId]);
+  if (rows[0]) throw Object.assign(new Error('Listening đang làm qua link dự phòng. Hãy mở đúng link để giữ bài đã lưu.'), {
+    status: 409, code: 'TERM1_SKILL_OWNED_BY_FALLBACK'
+  });
+}
+
+export async function withMainListeningSession(pool, slug, sessionId, work) {
+  if (slug !== 'term-test-1-k56') return work(pool);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM assessment.term_test_exam_session WHERE id=$1 AND test_slug=$2 FOR UPDATE', [sessionId, slug]);
+    await rejectListeningSessionIfBound(client, sessionId);
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // Used before binding. Return only the attempt key to the server and do not
 // reveal that it exists unless the independently supplied activation code matches.
 export async function resolveSkillTargetForOpen(client, token, ownerId, activationCode) {

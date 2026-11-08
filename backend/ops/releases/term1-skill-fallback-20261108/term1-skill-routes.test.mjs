@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
@@ -174,3 +177,78 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   assert.ok(!JSON.stringify(audit).includes(issued.activationCode) && !JSON.stringify(audit).includes(issued.token));
 });
 }
+
+test('Listening fallback protects a native run and does not accept an early automatic seal', async t => {
+  const f = await fixture('read_first', { skipPrepare: true });
+  t.after(f.close);
+  const studentRef = randomUUID(), ownerId = randomUUID();
+  const identity = { classCode: 'FIXTURE', studentRef, section: 'listening' };
+  const noop = (_req, _res, next) => next();
+  const app = express(), router = express.Router();
+  const root = process.env.TERM2_RUNTIME_ROOT + '/src/';
+  const { rejectListeningSessionIfBound } = await import(pathToFileURL(root + 'term1-skill-grant.mjs'));
+  let issueAudio;
+  try {
+    ({ issueTerm1SkillAudio: issueAudio } = await import(pathToFileURL(root + 'term1-skill-audio-r2.mjs')));
+  } catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error; }
+  const { publicAudioCatalog } = await import(pathToFileURL(root + 'k56-public-audio.mjs'));
+  const asset = publicAudioCatalog['term-test-1-k56'];
+  if (issueAudio) {
+    const dir = await mkdtemp(join(tmpdir(), 'term1-skill-r2-'));
+    const keys = ['AUDIO_R2_DIRECT_ENABLED', 'AUDIO_R2_DIRECT_CONFIG_FILE'];
+    const previous = keys.map(key => process.env[key]);
+    t.after(async () => {
+      keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+      await rm(dir, { recursive: true, force: true });
+    });
+    process.env.AUDIO_R2_DIRECT_ENABLED = 'true';
+    process.env.AUDIO_R2_DIRECT_CONFIG_FILE = join(dir, 'settings.json');
+    await writeFile(process.env.AUDIO_R2_DIRECT_CONFIG_FILE, JSON.stringify({ enabled: true, assets: [asset.sha256],
+      accountId: '0'.repeat(32), bucket: 'fixture-audio', accessKeyId: 'fixture-key', secretAccessKey: 'fixture-secret' }));
+  }
+  // The official Term 1 timing has no additional review. Use a nonzero fixture to exercise the guard.
+  f.timing.listeningReviewSeconds = 20;
+  app.use(express.json());
+  registerTerm1SkillRoutes(router, { authenticate: noop, limiter: noop, readLimiter: noop, issueAudio,
+    allowNew: section => section === 'listening', readTeacherScope: async () => {}, transaction: work => f.db.transaction(work),
+    prepare: (_slug, _input, _create, db) => f.load(db, 'term-test-1-k56', f.a), load: f.load,
+    findStudent: async () => ({ class_id: '5601', student_id: '5602' }), assets: {}, policy: 'term1-offline-v1' });
+  app.use('/api/term-tests', router);
+  const request = require('supertest')(app);
+  const prefix = '/api/term-tests/term-test-1-k56/skill-fallback/';
+  await f.db.query('UPDATE assessment.term_test_exam_session SET listening_started_at=now() WHERE id=$1', [f.s]);
+  const noCheckpoint = await request.post(prefix + 'issue').send({ ...identity, oldDeviceStopped: true }).expect(409);
+  assert.equal(noCheckpoint.body.error, 'TERM1_SKILL_AUDIO_CHECKPOINT_REQUIRED');
+  await f.db.query('UPDATE assessment.term_test_exam_session SET listening_started_at=NULL WHERE id=$1', [f.s]);
+  const { body: issued } = await request.post(prefix + 'issue').send(identity).expect(200);
+  const header = { 'x-term1-skill-grant': issued.token };
+  const input = { ...identity, ownerId, activationCode: issued.activationCode, audioTransport: 'r2-direct-v1' };
+  await request.post(prefix + 'open').set(header).send({ ...input, section: 'reading' }).expect(403);
+  const { body: opened } = await request.post(prefix + 'open').set(header).send(input).expect(200);
+  assert.deepEqual(Object.keys(opened.content), ['listening']);
+  assert.equal(opened.reviewSeconds, 20);
+  if (issueAudio) assert.equal(opened.audioDownload.sha256, asset.sha256);
+  assert.ok(!JSON.stringify(opened).includes(f.a) && !JSON.stringify(opened).includes(f.s));
+  await assert.rejects(rejectListeningSessionIfBound(f.pool, f.s), error => error.code === 'TERM1_SKILL_OWNED_BY_FALLBACK');
+  const scope = { ...f.scope, ownerId, attemptToken: issued.grantId, examSessionToken: issued.grantId };
+  const start = { ...op(f, 'listening', 'start'), ...scope };
+  const submit = async body => {
+    const response = await fetch(f.base + '/offline/operation', { method: 'POST',
+      headers: { 'content-type': 'application/json', ...header }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200);
+    return (await response.json()).receipt;
+  };
+  assert.equal((await submit(start)).status, 'accepted');
+  f.advance(opened.durationSeconds * 1000);
+  const makeSeal = (heardSeconds, audioEnded) => ({ ...op(f, 'listening', 'seal', {
+    startedAt: start.payload.startedAt, reason: 'ended', heardSeconds, audioEnded }), ...scope });
+  assert.equal((await submit(makeSeal(opened.durationSeconds, true))).reason, 'AUDIO_NOT_FINISHED');
+  f.advance(opened.reviewSeconds * 1000);
+  assert.equal((await submit(makeSeal(10, false))).reason, 'AUDIO_NOT_FINISHED');
+  assert.equal((await submit(makeSeal(opened.durationSeconds, true))).status, 'accepted');
+  const result = await request.post(prefix + 'result').set(header).send({ ownerId, grantId: issued.grantId, section: 'listening' }).expect(200);
+  assert.equal(result.body.result.total, 40);
+  await request.post(prefix + 'result').set(header).send({ ownerId, grantId: issued.grantId }).expect(403);
+  const dispatch = await f.db.query('SELECT field FROM assessment.k56_portal_field_dispatch WHERE attempt_id=$1', [f.a]);
+  assert.deepEqual(dispatch.rows, [{ field: 'listening' }]);
+});

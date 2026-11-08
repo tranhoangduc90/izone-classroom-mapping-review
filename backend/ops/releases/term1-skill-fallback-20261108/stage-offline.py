@@ -14,6 +14,7 @@ R2_FILES = {
 WRAPPER_SHA = 'ea46a95bb4e82a09d13f9bdc62221aae930174059530aad4dfde125e231453bc'
 ORDER_SHA = 'b7c2972e110063d342cc52a12819bb7c7c9d78e1d04cfb7e5f5fca796ebb85c6'
 APP_SHA = '18fde64f44462d1da1d4ea540ba82465ed8e88aad2ae9241ca5c71dd1b534b90'
+LISTENING_RECOVERY_SHA = 'c848bd6a8569a7a7ba5b26d9597ca09a65ef8025bfaec41706b8c80672280e93'
 
 
 def pinned(path, expected, *, git_text=False):
@@ -35,6 +36,8 @@ def build(runtime):
     target = runtime.resolve(strict=True) / 'src'
     order = pinned(target / 'k56-exam-order.js', ORDER_SHA)
     app = pinned(target / 'app.js', APP_SHA)
+    recovery_path = target / 'k56-listening-audio-recovery.js'
+    recovery = pinned(recovery_path, LISTENING_RECOVERY_SHA)
     core_path = target / 'k56-offline-core.mjs'
     r2 = hashlib.sha256(core_path.read_bytes()).hexdigest() == R2_CORE_SHA
     if r2:
@@ -136,6 +139,13 @@ def build(runtime):
  router.post('/:testSlug/offline/status'""")
     core = edit(core, "operationId:b.kind==='seal'?b.operationId:null};",
                 "operationId:b.kind==='seal'?b.operationId:null,...(grant&&b.kind==='seal'?{fallbackSeal:true}:{})};")
+    core = edit(core, '   const review=validateTimeline(b,run,a,timing);',
+                """   const review=validateTimeline(b,run,a,timing) || (
+    grant&&b.section==='listening'&&b.kind==='seal'&&p.reason!=='manual'
+      &&(!Number.isFinite(p.heardSeconds)||Date.parse(b.occurredAt)-Date.parse(p.startedAt)
+        <(timing.listeningDurationSeconds+timing.listeningReviewSeconds-2)*1000)
+    ? 'AUDIO_NOT_FINISHED' : null);
+""".rstrip())
     order = "import {registerTerm1SkillRoutes} from './term1-skill-routes.mjs';\n" + order
     order = "import {rejectMainSkillIfBound} from './term1-skill-grant.mjs';\n" + order
     order = edit(order, 'import {registerTerm1Offline}', 'import {registerTerm1Offline,POLICY as TERM1_OFFLINE_POLICY}')
@@ -145,9 +155,12 @@ def build(runtime):
     order = edit(order, '    return transaction(async client => {\n      const student =',
                  '    const run = existingClient ? work => work(existingClient) : transaction;\n    return run(async client => {\n      const student =')
     marker = '  registerTerm1Offline(router,{pool,secret,assets,prepare,load,transaction,serialize,resultFor,limiter,readLimiter,draftLimiter,record,onWriting});'
+    if r2:
+        order = "import {issueTerm1SkillAudio} from './term1-skill-audio-r2.mjs';\n" + order
     order = edit(order, marker, marker + """
   if(authenticate&&readTeacherSkillScope)registerTerm1SkillRoutes(router,{
-    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,record,
+    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,record,"""
+    + ("\n    issueAudio:issueTerm1SkillAudio," if r2 else "") + """
     findStudent:async(client,input)=>{
       const rows=(await client.query(findStudentForTermTestSql,[input.classCode,'term-test-1-k56',input.studentRef])).rows;
       return rows.length===1?rows[0]:null;
@@ -168,7 +181,15 @@ def build(runtime):
                  "      const accepted = body.revision>Number(a.reading_draft_revision||0);")
     order = edit(order, "      if (a[`${skill}_submitted_at`]) return { a, changed:false };",
                  "      if (a[`${skill}_submitted_at`]) return { a, changed:false };\n"
-                 "      if(a.test_slug==='term-test-1-k56'&&skill==='reading')await rejectMainSkillIfBound(client,a,skill);")
+                 "      if(a.test_slug==='term-test-1-k56')await rejectMainSkillIfBound(client,a,skill);")
+    recovery = "import {rejectListeningSessionIfBound} from './term1-skill-grant.mjs';\n" + recovery
+    recovery = edit(recovery, '    const row = found.rows[0];',
+                    "    const row = found.rows[0];\n    if(slug==='term-test-1-k56')await rejectListeningSessionIfBound(client,token);")
+    app = "import {withMainListeningSession} from './term1-skill-grant.mjs';\n" + app
+    app = edit(app, "    const saved = await pool.query(saveTermTestListeningDraftSql, [\n      parsed.data.examSessionToken,\n      slug.data,\n      JSON.stringify(parsed.data.answers),\n      parsed.data.revision ?? null\n    ]);",
+               """    const saved = await withMainListeningSession(pool, slug.data, parsed.data.examSessionToken, client =>
+      client.query(saveTermTestListeningDraftSql, [parsed.data.examSessionToken, slug.data,
+        JSON.stringify(parsed.data.answers), parsed.data.revision ?? null]));""")
     app = edit(app, "x-exam-journal-request-id, x-term2-permit');",
                "x-exam-journal-request-id, x-term2-permit, x-term1-skill-grant');")
     auth = '  const auth = createAuthService({ config, pool, verifyGoogleToken });\n  const authenticate = auth.authenticate;\n'
@@ -178,12 +199,14 @@ def build(runtime):
                '    authenticate, readTeacherSkillScope: readTeacherSavedProgress,\n'
                '    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter, secret: config.termTestSessionSecret,')
     wrapper = edit(wrapper, "'./k56-offline-core.mjs'", "'./term1-skill-offline-core.mjs'")
-    for name in ('term1-skill-grant.mjs', 'term1-skill-offline-core.mjs', 'term1-skill-routes.mjs'):
+    modules = ('term1-skill-grant.mjs', 'term1-skill-routes.mjs') + (('term1-skill-audio-r2.mjs',) if r2 else ())
+    for name in (*modules, 'term1-skill-offline-core.mjs'):
         if (target / name).exists():
             raise ValueError('Overlay target already exists: ' + name)
-    for name in ('term1-skill-grant.mjs', 'term1-skill-routes.mjs'):
+    for name in modules:
         shutil.copyfile(Path(__file__).with_name(name), target / name)
     (target / 'app.js').write_text(app, encoding='utf-8', newline='\n')
+    recovery_path.write_text(recovery, encoding='utf-8', newline='\n')
     (target / 'k56-exam-order.js').write_text(order, encoding='utf-8', newline='\n')
     (target / 'term1-skill-offline-core.mjs').write_text(core, encoding='utf-8', newline='\n')
     (target / 'term1-offline.mjs').write_text(wrapper, encoding='utf-8', newline='\n')
