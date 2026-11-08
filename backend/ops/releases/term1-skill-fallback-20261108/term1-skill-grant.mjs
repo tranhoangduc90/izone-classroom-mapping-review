@@ -4,6 +4,7 @@ export const skillGrantSchema = `
 CREATE TABLE IF NOT EXISTS assessment.term1_skill_grant (
   id uuid PRIMARY KEY,
   secret_hash text NOT NULL UNIQUE,
+  activation_hash text NOT NULL,
   attempt_id uuid NOT NULL REFERENCES assessment.term_test_attempt(id),
   session_id uuid NOT NULL,
   generation bigint NOT NULL CHECK (generation >= 0),
@@ -25,6 +26,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS term1_skill_grant_one_active
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const sectionNames = new Set(['listening', 'reading', 'writing']);
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
+const activationPattern = /^[A-F0-9]{16}$/;
 const scopeWhere = `
   attempt_id=$1 AND session_id=$2 AND generation=$3 AND class_id=$4
   AND student_ref=$5 AND section=$6
@@ -58,28 +60,31 @@ export async function issueSkillGrant(client, scope, ttlMinutes = 120) {
   const values = scopeArgs(scope);
   if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 1440) throw denied();
   const id = randomUUID(), secret = randomBytes(32).toString('base64url');
+  const activationCode = randomBytes(8).toString('hex').toUpperCase();
   const { rows } = await client.query(`
     INSERT INTO assessment.term1_skill_grant
-      (attempt_id, session_id, generation, class_id, student_ref, section, id, secret_hash, expires_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, clock_timestamp() + $9::integer * interval '1 minute')
+      (attempt_id, session_id, generation, class_id, student_ref, section, id, secret_hash, activation_hash, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp() + $10::integer * interval '1 minute')
     ON CONFLICT (attempt_id, generation, section) WHERE revoked_at IS NULL DO NOTHING
     RETURNING ${columns}
-  `, [...values, id, sha(secret), ttlMinutes]);
+  `, [...values, id, sha(secret), sha(activationCode), ttlMinutes]);
   if (!rows[0]) throw Object.assign(new Error('Kỹ năng này đã có link. Thu hồi link cũ trước khi cấp lại.'), {
     status: 409, code: 'TERM1_SKILL_GRANT_EXISTS'
   });
-  return { grant: rows[0], token: id + '.' + secret };
+  return { grant: rows[0], token: id + '.' + secret, activationCode };
 }
 
-export async function bindSkillGrant(client, scope, token, ownerId) {
+export async function bindSkillGrant(client, scope, token, ownerId, activationCode) {
   if (typeof ownerId !== 'string' || !uuid.test(ownerId)) throw denied();
+  const code = typeof activationCode === 'string' ? activationCode.trim().toUpperCase() : '';
+  const activationHash = activationPattern.test(code) ? sha(code) : null;
   const { rows } = await client.query(`
     UPDATE assessment.term1_skill_grant
     SET owner_id=$9, bound_at=coalesce(bound_at, clock_timestamp())
     WHERE ${scopeWhere} AND id=$7 AND secret_hash=$8 AND revoked_at IS NULL
-      AND (owner_id=$9 OR (owner_id IS NULL AND clock_timestamp()<expires_at))
+      AND (owner_id=$9 OR (owner_id IS NULL AND clock_timestamp()<expires_at AND activation_hash=$10))
     RETURNING ${columns}
-  `, [...scopeArgs(scope), ...credential(token), ownerId]);
+  `, [...scopeArgs(scope), ...credential(token), ownerId, activationHash]);
   if (!rows[0]) throw denied();
   return rows[0];
 }
@@ -140,6 +145,21 @@ export async function rejectMainSkillIfBound(client, attempt, section) {
   if (rows[0]) throw Object.assign(new Error('Kỹ năng này đang làm qua link dự phòng. Hãy mở đúng link để giữ bài đã lưu.'), {
     status: 409, code: 'TERM1_SKILL_OWNED_BY_FALLBACK'
   });
+}
+
+// Used before binding. Return only the attempt key to the server and do not
+// reveal that it exists unless the independently supplied activation code matches.
+export async function resolveSkillTargetForOpen(client, token, ownerId, activationCode) {
+  if (typeof ownerId !== 'string' || !uuid.test(ownerId)) throw denied();
+  const code = typeof activationCode === 'string' ? activationCode.trim().toUpperCase() : '';
+  const activationHash = activationPattern.test(code) ? sha(code) : null;
+  const { rows } = await client.query(`
+    SELECT attempt_id, owner_id, issued_at FROM assessment.term1_skill_grant
+    WHERE id=$1 AND secret_hash=$2 AND revoked_at IS NULL
+      AND (owner_id=$3 OR (owner_id IS NULL AND clock_timestamp()<expires_at AND activation_hash=$4))
+  `, [...credential(token), ownerId, activationHash]);
+  if (!rows[0]) throw denied();
+  return rows[0];
 }
 
 export async function resolveBoundSkillTarget(client, token, ownerId, publicId) {

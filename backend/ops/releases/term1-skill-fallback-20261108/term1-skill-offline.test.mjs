@@ -22,12 +22,12 @@ test('Reading fallback completes outside lis_first order without leaking full ex
   const ownerId = randomUUID();
   const scope = { attemptId: f.a, sessionId: f.s, generation: 0, classId: '5601',
     studentRef: randomUUID(), section: 'reading' };
-  const { grant, token } = await issueSkillGrant(f.db, scope);
+  const { grant, token, activationCode } = await issueSkillGrant(f.db, scope);
   const publicScope = { ...f.scope, attemptToken: grant.id, examSessionToken: grant.id, ownerId };
   const start = op(f, 'reading', 'start');
   assert.equal((await f.request('/offline/operation', start)).error, 'OFFLINE_DEPENDENCY');
   assert.equal((await request(f, '/offline/operation', { ...start, ...publicScope }, token)).status, 403);
-  await bindSkillGrant(f.db, scope, token, ownerId);
+  await bindSkillGrant(f.db, scope, token, ownerId, activationCode);
   assert.equal((await f.request('/offline/operation', start)).error, 'TERM1_SKILL_OWNED_BY_FALLBACK');
   const listeningStart = op(f, 'listening', 'start');
   assert.equal((await request(f, '/offline/operation', { ...listeningStart, ...publicScope }, token)).status, 403);
@@ -83,8 +83,8 @@ test('Reading fallback preserves a score already sealed by the online path', asy
   const original = { correct: 0, total: 26, marker: 'previous-native-result' };
   await f.db.query('UPDATE assessment.term_test_attempt SET reading_submitted_at=now(), reading_result=$2 WHERE id=$1',
     [f.a, original]);
-  const { token, grant } = await issueSkillGrant(f.db, scope);
-  await bindSkillGrant(f.db, scope, token, ownerId);
+  const { token, grant, activationCode } = await issueSkillGrant(f.db, scope);
+  await bindSkillGrant(f.db, scope, token, ownerId, activationCode);
   const start = { ...op(f, 'reading', 'start'), attemptToken: grant.id, examSessionToken: grant.id, ownerId };
   const response = await request(f, '/offline/operation', start, token);
   assert.equal(response.error, 'OFFLINE_SECTION_LOCKED');

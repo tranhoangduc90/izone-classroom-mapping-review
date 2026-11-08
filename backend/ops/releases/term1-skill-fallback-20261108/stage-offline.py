@@ -6,6 +6,8 @@ import shutil
 
 CORE_SHA = '9dc5ceef6f06f222326bd22c0b30c17651f135eb9891a388ee747acb497a3006'
 WRAPPER_SHA = 'ea46a95bb4e82a09d13f9bdc62221aae930174059530aad4dfde125e231453bc'
+ORDER_SHA = 'b7c2972e110063d342cc52a12819bb7c7c9d78e1d04cfb7e5f5fca796ebb85c6'
+APP_SHA = '18fde64f44462d1da1d4ea540ba82465ed8e88aad2ae9241ca5c71dd1b534b90'
 
 
 def pinned(path, expected):
@@ -23,10 +25,15 @@ def edit(source, old, new):
 
 def build(runtime):
     target = runtime.resolve(strict=True) / 'src'
+    order = pinned(target / 'k56-exam-order.js', ORDER_SHA)
+    app = pinned(target / 'app.js', APP_SHA)
     core = pinned(target / 'k56-offline-core.mjs', CORE_SHA)
     wrapper = pinned(target / 'term1-offline.mjs', WRAPPER_SHA)
     core = "import {readBoundSkillGrant, rejectMainSkillIfBound, resolveBoundSkillTarget, skillGrantSchema} from './term1-skill-grant.mjs';\n" + core
     core = edit(core, "const schema=tables(", "const schema=skillGrantSchema+tables(")
+    core = edit(core, "WHERE section='writing' AND kind='seal' AND receipt->>'status'='accepted';",
+                "WHERE section='writing' AND kind='seal' AND receipt->>'status'='accepted';\n"
+                "ALTER TABLE assessment.term2_offline_run ADD COLUMN IF NOT EXISTS main_owner_pending boolean NOT NULL DEFAULT false;")
     core = edit(core, 'async function admitted(client,body,token){', 'async function admitted(client,body,token,grantToken){')
     core = edit(core, """  const a=await load(client,SLUG,body.attemptToken,false,true);
   const run=(await client.query(tables('SELECT * FROM assessment.term2_offline_run WHERE attempt_id=$1 FOR UPDATE'),[body.attemptToken])).rows[0];""",
@@ -45,7 +52,7 @@ def build(runtime):
     core = edit(core, '  return {a,run};',
                 """  const grant=grantToken===undefined ? null
     : await readBoundSkillGrant(client,a,grantToken,body.ownerId,body.section);
-  if(!grant&&(run.owner_id!==body.ownerId||!equal(token,permitFor(secret,run))))
+  if(!grant&&(run.main_owner_pending||run.owner_id!==body.ownerId||!equal(token,permitFor(secret,run))))
     throw fail('OFFLINE_SCOPE_CONFLICT','Lượt thi hoặc quyền đã thay đổi. Giữ bài và liên hệ giảng viên.',403);
   return {a,run,grant};""")
     core = edit(core, """await admitted(client,b,req.get('x-term2-permit'));
@@ -66,11 +73,53 @@ def build(runtime):
                 '[b.operationId,a.attempt_token,hash,b.section,b.kind,JSON.stringify(b),JSON.stringify(receipt)]')
     core = edit(core, 'SLUG,b.attemptToken,{section:b.section,operationId:b.operationId,receiptId:',
                 'SLUG,out.a.attempt_token,{section:b.section,operationId:b.operationId,receiptId:')
+    core = edit(core, '   if(row.owner_id!==body.ownerId)',
+                """   if(row.main_owner_pending) {
+    row=(await client.query(tables('UPDATE assessment.term2_offline_run SET owner_id=$2,main_owner_pending=false WHERE attempt_id=$1 RETURNING *'),[a.attempt_token,body.ownerId])).rows[0];
+   }
+   if(row.owner_id!==body.ownerId)""")
+    order = "import {registerTerm1SkillRoutes} from './term1-skill-routes.mjs';\n" + order
+    order = "import {rejectMainSkillIfBound} from './term1-skill-grant.mjs';\n" + order
+    order = edit(order, 'import {registerTerm1Offline}', 'import {registerTerm1Offline,POLICY as TERM1_OFFLINE_POLICY}')
+    order = edit(order, '  onJournalEvent, secret, onWriting, readLimiter, draftLimiter,',
+                 '  onJournalEvent, secret, onWriting, readLimiter, draftLimiter, authenticate, readTeacherSkillScope,')
+    order = edit(order, 'async function prepare(slug, body, create = true)', 'async function prepare(slug, body, create = true, existingClient = null)')
+    order = edit(order, '    return transaction(async client => {\n      const student =',
+                 '    const run = existingClient ? work => work(existingClient) : transaction;\n    return run(async client => {\n      const student =')
+    marker = '  registerTerm1Offline(router,{pool,secret,assets,prepare,load,transaction,serialize,resultFor,limiter,readLimiter,draftLimiter,record,onWriting});'
+    order = edit(order, marker, marker + """
+  if(authenticate&&readTeacherSkillScope)registerTerm1SkillRoutes(router,{
+    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,
+    findStudent:async(client,input)=>{
+      const rows=(await client.query(findStudentForTermTestSql,[input.classCode,'term-test-1-k56',input.studentRef])).rows;
+      return rows.length===1?rows[0]:null;
+    }
+  });""")
+    order = edit(order, "      if (row.reading_submitted_at) throw failure('READING_LOCKED'",
+                 "      if(row.test_slug==='term-test-1-k56')await rejectMainSkillIfBound(client,row,'reading');\n"
+                 "      if (row.reading_submitted_at) throw failure('READING_LOCKED'")
+    order = edit(order, "      const accepted = body.revision>Number(a.reading_draft_revision||0);",
+                 "      if(a.test_slug==='term-test-1-k56')await rejectMainSkillIfBound(client,a,'reading');\n"
+                 "      const accepted = body.revision>Number(a.reading_draft_revision||0);")
+    order = edit(order, "      if (a[`${skill}_submitted_at`]) return { a, changed:false };",
+                 "      if (a[`${skill}_submitted_at`]) return { a, changed:false };\n"
+                 "      if(a.test_slug==='term-test-1-k56'&&skill==='reading')await rejectMainSkillIfBound(client,a,skill);")
+    app = edit(app, "x-exam-journal-request-id, x-term2-permit');",
+               "x-exam-journal-request-id, x-term2-permit, x-term1-skill-grant');")
+    auth = '  const auth = createAuthService({ config, pool, verifyGoogleToken });\n  const authenticate = auth.authenticate;\n'
+    app = edit(app, auth, '')
+    app = edit(app, '  const app = express();\n', '  const app = express();\n' + auth)
+    app = edit(app, '    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter, secret: config.termTestSessionSecret,',
+               '    authenticate, readTeacherSkillScope: readTeacherSavedProgress,\n'
+               '    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter, secret: config.termTestSessionSecret,')
     wrapper = edit(wrapper, "'./k56-offline-core.mjs'", "'./term1-skill-offline-core.mjs'")
-    for name in ('term1-skill-grant.mjs', 'term1-skill-offline-core.mjs'):
+    for name in ('term1-skill-grant.mjs', 'term1-skill-offline-core.mjs', 'term1-skill-routes.mjs'):
         if (target / name).exists():
             raise ValueError('Overlay target already exists: ' + name)
-    shutil.copyfile(Path(__file__).with_name('term1-skill-grant.mjs'), target / 'term1-skill-grant.mjs')
+    for name in ('term1-skill-grant.mjs', 'term1-skill-routes.mjs'):
+        shutil.copyfile(Path(__file__).with_name(name), target / name)
+    (target / 'app.js').write_text(app, encoding='utf-8', newline='\n')
+    (target / 'k56-exam-order.js').write_text(order, encoding='utf-8', newline='\n')
     (target / 'term1-skill-offline-core.mjs').write_text(core, encoding='utf-8', newline='\n')
     (target / 'term1-offline.mjs').write_text(wrapper, encoding='utf-8', newline='\n')
 

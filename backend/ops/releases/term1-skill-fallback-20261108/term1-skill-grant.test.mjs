@@ -22,17 +22,19 @@ const denied = { code: 'TERM1_SKILL_GRANT_DENIED', status: 403 };
 test('Reading grant stores only a digest and binds exactly one owner to the canonical scope', async t => {
   const { db, scope } = await fixture(t);
   const owner = randomUUID();
-  const { token, grant } = await issueSkillGrant(db, scope);
+  const { token, grant, activationCode } = await issueSkillGrant(db, scope);
   const stored = (await db.query('SELECT secret_hash FROM assessment.term1_skill_grant')).rows[0];
   assert.match(stored.secret_hash, /^[a-f0-9]{64}$/);
   assert.ok(!JSON.stringify(stored).includes(token.split('.')[1]));
   await assert.rejects(requireSkillGrant(db, scope, token, owner), denied);
   for (const changes of [{ classId: '125' }, { studentRef: randomUUID() }, { section: 'writing' },
     { sessionId: randomUUID() }, { generation: 3 }]) {
-    await assert.rejects(bindSkillGrant(db, { ...scope, ...changes }, token, owner), denied);
+    await assert.rejects(bindSkillGrant(db, { ...scope, ...changes }, token, owner, activationCode), denied);
   }
   await assert.rejects(bindSkillGrant(db, scope, token.slice(0, -2) + 'x', owner), denied);
-  const bound = await bindSkillGrant(db, scope, token, owner);
+  await assert.rejects(bindSkillGrant(db, scope, token, owner), denied);
+  await assert.rejects(bindSkillGrant(db, scope, token, owner, '0000000000000000'), denied);
+  const bound = await bindSkillGrant(db, scope, token, owner, activationCode);
   assert.equal(bound.id, grant.id);
   assert.ok(bound.bound_at);
   await assert.rejects(bindSkillGrant(db, scope, token, randomUUID()), denied);
@@ -51,14 +53,14 @@ test('Expiry blocks new owners, revocation blocks existing ones and replacement 
   const first = await issueSkillGrant(db, scope);
   await assert.rejects(issueSkillGrant(db, scope), { code: 'TERM1_SKILL_GRANT_EXISTS' });
   await db.query("UPDATE assessment.term1_skill_grant SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [first.grant.id]);
-  await assert.rejects(bindSkillGrant(db, scope, first.token, owner), denied);
+  await assert.rejects(bindSkillGrant(db, scope, first.token, owner, first.activationCode), denied);
   await assert.rejects(revokeSkillGrant(db, { ...scope, classId: '999' }, first.grant.id), denied);
   assert.ok((await revokeSkillGrant(db, scope, first.grant.id)).revoked_at);
   const replacement = await issueSkillGrant(db, scope, 1);
-  const bound = await bindSkillGrant(db, scope, replacement.token, owner);
+  const bound = await bindSkillGrant(db, scope, replacement.token, owner, replacement.activationCode);
   await db.query("UPDATE assessment.term1_skill_grant SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [replacement.grant.id]);
   assert.deepEqual((await bindSkillGrant(db, scope, replacement.token, owner)).bound_at, bound.bound_at);
-  await assert.rejects(bindSkillGrant(db, scope, first.token, owner), denied);
+  await assert.rejects(bindSkillGrant(db, scope, first.token, owner, first.activationCode), denied);
   await revokeSkillGrant(db, scope, replacement.grant.id);
   await assert.rejects(requireSkillGrant(db, scope, replacement.token, owner), denied);
 });
