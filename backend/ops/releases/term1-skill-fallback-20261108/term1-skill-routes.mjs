@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import {
   bindSkillGrant, issueSkillGrant, readActiveSkillGrant, readBoundSkillGrant, resolveBoundSkillTarget,
@@ -17,6 +18,19 @@ const openInput = identifyInput.extend({ studentRef: z.string().uuid(), audioTra
 const resultInput = z.object({ ownerId: z.string().uuid(), grantId: z.string().uuid(), section: identity.shape.section.default('reading') }).strict();
 const labels = { reading: 'Reading', listening: 'Listening', writing: 'Writing' };
 const issueFlags = { reading: 'TERM1_SKILL_FALLBACK_ENABLED', listening: 'TERM1_SKILL_LISTENING_ENABLED', writing: 'TERM1_SKILL_WRITING_ENABLED' };
+const rollout = z.object({ listening: z.boolean(), reading: z.boolean(), writing: z.boolean() }).strict();
+
+export function term1SkillIssueEnabled(section, env = process.env) {
+  if (!Object.hasOwn(issueFlags, section)) return false;
+  if (!env.TERM1_SKILL_CONFIG_FILE) return env[issueFlags[section]] === 'true';
+  try {
+    const config = rollout.parse(JSON.parse(readFileSync(env.TERM1_SKILL_CONFIG_FILE, 'utf8')));
+    return config[section];
+  } catch {
+    // An unreadable switch only stops issuance. Existing grants and receipts stay available.
+    return false;
+  }
+}
 
 function fail(status, code, message) {
   throw Object.assign(new Error(message), { status, code });
@@ -46,7 +60,7 @@ function publicWritingGrading(grading) {
 export function registerTerm1SkillRoutes(router, {
   authenticate, readTeacherScope, transaction, prepare, load, findStudent, assets, policy,
   limiter, readLimiter, record, issueAudio, readWriting, readReview,
-  allowNew = section => process.env[issueFlags[section]] === 'true'
+  allowNew = term1SkillIssueEnabled
 }) {
   const mutation = async (event, work) => {
     const { response, attemptId, grantId } = await transaction(work);

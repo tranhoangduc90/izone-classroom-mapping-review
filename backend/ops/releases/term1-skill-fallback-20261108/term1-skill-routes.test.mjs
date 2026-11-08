@@ -10,9 +10,24 @@ import { pathToFileURL } from 'node:url';
 process.env.K56_TEST_PRODUCT = '1';
 process.env.TERM2_FIXTURE_IMPORT_ONLY = '1';
 const { fixture, op } = await import('../term1-offline-20261107/test.mjs');
-const { registerTerm1SkillRoutes } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/term1-skill-routes.mjs'));
+const { registerTerm1SkillRoutes, term1SkillIssueEnabled } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/term1-skill-routes.mjs'));
 const require = createRequire(process.env.TERM2_DEPS_PACKAGE || new URL('../../../package.json', import.meta.url));
 const express = require('express');
+
+test('Term 1 rollout config toggles only the selected skill and fails closed', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'term1-skill-switch-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, 'rollout.json');
+  const env = { TERM1_SKILL_CONFIG_FILE: file, TERM1_SKILL_LISTENING_ENABLED: 'true' };
+  assert.equal(term1SkillIssueEnabled('listening', env), false);
+  await writeFile(file, JSON.stringify({ listening: false, reading: true, writing: false }));
+  assert.deepEqual(['listening', 'reading', 'writing'].map(skill => term1SkillIssueEnabled(skill, env)), [false, true, false]);
+  await writeFile(file, JSON.stringify({ listening: true, reading: false, writing: true }));
+  assert.deepEqual(['listening', 'reading', 'writing'].map(skill => term1SkillIssueEnabled(skill, env)), [true, false, true]);
+  await writeFile(file, '{"listening":true}');
+  assert.equal(term1SkillIssueEnabled('listening', env), false);
+  assert.equal(term1SkillIssueEnabled('listening', { TERM1_SKILL_LISTENING_ENABLED: 'true' }), true);
+});
 
 test('K56 app boots with the real teacher authentication middleware on the fallback route', async () => {
   const source = process.env.TERM2_RUNTIME_ROOT + '/src/';
