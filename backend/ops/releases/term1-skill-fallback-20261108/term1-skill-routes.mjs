@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
-  bindSkillGrant, issueSkillGrant, readBoundSkillGrant, resolveBoundSkillTarget,
+  bindSkillGrant, issueSkillGrant, readActiveSkillGrant, readBoundSkillGrant, resolveBoundSkillTarget,
   resolveSkillTargetForOpen, revokeSkillGrant
 } from './term1-skill-grant.mjs';
 
@@ -9,7 +9,8 @@ const SLUG = 'term-test-1-k56';
 const PATH = '/' + SLUG + '/skill-fallback';
 const identity = z.object({ classCode: z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/),
   studentRef: z.string().uuid(), section: z.literal('reading') });
-const issueInput = identity.extend({ oldDeviceStopped: z.boolean().default(false) }).strict();
+const issueInput = identity.extend({ oldDeviceStopped: z.boolean().default(false),
+  examMode: z.enum(['lis_first', 'read_first']).optional() }).strict();
 const revokeInput = identity.extend({ grantId: z.string().uuid() }).strict();
 const openInput = identity.extend({ ownerId: z.string().uuid(), activationCode: z.string().max(30).optional() }).strict();
 const identifyInput = openInput.omit({ studentRef: true });
@@ -33,8 +34,18 @@ function assertCbt(attempt) {
 
 export function registerTerm1SkillRoutes(router, {
   authenticate, readTeacherScope, transaction, prepare, load, findStudent, assets, policy,
-  limiter, readLimiter, allowNew = () => process.env.TERM1_SKILL_FALLBACK_ENABLED === 'true'
+  limiter, readLimiter, record, allowNew = () => process.env.TERM1_SKILL_FALLBACK_ENABLED === 'true'
 }) {
+  const mutation = async (event, work) => {
+    const { response, attemptId, grantId } = await transaction(work);
+    if (attemptId) {
+      try {
+        const pending = record?.(event, SLUG, attemptId, { section: 'reading', operationId: grantId, phase: 'after_commit' });
+        if (pending?.catch) void pending.catch(() => {});
+      } catch { /* Một sự kiện log lỗi không được làm hỏng thao tác đã commit. */ }
+    }
+    return response;
+  };
   const route = (schema, handler) => async (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     const parsed = schema.safeParse(req.body);
@@ -50,28 +61,42 @@ export function registerTerm1SkillRoutes(router, {
   const teacherAttempt = async (client, input, req, create) => {
     await readTeacherScope(client, { class: input.classCode, test: SLUG, student: input.studentRef, mode: 'index' }, req);
     const attempt = await prepare(SLUG, { classCode: input.classCode, studentRef: input.studentRef,
-      mode: 'lis_first', attemptMode: 'cbt' }, create, client);
+      mode: input.examMode ?? 'lis_first', attemptMode: 'cbt' }, create, client);
+    if (!attempt) return null;
     assertCbt(attempt);
     if (!/^[1-9]\d*$/.test(String(attempt.student_id))) denied();
     return attempt;
   };
 
-  router.post(PATH + '/issue', limiter, authenticate, route(issueInput, (input, req) =>
+  router.post(PATH + '/manage', readLimiter, authenticate, route(identity.strict(), (input, req) =>
     transaction(async client => {
+      const attempt = await teacherAttempt(client, input, req, false);
+      const activeGrant = attempt ? await readActiveSkillGrant(client, scopeOf(attempt, input)) : null;
+      return { ok: true, issueEnabled: allowNew(), attemptExists: Boolean(attempt),
+        examMode: attempt?.exam_mode ?? null, started: Boolean(attempt?.reading_started_at),
+        submitted: Boolean(attempt?.reading_submitted_at), activeGrant };
+    })));
+
+  router.post(PATH + '/issue', limiter, authenticate, route(issueInput, (input, req) =>
+    mutation('term1_skill_grant_issued', async client => {
       if (!allowNew()) fail(503, 'TERM1_SKILL_ISSUE_DISABLED', 'Chưa mở cấp link dự phòng.');
-      const attempt = await teacherAttempt(client, input, req, true);
+      const attempt = await teacherAttempt(client, input, req, Boolean(input.examMode));
+      if (!attempt) fail(409, 'TERM1_SKILL_MODE_REQUIRED', 'Chọn thứ tự của bài chính trước khi cấp link cho lượt mới.');
       if (attempt.reading_submitted_at) fail(409, 'OFFLINE_SECTION_LOCKED', 'Reading đã được nộp.');
       if (attempt.reading_started_at && !input.oldDeviceStopped)
         fail(409, 'TERM1_SKILL_STOP_REQUIRED', 'Xác nhận đã dừng làm Reading ở thiết bị cũ trước khi cấp link.');
       const { grant, token, activationCode } = await issueSkillGrant(client, scopeOf(attempt, input));
-      return { ok: true, grantId: grant.id, section: grant.section, expiresAt: grant.expires_at, token, activationCode };
+      return { attemptId: attempt.attempt_token, grantId: grant.id, response: {
+        ok: true, grantId: grant.id, section: grant.section, expiresAt: grant.expires_at, token, activationCode } };
     })));
 
   router.post(PATH + '/revoke', limiter, authenticate, route(revokeInput, (input, req) =>
-    transaction(async client => {
+    mutation('term1_skill_grant_revoked', async client => {
       const attempt = await teacherAttempt(client, input, req, false);
+      if (!attempt) denied();
       const grant = await revokeSkillGrant(client, scopeOf(attempt, input), input.grantId);
-      return { ok: true, grantId: grant.id, revokedAt: grant.revoked_at };
+      return { attemptId: attempt.attempt_token, grantId: grant.id,
+        response: { ok: true, grantId: grant.id, revokedAt: grant.revoked_at } };
     })));
 
   router.post(PATH + '/identify', limiter, route(identifyInput, (input, req) =>
@@ -86,7 +111,7 @@ export function registerTerm1SkillRoutes(router, {
     })));
 
   router.post(PATH + '/open', limiter, route(openInput, (input, req) =>
-    transaction(async client => {
+    mutation('term1_skill_grant_bound', async client => {
       const token = req.get('x-term1-skill-grant');
       const target = await resolveSkillTargetForOpen(client, token, input.ownerId, input.activationCode);
       const attempt = await load(client, SLUG, target.attempt_id, false, true);
@@ -98,7 +123,8 @@ export function registerTerm1SkillRoutes(router, {
           && Date.parse(attempt.reading_started_at) >= Date.parse(target.issued_at))
         fail(409, 'TERM1_SKILL_STATE_CHANGED', 'Reading đã bắt đầu sau khi cấp link. Nhờ giảng viên đối soát và cấp lại.');
       const grant = await bindSkillGrant(client, scopeOf(attempt, input), token, input.ownerId, input.activationCode);
-      if (attempt.reading_submitted_at) return { ok: true, grantId: grant.id, section: 'reading', submitted: true };
+      const trace = { attemptId: target.owner_id ? null : attempt.attempt_token, grantId: grant.id };
+      if (attempt.reading_submitted_at) return { ...trace, response: { ok: true, grantId: grant.id, section: 'reading', submitted: true } };
       const content = attempt.mini_definition_snapshot?.content ?? await assets.getContent(SLUG);
       const timing = attempt.mini_definition_snapshot?.timing ?? assets.getTiming(SLUG);
       if (!content?.reading || !Number.isSafeInteger(timing?.readingDurationMinutes))
@@ -128,9 +154,9 @@ export function registerTerm1SkillRoutes(router, {
         await client.query('UPDATE assessment.term1_offline_run SET state=$2::jsonb WHERE attempt_id=$1',
           [attempt.attempt_token, JSON.stringify(state)]);
       }
-      return { ok: true, grantId: grant.id, section: 'reading', submitted: false, generation: Number(attempt.generation),
+      return { ...trace, response: { ok: true, grantId: grant.id, section: 'reading', submitted: false, generation: Number(attempt.generation),
         content: { reading: content.reading }, durationMinutes: timing.readingDurationMinutes, serverNow: attempt.server_now,
-        preparedAt: run.prepared_at, startedAt, deadlineAt, draft: attempt.reading_draft ?? {}, revision };
+        preparedAt: run.prepared_at, startedAt, deadlineAt, draft: attempt.reading_draft ?? {}, revision } };
     })));
 
   router.post(PATH + '/result', readLimiter, route(resultInput, (input, req) =>

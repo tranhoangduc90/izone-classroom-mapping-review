@@ -115,6 +115,15 @@ export async function revokeSkillGrant(client, scope, grantId) {
   return rows[0];
 }
 
+export async function readActiveSkillGrant(client, scope) {
+  const { rows } = await client.query(`SELECT ${columns}, expires_at <= clock_timestamp() AS expired
+    FROM assessment.term1_skill_grant WHERE ${scopeWhere} AND revoked_at IS NULL`, scopeArgs(scope));
+  const grant = rows[0];
+  if (!grant) return null;
+  return { grantId: grant.id, section: grant.section, issuedAt: grant.issued_at, expiresAt: grant.expires_at,
+    state: grant.bound_at ? 'bound' : grant.expired ? 'expired' : 'awaiting' };
+}
+
 function attemptArgs(attempt) {
   return [attempt.attempt_token, attempt.exam_session_token, Number(attempt.generation), attempt.class_id];
 }

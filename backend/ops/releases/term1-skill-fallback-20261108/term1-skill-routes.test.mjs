@@ -40,6 +40,8 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   const studentRef = randomUUID();
   const ownerId = randomUUID();
   let canIssue = true;
+  let attemptExists = mode === 'lis_first';
+  const audit = [];
   const scope = { classCode: 'FIXTURE', studentRef, section: 'reading' };
   registerTerm1SkillRoutes(router, {
     authenticate(req, res, next) {
@@ -51,7 +53,12 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
         throw Object.assign(Error('Fixture scope denied'), { status: 403, code: 'ACCESS_DENIED' });
     },
     transaction: work => f.db.transaction(work),
-    prepare: async (_slug, _identity, _create, db) => f.load(db, 'term-test-1-k56', f.a),
+    prepare: async (_slug, input, create, db) => {
+      if (!attemptExists && !create) return null;
+      if (!attemptExists) assert.equal(input.mode, mode);
+      attemptExists = true;
+      return f.load(db, 'term-test-1-k56', f.a);
+    },
     load: f.load,
     findStudent: async (_db, input) => input.studentRef === studentRef && input.classCode === 'FIXTURE'
       ? { class_id: '5601', student_id: '5602' } : null,
@@ -59,7 +66,8 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
     policy: 'term1-offline-v1',
     limiter: (_req, _res, next) => next(),
     readLimiter: (_req, _res, next) => next(),
-    allowNew: () => canIssue
+    allowNew: () => canIssue,
+    record(...args) { audit.push(args); return Promise.reject(new Error('Fixture journal unavailable')); }
   });
   app.use('/api/term-tests', router);
   const server = app.listen(0, '127.0.0.1');
@@ -75,13 +83,24 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   }
   const teacher = { 'x-fixture-teacher': 'allowed' };
   assert.equal((await post('/issue', scope)).status, 401);
+  assert.equal((await post('/manage', scope)).status, 401);
   assert.equal((await post('/issue', scope, { 'x-fixture-teacher': 'wrong-class' })).status, 403);
+  assert.equal((await post('/manage', scope, { 'x-fixture-teacher': 'wrong-class' })).status, 403);
   assert.equal((await post('/issue', { ...scope, section: 'writing' }, teacher)).status, 400);
-  const issued = await post('/issue', scope, teacher);
+  const beforeGrant = await post('/manage', scope, teacher);
+  assert.equal(beforeGrant.attemptExists, attemptExists);
+  assert.equal(beforeGrant.activeGrant, null);
+  if (!attemptExists) assert.equal((await post('/issue', scope, teacher)).error, 'TERM1_SKILL_MODE_REQUIRED');
+  const issued = await post('/issue', { ...scope, ...attemptExists ? {} : { examMode: mode } }, teacher);
   assert.equal(issued.status, 200);
   assert.match(issued.activationCode, /^[A-F0-9]{16}$/);
   assert.ok(issued.token.startsWith(issued.grantId + '.'));
   assert.equal((await post('/issue', scope, teacher)).status, 409);
+  const awaiting = await post('/manage', scope, teacher);
+  assert.equal(awaiting.examMode, mode);
+  assert.equal(awaiting.activeGrant.state, 'awaiting');
+  assert.ok(!JSON.stringify(awaiting).includes(issued.activationCode));
+  assert.ok(!JSON.stringify(awaiting).includes(issued.token));
 
   const header = { 'x-term1-skill-grant': issued.token };
   const input = { ...scope, ownerId };
@@ -95,6 +114,9 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
     assert.ok(!JSON.stringify(opened).includes(secret), secret);
   }
   canIssue = false;
+  const disabled = await post('/manage', scope, teacher);
+  assert.equal(disabled.issueEnabled, false);
+  assert.equal(disabled.activeGrant.state, 'bound');
   assert.equal((await post('/issue', scope, teacher)).status, 503);
   assert.equal((await post('/open', { ...input, ownerId: randomUUID(), activationCode: issued.activationCode }, header)).status, 403);
   assert.equal((await post('/open', input, header)).grantId, issued.grantId);
@@ -142,6 +164,13 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   const writing = op(f, 'writing', 'start', { dependency: mode === 'read_first' ? listenSeal.operationId : marker.operationId });
   assert.equal((await f.request('/offline/operation', writing, main.offline.permit)).receipt.status, 'accepted');
   assert.equal((await post('/revoke', { ...scope, grantId: issued.grantId }, teacher)).status, 200);
+  assert.equal((await post('/manage', scope, teacher)).activeGrant, null);
   assert.equal((await post('/result', { grantId: issued.grantId, ownerId }, header)).status, 403);
+  assert.deepEqual(audit.map(([event, slug, attemptId, detail]) => [event, slug, attemptId, detail.operationId]), [
+    ['term1_skill_grant_issued', 'term-test-1-k56', f.a, issued.grantId],
+    ['term1_skill_grant_bound', 'term-test-1-k56', f.a, issued.grantId],
+    ['term1_skill_grant_revoked', 'term-test-1-k56', f.a, issued.grantId]
+  ]);
+  assert.ok(!JSON.stringify(audit).includes(issued.activationCode) && !JSON.stringify(audit).includes(issued.token));
 });
 }

@@ -119,7 +119,7 @@ def build(runtime):
     marker = '  registerTerm1Offline(router,{pool,secret,assets,prepare,load,transaction,serialize,resultFor,limiter,readLimiter,draftLimiter,record,onWriting});'
     order = edit(order, marker, marker + """
   if(authenticate&&readTeacherSkillScope)registerTerm1SkillRoutes(router,{
-    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,
+    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,record,
     findStudent:async(client,input)=>{
       const rows=(await client.query(findStudentForTermTestSql,[input.classCode,'term-test-1-k56',input.studentRef])).rows;
       return rows.length===1?rows[0]:null;
