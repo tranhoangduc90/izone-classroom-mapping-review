@@ -3,6 +3,15 @@ import {CODE,fail,hash} from './domain.js';
 import {CTA,planDocWrite} from './docs.js';
 import {authoredLesson} from './authored-content.js';
 
+// Match the exact codes accepted by the Listening Homework CTA workflow.
+const LISTENING_HOMEWORK_CODES=new Set([
+ '67-listening-scandinavian-studies',
+ '67-listening-horton-castle',
+ '67-listening-origami',
+ '67-listening-natural-dyes',
+ '67-listening-paper-on-public-libraries'
+]);
+
 // Đọc đủ tab và bảng lồng; chỉ nhận một CTA Listening đi cùng đúng mã ngay phía dưới.
 function documentParagraphs(document){
  const paragraphs=[];
@@ -18,6 +27,13 @@ export function findListeningCta(document,code=CODE){
  const paragraphs=documentParagraphs(document);
  const labels=paragraphs.filter(p=>p.text===CTA),codes=paragraphs.filter(p=>p.text===code);
  if(!labels.length&&!codes.length)return null;
+ // The shared CTA label also belongs to Listening Homework. Require one exact Homework code.
+ if(labels.length===1&&!codes.length){
+  const listeningCodes=paragraphs.filter(p=>/^67-(?:practice-)?listening[-_]/.test(p.text));
+  const next=paragraphs.slice(paragraphs.indexOf(labels[0])+1).find(p=>p.text);
+  if(listeningCodes.length===1&&next===listeningCodes[0]&&labels[0].tabId&&
+   next.tabId===labels[0].tabId&&LISTENING_HOMEWORK_CODES.has(next.text))return null;
+ }
  if(labels.length!==1||codes.length!==1)fail('CTA_SCOPE_AMBIGUOUS','CTA hoặc mã Listening bị thiếu/trùng.');
  const index=paragraphs.indexOf(labels[0]);
  const next=paragraphs.slice(index+1).find(p=>p.text);

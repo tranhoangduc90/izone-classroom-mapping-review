@@ -59,6 +59,27 @@ test('CTA: child tab, mã cạnh CTA; thiếu, trùng và nhầm tab đều dừ
  const duplicate=structuredClone(d);body(duplicate).push(body(duplicate)[2]);assert.throws(()=>findListeningCta(duplicate),e=>e.code==='CTA_SCOPE_AMBIGUOUS');
  const wrong=structuredClone(d);body(wrong).splice(3,0,{paragraph:{elements:[{textRun:{content:'67-listening-01\n'}}]}});assert.throws(()=>findListeningCta(wrong),e=>e.code==='CTA_CODE_MISMATCH');
 });
+test('Homework-only CTA is skipped without resolving an owner; ambiguous and mixed Docs still fail closed',async()=>{
+ const homework='67-listening-scandinavian-studies';
+ const paragraph=text=>({paragraph:{elements:[{textRun:{content:text+'\n'}}]}});
+ const make=(...texts)=>{
+  const d=document();body(d).splice(2,Infinity,...texts.map(paragraph));return d;
+ };
+ const homeworkOnly=make(CTA,'',homework);
+ const registrar=createCtaRegistrar({
+  docs:{read:async()=>homeworkOnly},
+  resolveOwner:async()=>assert.fail('Homework does not reach the practice registrar')
+ });
+ assert.deepEqual(await registrar(event),{documentId:event.doc_id,status:'not_applicable',code:CODE});
+ const splitTab=make(CTA);
+ splitTab.tabs[0].childTabs.push({tabProperties:{tabId:'other'},documentTab:{body:{content:[paragraph(homework)]}}});
+ for(const d of [make(CTA),make(CTA,'67-listening-unknown'),make(CTA,'other text',homework),
+  make(CTA,homework,homework),make(CTA,homework,'67-listening-horton-castle'),
+  make(CTA,homework,CTA,CODE),make(CTA,homework,CODE),splitTab]){
+  assert.throws(()=>findListeningCta(d),e=>['CTA_SCOPE_AMBIGUOUS','CTA_CODE_MISMATCH'].includes(e.code));
+ }
+});
+
 test('Đăng ký và chạy lại: một binding/job/link, giữ Reading/Speaking; sửa link mất và timeout có thể tiếp tục',async t=>{
  const f=await fixture();t.after(f.close);
  await f.pool.query('UPDATE listening_practice.assignment SET source_course_id=$1,source_work_id=$2',[event.classroom_course_id,event.coursework_id]);
