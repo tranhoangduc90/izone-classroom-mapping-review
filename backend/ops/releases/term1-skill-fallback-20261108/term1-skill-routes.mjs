@@ -141,7 +141,7 @@ export function registerTerm1SkillRoutes(router, {
       if (!student || String(student.class_id) !== attempt.class_id || String(student.student_id) !== attempt.student_id)
         denied();
       if (!target.owner_id && attempt[section + '_started_at'] && !attempt[section + '_submitted_at']
-          && Date.parse(attempt[section + '_started_at']) >= Date.parse(target.issued_at))
+          && new Date(attempt[section + '_started_at']).getTime() >= new Date(target.issued_at).getTime())
         fail(409, 'TERM1_SKILL_STATE_CHANGED', labels[section] + ' đã bắt đầu sau khi cấp link. Nhờ giảng viên đối soát và cấp lại.');
       const grant = await bindSkillGrant(client, scopeOf(attempt, input), token, input.ownerId, input.activationCode);
       const trace = { attemptId: target.owner_id ? null : attempt.attempt_token, grantId: grant.id };

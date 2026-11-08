@@ -55,7 +55,7 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
       if (req.get('x-fixture-teacher') !== 'allowed' || input.student !== studentRef || input.class !== 'FIXTURE')
         throw Object.assign(Error('Fixture scope denied'), { status: 403, code: 'ACCESS_DENIED' });
     },
-    transaction: work => f.db.transaction(work),
+    transaction: f.transaction,
     prepare: async (_slug, input, create, db) => {
       if (!attemptExists && !create) return null;
       if (!attemptExists) assert.equal(input.mode, mode);
@@ -210,7 +210,7 @@ test('Listening fallback protects a native run and does not accept an early auto
   f.timing.listeningReviewSeconds = 20;
   app.use(express.json());
   registerTerm1SkillRoutes(router, { authenticate: noop, limiter: noop, readLimiter: noop, issueAudio,
-    allowNew: section => section === 'listening', readTeacherScope: async () => {}, transaction: work => f.db.transaction(work),
+    allowNew: section => section === 'listening', readTeacherScope: async () => {}, transaction: f.transaction,
     prepare: (_slug, _input, _create, db) => f.load(db, 'term-test-1-k56', f.a), load: f.load,
     findStudent: async () => ({ class_id: '5601', student_id: '5602' }), assets: {}, policy: 'term1-offline-v1' });
   app.use('/api/term-tests', router);
@@ -270,7 +270,7 @@ test(`Standalone Writing seals before the other skills and grades exactly once (
   let advanceRelease = 0;
   app.use(express.json());
   registerTerm1SkillRoutes(router, { authenticate: noop, limiter: noop, readLimiter: noop,
-    allowNew: section => section === 'writing', readTeacherScope: async () => {}, transaction: work => f.db.transaction(work),
+    allowNew: section => section === 'writing', readTeacherScope: async () => {}, transaction: f.transaction,
     prepare: (_slug, _input, _create, db) => f.load(db, 'term-test-1-k56', f.a), load: f.load,
     findStudent: async () => ({ class_id: '5601', student_id: '5602' }), assets: {}, policy: 'term1-offline-v1',
     readWriting: async (client, attempt) => studentWritingGrading(attempt.test_slug,
