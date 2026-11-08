@@ -5,13 +5,21 @@ from pathlib import Path
 import shutil
 
 CORE_SHA = '9dc5ceef6f06f222326bd22c0b30c17651f135eb9891a388ee747acb497a3006'
+R2_CORE_SHA = 'ce8994a9895ab004f873bd64154afe0a15d445079c8b76a7a25d3d8307a98e03'
+R2_FILES = {
+    'audio-r2.js': '30cd162944d276ccbef8e9b13e0963ebd53f8834a3dea2cb6a63934ecf806902',
+    'k56-term-audio-r2.mjs': '2674eb373706393361126efa1179600675eb597847986517062d274d577a6beb',
+    'r2-audio-catalog.json': 'bda4fd37608693339ce17c391c1b4b88ee45515b00834a6c225100b44fec48bf',
+}
 WRAPPER_SHA = 'ea46a95bb4e82a09d13f9bdc62221aae930174059530aad4dfde125e231453bc'
 ORDER_SHA = 'b7c2972e110063d342cc52a12819bb7c7c9d78e1d04cfb7e5f5fca796ebb85c6'
 APP_SHA = '18fde64f44462d1da1d4ea540ba82465ed8e88aad2ae9241ca5c71dd1b534b90'
 
 
-def pinned(path, expected):
+def pinned(path, expected, *, git_text=False):
     raw = path.read_bytes()
+    if git_text:
+        raw = raw.replace(b'\r\n', b'\n')
     if hashlib.sha256(raw).hexdigest() != expected:
         raise ValueError('Unverified base source: ' + str(path))
     return raw.decode()
@@ -27,7 +35,15 @@ def build(runtime):
     target = runtime.resolve(strict=True) / 'src'
     order = pinned(target / 'k56-exam-order.js', ORDER_SHA)
     app = pinned(target / 'app.js', APP_SHA)
-    core = pinned(target / 'k56-offline-core.mjs', CORE_SHA)
+    core_path = target / 'k56-offline-core.mjs'
+    r2 = hashlib.sha256(core_path.read_bytes()).hexdigest() == R2_CORE_SHA
+    if r2:
+        for name, expected in R2_FILES.items():
+            pinned(target / name, expected)
+        # Start the Term 1 fork from the pinned pre-R2 source. Reapply the exact
+        # R2 opt-in at the authorization point of the new Term 1 receiver below.
+        core_path = Path(__file__).resolve().parent.parent / 'term1-offline-20261107' / core_path.name
+    core = pinned(core_path, CORE_SHA, git_text=r2)
     wrapper = pinned(target / 'term1-offline.mjs', WRAPPER_SHA)
     core = "import {readBoundSkillGrant, rejectMainSkillIfBound, resolveBoundSkillTarget, skillGrantSchema} from './term1-skill-grant.mjs';\n" + core
     core = edit(core, "const schema=tables(", "const schema=skillGrantSchema+tables(")
@@ -76,7 +92,9 @@ def build(runtime):
     core = edit(core, 'SLUG,b.attemptToken,{section:b.section,operationId:b.operationId,receiptId:',
                 'SLUG,out.a.attempt_token,{section:b.section,operationId:b.operationId,receiptId:')
     core = edit(core, '   if(row.owner_id!==body.ownerId)',
-                """   if(row.main_owner_pending) {
+                """   if(row.session_id!==body.examSessionToken||Number(row.generation)!==body.generation||row.policy!==POLICY)
+    throw fail('OFFLINE_SCOPE_CONFLICT','Lượt thi chưa khớp.',403);
+   if(row.main_owner_pending) {
     row=(await client.query(tables('UPDATE assessment.term2_offline_run SET owner_id=$2,main_owner_pending=false WHERE attempt_id=$1 RETURNING *'),[a.attempt_token,body.ownerId])).rows[0];
    }
    if(row.owner_id!==body.ownerId)""")
@@ -85,6 +103,16 @@ def build(runtime):
     core = edit(core, 'timing=a.mini_definition_snapshot?.timing||assets.getTiming(SLUG);\n  res.json({...serialize(a),content,timing,',
                 'timing=current.mini_definition_snapshot?.timing||assets.getTiming(SLUG);\n'
                 '  res.json({...serialize(current),content,timing,...mainProgress(current,run),')
+    if r2:
+        core = "import {issueK56TermAudio} from './k56-term-audio-r2.mjs';\n" + core
+        core = edit(core, "mode:z.enum(['lis_first','read_first'])",
+                    "mode:z.enum(['lis_first','read_first']),audioTransport:z.literal('r2-direct-v1').optional()")
+        core = edit(core, '  const {current,run}=await transaction(async client=>{',
+                    '  const {current,run,audioDownload}=await transaction(async client=>{')
+        core = edit(core, '   return {current,run:row};',
+                    '   return {current,run:row,audioDownload:issueK56TermAudio(current,body.audioTransport)};')
+        core = edit(core, '...mainProgress(current,run),offline:',
+                    '...mainProgress(current,run),...(audioDownload?{audioDownload}:{}),offline:')
     core = edit(core, " router.post('/:testSlug/offline/status'",
                 """ function mainProgress(a,run){
   const completedElsewhere={};
