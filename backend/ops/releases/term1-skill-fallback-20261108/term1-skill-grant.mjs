@@ -109,3 +109,47 @@ export async function revokeSkillGrant(client, scope, grantId) {
   if (!rows[0]) throw denied();
   return rows[0];
 }
+
+function attemptArgs(attempt) {
+  return [attempt.attempt_token, attempt.exam_session_token, Number(attempt.generation), attempt.class_id];
+}
+
+// Use the locked native attempt rather than identity claims from the request.
+// The selected student_ref was checked when the link was bound.
+export async function readBoundSkillGrant(client, attempt, token, ownerId, section = null) {
+  if (typeof ownerId !== 'string' || !uuid.test(ownerId)) throw denied();
+  const { rows } = await client.query(`
+    SELECT ${columns} FROM assessment.term1_skill_grant
+    WHERE attempt_id=$1 AND session_id=$2 AND generation=$3 AND class_id=$4
+      AND id=$5 AND secret_hash=$6 AND owner_id=$7 AND revoked_at IS NULL
+      AND ($8::text IS NULL OR section=$8)
+    FOR UPDATE
+  `, [...attemptArgs(attempt), ...credential(token), ownerId, section]);
+  if (!rows[0]) throw denied();
+  return rows[0];
+}
+
+// A bound link owns writes to its skill until it is revoked or submitted.
+export async function rejectMainSkillIfBound(client, attempt, section) {
+  const { rows } = await client.query(`
+    SELECT id FROM assessment.term1_skill_grant
+    WHERE attempt_id=$1 AND session_id=$2 AND generation=$3 AND class_id=$4
+      AND section=$5 AND owner_id IS NOT NULL AND revoked_at IS NULL
+    FOR UPDATE
+  `, [...attemptArgs(attempt), section]);
+  if (rows[0]) throw Object.assign(new Error('Kỹ năng này đang làm qua link dự phòng. Hãy mở đúng link để giữ bài đã lưu.'), {
+    status: 409, code: 'TERM1_SKILL_OWNED_BY_FALLBACK'
+  });
+}
+
+export async function resolveBoundSkillTarget(client, token, ownerId, publicId) {
+  if (typeof ownerId !== 'string' || !uuid.test(ownerId)) throw denied();
+  const [id, hash] = credential(token);
+  if (id !== publicId) throw denied();
+  const { rows } = await client.query(`
+    SELECT attempt_id, session_id FROM assessment.term1_skill_grant
+    WHERE id=$1 AND secret_hash=$2 AND owner_id=$3 AND revoked_at IS NULL
+  `, [id, hash, ownerId]);
+  if (!rows[0]) throw denied();
+  return rows[0];
+}
