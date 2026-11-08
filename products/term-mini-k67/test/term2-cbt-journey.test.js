@@ -13,9 +13,11 @@ import {publicAudioCatalog} from '../src/public-audio-catalog.js';
 const slug='/api/term-tests/term-test-2';
 const identity={classCode:'IC2304',studentRef:'11111111-1111-4111-8111-111111111111'};
 const definitions=[{id:'task1',prompt:'Đề giả Task 1'},{id:'task2',prompt:'Đề giả Task 2'}];
+const nativeDurationSeconds=1843.2;
+const reviewSeconds=120;
 const assets={supports:()=>true,getContent:()=>({title:'Fixture',writing:{tasks:definitions}}),
-  getTiming:()=>({readingDurationMinutes:1,listeningDurationSeconds:6,listeningTotalSeconds:8,
-    listeningReviewSeconds:2,writingDurationMinutes:1}),getSessionAudioKey:()=>Buffer.alloc(32)};
+  getTiming:()=>({readingDurationMinutes:1,listeningDurationSeconds:1844,listeningTotalSeconds:1964,
+    listeningReviewSeconds:reviewSeconds,writingDurationMinutes:1}),getSessionAudioKey:()=>Buffer.alloc(32)};
 
 for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}`,async t=>{
   let grading;
@@ -53,7 +55,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.equal((await post('begin',{deviceProof:'b'.repeat(64)})).status,403);
     const wrongTest=await api.post('/api/term-tests/mini-test-lesson-5/cbt-journey/prepare').send({...identity,...scope});
     assert.equal(wrongTest.status,404);
-    const before=await f.db.query(`UPDATE assessment.term_k67_cbt_journey SET activated_at=clock_timestamp()-interval '3 minutes'
+    const before=await f.db.query(`UPDATE assessment.term_k67_cbt_journey SET activated_at=clock_timestamp()-interval '40 minutes'
       WHERE session_id=$1 RETURNING activated_at`,[scope.examSessionToken]);
     const firstAt=new Date(before.rows[0].activated_at).getTime();
     const writing={section:'writing',operationId:randomUUID(),previousOperationId:null,startedAt:firstAt,
@@ -63,15 +65,22 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     const order=mode==='lis_first'?['listening','reading']:['reading','listening'];
     for(const section of order){
       const listening=section==='listening';
+      const eofAt=listening?nextAt+nativeDurationSeconds*1000:null;
       const operation={section,operationId:randomUUID(),previousOperationId,startedAt:nextAt,
-        capturedAt:nextAt+(listening?8_000:2_000),revision:1,automatic:listening,eofAt:listening?nextAt+6_000:null,
-        heardSeconds:listening?6:0,answers:listening?{11:'A'}:{14:'A'}};
+        capturedAt:listening?eofAt+reviewSeconds*1000:nextAt+2_000,revision:1,automatic:listening,eofAt,
+        heardSeconds:listening?nativeDurationSeconds:0,answers:listening?{11:'A'}:{14:'A'}};
+      let early;
       if(listening){
         assert.equal((await post('seal',{...operation,eofAt:null})).body.error,'AUDIO_END_NOT_CONFIRMED');
-        assert.equal((await post('seal',{...operation,capturedAt:operation.eofAt+100})).body.error,'OFFLINE_REVIEW_REQUIRED');
+        assert.equal((await post('seal',{...operation,heardSeconds:nativeDurationSeconds-0.3})).body.error,'AUDIO_END_NOT_CONFIRMED');
+        early=await post('seal',{...operation,capturedAt:operation.capturedAt-1});
       }
       const accepted=await post('seal',operation);
       assert.ok(accepted.ok,accepted.text);
+      if(listening){
+        assert.equal(early.body.error,'OFFLINE_REVIEW_REQUIRED');
+        assert.equal(offer.body.timing.listeningDurationSeconds,nativeDurationSeconds);
+      }
       assert.equal(accepted.body.receipt.completed,false);
       assert.equal(accepted.body.receipt.nextSection,previousOperationId?'writing':order[1]);
       assert.deepEqual((await post('status',{section,operationId:operation.operationId})).body.receipt,accepted.body.receipt);

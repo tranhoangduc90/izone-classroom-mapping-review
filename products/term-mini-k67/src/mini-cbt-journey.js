@@ -34,6 +34,14 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
 const peer = section => section === 'reading' ? 'listening' : 'reading';
 
+function timingForAudio(assets, slug, audioHash) {
+  const timing = assets.getTiming(slug);
+  const audio = publicAudioCatalog[slug];
+  if (audio?.sha256 !== audioHash || !Number.isFinite(audio?.durationSeconds)) return timing;
+  return { ...timing, listeningDurationSeconds: audio.durationSeconds,
+    listeningTotalSeconds: audio.durationSeconds + timing.listeningReviewSeconds };
+}
+
 async function lock(db, body, {slug,table,paper}) {
   const owner = (await db.query(`SELECT erp_course_class_id,erp_student_contact_id FROM assessment.term_test_exam_session
     WHERE id=$1 AND test_slug=$2`, [body.examSessionToken, slug])).rows[0];
@@ -249,7 +257,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
-        content:await assets.getContent(slug),timing:assets.getTiming(slug),audioManifest:manifest,...audio};
+        content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash),audioManifest:manifest,...audio};
     });
   }));
   if(!profile.paper)app.post(prefix+'/begin',writeLimiter,route(scope,(body,req)=>audioTransaction(pool,async db => {
@@ -285,7 +293,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         if(old.operationId!==body.operationId||old.payloadHash!==digest)throw problem('OFFLINE_CONFLICT','Mã nộp không khớp bản đã nhận.');
         return {ok:true,receipt:old};
       }
-      const applied=await commit(db,state,body,assets.getTiming(slug),profile);
+      const applied=await commit(db,state,body,timingForAudio(assets,slug,state.journey.audio_hash),profile);
       const receipt={...applied,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
