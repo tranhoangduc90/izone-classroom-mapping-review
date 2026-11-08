@@ -45,7 +45,8 @@ function publicWritingGrading(grading) {
 
 export function registerTerm1SkillRoutes(router, {
   authenticate, readTeacherScope, transaction, prepare, load, findStudent, assets, policy,
-  limiter, readLimiter, record, issueAudio, readWriting, allowNew = section => process.env[issueFlags[section]] === 'true'
+  limiter, readLimiter, record, issueAudio, readWriting, readReview,
+  allowNew = section => process.env[issueFlags[section]] === 'true'
 }) {
   const mutation = async (event, work) => {
     const { response, attemptId, grantId } = await transaction(work);
@@ -197,17 +198,34 @@ export function registerTerm1SkillRoutes(router, {
         serverNow: attempt.server_now, preparedAt: run.prepared_at, startedAt, deadlineAt, draft, revision } };
     })));
 
-  router.post(PATH + '/result', readLimiter, route(resultInput, (input, req) =>
-    transaction(async client => {
+  router.post(PATH + '/result', readLimiter, route(resultInput, async (input, req) => {
+    const { response, reviewAttempt } = await transaction(async client => {
       const token = req.get('x-term1-skill-grant');
       const target = await resolveBoundSkillTarget(client, token, input.ownerId, input.grantId);
       const attempt = await load(client, SLUG, target.attempt_id, false, true);
       assertCbt(attempt);
       await readBoundSkillGrant(client, attempt, token, input.ownerId, input.section);
       const submitted = Boolean(attempt[input.section + '_submitted_at']);
-      if (input.section === 'writing') return { ok: true, section: 'writing', submitted,
+      if (input.section === 'writing') return { response: { ok: true, section: 'writing', submitted,
         writing: submitted ? { submitted: true, task2: String(attempt.writing_task_2 ?? ''),
-          grading: publicWritingGrading(await readWriting?.(client, attempt)) } : null };
-      return { ok: true, section: input.section, submitted, result: submitted ? attempt[input.section + '_result'] : null };
-    })));
+          grading: publicWritingGrading(await readWriting?.(client, attempt)) } : null } };
+      return { reviewAttempt: submitted ? attempt : null,
+        response: { ok: true, section: input.section, submitted, result: submitted ? attempt[input.section + '_result'] : null } };
+    });
+    if (!reviewAttempt || !readReview) return response;
+    try {
+      const review = await readReview(reviewAttempt, input.section);
+      return review ? { ...response, review } : response;
+    } catch (error) {
+      // Missing review materials or a storage error cannot hide an accepted grade.
+      if (error?.code !== 'ENOENT') {
+        try {
+          const pending = record?.('term1_skill_review_unavailable', SLUG, reviewAttempt.attempt_token,
+            { section: input.section, errorCode: 'TERM1_SKILL_REVIEW_UNAVAILABLE' });
+          if (pending?.catch) void pending.catch(() => {});
+        } catch { /* Preserve the result when journal delivery also fails. */ }
+      }
+      return response;
+    }
+  }));
 }

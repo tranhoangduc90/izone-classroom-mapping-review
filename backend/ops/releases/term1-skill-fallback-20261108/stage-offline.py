@@ -6,6 +6,7 @@ import shutil
 
 CORE_SHA = '9dc5ceef6f06f222326bd22c0b30c17651f135eb9891a388ee747acb497a3006'
 R2_CORE_SHA = 'ce8994a9895ab004f873bd64154afe0a15d445079c8b76a7a25d3d8307a98e03'
+LIVE_MINI_CORE_SHA = '99f4ce86c322633ee3cdc86232859895d4c57a3a77e9d502e26264504453b517'
 R2_FILES = {
     'audio-r2.js': '30cd162944d276ccbef8e9b13e0963ebd53f8834a3dea2cb6a63934ecf806902',
     'k56-term-audio-r2.mjs': '2674eb373706393361126efa1179600675eb597847986517062d274d577a6beb',
@@ -13,9 +14,12 @@ R2_FILES = {
 }
 WRAPPER_SHA = 'ea46a95bb4e82a09d13f9bdc62221aae930174059530aad4dfde125e231453bc'
 ORDER_SHA = 'b7c2972e110063d342cc52a12819bb7c7c9d78e1d04cfb7e5f5fca796ebb85c6'
+LIVE_MINI_ORDER_SHA = 'f6abcfa1943cb80f4fadbb1a78265a29503880836a9bf9821a02b4e840bfbc2d'
 APP_SHA = '18fde64f44462d1da1d4ea540ba82465ed8e88aad2ae9241ca5c71dd1b534b90'
 LISTENING_RECOVERY_SHA = 'c848bd6a8569a7a7ba5b26d9597ca09a65ef8025bfaec41706b8c80672280e93'
 WRITING_GRADING_SHA = 'cbfde2cd4a3c4ba76268552b19a590fad9fc8f096db891c62af01462290036da'
+LIVE_MINI_GRADING_SHA = 'cb25ff228d8e1625bad8ec4439df5b5176ea9b1229c9b04168b1990e71a0fbad'
+LIVE_MINI_CATALOG_SHA = '9fe92824b68945ddd5854f873168876ade70b1cb30ff7a182f92656e10994fc0'
 
 
 def pinned(path, expected, *, git_text=False):
@@ -35,19 +39,23 @@ def edit(source, old, new):
 
 def build(runtime):
     target = runtime.resolve(strict=True) / 'src'
-    order = pinned(target / 'k56-exam-order.js', ORDER_SHA)
+    core_path = target / 'k56-offline-core.mjs'
+    core_hash = hashlib.sha256(core_path.read_bytes()).hexdigest()
+    live_mini = core_hash == LIVE_MINI_CORE_SHA
+    order = pinned(target / 'k56-exam-order.js', LIVE_MINI_ORDER_SHA if live_mini else ORDER_SHA)
     app = pinned(target / 'app.js', APP_SHA)
     recovery_path = target / 'k56-listening-audio-recovery.js'
     recovery = pinned(recovery_path, LISTENING_RECOVERY_SHA)
     grading_path = target / 'term-test-writing-grading.js'
-    grading = pinned(grading_path, WRITING_GRADING_SHA)
-    core_path = target / 'k56-offline-core.mjs'
-    r2 = hashlib.sha256(core_path.read_bytes()).hexdigest() == R2_CORE_SHA
+    grading = pinned(grading_path, LIVE_MINI_GRADING_SHA if live_mini else WRITING_GRADING_SHA)
+    r2 = core_hash in (R2_CORE_SHA, LIVE_MINI_CORE_SHA)
     if r2:
         for name, expected in R2_FILES.items():
+            if live_mini and name == 'r2-audio-catalog.json':
+                expected = LIVE_MINI_CATALOG_SHA
             pinned(target / name, expected)
-        # Start the Term 1 fork from the pinned pre-R2 source. Reapply the exact
-        # R2 opt-in at the authorization point of the new Term 1 receiver below.
+        # The live shared core and catalog remain byte-identical for Term 2/Mini.
+        # Build the Term 1-only fork and reapply its R2 admission below.
         core_path = Path(__file__).resolve().parent.parent / 'term1-offline-20261107' / core_path.name
     core = pinned(core_path, CORE_SHA, git_text=r2)
     wrapper = pinned(target / 'term1-offline.mjs', WRAPPER_SHA)
@@ -153,7 +161,7 @@ def build(runtime):
     order = "import {rejectMainSkillIfBound} from './term1-skill-grant.mjs';\n" + order
     order = edit(order, 'import {registerTerm1Offline}', 'import {registerTerm1Offline,POLICY as TERM1_OFFLINE_POLICY}')
     order = edit(order, '  onJournalEvent, secret, onWriting, readLimiter, draftLimiter,',
-                 '  onJournalEvent, secret, onWriting, readLimiter, draftLimiter, authenticate, readTeacherSkillScope, readSkillWriting,')
+                 '  onJournalEvent, secret, onWriting, readLimiter, draftLimiter, authenticate, readTeacherSkillScope, readSkillWriting, readSkillReview,')
     order = edit(order, 'async function prepare(slug, body, create = true)', 'async function prepare(slug, body, create = true, existingClient = null)')
     order = edit(order, '    return transaction(async client => {\n      const student =',
                  '    const run = existingClient ? work => work(existingClient) : transaction;\n    return run(async client => {\n      const student =')
@@ -162,7 +170,7 @@ def build(runtime):
         order = "import {issueTerm1SkillAudio} from './term1-skill-audio-r2.mjs';\n" + order
     order = edit(order, marker, marker + """
   if(authenticate&&readTeacherSkillScope)registerTerm1SkillRoutes(router,{
-    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,record,readWriting:readSkillWriting,"""
+    authenticate,readTeacherScope:readTeacherSkillScope,transaction,prepare,load,assets,policy:TERM1_OFFLINE_POLICY,limiter,readLimiter,record,readWriting:readSkillWriting,readReview:readSkillReview,"""
     + ("\n    issueAudio:issueTerm1SkillAudio," if r2 else "") + """
     findStudent:async(client,input)=>{
       const rows=(await client.query(findStudentForTermTestSql,[input.classCode,'term-test-1-k56',input.studentRef])).rows;
@@ -188,6 +196,7 @@ def build(runtime):
     recovery = "import {rejectListeningSessionIfBound} from './term1-skill-grant.mjs';\n" + recovery
     recovery = edit(recovery, '    const row = found.rows[0];',
                     "    const row = found.rows[0];\n    if(slug==='term-test-1-k56')await rejectListeningSessionIfBound(client,token);")
+    app = "import {readTerm1SkillReview} from './term1-skill-review.mjs';\n" + app
     app = "import {withMainListeningSession,withMainWritingAttempt} from './term1-skill-grant.mjs';\n" + app
     app = edit(app, "    const saved = await pool.query(saveTermTestListeningDraftSql, [\n      parsed.data.examSessionToken,\n      slug.data,\n      JSON.stringify(parsed.data.answers),\n      parsed.data.revision ?? null\n    ]);",
                """    const saved = await withMainListeningSession(pool, slug.data, parsed.data.examSessionToken, client =>
@@ -201,6 +210,7 @@ def build(runtime):
     app = edit(app, '    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter, secret: config.termTestSessionSecret,',
                '    authenticate, readTeacherSkillScope: readTeacherSavedProgress,\n'
                '    readSkillWriting: async (client,row) => studentWritingGrading(row.test_slug,await termTestWritingGradingService?.getStatus(row.attempt_token,client)),\n'
+               '    readSkillReview: (attempt,section) => readTerm1SkillReview({assetDir:config.termTestAssetDir,assets:termTestAssetService,attempt,section}),\n'
                '    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter, secret: config.termTestSessionSecret,')
     app = edit(app, '    const saved = await pool.query(miniWriting ? saveMiniTestWritingSql : k56TermWriting ? saveK56TermWritingSql : saveTermTestWritingSql, [',
                '    const saved = await withMainWritingAttempt(pool,attemptSlug,parsed.data.attemptToken, client =>\n'
@@ -230,7 +240,7 @@ const TERM1_SKILL_WRITING_SEALED = `(test_slug='term-test-1-k56' AND superseded_
     grading = edit(grading, '  async function getStatus(attemptToken) {\n    return readStatus(pool, attemptToken);',
                    '  async function getStatus(attemptToken, executor = pool) {\n    return readStatus(executor, attemptToken);')
     wrapper = edit(wrapper, "'./k56-offline-core.mjs'", "'./term1-skill-offline-core.mjs'")
-    modules = ('term1-skill-grant.mjs', 'term1-skill-routes.mjs') + (('term1-skill-audio-r2.mjs',) if r2 else ())
+    modules = ('term1-skill-grant.mjs', 'term1-skill-routes.mjs', 'term1-skill-review.mjs') + (('term1-skill-audio-r2.mjs',) if r2 else ())
     for name in (*modules, 'term1-skill-offline-core.mjs'):
         if (target / name).exists():
             raise ValueError('Overlay target already exists: ' + name)

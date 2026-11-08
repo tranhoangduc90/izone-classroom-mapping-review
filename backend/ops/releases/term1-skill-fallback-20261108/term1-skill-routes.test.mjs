@@ -44,6 +44,7 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   const ownerId = randomUUID();
   let canIssue = true;
   let attemptExists = mode === 'lis_first';
+  let readCount = 0;
   const audit = [];
   const scope = { classCode: 'FIXTURE', studentRef, section: 'reading' };
   registerTerm1SkillRoutes(router, {
@@ -69,6 +70,13 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
     policy: 'term1-offline-v1',
     limiter: (_req, _res, next) => next(),
     readLimiter: (_req, _res, next) => next(),
+    readReview: async (attempt, section) => {
+      readCount += 1;
+      assert.equal(attempt.attempt_token, f.a);
+      assert.equal(section, 'reading');
+      if (mode === 'read_first') throw Error('Fixture review storage unavailable');
+      return [{ number: 1, source: 'Fixture', evidence: 'Source text', explanation: 'Fixture review' }];
+    },
     allowNew: () => canIssue,
     record(...args) { audit.push(args); return Promise.reject(new Error('Fixture journal unavailable')); }
   });
@@ -124,6 +132,7 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   assert.equal((await post('/open', { ...input, ownerId: randomUUID(), activationCode: issued.activationCode }, header)).status, 403);
   assert.equal((await post('/open', input, header)).grantId, issued.grantId);
   assert.equal((await post('/result', { grantId: issued.grantId, ownerId }, header)).result, null);
+  assert.equal(readCount, 0);
 
   const publicScope = { ...f.scope, ownerId, attemptToken: issued.grantId, examSessionToken: issued.grantId };
   const start = op(f, 'reading', 'start');
@@ -141,7 +150,10 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   const result = await post('/result', { grantId: issued.grantId, ownerId }, header);
   assert.equal(result.result.correct, 1);
   assert.equal(result.result.total, 26);
+  assert.deepEqual(result.review, mode === 'lis_first'
+    ? [{ number: 1, source: 'Fixture', evidence: 'Source text', explanation: 'Fixture review' }] : undefined);
   assert.equal((await post('/result', { grantId: issued.grantId, ownerId: randomUUID() }, header)).status, 403);
+  assert.equal(readCount, 1);
 
   // The fallback-created run did not take ownership of the regular exam.
   const main = mainBefore ?? await f.request('/offline/prepare', mainInput);
@@ -172,6 +184,7 @@ test(`Teacher link → Reading result → original exam resumes (${mode})`, asyn
   assert.deepEqual(audit.map(([event, slug, attemptId, detail]) => [event, slug, attemptId, detail.operationId]), [
     ['term1_skill_grant_issued', 'term-test-1-k56', f.a, issued.grantId],
     ['term1_skill_grant_bound', 'term-test-1-k56', f.a, issued.grantId],
+    ...(mode === 'read_first' ? [['term1_skill_review_unavailable', 'term-test-1-k56', f.a, undefined]] : []),
     ['term1_skill_grant_revoked', 'term-test-1-k56', f.a, issued.grantId]
   ]);
   assert.ok(!JSON.stringify(audit).includes(issued.activationCode) && !JSON.stringify(audit).includes(issued.token));
