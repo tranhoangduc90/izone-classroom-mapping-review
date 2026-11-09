@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { sealMiniCbtSection } from './mini-cbt-offline.js';
+import { buildCombinedResult } from './term-tests.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 
@@ -27,6 +28,10 @@ const attemptSection = scope.extend({ operationId: z.uuid(), section: z.enum(['l
 const termSection = z.discriminatedUnion('section', [attemptSection.extend({section:z.literal('listening')}),
   attemptSection.extend({section:z.literal('reading')}),attemptSection.extend({section:z.literal('writing'),
     eofAt:z.null(),heardSeconds:z.literal(0),answers:z.object({task1:z.string().max(12_000),task2:z.string().max(12_000)}).strict()})]);
+const interruptedListening = attemptSection.extend({
+  section: z.literal('listening'), automatic: z.literal(false), eofAt: z.null(), heardSeconds: z.literal(0),
+  answers: z.strictObject({})
+});
 const termStatus=scope.extend({section:z.enum(['listening','reading','writing']),operationId:z.uuid()});
 const problem = (code, message, status = 409) => Object.assign(new Error(message), { code, status });
 const clock = value => new Date(value).getTime();
@@ -110,6 +115,39 @@ function timeline(body, state, timing, paper) {
   if (body.automatic && body.eofAt === null) throw problem('AUDIO_END_NOT_CONFIRMED', 'Chưa phát hết audio.');
   return body.eofAt === null ? Math.max(body.capturedAt, body.startedAt + timing.listeningTotalSeconds * 1_000)
     : body.eofAt + timing.listeningReviewSeconds * 1_000;
+}
+
+async function commitInterruption(db, state, body, timing, profile) {
+  timeline(body, state, timing, false);
+  const { session, attempt } = state;
+  if (session.listening_submitted_at || session.listening_eof_at || session.listening_audio_incident_id
+      || attempt?.listening_interrupted_at) {
+    throw problem('OFFLINE_CONFLICT', 'Listening đã có kết quả hoặc lượt đang được xử lý.');
+  }
+  await db.query('SELECT set_config($1,$2,true)', [profile.guard, session.id]);
+  const at = new Date(body.capturedAt).toISOString();
+  if (attempt) {
+    if (!attempt.reading_submitted_at || !attempt.reading_result) {
+      throw problem('OFFLINE_CONFLICT', 'Chưa nhận phần Reading của lượt.');
+    }
+    const definition = (await db.query(`
+      SELECT slug AS test_slug,title AS test_title,version AS definition_version
+      FROM assessment.test_definition WHERE slug=$1 AND version=$2`, [profile.slug,session.definition_version])).rows[0];
+    if (!definition) throw problem('OFFLINE_DEFINITION', 'Chưa tìm thấy đúng phiên bản đề.');
+    const combined = { ...buildCombinedResult(definition, null, attempt.reading_result), listeningStatus:'interrupted' };
+    await db.query(`UPDATE assessment.term_test_attempt
+      SET listening_interrupted_at=$2,completed_at=now(),combined_result=$3::jsonb,updated_at=now()
+      WHERE id=$1`, [attempt.id,at,JSON.stringify(combined)]);
+    return {attemptToken:attempt.id,completed:!profile.writing,nextSection:profile.writing?'writing':'result'};
+  }
+  const inserted = (await db.query(`INSERT INTO assessment.term_test_attempt
+    (client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,
+      student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation,listening_interrupted_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'lis_first','cbt',$10,$11) RETURNING id`,
+    [body.operationId,session.test_slug,session.definition_version,session.erp_course_class_id,session.class_name_snapshot,
+      session.erp_student_contact_id,session.student_name_snapshot,session.id,session.attempt_mode,session.generation,at])).rows[0];
+  await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2,updated_at=now() WHERE id=$1', [session.id,inserted.id]);
+  return {attemptToken:inserted.id,completed:false,nextSection:'reading'};
 }
 
 async function commit(db, state, body, timing, profile) {
@@ -281,20 +319,22 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
     return {ok:true,persisted:Boolean(receipt),receipt};
   }));
-  app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,async(body,req)=>{
+  const receive = interruption => async (body,req) => {
     const result=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
       const {deviceProof,...input}=body;
       const answerEntries=Object.entries(input.answers).sort(([left],[right])=>left.localeCompare(right));
-      const digest=sha(JSON.stringify({...input,answers:Object.fromEntries(answerEntries)}));
+      const outcome=interruption?{outcome:'interrupted'}:{};
+      const digest=sha(JSON.stringify({...input,answers:Object.fromEntries(answerEntries),...outcome}));
       const old=state.journey.sections[body.section];
       if(old){
         if(old.operationId!==body.operationId||old.payloadHash!==digest)throw problem('OFFLINE_CONFLICT','Mã nộp không khớp bản đã nhận.');
         return {ok:true,receipt:old};
       }
-      const applied=await commit(db,state,body,timingForAudio(assets,slug,state.journey.audio_hash),profile);
-      const receipt={...applied,version,section:body.section,operationId:body.operationId,payloadHash:digest,
+      const timing=timingForAudio(assets,slug,state.journey.audio_hash);
+      const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile);
+      const receipt={...applied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
         [state.session.id,JSON.stringify({...state.journey.sections,[body.section]:receipt})]);
@@ -303,5 +343,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     if(body.section==='writing')writingAccepted?.(result.receipt.attemptToken);
     if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);
     return result;
-  }));
+  };
+  app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,receive(false)));
+  if (!profile.paper) app.post(prefix+'/interrupt',writeLimiter,route(interruptedListening,receive(true)));
 }

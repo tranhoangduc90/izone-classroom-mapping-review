@@ -119,7 +119,9 @@ export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
     return { attemptToken: inserted.attempt_token, completed: false, nextSection: 'reading' };
   }
   const prior = attempt[listening ? 'reading_result' : 'listening_result'];
-  const combined = prior ? buildCombinedResult(test, listening ? grade : prior, listening ? prior : grade) : null;
+  const interrupted = !listening && Boolean(attempt.listening_interrupted_at);
+  const combined = interrupted ? { ...buildCombinedResult(test, null, grade), listeningStatus: 'interrupted' }
+    : prior ? buildCombinedResult(test, listening ? grade : prior, listening ? prior : grade) : null;
   await db.query(`UPDATE assessment.term_test_attempt SET ${body.section}_answers=$2::jsonb,${body.section}_result=$3::jsonb,
     ${body.section}_submitted_at=now(),combined_result=$4::jsonb,
     completed_at=CASE WHEN $4::jsonb IS NOT NULL THEN now() ELSE NULL END,updated_at=now() WHERE id=$1`,
