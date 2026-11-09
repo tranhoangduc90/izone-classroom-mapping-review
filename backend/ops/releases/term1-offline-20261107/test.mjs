@@ -18,7 +18,7 @@ if(pgUrl){
 const mod=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-offline.mjs`));
 const blank=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-blank.mjs`));const isBlank=blank.isBlank,storeTerm2Blank=blank[`storeTerm${PRODUCT}Blank`];
 const {createTermTestWritingGradingService}=await import(pathToFileURL(runtime+'/src/term-test-writing-grading.js'));
-export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false,beforeReceipt}={}){
+export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false,beforeReceipt,dropResponse,record=()=>{}}={}){
  let db,pool,dispose;
  if(pgUrl){
   const {Pool}=require('pg'),raw=new Pool({connectionString:pgUrl,max:10}),schema='term2_fixture_'+randomUUID().replaceAll('-','');
@@ -71,11 +71,21 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
   }
   return c.query(sql,...args);
  }};await c.query('BEGIN');try{const r=await work(proxy);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
- const app=express();app.use(express.json({limit:'1mb'}));const router=express.Router();
+ const app=express();
+ app.use(express.json({limit:'1mb'}));
+ if(dropResponse)app.use((request,response,next)=>{
+  const send=response.json;
+  response.json=function(body){
+   if(dropResponse(request.body,body)){this.destroy();return this;}
+   return send.call(this,body);
+  };
+  next();
+ });
+ const router=express.Router();
  const grading=createTermTestWritingGradingService({pool});
  const stop=mod[`registerTerm${PRODUCT}Offline`](router,{pool,secret:'x'.repeat(40),assets:{getSessionAudioKey:()=>Buffer.alloc(32)},prepare:async(slug,b)=>load(pool,slug,b.attemptToken),load,transaction,...(defaultPolicy?{}:{allowNew:()=>newEnabled}),
   serialize:x=>({ok:true,attemptToken:x.attempt_token,examSessionToken:x.exam_session_token,generation:0,examMode:mode,studentName:'Học viên giả',serverNow:x.server_now}),
-  resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),record(){},
+  resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),record,
   onWriting:async row=>{calls++;if(writingFailures-->0)throw Error('Fixture crash after commit');await grading.ensureSubmission({attemptToken:row.attempt_token,testSlug:mod.SLUG,task1:PRODUCT===2?row.writing_task_1:'',task2:PRODUCT===1?row.writing_task_2:'',taskDefinitions:content.writing.tasks});}});
  app.use('/api/term-tests',router);app.use((e,q,r,n)=>r.status(500).json({ok:false,error:e.code||e.message}));
  const server=app.listen(0,'127.0.0.1');await new Promise(ok=>server.once('listening',ok));const base=`http://127.0.0.1:${server.address().port}/api/term-tests/${mod.SLUG}`;
