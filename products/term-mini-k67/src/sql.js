@@ -888,7 +888,8 @@ JOIN assessment.test_definition AS definition
   ON definition.slug = attempt.test_slug
  AND definition.version = attempt.definition_version
 WHERE attempt.id = $1::uuid
-  AND attempt.listening_submitted_at IS NOT NULL;`;
+  AND (attempt.listening_submitted_at IS NOT NULL
+    OR (attempt.completed_at IS NOT NULL AND attempt.combined_result->>'listeningStatus'='interrupted'));`;
 
 export const fetchTermTestAttemptReviewSql = `SELECT
   attempt.id::text AS attempt_token,

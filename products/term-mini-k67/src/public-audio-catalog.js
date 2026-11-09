@@ -194,6 +194,7 @@ export const publicAudioCatalog = {
     "assetVersion": "sha256-656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e",
     "sha256": "656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e",
     "byteLength": 22119070,
+    "durationSeconds": 1843.2,
     "encryptedByteLength": 22119070,
     "envelopeVersion": "MP3",
     "url": "https://tranhoangduc90.github.io/izone-ai-team-pages/term-tests/k67-audio-assets/term-test-2-96kbps-656921dc9888dcfe.mp3",

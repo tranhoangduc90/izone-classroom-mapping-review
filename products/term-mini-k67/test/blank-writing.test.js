@@ -66,6 +66,37 @@ for(const slug of ['term-test-1','term-test-2'])for(const mode of ['lis_first','
     assert.equal(r.status,409);assert.equal(r.body.error,'WRITING_NOT_APPLICABLE');
   });
 }
+for(const slug of ['term-test-1','term-test-2'])for(const mode of ['lis_first','read_first'])test(`${slug} · ${mode}: ký tự vô hình vẫn là bài trắng`,async()=>{
+  await clean();
+  const invisible='\u200B\u2060\uFEFF\u180E\uFE0F';
+  const row=await seed(slug,mode,{task1:` \n${invisible}`,task2:`${invisible}\t`});
+  const result=await service.ensureSubmission(row);
+  assert.equal(result.ready,true);
+  assert.equal(result.writingScore,0);
+  for(const task of result.tasks){
+    assert.equal(task.wordCount,0);
+    assert.equal(task.taskScore,0);
+    assert.equal(task.gradingMethod,'blank_rule');
+  }
+  assert.equal((await fixture.db.query("SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job WHERE job_type='dispatch'")).rows[0].n,0);
+  assert.deepEqual(await service.claimJobs({workerId:'worker-invisible-blank'}),[]);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].grades.writing,0);
+});
+test('Term 2: bài có chữ xen ký tự vô hình vẫn giữ nguyên và chấm Task có nội dung',async()=>{
+  await clean();
+  const essay='Bài\u200B làm có chữ';
+  const row=await seed('term-test-2','read_first',{task1:essay,task2:'\u200B\u2060'});
+  const result=await service.ensureSubmission(row);
+  assert.equal(result.ready,false);
+  const [dispatch]=await service.claimJobs({workerId:'worker-visible-text'});
+  assert.equal(dispatch.taskNumber,1);
+  assert.equal(dispatch.essay,essay);
+  const runs=(await fixture.db.query('SELECT task_number,word_count,status FROM assessment.term_test_writing_grading_run ORDER BY task_number')).rows;
+  assert.equal(runs[0].word_count,4);
+  assert.equal(runs[1].word_count,0);
+  assert.equal(runs[1].status,'complete');
+});
 for(const mode of ['lis_first','read_first'])for(const blankTask of [1,2])test(`term-test-2 · ${mode}: Task ${blankTask} trắng vẫn tính hệ số đúng`,async()=>{
   await clean();const row=await seed('term-test-2',mode,{task1:blankTask===1?'':'Bài Task 1',task2:blankTask===2?'':'Bài Task 2'});
   const pending=await service.ensureSubmission(row);assert.equal(pending.ready,false);

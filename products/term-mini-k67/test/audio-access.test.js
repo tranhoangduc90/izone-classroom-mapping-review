@@ -24,7 +24,7 @@ before(async()=>{
   const miniR2ConfigFile=path.join(dir,'r2.fixture.json');
   await writeFile(miniR2ConfigFile,JSON.stringify({enabled:true,accountId:'f'.repeat(32),bucket:'fixture',
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog[slugs[2]].sha256]}));
-  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true,publicAudio:true,miniR2ConfigFile,miniListeningEofEnabled:true});api=request(f.app);
+  f=await createMiniFixture({examOrder:true,assets,audioProtection:true,audioCache:true,publicAudio:true,miniR2ConfigFile,miniListeningEofEnabled:true,term1ListeningEofEnabled:true,term2ListeningEofEnabled:true});api=request(f.app);
   for(const slug of slugs.slice(0,2))await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,created_at,updated_at,is_active)
     SELECT $1,title,version,listening_definition,reading_definition,created_at,updated_at,is_active
     FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`,[slug]);
@@ -45,6 +45,82 @@ async function prepare(slug='term-test-1',mode='lis_first'){
   return{base,token};
 }
 const begin=(base,token)=>post(base,'start',{...token,audioProtocolVersion:1,audioEventId:randomUUID()});
+for(const termSlug of ['term-test-1','term-test-2'])for(const mode of ['lis_first','read_first']) test(`${termSlug} native EOF và 120 giây rà chặn thu Listening sớm, ${mode}`,async()=>{
+  const {base,token}=await prepare(termSlug,mode);
+  const duration=termSlug==='term-test-1'?1735:1844;
+  const access=await post(base,'audio-access',{...token,listeningEofVersion:1});
+  assert.equal(access.status,200,JSON.stringify(access.body));
+  assert.equal(access.body.listeningEofVersion,1);
+  assert.equal((await begin(base,token)).status,200);
+  const submission=submissionIntent=>api.post(base+'/listening').send({
+    ...token,orderClientVersion:1,classCode:'IC2304',studentRef,
+    clientSubmissionId:randomUUID(),answers:{1:'A'},draftRevision:1,
+    ...(submissionIntent?{submissionIntent}:{})
+  });
+  const early=await submission();
+  assert.equal(early.status,409,JSON.stringify(early.body));
+  assert.equal(early.body.error,'AUDIO_END_NOT_CONFIRMED');
+  assert.equal((await submission('automatic')).body.error,'AUDIO_END_NOT_CONFIRMED');
+  assert.equal((await f.db.query('SELECT listening_submitted_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0].listening_submitted_at,null);
+  const premature=await post(base,'audio-progress',{...token,heardSeconds:duration,state:'ended'});
+  assert.equal(premature.body.error,'AUDIO_END_NOT_CONFIRMED');
+  await f.db.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=now()-make_interval(secs=>$2::double precision),
+    listening_audio_checkpoint_seconds=$3 WHERE id=$1`,[token.examSessionToken,duration+1,duration-4]);
+  const nearEnd=await submission();
+  assert.equal(nearEnd.body.error,'AUDIO_END_NOT_CONFIRMED');
+  const ended=await post(base,'audio-progress',{...token,heardSeconds:duration,state:'ended'});
+  assert.equal(ended.status,200,JSON.stringify(ended.body));
+  assert.ok(Date.parse(ended.body.listeningDeadlineAt)-Date.parse(ended.body.listeningEofAt)>=119_999);
+  const review=await submission();
+  assert.equal(review.status,409,JSON.stringify(review.body));
+  assert.equal(review.body.error,'LISTENING_REVIEW_ACTIVE');
+  await f.db.query(`UPDATE assessment.term_test_exam_session SET listening_eof_at=now()-interval '121 seconds' WHERE id=$1`,[token.examSessionToken]);
+  const submitted=await submission();
+  assert.ok([200,201].includes(submitted.status),JSON.stringify(submitted.body));
+  assert.equal(submitted.body.listeningSubmitted??submitted.body.resultAvailable,true);
+  const saved=(await f.db.query('SELECT listening_submitted_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  assert.ok(saved.listening_submitted_at);
+});
+for(const termSlug of ['term-test-1','term-test-2'])for(const mode of ['lis_first','read_first'])test(`${termSlug} ${mode}: nộp tay có xác nhận được phép trước EOF`,async()=>{
+  const {base,token}=await prepare(termSlug,mode);
+  const access=await post(base,'audio-access',{...token,listeningEofVersion:1});
+  assert.equal(access.body.listeningEofVersion,1);
+  assert.equal((await begin(base,token)).status,200);
+  const submitted=await api.post(base+'/listening').send({
+    ...token,orderClientVersion:1,classCode:'IC2304',studentRef,
+    clientSubmissionId:randomUUID(),answers:{1:'A'},submissionIntent:'manual'
+  });
+  assert.ok([200,201].includes(submitted.status),JSON.stringify(submitted.body));
+  const session=(await f.db.query('SELECT listening_submitted_at,listening_eof_at FROM assessment.term_test_exam_session WHERE id=$1',[token.examSessionToken])).rows[0];
+  assert.ok(session.listening_submitted_at);
+  assert.equal(session.listening_eof_at,null);
+});
+for(const termSlug of ['term-test-1','term-test-2'])test(`${termSlug}: đường legacy thiếu orderClientVersion vẫn chặn auto sớm và nhận nộp tay`,async()=>{
+  const {base,token}=await prepare(termSlug);
+  assert.equal((await post(base,'audio-access',{...token,listeningEofVersion:1})).body.listeningEofVersion,1);
+  assert.equal((await begin(base,token)).status,200);
+  const send=intent=>api.post(base+'/listening').send({...token,classCode:'IC2304',studentRef,
+    clientSubmissionId:randomUUID(),answers:{1:'A'},submissionIntent:intent});
+  const auto=await send('automatic');
+  assert.equal(auto.status,409,JSON.stringify(auto.body));
+  assert.equal(auto.body.error,'AUDIO_END_NOT_CONFIRMED');
+  const manual=await send('manual');
+  assert.ok([200,201].includes(manual.status),JSON.stringify(manual.body));
+});
+test('Term 1 và Term 2 lượt không opt-in giữ chính sách cũ',async()=>{
+  for(const slug of ['term-test-1','term-test-2']){
+    const {base,token}=await prepare(slug);
+    const access=await post(base,'audio-access',{...token});
+    assert.equal(access.status,200,JSON.stringify(access.body));
+    assert.equal(access.body.listeningEofVersion,undefined);
+    assert.equal((await begin(base,token)).status,200);
+    const submitted=await api.post(base+'/listening').send({
+      ...token,orderClientVersion:1,classCode:'IC2304',studentRef,
+      clientSubmissionId:randomUUID(),answers:{1:'A'}
+    });
+    assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  }
+});
 for(const mode of ['lis_first','read_first']) test(`Mini K67 native EOF rejects early or skipped playback and makes review replay-safe, ${mode}`, async()=>{
   const {base,token}=await prepare(slugs[2],mode);
   const access=await post(base,'audio-access',{...token,publicAudioVersion:1,listeningEofVersion:1});

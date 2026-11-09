@@ -17,8 +17,9 @@ import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
-import { mountMiniCbtJourney } from './mini-cbt-journey.js';
+import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
+import { mountTerm1ListeningRetake } from './term1-listening-retake.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
 import {mountAudioAccess,audioManifestFor,authorizeAudioSession} from './audio-access.js';
@@ -75,6 +76,7 @@ const listeningSubmissionSchema = z.object({
   clientSubmissionId: z.string().uuid(),
   examSessionToken: z.string().uuid().optional(),
   draftRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  submissionIntent: z.enum(['manual','automatic']).optional(),
   answers: answersSchema
 });
 
@@ -517,6 +519,8 @@ export function createApp({
     message: { ok: false, error: 'RATE_LIMITED', message: 'Bài Writing đang được lưu quá thường xuyên; vui lòng chờ một chút.' }
   });
 
+  mountTerm1ListeningRetake(app,{pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter});
   mountExamOrder(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,logEvent:logTermTestEvent,
     syncComplete:(attempt,result)=>trySyncErpGrades(syncErpGrades,attempt,result)});
@@ -528,6 +532,33 @@ export function createApp({
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+  const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
+      void pool.query(fetchTermTestResultSql,[attemptToken]).then(({rows:[row]})=>{
+        if(row?.test_slug===slug&&row.writing_scope==='lr_only'&&row.combined_result) {
+          return trySyncErpGrades(syncErpGrades,row,row.combined_result);
+        }
+      }).catch(()=>logger.error('Term offline paper grade sync will retry on result read'));
+    }};
+  mountTerm1PaperJourney(app,paperJourneyServices);
+  mountTerm2PaperJourney(app,paperJourneyServices);
+  mountTerm1CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
+      if(!termTestWritingGradingService)return;
+      // The receipt is committed already. Native grading ensures at most one job per submitted snapshot.
+      void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
+        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-1' AND superseded_at IS NULL`,[attemptToken])
+        .then(result=>ensureTermTestWritingGrading(result.rows[0]))
+        .catch(()=>logger.error('Term 1 offline Writing grading will retry on result read'));
+    }});
+  mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
+      if(!termTestWritingGradingService)return;
+      void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
+        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-2' AND superseded_at IS NULL`,[attemptToken])
+        .then(result=>ensureTermTestWritingGrading(result.rows[0]))
+        .catch(()=>logger.error('Term 2 offline Writing grading will retry on result read'));
+    }});
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
@@ -1692,9 +1723,12 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error?.code==='P6730')return res.status(409).json({ok:false,error:'AUDIO_END_NOT_CONFIRMED',message:'Audio chưa được xác nhận phát hết. Bài làm vẫn được giữ.'});
+    if(error?.code==='P6731')return res.status(409).json({ok:false,error:'LISTENING_REVIEW_ACTIVE',message:'Bạn vẫn còn thời gian rà bài Listening sau khi nghe hết audio.'});
     if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});
     if(error?.code==='P6701')return res.status(409).json({ok:false,error:'AUDIO_INCIDENT_OPEN',message:'Bài đang được giữ để xử lý sự cố audio. Chưa thu bài hoặc nhận thay đổi đáp án.'});
     if(error?.code==='P6721')return res.status(409).json({ok:false,error:'MINI_OFFLINE_JOURNEY_ACTIVE',message:'Lượt đang được giữ ở chế độ offline. Hãy mở lại trên thiết bị đã bắt đầu.'});
+    if(error?.code==='P6722')return res.status(409).json({ok:false,error:'TERM_OFFLINE_JOURNEY_ACTIVE',message:'Lượt đang được giữ ở chế độ offline. Hãy mở lại trên thiết bị đã bắt đầu.'});
     if(error?.code==='P6702')return res.status(409).json({ok:false,error:'AUDIO_SESSION_REQUIRED',message:'Hãy dùng đúng phiên Listening đang mở để nộp bài.'});
     if(error instanceof AudioRecoveryError)return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     if (error instanceof TermTestWritingGradingError) {

@@ -82,7 +82,7 @@ async function storedSeal(db, body) {
     WHERE session_id=$1 AND section=$2`, [body.examSessionToken, body.section])).rows[0];
 }
 
-export async function sealMiniCbtSection(db, state, body) {
+export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
   const { session, attempt, record, start, deadline, listening } = state;
   const observed = Date.parse(body.capturedAt);
   const serverNow = asTime(session.server_now);
@@ -95,7 +95,7 @@ export async function sealMiniCbtSection(db, state, body) {
   }
   const definition = (await db.query(`SELECT slug AS test_slug,title AS test_title,version AS definition_version,
     listening_band_adjustment,listening_definition,reading_definition FROM assessment.test_definition
-    WHERE slug=$1 AND version=$2`, [slug, session.definition_version])).rows[0];
+    WHERE slug=$1 AND version=$2`, [testSlug, session.definition_version])).rows[0];
   if (!definition) throw fail('OFFLINE_DEFINITION', 'Chưa tìm thấy đúng phiên bản đề.');
   const test = parseStoredTest(definition);
   const allowed = new Set(test[body.section + '_definition'].questions.map(question => String(question.number)));
@@ -113,13 +113,15 @@ export async function sealMiniCbtSection(db, state, body) {
     ${body.section}_draft_updated_at=now(),updated_at=now() WHERE id=$1`, [record.id, answers, body.revision]);
   if (!attempt) {
     const inserted = (await db.query(insertProtectedListeningAttemptSql,
-      [body.operationId, session.id, slug, answers, JSON.stringify(grade)])).rows[0];
+      [body.operationId, session.id, testSlug, answers, JSON.stringify(grade)])).rows[0];
     if (!inserted) throw fail('OFFLINE_SCOPE', 'Không thể gắn bài vào đúng lượt.');
     if (Number(session.generation) > 0) await db.query('UPDATE assessment.term_test_attempt SET generation=$2 WHERE id=$1', [inserted.attempt_token, session.generation]);
     return { attemptToken: inserted.attempt_token, completed: false, nextSection: 'reading' };
   }
   const prior = attempt[listening ? 'reading_result' : 'listening_result'];
-  const combined = prior ? buildCombinedResult(test, listening ? grade : prior, listening ? prior : grade) : null;
+  const interrupted = !listening && Boolean(attempt.listening_interrupted_at);
+  const combined = interrupted ? { ...buildCombinedResult(test, null, grade), listeningStatus: 'interrupted' }
+    : prior ? buildCombinedResult(test, listening ? grade : prior, listening ? prior : grade) : null;
   await db.query(`UPDATE assessment.term_test_attempt SET ${body.section}_answers=$2::jsonb,${body.section}_result=$3::jsonb,
     ${body.section}_submitted_at=now(),combined_result=$4::jsonb,
     completed_at=CASE WHEN $4::jsonb IS NOT NULL THEN now() ELSE NULL END,updated_at=now() WHERE id=$1`,

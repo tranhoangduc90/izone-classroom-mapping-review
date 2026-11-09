@@ -197,7 +197,7 @@ function splitPerformance(stats) {
 
 function buildResult(test, listening, reading = null) {
   const merged = new Map();
-  const sections = reading ? [listening, reading] : [listening];
+  const sections = [listening, reading].filter(Boolean);
   for (const stat of sections.flatMap(section => section.typeStats)) {
     const current = merged.get(stat.type) || { type: stat.type, correct: 0, total: 0 };
     current.correct += stat.correct;
@@ -210,7 +210,7 @@ function buildResult(test, listening, reading = null) {
   }));
   const totalCorrect = sections.reduce((sum, section) => sum + section.correct, 0);
   const totalQuestions = sections.reduce((sum, section) => sum + section.total, 0);
-  const averageBand = reading
+  const averageBand = listening && reading
     && [listening.band, reading.band].every(band => typeof band === 'number' && Number.isFinite(band))
     ? Number(((listening.band + reading.band) / 2).toFixed(2))
     : null;
