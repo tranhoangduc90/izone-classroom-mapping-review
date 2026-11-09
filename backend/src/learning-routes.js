@@ -7,6 +7,7 @@ import { createScheduleMonitor } from './learning-schedule-reconciliation.js';
 import { fetchLearningDemoSourceSql, fetchTeacherLearningDemoGrantSql } from './learning-sql.js';
 import { createLearningDemoGrant,createLearningDraftDemoGrant,createLearningLibraryDemoGrant,verifyLearningDemoGrant } from './learning-demo-grant.js';
 import {createLearningFormDraftService} from './learning-form-drafts.js';
+import {sharedCourseCapabilities} from './learning-shared-course-policy.js';
 import {AUTHORING_TYPES,FormAuthoringError} from './learning-form-authoring.js';
 import {createProgressLinkCipher} from './learning-journey-comments.js';
 import {createLearningAssignmentManagement} from './learning-assignment-management.js';
@@ -240,12 +241,12 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }:revalidate;
   // Quan sát đường đọc/ghi mới bằng metadata; không ghi email, query, body, key hoặc token.
   router.use((req,res,next)=>{
-    if(logger?.info&&/^\/teacher\/(erp-schedule|assignment-sessions|journey-plan|form-drafts|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
+    if(logger?.info&&/^\/teacher\/(erp-schedule|assignment-sessions|journey-plan|form-drafts|form-library|classes\/|assignments\/|session-comments|student-progress-links)/u.test(req.path)) {
       const started=performance.now(),correlation=randomUUID();
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
           operation:typeof req.route?.path==='string'?req.route.path:'teacher_request',method:req.method,
-          status:res.statusCode,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
+          status:res.statusCode,...res.locals.classDraftDelivery,...res.locals.sharedDraft,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
         catch { /* Lỗi logger không được làm hỏng nộp bài hoặc mutation đã commit. */ }
       });
     }
@@ -612,7 +613,14 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }));
   router.get('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({scope:z.enum(['personal','izone']).default('personal'),skill:z.enum(['','listening','reading','speaking','writing']).default('')}).strict(),req.query,res,'INVALID_LIBRARY_QUERY');if(!input)return;
-    res.set('Cache-Control','no-store');return res.json({ok:true,canManageShared:await isCatalogAdmin(pool,req.reviewer.email),entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
+    const shared=input.scope==='izone'?await sharedCourseCapabilities(pool,req.reviewer.email):undefined;
+    if(shared?.createCourses.length){
+      const {rows}=await pool.query(`SELECT DISTINCT c.course_code FROM learning.course_content_authority c
+        JOIN mapping.reviewer_account a ON lower(a.email)=lower(c.reviewer_email)
+        WHERE c.status='active' AND a.status='active' AND c.course_code=ANY($1::text[])`,[shared.createCourses]);
+      shared.configuredReviewCourses=rows.map(row=>row.course_code);
+    }
+    res.set('Cache-Control','no-store');return res.json({ok:true,shared,canManageShared:await isCatalogAdmin(pool,req.reviewer.email),entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
   }));
   router.get('/teacher/form-library/:id',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!input)return;
@@ -655,6 +663,18 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer,
       assertAssignable:classPolicy?.deliveryCheck({fresh:true})})});
   }));
+  router.post('/teacher/form-drafts/:id/assign-to-classes',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema,expectedRevision:z.number().int().positive(),
+      expectedHash:z.string().regex(/^[a-f0-9]{64}$/u),confirmedAnswers:z.literal(true),
+      targets:z.array(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
+        portalTarget:z.object({id:z.string().regex(/^[1-9]\d{0,17}$/u),startsAt:z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u)}).strict()
+      }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_CLASS_DRAFT_DELIVERY');if(!input)return;
+    const delivery=await drafts.assignOwnedDraft({...path,...input,reviewer:req.reviewer,assertAssignable:classPolicy?.deliveryCheck({fresh:true})});
+    res.locals.classDraftDelivery={outcome:delivery.status,delivered:delivery.results.filter(result=>result.ok).length,
+      rejected:delivery.results.filter(result=>!result.ok).map(result=>result.error)};
+    res.set('Cache-Control','no-store');return res.json({ok:true,delivery,sourceRevision:input.expectedRevision,sourceHash:input.expectedHash});
+  }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
   router.post('/teacher/form-drafts/from-assignment/:id/edit',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT_ID');if(!path)return;
@@ -672,7 +692,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft:await drafts.copyDraft({...path,...input,reviewer:req.reviewer})});
   }));
   router.get('/teacher/form-drafts/review-queue',authenticate,asyncRoute(async(req,res)=>{
-    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');if(!input)return;
+    const input=parseOrReply(z.union([z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),z.object({scope:z.literal('izone')}).strict()]),req.query,res,'INVALID_DRAFT_QUERY');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.reviewQueue({...input,reviewer:req.reviewer})});
   }));
   router.get('/teacher/form-drafts/:id/review',authenticate,asyncRoute(async(req,res)=>{
@@ -686,17 +706,25 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       ...(['publish','publish-library'].includes(action)?{operationId:uuidSchema}:{})}).strict(),req.body,res,'INVALID_DRAFT_ACTION');if(!input)return;
     res.set('Cache-Control','no-store');
     const args={...path,...input,reviewer:req.reviewer};
-    if(action==='request-review') return res.json({ok:true,draft:await drafts.requestReview(args)});
-    if(action==='approve') return res.json({ok:true,draft:await drafts.approve(args)});
+    res.locals.sharedDraft={draftId:path.id,revision:input.expectedRevision,...(input.operationId?{operationId:input.operationId}:{})};
+    if(action==='request-review'||action==='approve'){
+      const draft=await (action==='approve'?drafts.approve(args):drafts.requestReview(args));
+      if(draft.scope==='izone')Object.assign(res.locals.sharedDraft,{scope:'izone',courseCode:draft.definition.courseCode});
+      return res.json({ok:true,draft});
+    }
     if(action==='publish') return res.status(201).json({ok:true,published:await drafts.publish(args)});
-    if(action==='publish-library') return res.status(201).json({ok:true,publication:await drafts.publishLibrary(args)});
+    if(action==='publish-library'){
+      const publication=await drafts.publishLibrary(args);
+      if(publication.libraryEntryId)Object.assign(res.locals.sharedDraft,{scope:'izone',libraryEntryId:publication.libraryEntryId,courseCode:publication.courseCode});
+      return res.status(201).json({ok:true,publication});
+    }
     if(!demoSourceSecret) return res.status(503).json({ok:false,message:'Chưa cấu hình xem thử.'});
     const draft=await drafts.get(args);
     if(draft.revision!==input.expectedRevision) return res.status(409).json({ok:false,error:'DRAFT_STALE',message:'Nháp đã đổi; tải và đối chiếu lại.'});
     return res.json({ok:true,grant:createLearningDraftDemoGrant({draft,reviewer:req.reviewer,secret:demoSourceSecret})});
   }));
   router.get('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
-    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),req.query,res,'INVALID_DRAFT_QUERY');
+    const input=parseOrReply(z.union([z.object({classId:z.string().regex(/^\d{1,18}$/u)}).strict(),z.object({scope:z.literal('izone')}).strict()]),req.query,res,'INVALID_DRAFT_QUERY');
     if(!input) return;
     res.set('Cache-Control','no-store');return res.json({ok:true,drafts:await drafts.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
   }));
@@ -705,17 +733,24 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control','no-store');return res.json({ok:true,draft:await drafts.get({...input,reviewer:req.reviewer})});
   }));
   router.post('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
-    const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
-      definition:z.record(z.string(),z.unknown()),gradingKey:z.record(z.string(),z.unknown()),operationId:uuidSchema}).strict(),req.body,res,'INVALID_FORM_DRAFT');
+    const payload={definition:z.record(z.string(),z.unknown()),gradingKey:z.record(z.string(),z.unknown()),operationId:uuidSchema};
+    const input=parseOrReply(z.union([z.object({...payload,classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100)}).strict(),
+      z.object({...payload,scope:z.literal('izone')}).strict()]),req.body,res,'INVALID_FORM_DRAFT');
     if(!input) return;
-    const draft=await drafts.create({...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
+    if(input.scope==='izone')res.locals.sharedDraft={scope:'izone',operationId:input.operationId};
+    const draft=await drafts.create({...input,reviewer:req.reviewer});
+    if(draft.scope==='izone')Object.assign(res.locals.sharedDraft,{draftId:draft.id,revision:draft.revision,courseCode:draft.definition.courseCode});
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
   }));
   router.put('/teacher/form-drafts/:id',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path) return;
-    const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),sessionNumber:z.number().int().min(1).max(100),
+    const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),sessionNumber:z.number().int().min(1).max(100).optional(),
       definition:z.record(z.string(),z.unknown()),gradingKey:z.record(z.string(),z.unknown())}).strict(),req.body,res,'INVALID_FORM_DRAFT');
     if(!input) return;
-    const draft=await drafts.save({...path,...input,reviewer:req.reviewer});res.set('Cache-Control','no-store');return res.json({ok:true,draft});
+    res.locals.sharedDraft={draftId:path.id,revision:input.expectedRevision};
+    const draft=await drafts.save({...path,...input,reviewer:req.reviewer});
+    if(draft.scope==='izone')Object.assign(res.locals.sharedDraft,{scope:'izone',revision:draft.revision,courseCode:draft.definition.courseCode});
+    res.set('Cache-Control','no-store');return res.json({ok:true,draft});
   }));
   router.post('/teacher/form-drafts/copy',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({assignmentId:uuidSchema,classId:z.string().regex(/^\d{1,18}$/u),
@@ -850,6 +885,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
 
   router.use((error, _req, res, next) => {
     if (!(error instanceof LearningError) && !(error instanceof FormAuthoringError)) return next(error);
+    if(res.locals.sharedDraft)res.locals.sharedDraft.errorCode=error.code;
     return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message,
       ...(error instanceof FormAuthoringError?{issues:error.issues}:{}) });
   });

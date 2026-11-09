@@ -10,6 +10,7 @@ export function createWorksheetEditing({pool,owned,dto}){
   return withTransaction(pool,async db=>{
    await lockCatalog(db);
    const source=await owned(db,id,reviewer);
+   if(source.draft_scope==='izone')throw new FormAuthoringError('DRAFT_SCOPE_MISMATCH','Mở nháp từ Kho chung.',[],409);
    const relation=(await db.query('SELECT worksheet_id FROM learning.form_worksheet_revision WHERE draft_id=$1::uuid',[id])).rows[0];
    const root=relation?.worksheet_id||source.id;
    await db.query(`INSERT INTO learning.form_worksheet(id,owner_email,current_draft_id) VALUES($1::uuid,$2,$3::uuid) ON CONFLICT(id) DO NOTHING`,[root,reviewer.email,id]);

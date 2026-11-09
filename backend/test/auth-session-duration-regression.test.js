@@ -54,7 +54,9 @@ test('phiên giảng viên production giữ 90 ngày khi hoạt động và tố
   const login = await request(app).post('/api/auth/session')
     .set('Origin', origin).send({ credential: 'google-credential-for-test-only' });
   assert.equal(login.status, 201);
-  const cookie = login.headers['set-cookie'][0];
+  // Cookie xóa phiên chưa phân vùng có thể đứng trước cookie phiên mới.
+  const cookie = login.headers['set-cookie'].find(value => /^izone_teacher_session=[^;]+;/u.test(value));
+  assert.ok(cookie, 'Phải có cookie phiên mới với giá trị khác rỗng');
   assert.match(cookie, /HttpOnly/u);
   assert.match(cookie, /Secure/u);
   assert.match(cookie, /SameSite=None/u);
@@ -76,6 +78,6 @@ test('phiên giảng viên production giữ 90 ngày khi hoạt động và tố
     .set('Origin', origin).set('x-izone-csrf', '1')
     .set('Cookie', cookie.split(';', 1)[0]);
   assert.equal(logout.status, 200);
-  assert.match(logout.headers['set-cookie'][0], /Max-Age=0/u);
+  assert.ok(logout.headers['set-cookie'].some(value => /Max-Age=0/u.test(value)));
   assert(calls.some(call => call.sql.includes("revoked_reason = COALESCE(revoked_reason, 'logout')")));
 });

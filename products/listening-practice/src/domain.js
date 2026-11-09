@@ -92,13 +92,21 @@ export function checkpoint(a,input,lease,clock,{recovery=false}={}){
  // Chỉ nhận active chưa ACK trong cửa sổ lưu; thời gian vắng không được cộng vào bài.
  const unconfirmed=Math.max(0,draft.activeMs-a.lease.acceptedActiveMs);
  let increase=recovery?Math.min(RECOVERY_MS,unconfirmed,delta):a.lease.awaitingPlayback?Math.min(unconfirmed,delta):delta;
- if(recovery&&a.phase==='listening'){
-  const audioAdvance=Math.max(0,(draft.audioPosition-(a.draft.audioPosition||0))*1000);
-  // Audio tiến từ snapshot trước; acceptedActiveMs là giờ máy chủ đã tính,
-  // có thể đi trước activeMs của snapshot khi ACK chậm. So hai delta cùng mốc.
+ const audioMs=draft.audioPosition*1000;
+ const needsReconciliation=a.phase==='listening'&&a.lease.activated&&audioMs>a.usedMs+increase+1000;
+ if(a.phase==='listening'&&(recovery||needsReconciliation)){
+  const audioAdvance=Math.max(0,audioMs-(a.draft.audioPosition||0)*1000);
+  // Vị trí nghe và active của trình duyệt phải cùng tiến từ snapshot đã lưu.
   const reportedAdvance=Math.max(0,draft.activeMs-(a.draft.activeMs||0));
   if(audioAdvance>reportedAdvance+1000||audioAdvance>0&&!a.lease.activated)fail('AUDIO_POSITION_INVALID','Vị trí nghe chưa khớp thời gian phát đã xác nhận.',400);
-  if(draft.phase==='listening')increase=Math.min(increase,Math.max(0,draft.audioPosition*1000-a.usedMs));
+  const audioUnconfirmed=Math.max(0,audioMs-a.usedMs);
+  if(recovery&&draft.phase==='listening')increase=Math.min(increase,audioUnconfirmed);
+  if(needsReconciliation){
+   // Hai request có thể đến gần nhau hơn khoảng phát thực tế. Chỉ bù phần
+   // chưa tính nằm trong đồng hồ server của cùng lease và cửa sổ lưu cũ.
+   const wallAvailable=Math.max(0,clock-a.lease.startedAt-a.lease.acceptedActiveMs);
+   increase=Math.max(increase,Math.min(audioUnconfirmed,unconfirmed,wallAvailable,delta+REQUEST_TIMEOUT_MS,RECOVERY_MS));
+  }
  }
  // Thời gian máy chủ giới hạn tiến độ audio; không nhận tua hoặc chuyển rà bài sớm.
  const used=a.usedMs+increase;

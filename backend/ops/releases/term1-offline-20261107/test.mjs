@@ -4,17 +4,22 @@ import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 const PRODUCT=Number(process.env.K56_TEST_PRODUCT||2);assert.ok([1,2].includes(PRODUCT));
 const taskId=PRODUCT===1?'task2':'task1',minutesR=PRODUCT===1?40:60,minutesW=PRODUCT===1?55:30,audioSeconds=PRODUCT===1?1848:1824;
 const runtime=process.env.TERM2_RUNTIME_ROOT;
 assert.ok(runtime,'Cần TERM2_RUNTIME_ROOT trỏ source K56 đã ghép trong kho thử.');
 const require=createRequire(process.env.TERM2_DEPS_PACKAGE||new URL('../../../package.json',import.meta.url));
 const pgUrl=process.env.TERM2_TEST_PG_URL,express=require('express');
-if(pgUrl){const u=new URL(pgUrl);assert.equal(u.hostname,'izone-term1-fixture-pg-20261107');assert.equal(u.pathname,'/fixture');}
+if(pgUrl){
+ const u=new URL(pgUrl),local=u.hostname==='127.0.0.1'&&u.pathname==='/term1_fallback_race'
+  &&u.username==='term1_fixture'&&u.searchParams.get('application_name')==='term1-fallback-race';
+ if(!local){assert.equal(u.hostname,'izone-term1-fixture-pg-20261107');assert.equal(u.pathname,'/fixture');}
+}
 const mod=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-offline.mjs`));
 const blank=await import(pathToFileURL(runtime+`/src/term${PRODUCT}-blank.mjs`));const isBlank=blank.isBlank,storeTerm2Blank=blank[`storeTerm${PRODUCT}Blank`];
 const {createTermTestWritingGradingService}=await import(pathToFileURL(runtime+'/src/term-test-writing-grading.js'));
-export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false}={}){
+export async function fixture(mode='lis_first',{writingFailures=0,receiptFailures=0,skipPrepare=false,realtime=false,defaultPolicy=false,listeningInterruption=false,beforeReceipt,dropResponse,record=()=>{}}={}){
  let db,pool,dispose;
  if(pgUrl){
   const {Pool}=require('pg'),raw=new Pool({connectionString:pgUrl,max:10}),schema='term2_fixture_'+randomUUID().replaceAll('-','');
@@ -44,6 +49,32 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
  CREATE TABLE assessment.term_test_writing_grading_final(attempt_id uuid PRIMARY KEY,grading_version int,task_1_run_id uuid,task_2_run_id uuid,task_1_score numeric,task_2_score numeric,writing_score numeric,status text,ready_at timestamptz);
  CREATE TABLE assessment.term_test_writing_grading_job(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),run_id uuid,job_type text,idempotency_key text UNIQUE,status text,max_attempts int,next_attempt_at timestamptz);
  `);
+ if(listeningInterruption){
+  // Mirror the live Writing constraint and timestamp bridge before applying the candidate migration.
+  await db.exec(`ALTER TABLE assessment.term_test_attempt
+    ADD COLUMN writing_updated_at timestamptz,
+    ADD CONSTRAINT term_test_attempt_writing_order_check CHECK (
+      (writing_started_at IS NULL AND writing_updated_at IS NULL AND writing_submitted_at IS NULL)
+      OR (completed_at IS NOT NULL AND writing_started_at IS NOT NULL AND writing_updated_at IS NOT NULL
+      AND (writing_submitted_at IS NULL OR writing_submitted_at >= writing_started_at))
+    );
+    CREATE FUNCTION assessment.fixture_sync_writing_timestamp() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.writing_updated_at IS NULL OR NEW.writing_updated_at < NEW.writing_draft_updated_at THEN
+        NEW.writing_updated_at := NEW.writing_draft_updated_at;
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+    CREATE TRIGGER fixture_sync_writing_timestamp BEFORE UPDATE OF writing_draft_updated_at
+    ON assessment.term_test_attempt FOR EACH ROW WHEN (
+      NEW.test_slug = 'term-test-1-k56' AND NEW.writing_started_at IS NOT NULL
+      AND NEW.writing_draft_updated_at IS NOT NULL
+      AND OLD.writing_draft_updated_at IS DISTINCT FROM NEW.writing_draft_updated_at
+    ) EXECUTE FUNCTION assessment.fixture_sync_writing_timestamp();`);
+  await db.exec(await readFile(new URL('./listening-interruption.sql',import.meta.url),'utf8'));
+  if(PRODUCT===2)await db.exec(await readFile(new URL('./listening-interruption-k56-phase2.sql',import.meta.url),'utf8'));
+ }
  await db.exec(mod.schema);
  await db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',[a,mod.SLUG,s,mode]);
  await db.query('INSERT INTO assessment.term_test_exam_session(id) VALUES($1)',[s]);
@@ -52,20 +83,36 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
  const readingSection=PRODUCT===1?{questions:section.questions.slice(0,26)}:section;
  const content={baseTestSlug:mod.SLUG,writing:{tasks:[{id:taskId,prompt:'Fixture chart'}]},listening:{sections:[]},reading:{sections:[]}};
  const timing={listeningDurationSeconds:audioSeconds,listeningReviewSeconds:0,readingDurationMinutes:minutesR,writingDurationMinutes:minutesW};
- const load=async(client,slug,id)=>{
+ const load=async(client,slug,id,bySession=false,lock=false)=>{
   const row=(await client.query(`SELECT a.*,a.id::text AS attempt_token,a.exam_session_id::text AS exam_session_token,a.erp_course_class_id::text AS class_id,a.erp_student_contact_id::text AS student_id,
    s.listening_started_at,s.listening_deadline_at,s.listening_draft,s.listening_draft_revision FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
-   WHERE a.id=$1 AND a.superseded_at IS NULL`,[id])).rows[0];
+   WHERE a.${bySession?'exam_session_id':'id'}=$1 AND a.superseded_at IS NULL${lock?' FOR UPDATE OF a':''}`,[id])).rows[0];
   if(!row||row.test_slug!==slug)throw Object.assign(Error('not found'),{status:404,code:'ATTEMPT_NOT_FOUND'});
   return {...row,server_now:new Date(realtime?Date.now():clock).toISOString(),student_name:'Học viên giả',definition_version:1,test_title:'Term 2 fixture',listening_definition:section,reading_definition:readingSection,listening_band_adjustment:0,
    mini_definition_snapshot:{content,timing},...(PRODUCT===1?{score_mode:'raw'}:{})};
  };
- const transaction=async work=>{const c=await pool.connect(),proxy={query:(sql,...args)=>{if(sql.startsWith(`INSERT INTO assessment.term${PRODUCT}_offline_operation`)&&receiptFailures-->0)throw Error('Fixture receipt insert failed');return c.query(sql,...args);}};await c.query('BEGIN');try{const r=await work(proxy);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
- const app=express();app.use(express.json({limit:'1mb'}));const router=express.Router();
+ const transaction=async work=>{const c=await pool.connect(),proxy={query:async(sql,...args)=>{
+  if(sql.startsWith(`INSERT INTO assessment.term${PRODUCT}_offline_operation`)){
+   if(receiptFailures-->0)throw Error('Fixture receipt insert failed');
+   await beforeReceipt?.(args[0]);
+  }
+  return c.query(sql,...args);
+ }};await c.query('BEGIN');try{const r=await work(proxy);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}};
+ const app=express();
+ app.use(express.json({limit:'1mb'}));
+ if(dropResponse)app.use((request,response,next)=>{
+  const send=response.json;
+  response.json=function(body){
+   if(dropResponse(request.body,body)){this.destroy();return this;}
+   return send.call(this,body);
+  };
+  next();
+ });
+ const router=express.Router();
  const grading=createTermTestWritingGradingService({pool});
  const stop=mod[`registerTerm${PRODUCT}Offline`](router,{pool,secret:'x'.repeat(40),assets:{getSessionAudioKey:()=>Buffer.alloc(32)},prepare:async(slug,b)=>load(pool,slug,b.attemptToken),load,transaction,...(defaultPolicy?{}:{allowNew:()=>newEnabled}),
   serialize:x=>({ok:true,attemptToken:x.attempt_token,examSessionToken:x.exam_session_token,generation:0,examMode:mode,studentName:'Học viên giả',serverNow:x.server_now}),
-  resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),record(){},
+  resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),record,
   onWriting:async row=>{calls++;if(writingFailures-->0)throw Error('Fixture crash after commit');await grading.ensureSubmission({attemptToken:row.attempt_token,testSlug:mod.SLUG,task1:PRODUCT===2?row.writing_task_1:'',task2:PRODUCT===1?row.writing_task_2:'',taskDefinitions:content.writing.tasks});}});
  app.use('/api/term-tests',router);app.use((e,q,r,n)=>r.status(500).json({ok:false,error:e.code||e.message}));
  const server=app.listen(0,'127.0.0.1');await new Promise(ok=>server.once('listening',ok));const base=`http://127.0.0.1:${server.address().port}/api/term-tests/${mod.SLUG}`;
@@ -76,7 +123,7 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
  const newRun=async()=>{const next={attemptToken:randomUUID(),examSessionToken:randomUUID(),generation:0,ownerId:randomUUID()};
   await db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',[next.attemptToken,mod.SLUG,next.examSessionToken,mode]);await db.query('INSERT INTO assessment.term_test_exam_session(id) VALUES($1)',[next.examSessionToken]);
   const p=await request('/offline/prepare',{...next,classCode:'FIXTURE',studentRef:randomUUID(),mode});assert.equal(p.status,200);return {scope:next,permit:p.offline.permit};};
- return {base,db,a,s,scope,request,grading,timing,content,load,pool,newRun,setEnrollment:value=>{newEnabled=value;},get clock(){return realtime?Date.now():clock;},advance:ms=>clock+=ms,get calls(){return calls;},close:async()=>{stop();await new Promise(ok=>server.close(ok));await dispose();}};
+ return {base,db,a,s,scope,request,grading,timing,content,load,pool,transaction,newRun,setEnrollment:value=>{newEnabled=value;},get clock(){return realtime?Date.now():clock;},advance:ms=>clock+=ms,get calls(){return calls;},close:async()=>{stop();await new Promise(ok=>server.close(ok));await dispose();}};
 }
 export function op(f,section,kind,{dependency=null,startedAt=new Date(f.clock).toISOString(),revision=0,reason='manual',task1='',audioEnded=false,heardSeconds=0,timeValid=true}={}){
  const minutes=section==='reading'?minutesR:minutesW;

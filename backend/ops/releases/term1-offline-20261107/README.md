@@ -21,3 +21,10 @@ Phát API tương thích trước với cờ Term1 tắt, kiểm source/config/m
 `test.mjs` chọn `K56_TEST_PRODUCT=1|2`, dùng native source tại `TERM2_RUNTIME_ROOT`; các biến TERM2 được giữ để tái dùng runner. `TERM2_DEPS_PACKAGE` trỏ package Node24. Có thể dùng PGlite local hoặc PostgreSQL16 fixture; URL PG chỉ chấp nhận hostname fixture của ngày này. Không dùng DB học viên.
 
 `preflight.test.mjs`: CORS/journal và cách ly route. `term1-specific.test.mjs`: câu32, L40/R26, Task2=6, opt-in. `fake-grading.mjs` chỉ tạo phản hồi AI giả trong fixture, không gọi provider hoặc Portal. Báo cáo phát hành và các lượt đủ giờ được lưu trong bộ nhớ dự án sau khi kiểm xong.
+
+## Phát và quay lui Listening liên tục cho CBT Term 1 K56
+
+- Dựng đúng hai tệp ứng viên bằng `stage-listening-interruption.py` trên bản `term1-skill-offline-core.mjs` và `k56-exam-order.js` trích hoặc đối chiếu hash với container đang chạy. Giữ overlay ghi log danh tính, bridge timestamp Writing, receiver, secret, cấu hình và mount của các tuyến khác.
+- Chạy `listening-interruption.sql` trên đúng schema K56 sau khi xác nhận ràng buộc Writing cũ và không còn lượt thi trong các tuyến bị ảnh hưởng. Khóa DDL lấy ngay hoặc dừng. Hai ràng buộc mới có hiệu lực cho ghi mới trước khi bước kiểm các hàng lịch sử hoàn tất. Nếu bước kiểm lịch sử thất bại, giữ receiver hiện hành và kiểm `pg_constraint.convalidated` trước khi tiếp tục.
+- Chuyển API trước Pages. Đọc lại readiness, hash hai mô-đun và cả hai ràng buộc đã được xác minh. Xác nhận Term 2/Mini và link dự phòng giữ đúng cấu hình. Sau khi phát Pages, đọc lại tài nguyên và phiên bản offline từ link chính. Môi trường thử dùng API và điểm giả để kiểm mọi thao tác ghi.
+- Khi cần quay lui sau khi Pages mới có thể đã ghi `interrupt` trên thiết bị, dừng cấp lượt offline mới cho riêng Term 1 bằng `TERM1_OFFLINE_NEW_ENABLED=false`. Giữ Pages hiểu `interrupt`, API tương thích, secret và migration để lượt đã cấp tiếp tục nộp hoặc lấy lại biên nhận. Chỉ quay về API cũ trước khi Pages mới được cấp cho học viên, vì API cũ không nhận loại thao tác này. Ca `listening-interruption.test.mjs` kiểm tắt cấp mới, gửi tiếp theo quyền đã cấp và từ chối cấp quyền mới.

@@ -3,7 +3,7 @@ import test from 'node:test';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
-import {mkdtemp,rmdir,unlink,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rmdir,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -18,7 +18,7 @@ const slug='mini-test-k56';
 const timing={listeningDurationSeconds:446,listeningReviewSeconds:0,readingDurationMinutes:25,writingDurationMinutes:15};
 const content={writing:{tasks:[{id:'task2',prompt:'Fixture prompt'}]}};
 
-async function fixture(mode,paper){
+async function fixture(mode,paper,{listeningInterruption=false}={}){
  const db=new PGlite(),pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})};
  await db.exec(`CREATE SCHEMA assessment;
  CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY,test_slug text,exam_session_id uuid,generation int DEFAULT 0,
@@ -26,7 +26,7 @@ async function fixture(mode,paper){
   writing_task_1 text DEFAULT '',writing_task_2 text DEFAULT '',superseded_at timestamptz,
   reading_started_at timestamptz,reading_deadline_at timestamptz,reading_submitted_at timestamptz,reading_draft jsonb,
   reading_draft_revision bigint DEFAULT 0,reading_draft_updated_at timestamptz,
-  writing_started_at timestamptz,writing_deadline_at timestamptz,writing_submitted_at timestamptz,writing_draft_revision bigint DEFAULT 0,writing_draft_updated_at timestamptz,
+  writing_started_at timestamptz,writing_deadline_at timestamptz,writing_submitted_at timestamptz,writing_draft_revision bigint DEFAULT 0,writing_draft_updated_at timestamptz,writing_updated_at timestamptz,
   listening_submitted_at timestamptz,listening_answers jsonb,listening_result jsonb,reading_answers jsonb,reading_result jsonb,combined_result jsonb,completed_at timestamptz,updated_at timestamptz);
  CREATE TABLE assessment.term_test_exam_session(id uuid PRIMARY KEY,generation int DEFAULT 0,
   listening_started_at timestamptz,listening_deadline_at timestamptz,listening_submitted_at timestamptz,listening_draft jsonb,
@@ -38,6 +38,15 @@ async function fixture(mode,paper){
  CREATE TABLE assessment.term_test_writing_grading_job(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),run_id uuid,job_type text,idempotency_key text UNIQUE,status text,max_attempts int,next_attempt_at timestamptz);
  `);
  await db.exec(schema);
+ if(listeningInterruption){
+  await db.exec(`ALTER TABLE assessment.term_test_attempt ADD CONSTRAINT term_test_attempt_writing_order_check CHECK (
+   (writing_started_at IS NULL AND writing_updated_at IS NULL AND writing_submitted_at IS NULL) OR
+   (completed_at IS NOT NULL AND writing_started_at IS NOT NULL AND writing_updated_at IS NOT NULL
+    AND (writing_submitted_at IS NULL OR writing_submitted_at>=writing_started_at))); `);
+  for(const name of ['listening-interruption.sql','listening-interruption-k56-phase2.sql']){
+   await db.exec(await readFile(new URL('../term1-offline-20261107/'+name,import.meta.url),'utf8'));
+  }
+ }
  const a=randomUUID(),s=randomUUID(),student=randomUUID(),owner=randomUUID(),delivery=paper?'answer_sheet':'cbt';
  await db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,attempt_mode,exam_mode) VALUES($1,$2,$3,$4,$5)',[a,slug,s,delivery,mode]);
  await db.query('INSERT INTO assessment.term_test_exam_session(id) VALUES($1)',[s]);
@@ -111,6 +120,43 @@ test('Mini rollout separates modes and class scope; disabling keeps issued permi
 
 process.env.MINI_K56_CBT_OFFLINE_NEW='true';
 process.env.MINI_K56_PAPER_OFFLINE_NEW='true';
+if(process.env.K56_LISTENING_PHASE2==='1')for(const [mode,paper] of [['lis_first',false],['read_first',false],['lis_first',true]]){
+ test(`Mini gián đoạn Listening ${mode} ${paper?'phiếu':'thi máy'}`,async()=>{
+  const f=await fixture(mode,paper,{listeningInterruption:true});
+  try{
+   assert.equal((await f.prepare()).status,200);
+   let dependency=null;
+   async function operation(section,kind,startedAt=f.clock()){
+    const minutes=section==='reading'?25:15;
+    const deadlineAt=paper||section==='listening'?null:new Date(Date.parse(startedAt)+minutes*60000).toISOString();
+    const data=kind==='interrupt'?{interruptionReason:'learner_cannot_hear'}:
+     section==='writing'?{task2:''}:{answers:{'1':'A'}};
+    const body={...f.scope,operationId:randomUUID(),section,kind,revision:0,occurredAt:f.clock(),dependency,
+     payload:{startedAt,deadlineAt,timeValid:true,...data,...kind==='seal'?{reason:'manual'}:{}}};
+    return {body,result:await f.request('operation',body)};
+   }
+   if(mode==='read_first'){
+    const reading=await operation('reading','start');assert.equal(reading.result.receipt?.status,'accepted');
+    const seal=await operation('reading','seal',reading.body.payload.startedAt);
+    assert.equal(seal.result.receipt?.status,'accepted');dependency=seal.body.operationId;
+   }
+   const listening=await operation('listening','start');assert.equal(listening.result.receipt?.status,'accepted');
+   const interrupted=await operation('listening','interrupt',listening.body.payload.startedAt);
+   if(paper){assert.equal(interrupted.result.error,'OFFLINE_INVALID');return;}
+   assert.equal(interrupted.result.receipt?.status,'accepted',JSON.stringify(interrupted.result));
+   dependency=interrupted.body.operationId;
+   for(const section of mode==='lis_first'?['reading','writing']:['writing']){
+    const opened=await operation(section,'start');assert.equal(opened.result.receipt?.status,'accepted',JSON.stringify(opened.result));
+    const sealed=await operation(section,'seal',opened.body.payload.startedAt);
+    assert.equal(sealed.result.receipt?.status,'accepted',JSON.stringify(sealed.result));dependency=sealed.body.operationId;
+   }
+   const {rows:[row]}=await f.db.query('SELECT listening_interrupted_at,listening_submitted_at,listening_result FROM assessment.term_test_attempt');
+   assert.ok(row.listening_interrupted_at);assert.equal(row.listening_submitted_at,null);assert.equal(row.listening_result,null);
+   assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch WHERE field='listening'")).rows,[]);
+  }finally{await f.close();}
+ });
+}
+
 for(const paper of [true,false])for(const mode of ['lis_first','read_first']){
  test(`Mini HTTP/SQL ${paper?'paper':'cbt'} ${mode}`,async()=>{
   const f=await fixture(mode,paper);

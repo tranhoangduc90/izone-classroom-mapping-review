@@ -6,6 +6,7 @@ import {sha256,stableStringify} from './learning-domain.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {decorateSchedule} from './learning-schedule-plan.js';
 import {createLearningFormPublications} from './learning-form-publications.js';
+import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
 import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
 
@@ -13,8 +14,13 @@ const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],sta
 const scored=definition=>definition.blocks.some(block=>block.items.some(item=>item.graderType!=='none'||item.maxScore>0));
 
 export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null,portalAssignmentReader=null}) {
-  async function authority(database,email,definition,ownerEmail) {
-    if(!scored(definition)) return email.toLowerCase()===ownerEmail.toLowerCase();
+  async function authority(database,email,definition,ownerEmail,shared=false) {
+    const owner=email.toLowerCase()===ownerEmail.toLowerCase();
+    if(!scored(definition)){
+      if(!shared)return owner;
+      const rights=await sharedCourseCapabilities(database,email);
+      return (owner?rights.createCourses:rights.reviewCourses).includes(definition.courseCode);
+    }
     if(!definition.courseCode) return false;
     const result=await database.query(`SELECT authority.can_self_approve_scored_forms FROM learning.course_content_authority AS authority
       JOIN mapping.reviewer_account AS account ON lower(account.email)=lower(authority.reviewer_email) AND account.status='active'
@@ -25,14 +31,18 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     const result=await database.query(`SELECT * FROM learning.form_draft WHERE id=$1::uuid${lock?' FOR UPDATE':''};`,[id]);
     const row=result.rows[0];
     if(!row) throw fail('DRAFT_NOT_FOUND','Không tìm thấy nháp.',404);
-    await authorizeClass(database,row.erp_course_class_id,reviewer);
+    const shared=row.draft_scope==='izone';
+    if(shared&&row.owner_email.toLowerCase()===reviewer.email.toLowerCase())
+      await assertSharedCourse(database,reviewer.email,row.public_definition.courseCode);
+    if(!shared)await authorizeClass(database,row.erp_course_class_id,reviewer);
     if(row.owner_email.toLowerCase()!==reviewer.email.toLowerCase()
-      &&(!['pending_review','approved'].includes(row.status)||!await authority(database,reviewer.email,row.public_definition,row.owner_email))) {
+      &&(!['pending_review','approved'].includes(row.status)||!await authority(database,reviewer.email,row.public_definition,row.owner_email,shared))) {
       throw fail('DRAFT_REVIEW_ACCESS_DENIED','Bạn chưa được cấp quyền duyệt nháp này.',403);
     }
     return row;
   }
   async function assertCourse(database,row) {
+    if(row.draft_scope==='izone')return;
     const classes=await database.query(`SELECT DISTINCT course_code FROM learning.form_assignment
       WHERE erp_course_class_id=$1::bigint AND status IN ('published','closed') AND course_code IS NOT NULL AND course_code<>'';`,[row.erp_course_class_id]);
     if(classes.rows.some(existing=>existing.course_code!==row.public_definition.courseCode)) {
@@ -58,7 +68,18 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
   }
   return {
     ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader}),
-    async reviewQueue({classId,reviewer}) {
+    async reviewQueue({classId,scope,reviewer}) {
+      if(scope==='izone'){
+        const {reviewCourses}=await sharedCourseCapabilities(pool,reviewer.email);
+        if(!reviewCourses.length)return [];
+        const {rows}=await pool.query(`SELECT * FROM learning.form_draft WHERE draft_scope='izone'
+          AND status='pending_review' AND public_definition->>'courseCode'=ANY($1::text[])
+          ORDER BY updated_at,id LIMIT 100`,[reviewCourses]);
+        const allowed=[];
+        for(const row of rows)if(await authority(pool,reviewer.email,row.public_definition,row.owner_email,true))
+          allowed.push(dto(row,{includeKey:false}));
+        return allowed;
+      }
       await authorizeClass(pool,classId,reviewer);
       const result=await pool.query(`SELECT * FROM learning.form_draft WHERE erp_course_class_id=$1::bigint
         AND status='pending_review' ORDER BY updated_at,id LIMIT 100;`,[classId]);
@@ -71,7 +92,8 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
         if(Number(row.revision)!==expectedRevision) throw fail('DRAFT_STALE','Nháp đã đổi; tải và đối chiếu trước khi gửi duyệt.');
-        if(row.status==='published') throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
+        if(row.status==='published'||row.draft_scope==='izone'&&(await client.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[id])).rowCount)
+          throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
         validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,requireAnswers:true});
         await assertCourse(client,row);
         const result=await client.query(`UPDATE learning.form_draft SET status='pending_review',approved_hash=NULL,
@@ -82,10 +104,11 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     async approve({id,expectedRevision,expectedHash,reviewer,libraryOnly=false}) {
       return withTransaction(pool,async client=>{
         const row=await reviewable(client,id,reviewer,{lock:true});
+        if(row.draft_scope==='izone'&&row.status!=='pending_review')throw fail('DRAFT_REVIEW_REQUIRED','Hãy gửi bản này duyệt trước.');
         if(Number(row.revision)!==expectedRevision||row.content_hash!==expectedHash) throw fail('DRAFT_STALE','Nháp đã đổi sau khi mở bản duyệt.');
         if(row.status==='published') throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
         validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,requireAnswers:true});
-        if(!await authority(client,reviewer.email,row.public_definition,row.owner_email)) throw fail('DRAFT_APPROVAL_DENIED','Bạn chưa có quyền duyệt nội dung có điểm của đúng khóa.',403);
+        if(!await authority(client,reviewer.email,row.public_definition,row.owner_email,row.draft_scope==='izone')) throw fail('DRAFT_APPROVAL_DENIED','Bạn chưa có quyền duyệt nội dung của đúng khóa.',403);
         if(!libraryOnly)await assertCourse(client,row);
         const result=await client.query(`UPDATE learning.form_draft SET status='approved',approved_hash=content_hash,
           approved_revision=revision,approved_by_email=$2,approved_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *;`,[id,reviewer.email.toLowerCase()]);
@@ -95,6 +118,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     async publish({id,expectedRevision,operationId,reviewer}) {
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
+        if(row.draft_scope==='izone')throw fail('DRAFT_SCOPE_MISMATCH','Bài Kho chung phải xuất bản trước khi giao.');
         if(Number(row.revision)!==expectedRevision) throw fail('DRAFT_STALE','Nháp đã đổi; cần duyệt lại trước khi phát hành.');
         if(row.status==='published') {
           if(row.publish_operation_id!==operationId) throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành. Mở phiếu đã có hoặc sao chép để sửa.');
