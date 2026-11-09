@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import {
-  bindSkillGrant, issueSkillGrant, readActiveSkillGrant, readBoundSkillGrant, resolveBoundSkillTarget,
+  bindSkillGrant, bindRosterSkillGrant, issueSkillGrant, readActiveSkillGrant, readBoundSkillGrant, resolveBoundSkillTarget,
   resolveSkillTargetForOpen, revokeSkillGrant
 } from './term1-skill-grant.mjs';
 
@@ -15,6 +15,7 @@ const issueInput = identity.extend({ oldDeviceStopped: z.boolean().default(false
 const revokeInput = identity.extend({ grantId: z.string().uuid() }).strict();
 const identifyInput = identity.omit({ studentRef: true }).extend({ ownerId: z.string().uuid(), activationCode: z.string().max(30).optional() }).strict();
 const openInput = identifyInput.extend({ studentRef: z.string().uuid(), audioTransport: z.literal('r2-direct-v1').optional() });
+const rosterInput = identity.extend({ ownerId: z.string().uuid(), examMode: z.enum(['lis_first', 'read_first']).optional() }).strict();
 const resultInput = z.object({ ownerId: z.string().uuid(), grantId: z.string().uuid(), section: identity.shape.section.default('reading') }).strict();
 const labels = { reading: 'Reading', listening: 'Listening', writing: 'Writing' };
 const issueFlags = { reading: 'TERM1_SKILL_FALLBACK_ENABLED', listening: 'TERM1_SKILL_LISTENING_ENABLED', writing: 'TERM1_SKILL_WRITING_ENABLED' };
@@ -131,6 +132,33 @@ export function registerTerm1SkillRoutes(router, {
       const grant = await revokeSkillGrant(client, scopeOf(attempt, input), input.grantId);
       return { attemptId: attempt.attempt_token, grantId: grant.id,
         response: { ok: true, section: input.section, grantId: grant.id, revokedAt: grant.revoked_at } };
+    })));
+
+  router.post(PATH + '/enroll', limiter, route(rosterInput, (input, req) =>
+    mutation('term1_skill_grant_bound', async client => {
+      if (!allowNew(input.section)) fail(503, 'TERM1_SKILL_ISSUE_DISABLED', 'Kỹ năng này đang tạm đóng. Hãy thử lại sau.');
+      const token = req.get('x-term1-skill-grant');
+      if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\.[A-Za-z0-9_-]{43}$/i.test(token ?? '')) denied();
+      const student = await findStudent(client, input);
+      if (!student || !/^[1-9]\d*$/.test(String(student.student_id))) denied();
+      const prepared = await prepare(SLUG, {
+        classCode: input.classCode, studentRef: input.studentRef, mode: input.examMode ?? 'lis_first', attemptMode: 'cbt'
+      }, true, client);
+      assertCbt(prepared);
+      const attempt = await lockListeningSession(client, prepared, input.section);
+      assertCbt(attempt);
+      if (String(student.class_id) !== attempt.class_id || String(student.student_id) !== attempt.student_id) denied();
+      const scope = scopeOf(attempt, input);
+      const active = await readActiveSkillGrant(client, scope);
+      if (attempt[input.section + '_submitted_at'] && active?.state !== 'bound')
+        fail(409, 'OFFLINE_SECTION_LOCKED', labels[input.section] + ' đã được nộp. Bạn có thể xem kết quả ở bài chính.');
+      if (input.section === 'listening' && attempt.listening_started_at && !attempt.listening_submitted_at &&
+          active?.state !== 'bound' && !(Number(attempt.listening_audio_checkpoint_seconds) > 0))
+        fail(409, 'TERM1_SKILL_AUDIO_CHECKPOINT_REQUIRED', 'Chưa có mốc nghe để chuyển thiết bị. Hãy tiếp tục trên thiết bị đang làm.');
+      const grant = await bindRosterSkillGrant(client, scope, token, input.ownerId);
+      return { attemptId: active?.state === 'bound' ? null : attempt.attempt_token, grantId: grant.id,
+        response: { ok: true, grantId: grant.id, section: input.section, studentRef: input.studentRef,
+          studentName: attempt.student_name, classCode: input.classCode } };
     })));
 
   router.post(PATH + '/identify', limiter, route(identifyInput, (input, req) =>

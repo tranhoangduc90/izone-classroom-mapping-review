@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,40 @@ const { fixture, op } = await import('../term1-offline-20261107/test.mjs');
 const { registerTerm1SkillRoutes, term1SkillIssueEnabled } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/term1-skill-routes.mjs'));
 const require = createRequire(process.env.TERM2_DEPS_PACKAGE || new URL('../../../package.json', import.meta.url));
 const express = require('express');
+
+test('Roster entry binds a single canonical skill and retries without an activation code', async t => {
+  const f = await fixture('lis_first', { skipPrepare: true });
+  t.after(f.close);
+  const app = express();
+  const router = express.Router();
+  app.use(express.json());
+  const studentRef = randomUUID();
+  const noop = (_req, _res, next) => next();
+  registerTerm1SkillRoutes(router, {
+    authenticate: noop, readTeacherScope: noop, transaction: f.transaction,
+    prepare: (slug, _input, _create, db) => f.load(db, slug, f.a), load: f.load,
+    findStudent: async (_db, input) => input.classCode === 'IC5601' && input.studentRef === studentRef
+      ? { class_id: '5601', student_id: '5602' } : null,
+    assets: {}, policy: 'term1-offline-v1', limiter: noop, readLimiter: noop, allowNew: () => true
+  });
+  app.use('/api/term-tests', router);
+  const api = require('supertest')(app);
+  const endpoint = '/api/term-tests/term-test-1-k56/skill-fallback/enroll';
+  const request = (scope, key) => api.post(endpoint).set('x-term1-skill-grant', key).send(scope);
+  const scope = { classCode: 'IC5601', studentRef, ownerId: randomUUID() };
+  for (const section of ['reading', 'listening', 'writing']) {
+    const token = randomUUID() + '.' + randomBytes(32).toString('base64url');
+    const input = { ...scope, section };
+    await request({ ...input, classCode: 'OTHER' }, token).expect(403);
+    const first = await request(input, token).expect(200);
+    const retry = await request(input, token).expect(200);
+    assert.deepEqual(first.body, retry.body);
+    assert.equal(first.body.section, section);
+    await request({ ...input, ownerId: randomUUID() }, randomUUID() + '.' + 'x'.repeat(43)).expect(409);
+  }
+  const count = await f.db.query('SELECT count(*)::int n FROM assessment.term1_skill_grant WHERE owner_id=$1', [scope.ownerId]);
+  assert.equal(count.rows[0].n, 3);
+});
 
 test('Term 1 rollout config toggles only the selected skill and fails closed', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'term1-skill-switch-'));
