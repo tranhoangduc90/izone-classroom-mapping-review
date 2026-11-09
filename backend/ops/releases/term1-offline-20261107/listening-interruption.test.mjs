@@ -2,11 +2,48 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 process.env.TERM2_FIXTURE_IMPORT_ONLY = '1';
 process.env.K56_TEST_PRODUCT = '1';
 const { fixture, op } = await import('./test.mjs');
-const { nextK56Section } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/k56-exam-order.js'));
+const { nextK56Section, registerK56ExamOrder } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/k56-exam-order.js'));
+const express = createRequire(process.env.TERM2_DEPS_PACKAGE || new URL('../../../package.json', import.meta.url))('express');
+
+async function readInterruptedResult(attempt) {
+  const app = express();
+  app.use(express.json());
+  const grading = { ready: true, status: 'ready', writingScore: 6 };
+  const pool = { async query(sql, args) {
+    assert.match(sql, /^SELECT a\.\*/);
+    assert.deepEqual(args, [attempt.attempt_token]);
+    return { rows: [{ ...attempt, class_name_snapshot: 'FIXTURE' }] };
+  } };
+  registerK56ExamOrder(app, {
+    pool, profile: { family: 'k56' }, limiter: (_req, _res, next) => next(),
+    readPortalSyncStatus: async (_row, result) => { assert.equal(result.listening, null); return 'synced'; },
+    readSkillWriting: async (client, row) => {
+      assert.equal(client, pool);
+      assert.equal(row.attempt_token, attempt.attempt_token);
+      return grading;
+    }
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/term-tests/result`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ attemptToken: attempt.attempt_token })
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.className, 'FIXTURE');
+    assert.equal(result.listeningInterrupted, true);
+    assert.equal(result.result.listening, null);
+    assert.ok(result.result.reading);
+    assert.equal(result.writing?.submitted, true);
+    assert.deepEqual(result.writing.grading, grading);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+}
 
 for (const mode of ['lis_first', 'read_first']) {
   test(`${mode}: gián đoạn mở đúng kỹ năng tiếp theo và không tạo điểm Listening`, async () => {
@@ -62,6 +99,7 @@ for (const mode of ['lis_first', 'read_first']) {
       assert.ok(attempt.reading_submitted_at);
       assert.ok(attempt.writing_submitted_at);
       assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch WHERE field = 'listening'")).rows, []);
+      await readInterruptedResult(attempt);
       const fresh = { attemptToken: randomUUID(), examSessionToken: randomUUID(), generation: 0, ownerId: randomUUID() };
       await f.db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',
         [fresh.attemptToken, 'term-test-1-k56', fresh.examSessionToken, mode]);

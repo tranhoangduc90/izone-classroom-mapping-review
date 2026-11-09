@@ -41,11 +41,27 @@ def stage(source):
 
 
 def stage_order(source):
-    source = replace(source, 'return order.find(skill => !a[`${skill}_submitted_at`])',
-                     "return order.find(skill => !a[`${skill}_submitted_at`] && !(skill === 'listening' && a.listening_interrupted_at))")
-    return replace(source, '    listeningSubmitted: Boolean(a.listening_submitted_at), readingSubmitted:',
-                   '    listeningInterrupted: Boolean(a.listening_interrupted_at),\n'
-                   '    listeningSubmitted: Boolean(a.listening_submitted_at), readingSubmitted:')
+    if '    listeningInterrupted: Boolean(a.listening_interrupted_at),' not in source:
+        source = replace(source, 'return order.find(skill => !a[`${skill}_submitted_at`])',
+                         "return order.find(skill => !a[`${skill}_submitted_at`] && !(skill === 'listening' && a.listening_interrupted_at))")
+        source = replace(source, '    listeningSubmitted: Boolean(a.listening_submitted_at), readingSubmitted:',
+                         '    listeningInterrupted: Boolean(a.listening_interrupted_at),\n'
+                         '    listeningSubmitted: Boolean(a.listening_submitted_at), readingSubmitted:')
+    return replace(source,
+                   '    res.json({ ...serialize(a),result:resultFor(a),portalSyncStatus:await readPortalSyncStatus(a,resultFor(a)),exam:{...serialize(a)},writing:null });',
+                   """    const result = resultFor(a);
+    let writing = null;
+    if (a.listening_interrupted_at && a.writing_started_at) {
+      writing = {
+        task1: String(a.writing_task_1 || ''), task2: String(a.writing_task_2 || ''),
+        revision: Number(a.writing_draft_revision) || 0, started: true, submitted: Boolean(a.writing_submitted_at),
+        deadlineAt: a.writing_deadline_at || null, serverNow: a.server_now,
+        updatedAt: a.writing_updated_at || null, submittedAt: a.writing_submitted_at || null,
+        grading: a.writing_submitted_at ? await readSkillWriting(pool, a) : null
+      };
+    }
+    res.json({ ...serialize(a), className:a.class_name_snapshot, result,
+      portalSyncStatus:await readPortalSyncStatus(a,result), exam:{...serialize(a)}, writing });""")
 
 
 if __name__ == '__main__':
