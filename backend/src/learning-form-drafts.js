@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import {catalogVisible,assertCatalogSource,lockCatalog} from './learning-catalog-archive.js';
 import {sha256,stableStringify} from './learning-domain.js';
 import {withTransaction} from './db.js';
+import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
 import {authorizeLearningClassSql,authorizeLearningJourneyPlanAssignmentSql} from './learning-sql.js';
 import {validateAuthoringPayload,copyAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {previewFormImport} from './learning-form-import.js';
@@ -14,7 +15,8 @@ import {createWorksheetEditing} from './learning-worksheet-editing.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
-  return {id:row.id,classId:String(row.erp_course_class_id),sessionNumber:Number(row.session_number),
+  return {id:row.id,...(row.draft_scope==='izone'?{scope:'izone'}:{}),
+    classId:row.erp_course_class_id==null?null:String(row.erp_course_class_id),sessionNumber:row.session_number==null?null:Number(row.session_number),
     revision:Number(row.revision),status:row.status,contentHash:row.content_hash,definition:row.public_definition,
     ...(includeKey?{gradingKey:row.private_definition}:{}),approvedRevision:row.approved_revision||null,
     updatedAt:row.updated_at,assignmentId:row.published_assignment_id||null};
@@ -31,24 +33,28 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
     const result=await database.query(`SELECT * FROM learning.form_draft WHERE id=$1::uuid
       AND lower(owner_email)=lower($2)${lock?' FOR UPDATE':''};`,[id,reviewer.email]);
     if(result.rowCount!==1) throw error('DRAFT_NOT_FOUND','Không tìm thấy nháp thuộc phiên của bạn.',404);
-    await assertCatalogSource(database,id,reviewer.email);
-    await authorizeClass(database,result.rows[0].erp_course_class_id,reviewer);
-    return result.rows[0];
+    const row=result.rows[0];
+    await assertCatalogSource(database,id,reviewer.email,row.draft_scope==='izone'?'izone':'personal');
+    if(row.draft_scope==='izone')await assertSharedCourse(database,reviewer.email,row.public_definition.courseCode);
+    else await authorizeClass(database,row.erp_course_class_id,reviewer);
+    return row;
   }
-  async function create({classId,sessionNumber,definition,gradingKey,operationId,sourceAssignmentId=null,reviewer}) {
+  async function create({scope='class',classId=null,sessionNumber=null,definition,gradingKey,operationId,sourceAssignmentId=null,reviewer}) {
     const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
     return withTransaction(pool,async client=>{
-      await authorizeClass(client,classId,reviewer);
+      if(scope==='izone')await assertSharedCourse(client,reviewer.email,checked.definition.courseCode);
+      else await authorizeClass(client,classId,reviewer);
       const id=crypto.randomUUID();
+      const shared=scope==='izone';
       await client.query(`INSERT INTO learning.form_draft (id,create_operation_id,owner_email,erp_course_class_id,
-        session_number,public_definition,private_definition,content_hash,source_assignment_id)
-        VALUES ($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::jsonb,$7::jsonb,$8,$9::uuid)
+        session_number,public_definition,private_definition,content_hash,source_assignment_id${shared?',draft_scope':''})
+        VALUES ($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::jsonb,$7::jsonb,$8,$9::uuid${shared?",'izone'":''})
         ON CONFLICT (create_operation_id) DO NOTHING;`,[id,operationId,reviewer.email,classId,sessionNumber,
         JSON.stringify(checked.definition),JSON.stringify(checked.gradingKey),checked.contentHash,sourceAssignmentId]);
       const saved=await client.query('SELECT * FROM learning.form_draft WHERE create_operation_id=$1::uuid;',[operationId]);
       const row=saved.rows[0];
-      if(!row||row.owner_email.toLowerCase()!==reviewer.email.toLowerCase()||String(row.erp_course_class_id)!==String(classId)
-        ||Number(row.session_number)!==sessionNumber||row.source_assignment_id!==sourceAssignmentId
+      if(!row||row.owner_email.toLowerCase()!==reviewer.email.toLowerCase()||(row.draft_scope||'class')!==scope||String(row.erp_course_class_id)!==String(classId)
+        ||(row.session_number==null?null:Number(row.session_number))!==sessionNumber||row.source_assignment_id!==sourceAssignmentId
         ||(!sourceAssignmentId&&row.content_hash!==checked.contentHash)) {
         throw error('DRAFT_OPERATION_CONFLICT','Mã thao tác đã dùng cho một nháp khác.');
       }
@@ -95,13 +101,24 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       // Xem thử cho phép key/ô đáp án còn trống; nội dung và cấu trúc câu vẫn phải hợp lệ.
       try{checked.definition=parseFormDefinition(checked.definition);}
       catch{throw error('DRAFT_PREVIEW_INCOMPLETE','Hãy hoàn thiện nội dung và cấu trúc câu hỏi trước khi xem thử; đáp án có thể bổ sung sau.');}
-      const target=await authorizeClass(pool,row.erp_course_class_id,reviewer);
+      const shared=row.draft_scope==='izone';
+      const target=shared?null:await authorizeClass(pool,row.erp_course_class_id,reviewer);
       return {sourceDraftId:row.id,sourceRevision:Number(row.revision),contentHash:row.content_hash,
-        sourceAssignmentId:null,className:target.class_name,courseCode:checked.definition.courseCode||null,
-        sessionNumber:Number(row.session_number),title:checked.definition.title,definitionHash:sha256(stableStringify(checked.definition)),
+        sourceAssignmentId:null,className:shared?'Kho chung':target.class_name,courseCode:checked.definition.courseCode||null,
+        sessionNumber:shared?1:Number(row.session_number),title:checked.definition.title,definitionHash:sha256(stableStringify(checked.definition)),
         definition:checked.definition,gradingKey:checked.gradingKey,blockReleases:[],answerReleaseOverride:null};
     },
-    async list({classId,reviewer,worksheetHeads=false}) {
+    async list({classId,scope,reviewer,worksheetHeads=false}) {
+      if(scope==='izone'){
+        const {createCourses}=await sharedCourseCapabilities(pool,reviewer.email);
+        if(!createCourses.length)return [];
+        const {rows}=await pool.query(`SELECT d.* FROM learning.form_draft d WHERE d.draft_scope='izone'
+          AND lower(d.owner_email)=lower($1) AND d.public_definition->>'courseCode'=ANY($2::text[])
+          AND ${catalogVisible('d.id','d.owner_email',"'izone'")}
+          AND NOT EXISTS(SELECT 1 FROM learning.form_publication p WHERE p.source_draft_id=d.id)
+          ORDER BY d.updated_at DESC,d.id LIMIT 100`,[reviewer.email,createCourses]);
+        return rows.map(row=>dto(row,{includeKey:false}));
+      }
       await authorizeClass(pool,classId,reviewer);
       const result=await pool.query(`SELECT d.id,d.erp_course_class_id,d.session_number,d.revision,d.status,d.content_hash,
         d.public_definition->>'title' AS title,d.updated_at${worksheetHeads?',COALESCE(r.worksheet_id,d.id) AS worksheet_id':''} FROM learning.form_draft d
@@ -119,13 +136,19 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       }
       return value;
     },
-    async save({id,expectedRevision,sessionNumber,definition,gradingKey,reviewer}) {
+    async save({id,expectedRevision,sessionNumber=null,definition,gradingKey,reviewer}) {
       const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
+        const shared=row.draft_scope==='izone';
+        if(shared!==(sessionNumber===null))throw error('DRAFT_SCOPE_MISMATCH','Đích lưu nháp không khớp.',400);
+        if(shared)await assertSharedCourse(client,reviewer.email,checked.definition.courseCode);
+        if(shared&&(await client.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[id])).rowCount)
+          throw error('DRAFT_ALREADY_PUBLISHED','Bài đã xuất bản.',409);
+        const storedSession=value=>value==null?null:Number(value);
         if(row.status==='published') throw error('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành; hãy sao chép thành nháp mới.');
         if(definition.formVersionId!==row.public_definition.formVersionId) throw error('DRAFT_VERSION_CHANGED','Không đổi ID phiên bản của nháp đang sửa.');
-        if(Number(row.revision)===expectedRevision+1&&row.content_hash===checked.contentHash&&Number(row.session_number)===sessionNumber) {
+        if(Number(row.revision)===expectedRevision+1&&row.content_hash===checked.contentHash&&storedSession(row.session_number)===sessionNumber) {
           return {...dto(row),missingAnswers:checked.missingAnswers,replayed:true};
         }
         if(Number(row.revision)!==expectedRevision) throw error('DRAFT_STALE','Nháp đã được lưu ở tab khác. Bản đang soạn chưa được ghi đè; hãy đối chiếu phiên bản mới.');
@@ -138,7 +161,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
         const readback=await client.query('SELECT * FROM learning.form_draft WHERE id=$1::uuid;',[id]);
         const current=readback.rows[0];
         if(!current||Number(current.revision)!==expectedRevision+1||current.content_hash!==checked.contentHash
-          ||Number(current.session_number)!==sessionNumber) throw error('DRAFT_READBACK_MISMATCH','Chưa xác nhận được nháp vừa lưu.',500);
+          ||storedSession(current.session_number)!==sessionNumber) throw error('DRAFT_READBACK_MISMATCH','Chưa xác nhận được nháp vừa lưu.',500);
         return {...dto(current),missingAnswers:checked.missingAnswers,replayed:false};
       });
     },

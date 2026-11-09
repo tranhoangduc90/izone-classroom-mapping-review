@@ -51,6 +51,7 @@ export function createLearningFormLibrary({pool,drafts}){
   async store({draftId,expectedRevision,expectedHash,scope,operationId,reviewer}){
    if(!['personal','izone'].includes(scope))throw fail('LIBRARY_SCOPE_INVALID','Nguồn kho chưa hợp lệ.',400);
    const draft=await drafts.get({id:draftId,reviewer});
+   if(draft.scope==='izone')throw fail('DRAFT_SCOPE_MISMATCH','Dùng Xuất bản trong Kho chung để lưu bài.');
    if(draft.revision!==expectedRevision||draft.contentHash!==expectedHash)throw fail('DRAFT_STALE','Nháp đã đổi; đọc lại trước khi lưu vào kho.');
    if(scope==='izone'){
     if(!['approved','published'].includes(draft.status)||draft.approvedRevision!==draft.revision||!draft.definition.courseCode)
