@@ -1,0 +1,26 @@
+{
+  "term1-skill-offline-core.mjs": [
+    [
+      "   const interruption=b.kind==='interrupt';\n   if(interruption ? SLUG!=='term-test-1-k56'||grant||b.section!=='listening'||!p.interruptionReason\n      ||p.answers!==undefined||p[profile.taskId]!==undefined||p.reason!==undefined\n",
+      "   const interruption=b.kind==='interrupt';\n   if(interruption ? SLUG!=='term-test-1-k56'||b.section!=='listening'||(grant&&grant.section!=='listening')||!p.interruptionReason\n      ||p.answers!==undefined||p[profile.taskId]!==undefined||p.reason!==undefined\n"
+    ]
+  ],
+  "term1-skill-routes.mjs": [
+    [
+      "      if (attempt[input.section + '_submitted_at']) fail(409, 'OFFLINE_SECTION_LOCKED', labels[input.section] + ' đã được nộp.');\n      if (attempt[input.section + '_started_at'] && !input.oldDeviceStopped)\n",
+      "      if (attempt[input.section + '_submitted_at']) fail(409, 'OFFLINE_SECTION_LOCKED', labels[input.section] + ' đã được nộp.');\n      if (input.section === 'listening' && attempt.listening_interrupted_at)\n        fail(409, 'OFFLINE_SECTION_LOCKED', 'Lượt Listening gián đoạn cần bài thay thế.');\n      if (attempt[input.section + '_started_at'] && !input.oldDeviceStopped)\n"
+    ],
+    [
+      "      const state = run?.state ?? {};\n      const needsSeed = startedAt && (!state[section] || state[section].revision < revision);\n      if (needsSeed) {\n",
+      "      const state = run?.state ?? {};\n      const listeningInterrupted = Boolean(isListening && attempt.listening_interrupted_at);\n      const needsSeed = startedAt && !listeningInterrupted && (!state[section] || state[section].revision < revision);\n      if (needsSeed) {\n"
+    ],
+    [
+      "      }\n      const audioDownload = isListening ? issueAudio?.(attempt, input.audioTransport) : undefined;\n      return { ...trace, response: { ok: true, grantId: grant.id, section, submitted: false, generation: Number(attempt.generation),\n",
+      "      }\n      const audioDownload = isListening && !listeningInterrupted ? issueAudio?.(attempt, input.audioTransport) : undefined;\n      return { ...trace, response: { ok: true, grantId: grant.id, section, submitted: false, generation: Number(attempt.generation),\n"
+    ],
+    [
+      "      return { ...trace, response: { ok: true, grantId: grant.id, section, submitted: false, generation: Number(attempt.generation),\n        content: scopedContent, ...(isListening ? { durationSeconds: duration, reviewSeconds: timing.listeningReviewSeconds, position, audioDownload } : { durationMinutes: duration }),\n        serverNow: attempt.server_now, preparedAt: run.prepared_at, startedAt, deadlineAt, draft, revision } };\n",
+      "      return { ...trace, response: { ok: true, grantId: grant.id, section, submitted: false, generation: Number(attempt.generation),\n        content: scopedContent, ...(isListening ? { durationSeconds: duration, reviewSeconds: timing.listeningReviewSeconds,\n          position, audioDownload, listeningContinuityVersion: 1, listeningInterrupted } : { durationMinutes: duration }),\n        serverNow: attempt.server_now, preparedAt: run.prepared_at, startedAt, deadlineAt, draft, revision } };\n"
+    ]
+  ]
+}

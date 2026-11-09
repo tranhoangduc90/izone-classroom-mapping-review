@@ -1,0 +1,12 @@
+{
+  "id": "5ed26422c78765c6e7d68826d3d0148edcb54497aa53bad472eaf8075d401da9",
+  "image": "sha256:6e1b6b769352e4fd58e21bf3103270c676c05b39219762f1b6ae5b22f33389e0",
+  "files": {
+    "term1-skill-offline-core.mjs": "e250db8fbdaf00be3bf80b8d9c22c866b7c6555d2316d326c838a5521563d782",
+    "term1-skill-routes.mjs": "78ade9803a5eef4d34ea80ed5c8ea66981d2fa59bee163960018c48fb841abc5"
+  },
+  "patched": {
+    "term1-skill-offline-core.mjs": "861110b7f26570fb37d678ad498b7a923f3b572c0dc6e67d594e6d6b1de57209",
+    "term1-skill-routes.mjs": "2b708398b07ddad0ffbf22e2b59acab745dadd94a1d2ff1e87a95a9fa265ffd5"
+  }
+}
