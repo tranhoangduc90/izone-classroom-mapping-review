@@ -1,0 +1,115 @@
+{
+  "app.js": [
+    {
+      "start": 502,
+      "stop": 503,
+      "text": "    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-exam-journal-request-id, x-term2-permit');\n"
+    },
+    {
+      "start": 763,
+      "stop": 764,
+      "text": "    limiter: testWriteLimiter, readLimiter: testReadLimiter, draftLimiter: testDraftLimiter,\n    secret: config.termTestSessionSecret, onWriting: ensureTermTestWritingGrading,\n    readWriting: async row => studentWritingGrading(row.test_slug,await termTestWritingGradingService?.getStatus(row.attempt_token)),\n    requestPortalSync, readPortalSyncStatus, onJournalEvent: (...args) => termJournal?.business(...args) });\n"
+    }
+  ],
+  "k56-demo-class-reset.mjs": [
+    {
+      "start": 39,
+      "stop": 40,
+      "text": ""
+    },
+    {
+      "start": 41,
+      "stop": 42,
+      "text": ""
+    },
+    {
+      "start": 44,
+      "stop": 44,
+      "text": "    const deletedSessions = await client.query('DELETE FROM assessment.term_test_exam_session WHERE id=ANY($1::uuid[])', [sessions]);\n"
+    }
+  ],
+  "k56-exam-order.js": [
+    {
+      "start": 3,
+      "stop": 3,
+      "text": "import {registerTerm1Offline} from './term1-offline.mjs';\nimport {registerTerm2Offline} from './term2-offline.mjs';\nimport {registerMiniOffline} from './mini-offline.mjs';\n"
+    },
+    {
+      "start": 63,
+      "stop": 64,
+      "text": "  return order.find(skill => !a[`${skill}_submitted_at`] && !(skill === 'listening' && a.listening_interrupted_at)) || (a.writing_submitted_at ? 'result' : 'writing');\n"
+    },
+    {
+      "start": 72,
+      "stop": 72,
+      "text": "    listeningInterrupted: Boolean(a.listening_interrupted_at),\n"
+    },
+    {
+      "start": 89,
+      "stop": 89,
+      "text": "    ...(a.listening_interrupted_at ? {listeningStatus:'interrupted'} : {}),\n"
+    },
+    {
+      "start": 108,
+      "stop": 109,
+      "text": "  onJournalEvent, secret, onWriting, readWriting, readLimiter, draftLimiter, allowNewReadFirst = process.env.K56_READ_FIRST_NEW_ENABLED !== 'false' }) {\n"
+    },
+    {
+      "start": 110,
+      "stop": 110,
+      "text": "  if (profile.name !== 'k56-demo' || !profile.demoIsolated) throw new Error('Demo offline overlay requires the isolated demo profile.');\n"
+    },
+    {
+      "start": 216,
+      "stop": 216,
+      "text": "  const offline = {pool,secret,assets,prepare,load,transaction,serialize,resultFor,limiter,readLimiter,draftLimiter,record,onWriting};\n  registerTerm1Offline(router,offline);\n  registerTerm2Offline(router,offline);\n  registerMiniOffline(router,offline);\n  const runTables = new Map([\n    ['term-test-1-k56','term1_offline_run'],\n    ['term-test-2-k56','term2_offline_run'],\n    ['mini-test-k56','mini_k56_offline_run']\n  ]);\n  async function assertLegacyWrite(client, slug, attemptId) {\n    const table = runTables.get(slug);\n    if (!table || !attemptId) return;\n    const found = await client.query('SELECT 1 FROM assessment.'+table+' WHERE attempt_id=$1', [attemptId]);\n    if (found.rows.length) throw failure('OFFLINE_RELOAD_REQUIRED','Hãy tải lại để tiếp tục lượt đã lưu trên thiết bị.');\n  }\n\n"
+    },
+    {
+      "start": 238,
+      "stop": 238,
+      "text": "    await assertLegacyWrite(pool,a.test_slug,a.attempt_token);\n"
+    },
+    {
+      "start": 263,
+      "stop": 263,
+      "text": "      await assertLegacyWrite(client,row.test_slug,row.attempt_token);\n"
+    },
+    {
+      "start": 276,
+      "stop": 276,
+      "text": "      await assertLegacyWrite(client,a.test_slug,a.attempt_token);\n"
+    },
+    {
+      "start": 322,
+      "stop": 322,
+      "text": "      await assertLegacyWrite(client,a.test_slug,a.attempt_token);\n"
+    },
+    {
+      "start": 359,
+      "stop": 360,
+      "text": "    const result = resultFor(a);\n    const writing = a.listening_interrupted_at && a.writing_started_at ? {\n      task1: String(a.writing_task_1 || ''), task2: String(a.writing_task_2 || ''),\n      revision: Number(a.writing_draft_revision) || 0, started: true, submitted: Boolean(a.writing_submitted_at),\n      deadlineAt: a.writing_deadline_at || null, serverNow: a.server_now,\n      updatedAt: a.writing_updated_at || null, submittedAt: a.writing_submitted_at || null,\n      grading: a.writing_submitted_at ? await readWriting(a) : null\n    } : null;\n    res.json({ ...serialize(a), className:a.class_name_snapshot, result,\n      portalSyncStatus:await readPortalSyncStatus(a,result), exam:serialize(a), writing });\n"
+    },
+    {
+      "start": 368,
+      "stop": 368,
+      "text": "    await assertLegacyWrite(pool,a.test_slug,a.attempt_token);\n"
+    },
+    {
+      "start": 376,
+      "stop": 376,
+      "text": "    await assertLegacyWrite(pool,result.rows[0]?.test_slug,token.data);\n"
+    }
+  ],
+  "term-test-writing-grading.js": [
+    {
+      "start": 418,
+      "stop": 419,
+      "text": "        AND (completed_at IS NOT NULL OR (listening_interrupted_at IS NOT NULL AND reading_submitted_at IS NOT NULL))\n"
+    },
+    {
+      "start": 736,
+      "stop": 737,
+      "text": "      AND (completed_at IS NOT NULL OR (listening_interrupted_at IS NOT NULL AND reading_submitted_at IS NOT NULL))\n"
+    }
+  ]
+}
