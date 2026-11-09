@@ -245,7 +245,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
           operation:typeof req.route?.path==='string'?req.route.path:'teacher_request',method:req.method,
-          status:res.statusCode,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
+          status:res.statusCode,...res.locals.classDraftDelivery,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
         catch { /* Lỗi logger không được làm hỏng nộp bài hoặc mutation đã commit. */ }
       });
     }
@@ -654,6 +654,18 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_DELIVERY');if(!input)return;
     res.set('Cache-Control','no-store');return res.json({ok:true,delivery:await drafts.assignPublication({...path,...input,reviewer:req.reviewer,
       assertAssignable:classPolicy?.deliveryCheck({fresh:true})})});
+  }));
+  router.post('/teacher/form-drafts/:id/assign-to-classes',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema,expectedRevision:z.number().int().positive(),
+      expectedHash:z.string().regex(/^[a-f0-9]{64}$/u),confirmedAnswers:z.literal(true),
+      targets:z.array(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),
+        portalTarget:z.object({id:z.string().regex(/^[1-9]\d{0,17}$/u),startsAt:z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u)}).strict()
+      }).strict()).min(1).max(100)}).strict(),req.body,res,'INVALID_CLASS_DRAFT_DELIVERY');if(!input)return;
+    const delivery=await drafts.assignOwnedDraft({...path,...input,reviewer:req.reviewer,assertAssignable:classPolicy?.deliveryCheck({fresh:true})});
+    res.locals.classDraftDelivery={outcome:delivery.status,delivered:delivery.results.filter(result=>result.ok).length,
+      rejected:delivery.results.filter(result=>!result.ok).map(result=>result.error)};
+    res.set('Cache-Control','no-store');return res.json({ok:true,delivery,sourceRevision:input.expectedRevision,sourceHash:input.expectedHash});
   }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
   router.post('/teacher/form-drafts/from-assignment/:id/edit',authenticate,asyncRoute(async(req,res)=>{

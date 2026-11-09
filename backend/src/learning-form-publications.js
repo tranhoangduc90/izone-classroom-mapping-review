@@ -119,7 +119,90 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     return {assignmentId:row.assignment_id,formVersionId:row.form_version_id,publicToken:row.public_token,
       classId:String(row.erp_course_class_id),sessionNumber:Number(row.session_number),rosterCount:row.roster_count,blockCount:row.block_count};
   }
+  async function deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable}){
+    if(assertAssignable)await assertAssignable(target.classId);
+    await assertCourse(database,{erp_course_class_id:target.classId,public_definition:definition});
+    let attendanceFingerprint;
+    if(target.portalTarget) attendanceFingerprint=await checkPortalTarget(database,target);
+    else{
+      await checkSchedule(database,target.classId,target.sessionNumber);
+      const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
+        AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
+      if(existing.rowCount)throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu; hãy thu hồi hoặc thay phiếu có giữ lịch sử.');
+    }
+    const current=await database.query(fetchCourseCurrentRosterSql,[target.classId]);
+    if(!current.rowCount||current.rows.some(s=>s.membership_verified!==true))throw fail('DRAFT_ROSTER_UNVERIFIED','Đọc lại danh sách ERP trước khi giao bài.');
+    const refs=new Set(current.rows.map(s=>s.student_ref)),roster=(await database.query(fetchLearningRosterForClassSql,[target.classId])).rows.filter(s=>refs.has(s.student_ref));
+    if(roster.length!==refs.size)throw fail('DRAFT_ROSTER_CHANGED','Danh sách học viên cần được đối chiếu lại.');
+    const assignment=(await database.query(insertLearningAssignmentSql,[definition.formVersionId,definition.courseCode||null,
+      target.classId,classInfo.class_name,target.sessionNumber,definition.title,null,null,reviewer.email])).rows[0];
+    if(target.portalTarget)await database.query(`INSERT INTO learning.form_assignment_portal_target
+      (assignment_id,portal_session_id,starts_at,attendance_fingerprint) VALUES($1::uuid,$2::bigint,$3,$4)`,
+      [assignment.assignment_id,target.portalTarget.id,target.portalTarget.startsAt,attendanceFingerprint]);
+    for(const student of roster) await database.query(insertLearningAssignmentRosterSql,[assignment.assignment_id,student.student_ref,student.student_id,student.student_name,student.display_discriminator]);
+    const first=Math.min(...definition.blocks.map(block=>block.checkpoint));
+    for(const block of definition.blocks)await database.query(insertLearningAssignmentBlockReleaseSql,[assignment.assignment_id,block.blockId,block.checkpoint,block.checkpoint===first?'open':'locked',reviewer.email]);
+    const result=await readDelivery(database,{...assignment,erp_course_class_id:target.classId,session_number:target.sessionNumber});
+    if(result.formVersionId!==definition.formVersionId||result.blockCount!==definition.blocks.length)
+      throw fail('DELIVERY_READBACK_MISMATCH','Phiên bản hoặc các phần vừa giao chưa khớp.',500);
+    return result;
+  }
+  async function lockClass(database,classId){
+    await database.query('INSERT INTO learning.form_draft_class_lock VALUES($1::bigint) ON CONFLICT DO NOTHING',[classId]);
+    await database.query('SELECT erp_course_class_id FROM learning.form_draft_class_lock WHERE erp_course_class_id=$1::bigint FOR UPDATE',[classId]);
+  }
+  async function deliverTargets(targets,deliver){
+    const unique=new Set(targets.map(t=>String(t.classId)+':'+t.sessionNumber));
+    if(unique.size!==targets.length)throw fail('DELIVERY_DUPLICATE_TARGET','Không chọn trùng một lớp và buổi.',400);
+    const results=[];
+    for(const target of targets){
+      try{results.push({...target,ok:true,delivery:await deliver(target)});}
+      catch(error){
+        const known=error instanceof FormAuthoringError||['CLASS_STATUS_UNAVAILABLE','CLASS_NOT_ONGOING'].includes(error.code);
+        results.push({...target,ok:false,error:known?error.code:'DELIVERY_FAILED',
+          message:known?error.message:'Chưa giao được đích này. Thử lại sẽ đối chiếu mã thao tác cũ.',status:known?error.httpStatus:500});
+      }
+    }
+    return {status:results.every(r=>r.ok)?'success':results.some(r=>r.ok)?'partial':'failure',results};
+  }
   return {
+    async assignOwnedDraft({id,expectedRevision,expectedHash,confirmedAnswers,targets,operationId,reviewer,assertAssignable}){
+      if(confirmedAnswers!==true)throw fail('DELIVERY_ANSWERS_UNCONFIRMED','Hãy kiểm và xác nhận đáp án trước khi giao.',400);
+      await owned(pool,id,reviewer);
+      return deliverTargets(targets,target=>withTransaction(pool,async database=>{
+        const draft=await owned(database,id,reviewer,{lock:true});
+        const classInfo=await authorizeClass(database,target.classId,reviewer);
+        await lockClass(database,target.classId);
+        const operation=targetOperation(operationId,target.classId,target.sessionNumber);
+        const prior=(await database.query(`SELECT delivery.*,assignment.id AS assignment_id
+          FROM learning.class_draft_delivery delivery JOIN learning.form_assignment assignment
+            ON assignment.form_version_id=delivery.form_version_id
+          WHERE delivery.operation_id=$1::uuid`,[operation])).rows[0];
+        if(prior){
+          if(prior.draft_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase()
+            ||prior.draft_revision!==expectedRevision||prior.draft_hash!==expectedHash
+            ||String(prior.portal_session_id)!==target.portalTarget.id||prior.starts_at!==target.portalTarget.startsAt)
+            throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác hoặc mốc Portal khác.');
+          return {...await readDelivery(database,prior),replayed:true};
+        }
+        if(draft.revision!==expectedRevision||draft.content_hash!==expectedHash)
+          throw fail('DRAFT_STALE','Bài đã thay đổi. Mở lại Giao bài để kiểm đáp án bản mới.');
+        if(draft.status==='published')throw fail('DRAFT_ALREADY_PUBLISHED','Bài đã xuất bản. Mở lại Giao bài để dùng bản đã xuất bản.');
+        validateAuthoringPayload({definition:draft.public_definition,gradingKey:draft.private_definition,requireAnswers:true});
+        const definition=structuredClone(draft.public_definition),gradingKey=structuredClone(draft.private_definition);
+        if(sha256(stableStringify({definition,gradingKey}))!==draft.content_hash)
+          throw fail('PUBLICATION_CONTENT_MISMATCH','Nội dung nháp chưa khớp bản đã xác nhận; đã dừng giao.',500);
+        definition.formVersionId=gradingKey.formVersionId=crypto.randomUUID();
+        await database.query(`INSERT INTO learning.class_draft_delivery
+          (operation_id,draft_id,draft_revision,draft_hash,form_version_id,owner_email,erp_course_class_id,session_number,portal_session_id,starts_at)
+          VALUES($1::uuid,$2::uuid,$3,$4,$5::uuid,$6,$7::bigint,$8,$9::bigint,$10)`,
+          [operation,id,expectedRevision,expectedHash,definition.formVersionId,draft.owner_email,target.classId,target.sessionNumber,target.portalTarget.id,target.portalTarget.startsAt]);
+        await storeVersion(database,definition,gradingKey,draft.owner_email,draft.owner_email);
+        const result=await deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable});
+        await database.query("INSERT INTO learning.form_assignment_origin(assignment_id,source_scope) VALUES($1::uuid,'personal')",[result.assignmentId]);
+        return {...result,replayed:false};
+      }));
+    },
     async listPublications({reviewer}){
       const rows=(await pool.query(`SELECT publication.*,(SELECT draft.id FROM learning.form_draft draft
           WHERE draft.public_definition->>'formVersionId'=publication.form_version_id::text AND draft.content_hash=publication.content_hash
@@ -229,68 +312,31 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
       });
     },
     async assignPublication({id,targets,operationId,reviewer,origin,assertAssignable}){
-      const unique=new Set(targets.map(t=>String(t.classId)+':'+t.sessionNumber));
-      if(unique.size!==targets.length)throw fail('DELIVERY_DUPLICATE_TARGET','Không chọn trùng một lớp và buổi.',400);
-      const results=[];
       // Kiểm quyền đọc nguồn trước vòng lặp; không trả nội dung private ra caller.
       await publication(pool,id,reviewer);
-      for(const target of targets){
+      return deliverTargets(targets,target=>withTransaction(pool,async database=>{
+        await lockCatalog(database);
+        const source=await publication(database,id,reviewer),classInfo=await authorizeClass(database,target.classId,reviewer);
+        const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
+        await lockClass(database,target.classId);
         const operation=targetOperation(operationId,target.classId,target.sessionNumber);
-        try{
-          const delivered=await withTransaction(pool,async database=>{
-            await lockCatalog(database);
-            const source=await publication(database,id,reviewer),classInfo=await authorizeClass(database,target.classId,reviewer);
-            const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
-            await database.query('INSERT INTO learning.form_draft_class_lock VALUES($1::bigint) ON CONFLICT DO NOTHING',[target.classId]);
-            await database.query('SELECT erp_course_class_id FROM learning.form_draft_class_lock WHERE erp_course_class_id=$1::bigint FOR UPDATE',[target.classId]);
-            const prior=(await database.query('SELECT * FROM learning.form_delivery WHERE operation_id=$1::uuid',[operation])).rows[0];
-            if(prior){if(prior.publication_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
-              throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác.');
-              if(target.portalTarget){
-                const pinned=(await database.query('SELECT portal_session_id::text,starts_at FROM learning.form_assignment_portal_target WHERE assignment_id=$1::uuid',[prior.assignment_id])).rows[0];
-                if(pinned?.portal_session_id!==target.portalTarget.id||pinned.starts_at!==target.portalTarget.startsAt)
-                  throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một mốc Portal khác.');
-              }
-              return {...await readDelivery(database,prior),replayed:true};}
-            if(assertAssignable)await assertAssignable(target.classId);
-            await assertCourse(database,{erp_course_class_id:target.classId,public_definition:source.public_definition});
-            let attendanceFingerprint;
-            if(target.portalTarget) attendanceFingerprint=await checkPortalTarget(database,target);
-            else{
-              await checkSchedule(database,target.classId,target.sessionNumber);
-              const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
-                AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
-              if(existing.rowCount)throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu; hãy thu hồi hoặc thay phiếu có giữ lịch sử.');
-            }
-            const current=await database.query(fetchCourseCurrentRosterSql,[target.classId]);
-            if(!current.rowCount||current.rows.some(s=>s.membership_verified!==true))throw fail('DRAFT_ROSTER_UNVERIFIED','Đọc lại danh sách ERP trước khi giao bài.');
-            const refs=new Set(current.rows.map(s=>s.student_ref)),roster=(await database.query(fetchLearningRosterForClassSql,[target.classId])).rows.filter(s=>refs.has(s.student_ref));
-            if(roster.length!==refs.size)throw fail('DRAFT_ROSTER_CHANGED','Danh sách học viên cần được đối chiếu lại.');
-            const definition=source.public_definition;
-            const assignment=(await database.query(insertLearningAssignmentSql,[source.form_version_id,definition.courseCode||null,
-              target.classId,classInfo.class_name,target.sessionNumber,definition.title,null,null,reviewer.email])).rows[0];
-            if(target.portalTarget)await database.query(`INSERT INTO learning.form_assignment_portal_target
-              (assignment_id,portal_session_id,starts_at,attendance_fingerprint) VALUES($1::uuid,$2::bigint,$3,$4)`,
-              [assignment.assignment_id,target.portalTarget.id,target.portalTarget.startsAt,attendanceFingerprint]);
-            for(const student of roster)await database.query(insertLearningAssignmentRosterSql,[assignment.assignment_id,student.student_ref,student.student_id,student.student_name,student.display_discriminator]);
-            const first=Math.min(...definition.blocks.map(b=>b.checkpoint));
-            for(const block of definition.blocks)await database.query(insertLearningAssignmentBlockReleaseSql,[assignment.assignment_id,block.blockId,block.checkpoint,block.checkpoint===first?'open':'locked',reviewer.email]);
-            const delivery=(await database.query(`INSERT INTO learning.form_delivery(operation_id,publication_id,owner_email,erp_course_class_id,session_number,assignment_id)
-              VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid) RETURNING *`,[operation,id,reviewer.email,target.classId,target.sessionNumber,assignment.assignment_id])).rows[0];
-            if(selectedOrigin)await database.query('INSERT INTO learning.form_assignment_origin(assignment_id,source_scope,source_library_id) VALUES($1::uuid,$2,$3::uuid)',[assignment.assignment_id,selectedOrigin.scope,selectedOrigin.libraryId]);
-            const result=await readDelivery(database,delivery);
-            if(result.formVersionId!==source.form_version_id||result.blockCount!==definition.blocks.length)
-              throw fail('DELIVERY_READBACK_MISMATCH','Phiên bản hoặc các phần vừa giao chưa khớp.',500);
-            return {...result,replayed:false};
-          });
-          results.push({...target,ok:true,delivery:delivered});
-        }catch(error){
-          // Lỗi đích sau một đích thành công phải được báo theo từng dòng để retry đúng đích.
-          const known=error instanceof FormAuthoringError||['CLASS_STATUS_UNAVAILABLE','CLASS_NOT_ONGOING'].includes(error.code);
-          results.push({...target,ok:false,error:known?error.code:'DELIVERY_FAILED',
-            message:known?error.message:'Chưa giao được đích này. Thử lại sẽ đối chiếu mã thao tác cũ.',status:known?error.httpStatus:500});}
-      }
-      return {status:results.every(r=>r.ok)?'success':results.some(r=>r.ok)?'partial':'failure',results};
+        const prior=(await database.query('SELECT * FROM learning.form_delivery WHERE operation_id=$1::uuid',[operation])).rows[0];
+        if(prior){
+          if(prior.publication_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
+            throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác.');
+          if(target.portalTarget){
+            const pinned=(await database.query('SELECT portal_session_id::text,starts_at FROM learning.form_assignment_portal_target WHERE assignment_id=$1::uuid',[prior.assignment_id])).rows[0];
+            if(pinned?.portal_session_id!==target.portalTarget.id||pinned.starts_at!==target.portalTarget.startsAt)
+              throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một mốc Portal khác.');
+          }
+          return {...await readDelivery(database,prior),replayed:true};
+        }
+        const result=await deliverVersion(database,{target,definition:source.public_definition,classInfo,reviewer,assertAssignable});
+        await database.query(`INSERT INTO learning.form_delivery(operation_id,publication_id,owner_email,erp_course_class_id,session_number,assignment_id)
+          VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid)`,[operation,id,reviewer.email,target.classId,target.sessionNumber,result.assignmentId]);
+        if(selectedOrigin)await database.query('INSERT INTO learning.form_assignment_origin(assignment_id,source_scope,source_library_id) VALUES($1::uuid,$2,$3::uuid)',[result.assignmentId,selectedOrigin.scope,selectedOrigin.libraryId]);
+        return {...result,replayed:false};
+      }));
     }
   };
 }
