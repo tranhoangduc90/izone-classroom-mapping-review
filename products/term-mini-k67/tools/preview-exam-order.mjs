@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {readFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
 
 // Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên và đề đều giả.
 // API và giao diện thật dùng cùng origin; không nối Portal, n8n hoặc database production.
@@ -104,11 +105,15 @@ const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if(listeningContinuityEnabled){
+  await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
+}
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
@@ -147,6 +152,30 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
 });
 const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`;
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
+const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
+if(previousPagesRevision){
+  if(!/^[a-f0-9]{40}$/.test(previousPagesRevision))throw new Error('Revision Pages thử không hợp lệ.');
+  const route=term1JourneyMode==='on'?'term-test-1-computer-based':'term-test-2-computer-based';
+  const files=[`term-tests/${route}/index.html`,`term-tests/${route}/offline-assets.mjs`,
+    'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
+    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
+  const previous=new Map(files.map(file=>[file,execFileSync('git',['show',previousPagesRevision+':'+file],
+    {cwd:pages,encoding:'utf8'}).replace(/\r\n/g,'\n')]));
+  let servingPrevious=true;
+  outer.post('/preview/switch-pages',(_req,res)=>{servingPrevious=false;res.json({ok:true});});
+  outer.use((req,res,next)=>{
+    if(!servingPrevious||req.method!=='GET')return next();
+    const file=req.path.replace(/^\//,'').replace(/\/$/,'/index.html');
+    const content=previous.get(file);
+    if(!content)return next();
+    const body=file.endsWith('/offline-assets.mjs')
+      ? content.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
+          (_match,before,after)=>before+createHash('sha256').update(fixtureConfig).digest('hex')+after)
+      : content;
+    res.type(path.extname(file)).send(body);
+  });
+}
+
 const offlineEntries=[];
 if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEntries.push('mini-test-lesson-5-computer-based');
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');

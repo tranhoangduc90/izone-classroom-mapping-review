@@ -295,6 +295,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
+        ...(config.listeningContinuityEnabled?{listeningContinuityVersion:1}:{}),
         content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash),audioManifest:manifest,...audio};
     });
   }));
