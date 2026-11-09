@@ -155,9 +155,11 @@ outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/j
 const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
 if(previousPagesRevision){
   if(!/^[a-f0-9]{40}$/.test(previousPagesRevision))throw new Error('Revision Pages thử không hợp lệ.');
-  const route=term1JourneyMode==='on'?'term-test-1-computer-based':'term-test-2-computer-based';
+  const route=term1JourneyMode==='on'?'term-test-1-computer-based'
+    :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
   const files=[`term-tests/${route}/index.html`,`term-tests/${route}/offline-assets.mjs`,
-    'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
+    'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
+    'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
   const previous=new Map(files.map(file=>[file,execFileSync('git',['show',previousPagesRevision+':'+file],
     {cwd:pages,encoding:'utf8'}).replace(/\r\n/g,'\n')]));
