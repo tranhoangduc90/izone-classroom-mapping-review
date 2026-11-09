@@ -56,22 +56,42 @@ function credential(token) {
 
 // The caller resolves this scope from the canonical Term 1 attempt under its lock
 // and checks the teacher's class permission before entering this transaction.
-export async function issueSkillGrant(client, scope, ttlMinutes = 120) {
+export async function issueSkillGrant(client, scope, ttlMinutes = 120, rosterToken) {
   const values = scopeArgs(scope);
   if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 1440) throw denied();
-  const id = randomUUID(), secret = randomBytes(32).toString('base64url');
+  const token = rosterToken ?? randomUUID() + '.' + randomBytes(32).toString('base64url');
+  const [id, secretHash] = credential(token);
   const activationCode = randomBytes(8).toString('hex').toUpperCase();
   const { rows } = await client.query(`
     INSERT INTO assessment.term1_skill_grant
       (attempt_id, session_id, generation, class_id, student_ref, section, id, secret_hash, activation_hash, expires_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp() + $10::integer * interval '1 minute')
-    ON CONFLICT (attempt_id, generation, section) WHERE revoked_at IS NULL DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING ${columns}
-  `, [...values, id, sha(secret), sha(activationCode), ttlMinutes]);
+  `, [...values, id, secretHash, sha(activationCode), ttlMinutes]);
   if (!rows[0]) throw Object.assign(new Error('Kỹ năng này đã có link. Thu hồi link cũ trước khi cấp lại.'), {
     status: 409, code: 'TERM1_SKILL_GRANT_EXISTS'
   });
-  return { grant: rows[0], token: id + '.' + secret, activationCode };
+  return { grant: rows[0], token, activationCode };
+}
+
+export async function bindRosterSkillGrant(client, scope, token, ownerId) {
+  const active = (await client.query(`
+    SELECT id, owner_id FROM assessment.term1_skill_grant WHERE ${scopeWhere} AND revoked_at IS NULL FOR UPDATE
+  `, scopeArgs(scope))).rows[0];
+  if (active?.owner_id) {
+    try { return await requireSkillGrant(client, scope, token, ownerId); }
+    catch (error) {
+      if (error.code !== 'TERM1_SKILL_GRANT_DENIED') throw error;
+      throw Object.assign(new Error('Kỹ năng này đang gắn với thiết bị khác. Hãy mở lại trên thiết bị đã làm để giữ bài.'), {
+        status: 409, code: 'TERM1_SKILL_OWNED_BY_FALLBACK'
+      });
+    }
+  }
+  // A teacher link that was never opened has no browser draft to protect.
+  if (active) await revokeSkillGrant(client, scope, active.id);
+  const { activationCode } = await issueSkillGrant(client, scope, 120, token);
+  return bindSkillGrant(client, scope, token, ownerId, activationCode);
 }
 
 export async function bindSkillGrant(client, scope, token, ownerId, activationCode) {
