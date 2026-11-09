@@ -1,0 +1,21 @@
+{
+  "base": {
+    "app.js": "30e7a66024ec6d811106460e5123b50f30422339bfa5b84da63701a1637ecf0c",
+    "k56-demo-class-reset.mjs": "09757d38858aec1eeda765b2249ec0d37025c1278ed813cc7116dfca67297ab7",
+    "k56-exam-order.js": "da1c13301c8190642f5639b056fb4b9b12a018ce6eaac3910fc688635ea2cde7",
+    "term-test-writing-grading.js": "6e0f00190fae39c01747927870af78cd538dcf0ab1554752c76d90d49270ff7d"
+  },
+  "overlay": {
+    "app.js": "7899d76785ab9e468104e51aa1e6a39429e7db09996e612110727570fdb8ab2f",
+    "k56-demo-class-reset.mjs": "8de9a0cc801ed5d9bbfd5c229b5ae67488b211139fee569a68745b7222cea0d0",
+    "k56-exam-order.js": "b23ade1aea69447f6f6a7d848695e963a48669b825cdbd5e3a3d0005c2f6da07",
+    "k56-offline-core.mjs": "2abd26af172890c9883cb674284e2553a87d65e6352e8084e108ba46e7f83abd",
+    "mini-offline.mjs": "211f24e4aaa16aef253eada9c5efcda37dfdf8710e4d06cb57c7df26c21e4a47",
+    "term-test-writing-grading.js": "c6979ee77117bb76701576a41b836fffa87a2af666ec0fe753c5383fe839ad94",
+    "term1-blank.mjs": "ebafe24f183269bd04019d8748f732cb97781bd3c2050f06a5bf6ab640595c58",
+    "term1-offline.mjs": "c14ae1644778085938249f77a3fb1db1a61a99f9997291ad078384a017d59123",
+    "term1-skill-grant.mjs": "d23639cf5d4d5d189dd01963a5f9d5cb7bcdfe1d1ee488eda2abc8a3669027be",
+    "term1-skill-offline-core.mjs": "d899ae9cbb3e68a53b9c49e04aff3a8c6811e7f9c97ddbe8eabbbc383c0db1c0",
+    "term2-offline.mjs": "d2df003bdb90ee84ee83d5623be01850f8fb8786bd934f17bedacc6582f573a1"
+  }
+}
