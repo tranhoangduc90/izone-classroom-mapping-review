@@ -8,6 +8,40 @@ import {createLearningFormLibrary} from '../src/learning-form-library.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningService} from '../src/learning-service.js';
 
+test('Kho chung PostgreSQL: quyền khóa, lưu cách ly và rollback xuất bản khi mục kho lỗi',{timeout:60000},async()=>{
+  const fixture=await postgresFixture({asApplication:true});
+  try{
+    for(const file of ['202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql','202610280001_form_publications.sql','202611090002_shared_course_drafts.sql'])
+      await fixture.pool.query(await readFile(new URL('../ops/learning-migrations/'+file,import.meta.url),'utf8'));
+    await fixture.pool.query(`INSERT INTO mapping.reviewer_account VALUES('lead67@example.test','active');
+      INSERT INTO learning.course_content_authority(reviewer_email,course_code,can_self_approve_scored_forms,grant_reference)
+      VALUES('lead67@example.test','67',true,'Isolated fixture only')`);
+    const reviewer={email:'lead67@example.test',canAccessAllClasses:false};
+    const drafts=createLearningFormDraftService({pool:fixture.clockPool});
+    const payload=previewFormImport('type,prompt,skill\nreflection,Câu Kho chung,reading').payload;
+    payload.definition.courseCode='67';
+    const draft=await drafts.create({...payload,scope:'izone',operationId:randomUUID(),reviewer});
+    assert.equal(draft.classId,null);
+    await assert.rejects(()=>drafts.save({...payload,definition:{...payload.definition,courseCode:'56'},
+      id:draft.id,expectedRevision:1,reviewer}),{code:'SHARED_COURSE_ACCESS_DENIED'});
+    const review={id:draft.id,expectedRevision:1,expectedHash:draft.contentHash,reviewer};
+    await drafts.requestReview(review);
+    await drafts.approve(review);
+    await fixture.pool.query(`ALTER TABLE learning.form_library_entry ADD CONSTRAINT fixture_reject_shared CHECK(sharing_scope<>'izone')`);
+    const operation={...review,operationId:randomUUID()};
+    await assert.rejects(()=>drafts.publishLibrary(operation),{code:'23514'});
+    assert.equal((await fixture.pool.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[draft.id])).rowCount,0);
+    assert.equal((await fixture.pool.query('SELECT 1 FROM learning.form_version WHERE id=$1',[draft.definition.formVersionId])).rowCount,0);
+    await fixture.pool.query('ALTER TABLE learning.form_library_entry DROP CONSTRAINT fixture_reject_shared');
+    const [one,two]=await Promise.all([drafts.publishLibrary(operation),drafts.publishLibrary({...operation,operationId:randomUUID()})]);
+    assert.equal(one.libraryEntryId,two.libraryEntryId);
+    assert.equal((await fixture.pool.query('SELECT 1 FROM learning.form_library_entry WHERE source_draft_id=$1',[draft.id])).rowCount,1);
+    assert.equal((await fixture.pool.query('SELECT 1 FROM learning.form_assignment')).rowCount,0);
+    await fixture.pool.query("UPDATE learning.course_content_authority SET status='revoked',revoked_at=now() WHERE reviewer_email=$1",[reviewer.email]);
+    await assert.rejects(()=>drafts.get({id:draft.id,reviewer}),{code:'SHARED_COURSE_ACCESS_DENIED'});
+  }finally{await fixture.close();}
+});
+
 test('R30 PostgreSQL: giao bản chụp đợi save đang commit, không khóa nhầm revision mới; hai lần giao cạnh tranh chỉ có một phiếu',{timeout:60000},async()=>{
   const f=await postgresFixture({asApplication:true});let resume;
   try{
