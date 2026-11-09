@@ -10,7 +10,7 @@ const testSlug = `term-test-${process.env.K56_TEST_PRODUCT}-k56`;
 const operationTable = `assessment.term${process.env.K56_TEST_PRODUCT}_offline_operation`;
 const { fixture, op } = await import('./test.mjs');
 const { nextK56Section, registerK56ExamOrder } = await import(pathToFileURL(process.env.TERM2_RUNTIME_ROOT + '/src/k56-exam-order.js'));
-const express = createRequire(process.env.TERM2_DEPS_PACKAGE)('express');
+const express = createRequire(process.env.TERM2_DEPS_PACKAGE || new URL('../../../package.json', import.meta.url))('express');
 
 async function readInterruptedResult(attempt) {
   const app = express();
@@ -103,7 +103,7 @@ for (const mode of ['lis_first', 'read_first']) {
       assert.ok(attempt.reading_submitted_at);
       assert.ok(attempt.writing_submitted_at);
       assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch WHERE field = 'listening'")).rows, []);
-      if(process.env.K56_LISTENING_RESULT_FIXTURE==='1')await readInterruptedResult(attempt);
+      await readInterruptedResult(attempt);
       const fresh = { attemptToken: randomUUID(), examSessionToken: randomUUID(), generation: 0, ownerId: randomUUID() };
       await f.db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',
         [fresh.attemptToken, testSlug, fresh.examSessionToken, mode]);
