@@ -189,5 +189,186 @@
     "audioMs": 1615060,
     "reviewMs": 120000,
     "totalMs": 1735060
+  },
+  {
+    "code": "67-practice-listening_c21_t2_full_test",
+    "title": "Cambridge 21 · Test 2 · Full Listening",
+    "lesson": 16,
+    "book": 21,
+    "test": 2,
+    "sourceLabel": "Cambridge 21 · Test 2 · Full Listening",
+    "subtitle": "Nghe một lượt ở tốc độ gốc.\n40 câu và 2 phút rà bài sau audio.",
+    "totalMs": 1659426,
+    "audioMs": 1539426,
+    "reviewMs": 120000,
+    "parts": [
+      {
+        "id": "part1",
+        "title": "Part 1 · One-day classes at Steynford College",
+        "start": 1,
+        "end": 10,
+        "startMs": 0,
+        "endMs": 401345
+      },
+      {
+        "id": "part2",
+        "title": "Part 2 · Marsden Coastal Walk and Melby Heritage Walk",
+        "start": 11,
+        "end": 20,
+        "startMs": 401345,
+        "endMs": 738821,
+        "splitAfter": 14
+      },
+      {
+        "id": "part3",
+        "title": "Part 3 · Food science course and developing a new food product",
+        "start": 21,
+        "end": 30,
+        "startMs": 738821,
+        "endMs": 1154926,
+        "splitAfter": 26
+      },
+      {
+        "id": "part4",
+        "title": "Part 4 · Challenges facing the cruise ship industry",
+        "start": 31,
+        "end": 40,
+        "startMs": 1154926,
+        "endMs": 1539426
+      }
+    ],
+    "paragraphs": [
+      "part1",
+      "part2",
+      "part3",
+      "part4"
+    ],
+    "preparationGroups": [
+      {
+        "label": "Table completion",
+        "preparationSteps": [
+          "Đọc lướt bảng và khoanh giới hạn từ/số.",
+          "Dự đoán loại thông tin cần điền dựa vào hàng, cột và từ khóa."
+        ]
+      },
+      {
+        "label": "Multiple choice — chọn 2",
+        "preparationSteps": [
+          "Đọc câu hỏi và cả năm lựa chọn, xác định tiêu chí để chọn đúng hai ý.",
+          "Nghe cách diễn đạt tương đương và loại các ý trái nghĩa hoặc thiếu bằng chứng."
+        ]
+      },
+      {
+        "label": "Map labelling",
+        "preparationSteps": [
+          "Xác định hướng, lối vào và các mốc trên bản đồ.",
+          "Dò theo đường đi và đối chiếu vị trí trước khi chọn chữ cái."
+        ]
+      },
+      {
+        "label": "Flow-chart completion",
+        "preparationSteps": [
+          "Đọc theo thứ tự các bước và so sánh các lựa chọn.",
+          "Nghe từng bước rồi chọn chữ cái phù hợp."
+        ]
+      },
+      {
+        "label": "Note completion",
+        "preparationSteps": [
+          "Đọc tiêu đề và nhóm ý, khoanh giới hạn từ.",
+          "Dự đoán loại từ cần điền và nghe theo thứ tự của ghi chú."
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "id": "one-day-classes",
+        "kind": "completion",
+        "label": "Table completion",
+        "start": 1,
+        "end": 10,
+        "instruction": "Complete the table below. Write ONE WORD AND/OR A NUMBER for each answer."
+      },
+      {
+        "id": "marsden-coastal-walk",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 11,
+        "end": 12,
+        "instruction": "Choose TWO letters, A–E."
+      },
+      {
+        "id": "melby-heritage-walk",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 13,
+        "end": 14,
+        "instruction": "Choose TWO letters, A–E."
+      },
+      {
+        "id": "melby-coal-mine",
+        "kind": "matching",
+        "label": "Map labelling",
+        "start": 15,
+        "end": 20,
+        "instruction": "Label the map below. Write the correct letter, A–I, next to Questions 15–20."
+      },
+      {
+        "id": "food-safety",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 21,
+        "end": 22,
+        "instruction": "Choose TWO letters, A–E."
+      },
+      {
+        "id": "food-fraud",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 23,
+        "end": 24,
+        "instruction": "Choose TWO letters, A–E."
+      },
+      {
+        "id": "course-topics",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 25,
+        "end": 26,
+        "instruction": "Choose TWO letters, A–E."
+      },
+      {
+        "id": "new-food-product",
+        "kind": "flowchart",
+        "label": "Flow-chart completion",
+        "start": 27,
+        "end": 30,
+        "instruction": "Complete the flow-chart below. Choose FOUR answers from the box and write the correct letter, A–F, next to Questions 27–30."
+      },
+      {
+        "id": "overtourism",
+        "kind": "completion",
+        "label": "Problems with overtourism",
+        "start": 31,
+        "end": 34,
+        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
+      },
+      {
+        "id": "perception",
+        "kind": "completion",
+        "label": "Problems of perception",
+        "start": 35,
+        "end": 36,
+        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
+      },
+      {
+        "id": "solutions",
+        "kind": "completion",
+        "label": "Solutions",
+        "start": 37,
+        "end": 40,
+        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
+      }
+    ]
   }
 ]
