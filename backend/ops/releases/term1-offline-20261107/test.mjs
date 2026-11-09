@@ -73,6 +73,7 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
       AND OLD.writing_draft_updated_at IS DISTINCT FROM NEW.writing_draft_updated_at
     ) EXECUTE FUNCTION assessment.fixture_sync_writing_timestamp();`);
   await db.exec(await readFile(new URL('./listening-interruption.sql',import.meta.url),'utf8'));
+  if(PRODUCT===2)await db.exec(await readFile(new URL('./listening-interruption-k56-phase2.sql',import.meta.url),'utf8'));
  }
  await db.exec(mod.schema);
  await db.query('INSERT INTO assessment.term_test_attempt(id,test_slug,exam_session_id,exam_mode) VALUES($1,$2,$3,$4)',[a,mod.SLUG,s,mode]);
