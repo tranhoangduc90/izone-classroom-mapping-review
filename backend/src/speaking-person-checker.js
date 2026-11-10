@@ -26,18 +26,35 @@ async function analyzePerson(section, messages) {
       rule.criteria,
       `Tìm đủ các bước THEO THỨ TỰ: ${rule.stages.join(', ')}. Các bước trước transfer phải thuộc cùng chủ đề/người; transfer là đề mới. Mỗi bước có yêu cầu chatbot → nỗ lực thực hành học viên → phản hồi chatbot. Phản hồi có thể đồng thời giao bước kế tiếp. Các bước có thể được gộp trong cùng câu trả lời hoàn chỉnh; khi đó có thể dùng chung bộ chỉ số nhưng phải thực sự có nội dung từng bước.`,
       'Chấp nhận nỗ lực còn lỗi, câu tiếng Việt nếu chatbot cho phép; không ép số giây, micro hay nói lại sau mọi góp ý. Thử thách cuối bài là bắt buộc theo prompt gốc. Menu gợi ý và phần tổng kết không phải lượt luyện riêng.',
-      'Chỉ trả JSON {"confidence":0.95,"completed":[{"stage":"tên bước","questionMessage":3,"questionText":"@m3.s1","answerMessage":4,"answerQuote":"@m4.s1","feedbackMessage":5}]}. Các số và mã chỉ minh họa. Các trường Message luôn là số nguyên, chỉ questionText và answerQuote dùng mã đoạn nguồn. Mỗi bước tối đa một mục, theo thứ tự; không liệt kê nhiều phương án cho cùng bước. Thiếu bằng chứng thì bỏ bước. Không bịa trích dẫn.',
+      `Chỉ trả JSON {"confidence":0.95,"completed":{"${rule.stages[0]}":[3,4,5]}}. Mỗi tên bước chỉ có một bộ ba SỐ TIN NHẮN: chatbot giao việc, học viên thực hành, chatbot góp ý. Ba số trong ví dụ chỉ để minh họa; chọn đúng chỉ số từ hội thoại. Không chép, viết lại hoặc thêm trường trích dẫn. Bỏ hẳn bước thiếu một trong ba tin nhắn.`,
       transcript
     ].join('\n\n') })
   };
   const response = await fetchSpeakingEvidence(endpoint, options, {
-    messages, validate: analysis => validatePersonAnalysis(section, messages, analysis),
+    messages, anchored: false,
+    validate: analysis => validatePersonAnalysis(section, messages, resolvePersonEvidence(rule, messages, analysis)),
   });
   if (!response.ok) throw new Error(`AI_HTTP_${response.status}`);
   const body = await response.json();
   const raw = body?.candidates?.[0]?.content?.parts?.map(p => p?.text || '').join('') || body?.text;
   if (!raw) throw new Error('AI_EMPTY');
-  return JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+  const analysis = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+  return resolvePersonEvidence(rule, messages, analysis);
+}
+
+// AI chỉ chọn các tin nguồn. Máy chủ lấy nguyên văn rồi kiểm vai trò, thứ tự và ngưỡng như trước.
+function resolvePersonEvidence(rule, messages, analysis) {
+  const positions = analysis?.completed;
+  if (!positions || typeof positions !== 'object' || Array.isArray(positions)
+    || Object.keys(positions).some(stage => !rule.stages.includes(stage))) throw new Error('PERSON_MESSAGE_POSITIONS_INVALID');
+  const completed = rule.stages.filter(stage => Object.hasOwn(positions, stage)).map(stage => {
+    const ids = positions[stage];
+    if (!Array.isArray(ids) || ids.length !== 3 || !ids.every(Number.isInteger)) throw new Error('PERSON_MESSAGE_POSITIONS_INVALID');
+    const [questionMessage, answerMessage, feedbackMessage] = ids;
+    return { stage, questionMessage, answerMessage, feedbackMessage,
+      questionText: messages[questionMessage - 1]?.text, answerQuote: messages[answerMessage - 1]?.text };
+  });
+  return { confidence: analysis.confidence, completed };
 }
 
 function validateEvidence(messages, proposed, stages) {
