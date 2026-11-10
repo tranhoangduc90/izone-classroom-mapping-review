@@ -67,3 +67,32 @@ test('Lesson14: tiến độ 1/5, nhãn lượt và bổ trợ ngắn trước r
   assert.match(r.text,/Đã xác nhận 1\/5 phần/);assert.match(r.text,/Tả vật – Chức năng: đã xác nhận 1 lượt/);
   assert.match(r.text,/Tả vật – What if: chưa xác nhận/);assert.match(r.text,/Bổ trợ 2: chưa xác nhận/);assert.equal(r.receiptId,null);
 });
+
+test('object_function: resolves source references, repairs a mismatched reference and still requires the final challenge', async t => {
+  for (const omit of [[], ['combined', 'independent']]) {
+    const f=fixture('object_function',omit), prompts=[];
+    const evidence=f.rounds[0].evidence.map(item=>({
+      ...item, questionText:'@m'+item.questionMessage+'.s1', answerQuote:'@m'+item.answerMessage+'.s1'
+    }));
+    const provider=t.mock.method(globalThis,'fetch',async (_url,options)=>{
+      prompts.push(JSON.parse(options.body).prompt);
+      const candidate=prompts.length===1
+        ? [{...evidence[0],questionText:'@m2.s1'},...evidence.slice(1)]
+        : evidence;
+      return Response.json({text:JSON.stringify({confidence:0.95,rounds:[{evidence:candidate}]})});
+    });
+    try {
+      const r=await checkSubmission({section:'object_function',url,minimum:1},{
+        readShare:async()=>({messages:f.messages,source:'fixture'}),
+        analyzeCompletion:async()=>({completed:false,confidence:1})
+      });
+      assert.equal(r.kind,omit.length?'blocked':'pass');
+      assert.equal(r.count,omit.length?0:1);
+      assert.equal(prompts.length,2);
+      assert.match(prompts[0],/@m1[.]s1/);
+      assert.match(prompts[0],/\x22stage\x22:\x22function_choice\x22,\x22questionMessage\x22:3/);
+      assert.match(prompts[0],/Mỗi stage tối đa một lần trong một lượt/);
+      assert.match(prompts[1],/AI_EVIDENCE_MESSAGE_MISMATCH/);
+    } finally {provider.mock.restore();}
+  }
+});
