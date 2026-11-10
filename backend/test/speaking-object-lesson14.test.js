@@ -90,6 +90,8 @@ test('object_function: resolves source references, repairs a mismatched referenc
       assert.equal(r.count,omit.length?0:1);
       assert.equal(prompts.length,2);
       assert.match(prompts[0],/@m1[.]s1/);
+      assert.match(prompts[0],/\x22stage\x22:\x22function_choice\x22,\x22questionMessage\x22:3/);
+      assert.match(prompts[0],/Mỗi stage tối đa một lần trong một lượt/);
       assert.match(prompts[1],/AI_EVIDENCE_MESSAGE_MISMATCH/);
     } finally {provider.mock.restore();}
   }

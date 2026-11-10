@@ -33,7 +33,9 @@ async function analyzeObject(section, messages) {
       rule.title, rule.criteria,
       `Các stage theo thứ tự: ${rule.stages.join(', ')}. Các bước có hướng dẫn trong một lượt phải cùng món đồ; stage independent theo đề mới của thử thách cuối. Không đếm bản sửa của cùng lượt, ví dụ chatbot hay lời hứa sẽ làm thành lượt mới. Lượt sau phải là lần thực hành mới sau phản hồi lượt trước.`,
       'Mỗi stage cần questionMessage (chatbot giao việc), answerMessage (học viên thực hành), feedbackMessage (chatbot góp ý sau đó). Lượt tự luyện có thể dùng cùng bộ tin cho nhiều stage khi câu trả lời thực sự chứa các ý. Trích nguyên văn questionText và answerQuote. Chỉ số tin từ 1.',
-      'Chỉ trả JSON {"confidence":0.9,"rounds":[{"evidence":[{"stage":"identity","questionMessage":3,"questionText":"yêu cầu nguyên văn","answerMessage":4,"answerQuote":"câu thực hành nguyên văn","feedbackMessage":5}]}]}. Bỏ stage thiếu, không bịa dẫn chứng hoặc kết luận bằng số lượt tự khai.',
+      section === 'object_function'
+        ? 'Chỉ trả JSON {"confidence":0.9,"rounds":[{"evidence":[{"stage":"function_choice","questionMessage":3,"questionText":"@m3.s1","answerMessage":4,"answerQuote":"@m4.s1","feedbackMessage":5}]}]}. Các số và mã trong ví dụ chỉ minh họa. Chỉ questionText và answerQuote dùng mã đoạn; ba trường Message luôn là số nguyên. Mỗi stage tối đa một lần trong một lượt, chọn bộ tin đúng nhất. Đừng tạo lượt mới chỉ để liệt kê nhiều phương án cho cùng stage. Thiếu bước nào thì bỏ bước đó, không bịa dẫn chứng.'
+        : 'Chỉ trả JSON {"confidence":0.9,"rounds":[{"evidence":[{"stage":"identity","questionMessage":3,"questionText":"yêu cầu nguyên văn","answerMessage":4,"answerQuote":"câu thực hành nguyên văn","feedbackMessage":5}]}]}. Bỏ stage thiếu, không bịa dẫn chứng hoặc kết luận bằng số lượt tự khai.',
       transcript
     ].join('\n\n'), anh_minh_hoa: '' }), signal: AbortSignal.timeout(45_000)
   };
