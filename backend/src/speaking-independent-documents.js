@@ -219,10 +219,12 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway,sel
       await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`member:${b.class_id}:${b.student_ref}`]);
       const units=(await db.query(`SELECT u.*,p.identity_ref,p.kind AS profile_kind,p.course_id AS profile_course,p.class_id,p.student_ref
         FROM speaking_independent.work_unit u JOIN speaking_independent.profile p ON p.id=u.profile_id
-        WHERE u.assignment_code=$1 AND ((p.class_id=$2 AND p.student_ref=$3) OR u.document_id=$4) FOR UPDATE OF u,p`,
+        WHERE u.assignment_code=$1 AND ((p.class_id=$2 AND p.student_ref=$3 AND u.revoked_at IS NULL)
+          OR u.document_id=$4) FOR UPDATE OF u,p`,
       [b.assignment_code,b.class_id,b.student_ref,input.documentId])).rows;
       const unique=[...new Map(units.map(u=>[u.id,u])).values()];
-      if(unique.length>1||unique.some(u=>u.document_id&&u.document_id!==input.documentId)) {
+      // A detached, revoked unit is history. A revoked unit still holding this Doc must not be reopened.
+      if(unique.length>1||unique.some(u=>u.revoked_at||(u.document_id&&u.document_id!==input.documentId))) {
         await db.query("UPDATE speaking_independent.source_binding SET status='review' WHERE document_id=$1",[input.documentId]);
         return {documentId:input.documentId,verified:true,status:'review',reason:'EXISTING_PROGRESS_CONFLICT'};
       }
