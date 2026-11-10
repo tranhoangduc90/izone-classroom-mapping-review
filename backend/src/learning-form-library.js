@@ -21,10 +21,16 @@ export function createLearningFormLibrary({pool,drafts}){
   if(!row)throw fail('LIBRARY_ENTRY_NOT_FOUND','Không tìm thấy phiếu trong kho bạn được mở.',404);
   return row;
  }
+ function checkedSnapshot(row){
+  validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
+  // Kho giữ nguyên bản chụp; parser chỉ kiểm hợp lệ, hash phải đối chiếu dữ liệu thực lưu.
+  if(sha256(stableStringify({definition:row.public_definition,gradingKey:row.private_definition}))!==row.content_hash)
+    throw fail('LIBRARY_CONTENT_MISMATCH','Nội dung bản chụp trong kho chưa khớp.',500);
+  return {definition:row.public_definition,gradingKey:row.private_definition};
+ }
  return {
   async previewInfo({id,reviewer}){
-   const row=await get(id,reviewer),checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
-   if(checked.contentHash!==row.content_hash)throw fail('LIBRARY_CONTENT_MISMATCH','Nội dung bản chụp trong kho chưa khớp.',500);
+   const row=await get(id,reviewer);checkedSnapshot(row);
    return {id:row.id,revision:Number(row.source_revision),contentHash:row.content_hash};
   },
   async demoSource({grant}){
@@ -32,8 +38,7 @@ export function createLearningFormLibrary({pool,drafts}){
    if(active.rowCount!==1)throw fail('LIBRARY_PREVIEW_DENIED','Quyền xem kho đã thay đổi.',403);
    const row=await get(grant.entryId,{email:active.rows[0].email});
    if(row.content_hash!==grant.contentHash||Number(row.source_revision)!==grant.revision)throw fail('LIBRARY_PREVIEW_STALE','Bản nguồn đã đổi; mở lại bản xem trước.');
-   const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
-   if(checked.contentHash!==row.content_hash)throw fail('LIBRARY_CONTENT_MISMATCH','Nội dung bản chụp trong kho chưa khớp.',500);
+   const checked=checkedSnapshot(row);
    return {sourceLibraryId:row.id,sourceRevision:Number(row.source_revision),contentHash:row.content_hash,
     sourceAssignmentId:null,className:'Lớp mẫu',courseCode:row.course_code||null,sessionNumber:1,title:checked.definition.title,
     definitionHash:sha256(stableStringify(checked.definition)),definition:checked.definition,gradingKey:checked.gradingKey,

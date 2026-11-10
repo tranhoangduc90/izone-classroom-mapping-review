@@ -18,6 +18,20 @@ const publicationDto=row=>({id:row.id,draftId:row.source_draft_id||row.bound_dra
   assignmentId:row.source_assignment_id||null,libraryEntryId:row.source_library_id||null,revision:Number(row.source_revision),
   contentHash:row.content_hash,formVersionId:row.form_version_id});
 const hasScore=definition=>definition.blocks.some(block=>block.items.some(item=>item.maxScore>0));
+function legacyNormalizedDraftMatches(row,snapshotHash){
+  // Bản cũ đã trim khi xuất bản nhưng giữ hash nháp. Chỉ nhận lại khi có đủ bằng chứng
+  // đúng revision đã duyệt và snapshot đúng bằng kết quả chuẩn hóa; không sửa dữ liệu bất biến.
+  if(!row.source_draft_id||row.source_content_hash||row.draft_status!=='approved'
+    ||Number(row.source_revision)!==Number(row.draft_revision)
+    ||Number(row.draft_approved_revision)!==Number(row.draft_revision)
+    ||row.draft_approval_hash!==row.draft_hash||row.draft_hash!==row.content_hash
+    ||!row.approved_by_email||!row.draft_definition||!row.draft_key)return false;
+  if(sha256(stableStringify({definition:row.draft_definition,gradingKey:row.draft_key}))!==row.draft_hash)return false;
+  try{
+    return validateAuthoringPayload({definition:row.draft_definition,gradingKey:row.draft_key,
+      requireAnswers:true}).contentHash===snapshotHash;
+  }catch{return false;}
+}
 function validatePublishedSource({definition,gradingKey}){
   // Nguồn đã phát được kiểm bằng hợp đồng reader/chấm hiện hành, không áp danh mục tạo câu mới.
   // Giữ nguyên payload/hash lịch sử; không thêm default hoặc chuyển dạng khi giao lại.
@@ -89,18 +103,21 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
       (draft.id IS NOT NULL AND draft.erp_course_class_id IS NULL) AS shared_course_draft,
       COALESCE(draft.approved_by_email,version.approved_by_email) AS approved_by_email,
       COALESCE(draft.owner_email,version.created_by_email) AS draft_owner_email,
-      draft.content_hash AS draft_hash,version.public_definition AS published_definition,
+      draft.content_hash AS draft_hash,draft.public_definition AS draft_definition,draft.private_definition AS draft_key,
+      draft.revision AS draft_revision,draft.status AS draft_status,draft.approved_revision AS draft_approved_revision,
+      draft.approved_hash AS draft_approval_hash,version.public_definition AS published_definition,
       version.definition_hash,grading.private_definition AS published_key,grading.content_hash AS published_key_hash
       FROM learning.form_publication publication LEFT JOIN learning.form_draft draft ON draft.id=publication.source_draft_id
       JOIN learning.form_version version ON version.id=publication.form_version_id
       JOIN learning.form_grading_key grading ON grading.form_version_id=version.id WHERE publication.id=$1::uuid
       AND ${accessSql('$2','$3')}`,[id,reviewer.email,reviewer.canAccessAllClasses===true])).rows[0];
     if(!row)throw fail('PUBLICATION_NOT_FOUND','Không tìm thấy bản xuất bản trong kho bạn được dùng.',404);
+    const snapshotHash=sha256(stableStringify({definition:row.public_definition,gradingKey:row.private_definition}));
     if(sha256(stableStringify(row.published_definition))!==row.definition_hash
       ||row.definition_hash!==sha256(stableStringify(row.public_definition))
       ||sha256(stableStringify(row.published_key))!==row.published_key_hash
       ||row.published_key_hash!==sha256(stableStringify(row.private_definition))
-      ||row.content_hash!==sha256(stableStringify({definition:row.public_definition,gradingKey:row.private_definition}))
+      ||(row.content_hash!==snapshotHash&&!legacyNormalizedDraftMatches(row,snapshotHash))
       ||row.source_draft_id&&row.draft_hash!==row.content_hash)
       throw fail('PUBLICATION_CONTENT_MISMATCH','Nội dung hoặc đáp án của phiên bản xuất bản chưa khớp; đã dừng giao.',500);
     if((row.source_draft_id||hasScore(row.public_definition))&&(!row.approved_by_email
@@ -305,8 +322,11 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           throw fail('DRAFT_APPROVAL_REQUIRED','Cần duyệt đúng phiên bản trước khi xuất bản vào kho.');
         if(!await authority(database,draft.approved_by_email,draft.public_definition,draft.owner_email,shared))
           throw fail('DRAFT_APPROVAL_REVOKED','Quyền duyệt đã thay đổi; cần duyệt lại.',403);
-        const checked=validateAuthoringPayload({definition:draft.public_definition,gradingKey:draft.private_definition,requireAnswers:true});
-        const definition=checked.definition,key=checked.gradingKey;
+        validateAuthoringPayload({definition:draft.public_definition,gradingKey:draft.private_definition,requireAnswers:true});
+        // Kiểm hợp lệ không được âm thầm đổi bản đã duyệt. Snapshot và hash cùng dùng đúng nguồn.
+        const definition=structuredClone(draft.public_definition),key=structuredClone(draft.private_definition);
+        if(sha256(stableStringify({definition,gradingKey:key}))!==draft.content_hash)
+          throw fail('PUBLICATION_CONTENT_MISMATCH','Nội dung nháp chưa khớp bản đã duyệt; đã dừng xuất bản.',500);
         const template=(await database.query(`INSERT INTO learning.form_template(title,kind,created_by_email) VALUES($1,$2,$3) RETURNING id`,
           [definition.title,definition.kind,draft.owner_email])).rows[0];
         await database.query(`INSERT INTO learning.form_version(id,template_id,version,public_definition,definition_hash,status,
