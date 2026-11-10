@@ -949,6 +949,19 @@ test('Chèn điểm giữa chỉ đạt khi ba giai đoạn có dẫn chứng th
   }, { readShare: async () => ({ messages }), analyzeStages: async () => ({ confidence: .9, stages }) });
   assert.equal(result.kind, 'pass');
   assert.equal(result.count, 3);
+  const partial = await checkSubmission({
+    section: 'insert_middle', url: share('a'), minimum: 3
+  }, { readShare: async () => ({ messages }),
+    analyzeStages: async () => ({ confidence: .9, stages: stages.slice(0, 2) }),
+    analyzeCompletion: async () => null });
+  assert.equal(partial.kind, 'blocked');
+  assert.equal(partial.count, 2);
+  const invalid = await checkSubmission({
+    section: 'insert_middle', url: share('a'), minimum: 3
+  }, { readShare: async () => ({ messages }),
+    analyzeStages: async () => ({ confidence: .9, stages: [stages[0], stages[2]] }),
+    analyzeCompletion: async () => null });
+  assert.equal(invalid.kind, 'error');
 });
 
 test('Lesson 4 cần hai bài bổ trợ khác nhau; sau biên nhận có thể luyện thêm và cập nhật Bác sĩ AI', async () => {

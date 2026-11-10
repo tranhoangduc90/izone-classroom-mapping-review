@@ -28,12 +28,14 @@ export function findReadingCta(document,code=CODE){
 
 // Nhận một sự kiện Classroom đã chuẩn hóa; đối chiếu chủ Docs trước đăng ký, giữ link ổn định khi chạy lại.
 // Hàng Docs hiện có chịu trách nhiệm ghi/đọc lại; timeout trả lỗi để thử lại an toàn, không báo đã gắn khi mới xếp hàng.
-export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publishPending,verifyClassroomCopy,pageBase,entryKey,contentVersion,code=CODE,waitMs=12000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}){
+export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publishPending,verifyClassroomCopy,pageBase,entryKey,contentVersion,code=CODE,legacyCtaSources=new Set((process.env.READING_LEGACY_CTA_SOURCES||'').split(',').filter(Boolean)),waitMs=12000,sleep=ms=>new Promise(r=>setTimeout(r,ms))}){
  return async event=>{
   const document=await docs.read(event.doc_id);
   if(document.documentId!==event.doc_id)fail('DOC_IDENTITY_MISMATCH','Nguồn Docs trả sai tài liệu.');
   // Mã hiển thị trong Docs quyết định bài; hyperlink cũ không được dùng để chọn buổi.
-  const authoredCodes=documentParagraphs(document).filter(p=>authoredLesson(p.text)||p.text===ROBOTS_CODE).map(p=>p.text);
+  const legacyScope=legacyCtaSources.has(event.classroom_course_id+':'+event.coursework_id);
+  const authoredCodes=documentParagraphs(document)
+   .filter(p=>authoredLesson(p.text)||p.text===ROBOTS_CODE||(legacyScope&&p.text===CODE)).map(p=>p.text);
   if(authoredCodes.length>1)fail('CTA_SCOPE_AMBIGUOUS','Có nhiều mã Reading mới trong tài liệu.');
   if(!authoredCodes.length)return{documentId:event.doc_id,status:'not_applicable',code};
   const selectedCode=authoredCodes[0],shared=true;
@@ -48,6 +50,7 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publi
    await verifyClassroomCopy(event);
    return {documentId:event.doc_id,status:'eligible',code:selectedCode};
   }
+  if(selectedCode===CODE) await verifyClassroomCopy(event);
   let owner;
   try { owner=await resolveOwner({courseId:event.classroom_course_id,googleUserId:event.student_id}); }
   catch(error){
