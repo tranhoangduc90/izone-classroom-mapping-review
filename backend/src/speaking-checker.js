@@ -7,6 +7,7 @@ import { checkStoryOutcomeSubmission } from './speaking-story-outcome-checker.js
 import { checkPersonSubmission } from './speaking-person-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
+import { MAX_SPEAKING_CONVERSATION_CHARS } from './speaking-conversation-snapshot.js';
 
 const GEMINI_ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
 const sectionRules = {
@@ -29,10 +30,13 @@ export async function readConversation(url) {
 // Gửi lời thoại đã đọc tới AI để đếm chu trình luyện, không cho chỉ dẫn trong chat điều khiển bộ kiểm.
 export async function analyzeConversation(section, messages) {
   const rule = sectionRules[section];
+  // Dùng cùng giới hạn với bản chụp, giữ nguyên nội dung và số thứ tự tin.
+  if (messages.reduce((length, message) => length + message.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) {
+    throw new Error('SHARE_TOO_LONG');
+  }
   const transcript = messages.map((message, index) =>
     `[${index + 1}] ${message.role === 'user' ? 'HỌC VIÊN' : 'CHATGPT'}: ${message.text}`,
   ).join('\n');
-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
   const criteria = rule.mode === 'short'
     ? 'Đếm mỗi CÂU HỎI IELTS RIÊNG BIỆT mà ChatGPT đã đưa ra và học viên có ít nhất một nỗ lực phân tích/paraphrase cho chính câu đó. Một câu có thể có nhiều bước và nhiều lượt tin nhắn nhưng chỉ tính một. Không đòi học viên phải viết xong một câu trả lời hoàn chỉnh. Không đếm lời chào, prompt ban đầu, yêu cầu "next question" hay câu hỏi chưa được học viên thử.'
     : 'Đếm một câu Speaking hoàn chỉnh chỉ khi có câu hỏi của ChatGPT, câu trả lời đầu của học viên, góp ý/chỉnh sửa của ChatGPT, rồi học viên nói/viết lại câu trả lời đầy đủ sau góp ý. Không đếm lời hứa sẽ nói lại hoặc câu đáp cụt.';
@@ -197,8 +201,9 @@ export async function checkSubmission(input, dependencies = {}) {
   let analysis;
   try {
     analysis = await analyzer(section, messages);
-  } catch {
-    return { kind: 'error', title: 'Chưa phân tích được hội thoại', message: 'Bước kiểm nội dung đang gặp lỗi. Bài chưa được nhận; hãy thử lại sau.' };
+  } catch (error) {
+    return { kind: 'error', ...(error?.message === 'SHARE_TOO_LONG' ? { errorCode: 'SHARE_TOO_LONG' } : {}),
+      title: 'Chưa phân tích được hội thoại', message: 'Bước kiểm nội dung đang gặp lỗi. Bài chưa được nhận; hãy thử lại sau.' };
   }
   if (!Array.isArray(analysis?.completed) || !Number.isFinite(analysis?.confidence) || analysis.confidence < 0.65) {
     return { kind: 'error', title: 'Chưa xác định chắc chắn', message: 'Hệ thống chưa đọc đủ chắc các bước luyện. Bài chưa được nhận; hãy thử lại hoặc báo giảng viên.' };
