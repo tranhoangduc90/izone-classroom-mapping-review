@@ -4,10 +4,10 @@ import {planDocWrite,createDocsWorker,CTA,STATUS_HEADING} from '../src/docs.js';
 import {fixture} from './helpers.js';
 import {CODE,uuid} from '../src/domain.js';
 
-const paragraph=(start,value,link='')=>({startIndex:start,endIndex:start+value.length+1,paragraph:{elements:[{startIndex:start,endIndex:start+value.length,textRun:{content:value,textStyle:{link:link?{url:link}:undefined}}},{startIndex:start+value.length,endIndex:start+value.length+1,textRun:{content:'\n'}}]}});
-const cell=(start,value,link)=>({content:[paragraph(start,value,link)]});
-function document(binding,value='',link=''){
- return{documentId:binding.document_id,revisionId:'revision1',tabs:[{tabProperties:{tabId:'parent'},childTabs:[{tabProperties:{tabId:binding.tab_id},documentTab:{body:{content:[paragraph(1,CODE),paragraph(50,CTA),{table:{tableRows:[{tableCells:[cell(100,STATUS_HEADING)]},{tableCells:[cell(200,value,link)]}]}}]}}}]}]};
+const paragraph=(start,value,link='',bold=false)=>({startIndex:start,endIndex:start+value.length+1,paragraph:{elements:[{startIndex:start,endIndex:start+value.length,textRun:{content:value,textStyle:{link:link?{url:link}:undefined,bold}}},{startIndex:start+value.length,endIndex:start+value.length+1,textRun:{content:'\n'}}]}});
+const cell=(start,value,link,bold)=>({content:[paragraph(start,value,link,bold)]});
+function document(binding,value='',link='',bold=false){
+ return{documentId:binding.document_id,revisionId:'revision1',tabs:[{tabProperties:{tabId:'parent'},childTabs:[{tabProperties:{tabId:binding.tab_id},documentTab:{body:{content:[paragraph(1,CODE),paragraph(50,CTA),{table:{tableRows:[{tableCells:[cell(100,STATUS_HEADING)]},{tableCells:[cell(200,value,link,bold)]}]}}]}}}]}]};
 }
 test('Docs: tìm child tab, đúng ô trạng thái, khóa revision, thay own text và bảo toàn manual text',()=>{
  const b={document_id:'fixture',tab_id:'child',last_doc_text:''},job={kind:'status',payload:{text:'Đã bắt đầu làm bài lần đầu tiên.',link:''}};
@@ -15,7 +15,7 @@ test('Docs: tìm child tab, đúng ô trạng thái, khóa revision, thay own te
  const second={kind:'status',payload:{text:'Đã hoàn thành. Giảng viên nhấn vào đây để xem kết quả.',link:'https://page.test/teacher.html#submission=fixture'}};
  const replace=planDocWrite(document(b,job.payload.text),{...b,last_doc_text:job.payload.text},second);assert.equal(replace.requests[0].deleteContentRange.range.endIndex,200+job.payload.text.length);
  assert.equal(replace.requests.at(-1).updateTextStyle.textStyle.link.url,second.payload.link);
- assert.equal(planDocWrite(document(b,second.payload.text,second.payload.link),b,second).verified,true);
+ assert.equal(planDocWrite(document(b,second.payload.text.replace(' Giảng viên','\nGiảng viên'),second.payload.link,true),b,second).verified,true);
  assert.throws(()=>planDocWrite(document(b,'Nhận xét riêng của giáo viên'),b,job),e=>e.code==='DOC_MANUAL_CONFLICT');
  assert.throws(()=>planDocWrite({...initial,documentId:'other'},b,job),e=>e.code==='DOC_IDENTITY_MISMATCH');
  assert.throws(()=>planDocWrite(initial,{...b,tab_id:'wrong'},job),e=>e.code==='DOC_TAB_NOT_FOUND');
@@ -37,10 +37,11 @@ test('Docs link chung: giữ chữ nhập tay, thêm dòng tự động và retr
  const manual='Em đã nộp bài ạ\nhttps://example.test/ket-qua-cu';
  const message='Đã hoàn thành ngay từ lần đầu. Giảng viên nhấn vào đây để xem kết quả.';
  const job={kind:'status',payload:{text:message,link:'https://page.test/teacher.html#submission=done'}};
+ const formatted=message.replace(' Giảng viên','\nGiảng viên');
  const plan=planDocWrite(document(b,manual),b,job);
  assert.equal(plan.requests.some(r=>r.deleteContentRange),false);
- assert.equal(plan.requests[0].insertText.text,'\nReading thực chiến (tự động): '+message);
- const ready=document(b,manual+'\nReading thực chiến (tự động): '+message,job.payload.link);
+ assert.equal(plan.requests[0].insertText.text,'\nReading thực chiến (tự động): '+formatted);
+ const ready=document(b,manual+'\nReading thực chiến (tự động): '+formatted,job.payload.link,true);
  assert.equal(planDocWrite(ready,b,job).verified,true);
  assert.deepEqual(planDocWrite(ready,b,job).requests,[]);
  const next={kind:'status',payload:{text:'Đã bắt đầu làm bài lần 2.',link:''}};
@@ -58,7 +59,7 @@ test('Docs link chung qua queue: mất phản hồi sau ghi vẫn readback, khô
  const target={classId:'1124',studentRef:b.student_ref,code:CODE,documentId:'personal_doc',tabId:'child'};
  const effective={...b,document_id:target.documentId,tab_id:target.tabId};
  let value='Chữ nhập tay giữ nguyên',link='',writes=0;
- const docs={read:async()=>document(effective,value,link),write:async(id,plan)=>{
+ const docs={read:async()=>document(effective,value,link,writes>0),write:async(id,plan)=>{
   assert.equal(id,target.documentId);writes++;
   for(const req of plan.requests){
    if(req.insertText){const at=req.insertText.location.index-200;value=value.slice(0,at)+req.insertText.text+value.slice(at);}
@@ -96,7 +97,7 @@ test('Chưa giao Homework vẫn chờ sau tám lượt; khi có đích thì ghi 
  let delivered=false,reads=0;
  const worker=createDocsWorker({pool:f.pool,resolveSharedHomework:async()=>{
   if(!delivered)throw Object.assign(new Error('Chưa giao'),{code:'HOMEWORK_NOT_FOUND'});return target;
- },docs:{read:async()=>{reads++;return document({...b,document_id:target.documentId,tab_id:target.tabId},'Reading thực chiến (tự động): '+job.payload.text);},write:async()=>assert.fail('Đích đã khớp không ghi lại')}});
+ },docs:{read:async()=>{reads++;return document({...b,document_id:target.documentId,tab_id:target.tabId},'Reading thực chiến (tự động): '+job.payload.text.replace(' Giảng viên','\nGiảng viên'),job.payload.link,true);},write:async()=>assert.fail('Đích đã khớp không ghi lại')}});
  await f.pool.query('UPDATE reading_practice.doc_job SET attempts=8');await worker.once();
  const pending=(await f.pool.query('SELECT status,error_code,attempts FROM reading_practice.doc_job')).rows[0];
  assert.equal(pending.status,'pending');assert.equal(pending.error_code,'HOMEWORK_NOT_FOUND');assert.equal(pending.attempts,9);assert.equal(reads,0);
@@ -116,7 +117,7 @@ test('read-only Google Doc retries the saved status and verifies its link after 
  await f.pool.query('UPDATE '+table+' SET payload=$2 WHERE id=$1',[job.id,payload]);
  let editable=false,text='',link='',writes=0;
  const worker=createDocsWorker({pool:f.pool,docs:{read:async()=>{
-  const doc=document(binding,text,link);
+  const doc=document(binding,text,link,writes>0);
   if(!editable)delete doc.revisionId;
   return doc;
  },write:async(_id,plan)=>{
@@ -129,5 +130,5 @@ test('read-only Google Doc retries the saved status and verifies its link after 
  assert.equal(await worker.once(),false);assert.equal(writes,0);
  editable=true;await f.pool.query('UPDATE '+table+' SET available_at=now()');await worker.once();
  assert.equal((await f.pool.query('SELECT status FROM '+table)).rows[0].status,'verified');
- assert.equal(writes,1);assert.equal(text,payload.text);assert.equal(link,payload.link);
+ assert.equal(writes,1);assert.equal(text.replaceAll('\n',' '),payload.text);assert.equal(link,payload.link);
 });

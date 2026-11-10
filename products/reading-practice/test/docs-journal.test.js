@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {setImmediate as tick} from 'node:timers/promises';
 import {fixture} from './helpers.js';
+import {docsTextBuffer} from '../../test-support/homework-docs.js';
 import {localPool} from '../tools/local-pool.mjs';
 import {createDocsWorker,CTA,STATUS_HEADING} from '../src/docs.js';
 import {CODE,uuid} from '../src/domain.js';
@@ -14,18 +15,15 @@ async function setup(t){
  return{...f,journal,records,get failures(){return failures;}};
 }
 function fakeDocs(b,{onWrite=async()=>{}}={}){
- let value='',link='',writes=0;
+ const status=docsTextBuffer(200);
+ let writes=0;
  const paragraph=(start,text,url='')=>({paragraph:{elements:[{startIndex:start,endIndex:start+text.length,textRun:{content:text,textStyle:url?{link:{url}}:{}}},{startIndex:start+text.length,endIndex:start+text.length+1,textRun:{content:'\n'}}]}});
- const docs={read:async id=>{assert.equal(id,b.document_id);return{documentId:id,revisionId:'fixture-'+writes,tabs:[{tabProperties:{tabId:b.tab_id},documentTab:{body:{content:[paragraph(1,CODE),paragraph(50,CTA),{table:{tableRows:[{tableCells:[{content:[paragraph(100,STATUS_HEADING)]}]},{tableCells:[{content:[paragraph(200,value,link)]}]}]}}]}}}]};},
+ const docs={read:async id=>{assert.equal(id,b.document_id);return{documentId:id,revisionId:'fixture-'+writes,tabs:[{tabProperties:{tabId:b.tab_id},documentTab:{body:{content:[paragraph(1,CODE),paragraph(50,CTA),{table:{tableRows:[{tableCells:[{content:[paragraph(100,STATUS_HEADING)]}]},{tableCells:[{content:[{paragraph:{elements:status.elements()}}]}]}]}}]}}}]};},
  write:async(id,plan)=>{assert.equal(id,b.document_id);assert.equal(plan.revisionId,'fixture-'+writes);writes++;
-  for(const request of plan.requests){
-   if(request.deleteContentRange){const r=request.deleteContentRange.range;value=value.slice(0,r.startIndex-200)+value.slice(r.endIndex-200);}
-   if(request.insertText){const at=request.insertText.location.index-200;value=value.slice(0,at)+request.insertText.text+value.slice(at);}
-   if(request.updateTextStyle?.fields.includes('link'))link=request.updateTextStyle.textStyle.link?.url||'';
-  }
+  for(const request of plan.requests)status.apply(request);
   await onWrite();
  }};
- return{docs,get writes(){return writes;},get value(){return value;}};
+ return{docs,get writes(){return writes;},get value(){return status.text;}};
 }
 async function statusSetup(t){
  const f=await setup(t),started=await f.begin();await f.pool.query(`DELETE FROM ${schema}.doc_job WHERE kind='cta'`);await tick();

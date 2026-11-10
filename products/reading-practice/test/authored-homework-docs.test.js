@@ -11,14 +11,15 @@ test('Homework Reading mới: giữ chữ/link tay, đúng mã/tab, khóa revisi
  const doc=value=>({documentId:'personal_doc',revisionId:'revision_fixture',tabs:[{tabProperties:{tabId:'child'},documentTab:{body:{content:[paragraph(1,'Homework fixture'),{table:{tableRows:[{tableCells:[{content:[paragraph(50,code)]}]},{tableCells:[{content:[paragraph(100,READING_STATUS_HEADING)]}]},{tableCells:[{content:[paragraph(200,value,'https://manual.test/own')]}]}]}}]}}}]});
  const b={code,document_id:'personal_doc',tab_id:'child',last_doc_text:''},manual='Em đã nộp bài ạ; giữ link riêng.';
  const job={kind:'status',payload:{text:'Đã hoàn thành. Giảng viên nhấn vào đây để xem kết quả.',link:'https://page.test/teacher.html#submission=fixture'}};
+ const formatted=job.payload.text.replace(' Giảng viên','\nGiảng viên');
  const plan=planDocWrite(doc(manual),b,job);assert.equal(plan.revisionId,'revision_fixture');
  assert.equal(plan.requests.some(r=>r.deleteContentRange),false);
- assert.equal(plan.requests[0].insertText.text,'\nReading thực chiến (tự động): '+job.payload.text);
+ assert.equal(plan.requests[0].insertText.text,'\nReading thực chiến (tự động): '+formatted);
  for(const req of plan.requests)if(req.updateTextStyle)assert.ok(req.updateTextStyle.range.startIndex>=200+manual.length);
  assert.throws(()=>planDocWrite(doc(manual),{...b,document_id:'wrong'},job),e=>e.code==='DOC_IDENTITY_MISMATCH');
  assert.throws(()=>planDocWrite(doc(manual),{...b,tab_id:'wrong'},job),e=>e.code==='DOC_TAB_NOT_FOUND');
- const ready=doc(manual+'\nReading thực chiến (tự động): '+job.payload.text);
- ready.tabs[0].documentTab.body.content[1].table.tableRows[2].tableCells[0].content[0].paragraph.elements[0].textRun.textStyle.link.url=job.payload.link;
+ const ready=doc(manual+'\nReading thực chiến (tự động): '+formatted);
+ ready.tabs[0].documentTab.body.content[1].table.tableRows[2].tableCells[0].content[0].paragraph.elements[0].textRun.textStyle={link:{url:job.payload.link},bold:true};
  assert.equal(planDocWrite(ready,b,job).verified,true);assert.deepEqual(planDocWrite(ready,b,job).requests,[]);
  const unrelated={table:{tableRows:[{tableCells:[{content:[paragraph(500,READING_STATUS_HEADING)]}]},{tableCells:[{content:[paragraph(600,'Listening: giữ nguyên')]}]}]}};
  const combined=doc(manual);combined.tabs[0].documentTab.body.content.push(unrelated);

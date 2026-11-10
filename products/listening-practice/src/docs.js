@@ -1,13 +1,14 @@
 import {readDocsBinding,createDocsObserver} from './docs-journal-observer.js';
 import {CODE,fail,uuid} from './domain.js';
 import {transaction} from './service.js';
+import {planDocsStatus} from './docs-status-format.js';
 import {authoredLesson} from './authored-content.js';
 
 export const STATUS_HEADING='TÌNH TRẠNG NỘP BÀI THỰC CHIẾN';
 export const CTA='NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP LISTENING';
 const LINK='nhấn vào đây';
 const AUTHORED_STATUS_PREFIX='Listening thực chiến (tự động): ';
-const runs=content=>(content||[]).flatMap(e=>e.paragraph?.elements||[]).filter(e=>e.textRun).map(e=>({start:e.startIndex,end:e.endIndex,text:e.textRun.content,link:e.textRun.textStyle?.link?.url||''}));
+const runs=content=>(content||[]).flatMap(e=>e.paragraph?.elements||[]).filter(e=>e.textRun).map(e=>({start:e.startIndex,end:e.endIndex,text:e.textRun.content,style:e.textRun.textStyle||{}}));
 const text=cell=>runs(cell?.content).map(r=>r.text).join('').replace(/\n$/,'');
 function tabs(list){return(list||[]).flatMap(t=>[t,...tabs(t.childTabs)]);}
 function walk(content,visitor){for(const e of content||[]){visitor(e);for(const row of e.table?.tableRows||[])for(const cell of row.tableCells||[])walk(cell.content,visitor);}}
@@ -29,35 +30,9 @@ function statusCell(tab){
 function linkAt(runs,start,end,url){
  let covered=start;
  for(const r of runs.filter(r=>r.end>start&&r.start<end).sort((a,b)=>a.start-b.start)){
-  if(r.start>covered||r.link!==url)return false;covered=Math.max(covered,Math.min(r.end,end));
+  if(r.start>covered||r.style.link?.url!==url)return false;covered=Math.max(covered,Math.min(r.end,end));
  }
  return covered>=end;
-}
-// Bài mới kế thừa cách ghi một dòng của Reading: không đụng chữ/link thủ công, retry không nhân đôi.
-function authoredStatusPlan(document,binding,job,tab){
- const cell=statusCell(tab),rs=runs(cell.content),existing=text(cell),tabId=binding.tab_id;
- const target=AUTHORED_STATUS_PREFIX+job.payload.text;
- const managed=existing.split('\n').filter(line=>line.startsWith(AUTHORED_STATUS_PREFIX));
- if(managed.length>1)fail('DOC_STATUS_AMBIGUOUS','Có nhiều dòng trạng thái Listening tự động.');
- function indexAt(offset){
-  let used=0;
-  for(const r of rs){if(offset<used+r.text.length)return r.start+offset-used;used+=r.text.length;}
-  fail('DOC_STATUS_INVALID','Không xác định được vị trí dòng trạng thái.');
- }
- const old=managed[0],offset=old?existing.indexOf(old):existing.length,start=indexAt(offset);
- const labelOffset=target.indexOf(LINK),linkStart=start+labelOffset,linkEnd=linkStart+LINK.length;
- if(old===target&&(!job.payload.link||linkAt(rs,linkStart,linkEnd,job.payload.link)))return{revisionId:document.revisionId,requests:[],verified:true};
- if(old&&old!==AUTHORED_STATUS_PREFIX+binding.last_doc_text&&old!==target)fail('DOC_MANUAL_CONFLICT','Dòng tự động đã được sửa tay; giữ nguyên để kiểm tra.');
- const requests=[];
- if(old)requests.push({deleteContentRange:{range:{startIndex:start,endIndex:start+old.length,tabId}}});
- const prefix=!old&&existing?'\n':'',textStart=start+prefix.length;
- requests.push({insertText:{location:{index:start,tabId},text:prefix+target}},
-  {updateTextStyle:{range:{startIndex:textStart,endIndex:textStart+target.length,tabId},textStyle:{bold:false,foregroundColor:{color:{rgbColor:{red:0.082,green:0.169,blue:0.306}}},fontSize:{magnitude:11,unit:'PT'}},fields:'link,bold,foregroundColor,fontSize'}});
- if(job.payload.link){
-  if(labelOffset<0)fail('DOC_LINK_LABEL_INVALID','Thiếu nhãn mở kết quả.');
-  requests.push({updateTextStyle:{range:{startIndex:textStart+labelOffset,endIndex:textStart+labelOffset+LINK.length,tabId},textStyle:{link:{url:job.payload.link},underline:true},fields:'link,underline'}});
- }
- return{revisionId:document.revisionId,requests,verified:false};
 }
 // Chỉ thay ô do Listening quản lý. Revision khóa việc ghi; ô người dùng sửa tay được giữ nguyên.
 export function planDocWrite(document,binding,job){
@@ -72,22 +47,12 @@ export function planDocWrite(document,binding,job){
   const good=linkAt(match.runs,match.start,match.end,job.payload.url);
   return{revisionId:document.revisionId,requests:good?[]:[{updateTextStyle:{range:{startIndex:match.start,endIndex:match.end,tabId},textStyle:{link:{url:job.payload.url},underline:false,foregroundColor:{color:{rgbColor:{red:1,green:1,blue:1}}}},fields:'link,underline,foregroundColor'}}],verified:good};
  }
- if(authoredLesson(binding.code))return authoredStatusPlan(document,binding,job,tab);
- const cell=statusCell(tab),rs=runs(cell.content),existing=text(cell),target=job.payload.text;
- const start=rs[0]?.start;if(!Number.isInteger(start))fail('DOC_STATUS_INVALID','Ô nộp bài không có đoạn văn hợp lệ.');
- const linkStart=start+target.indexOf(LINK),linkEnd=linkStart+LINK.length;
- const good=existing===target&&(!job.payload.link||linkAt(rs,linkStart,linkEnd,job.payload.link));
- if(good)return{revisionId:document.revisionId,requests:[],verified:true};
- if(existing!==binding.last_doc_text)fail('DOC_MANUAL_CONFLICT','Ô tình trạng đã được sửa tay; cần giảng viên kiểm tra.');
- const requests=[];
- if(existing)requests.push({deleteContentRange:{range:{startIndex:start,endIndex:start+existing.length,tabId}}});
- requests.push({insertText:{location:{index:start,tabId},text:target}},
-  {updateTextStyle:{range:{startIndex:start,endIndex:start+target.length,tabId},textStyle:{bold:false,foregroundColor:{color:{rgbColor:{red:0.082,green:0.169,blue:0.306}}},fontSize:{magnitude:11,unit:'PT'}},fields:'link,bold,foregroundColor,fontSize'}});
- if(job.payload.link){
-  if(!target.includes(LINK))fail('DOC_LINK_LABEL_INVALID','Thiếu nhãn mở kết quả.');
-  requests.push({updateTextStyle:{range:{startIndex:linkStart,endIndex:linkEnd,tabId},textStyle:{link:{url:job.payload.link},underline:true},fields:'link,underline'}});
- }
- return{revisionId:document.revisionId,requests,verified:false};
+ const prefix=authoredLesson(binding.code)?AUTHORED_STATUS_PREFIX:'';
+ const cell=statusCell(tab);
+ return planDocsStatus({
+  revisionId:document.revisionId,tabId,runs:runs(cell.content),existing:text(cell),
+  previous:binding.last_doc_text,text:job.payload.text,link:job.payload.link,prefix,fail,
+ });
 }
 function requireDocsRevision(plan){
  if(typeof plan.revisionId!=='string'||!plan.revisionId.trim())fail('DOC_WRITE_UNAVAILABLE','Google Docs chưa cho phép ghi bản này.');

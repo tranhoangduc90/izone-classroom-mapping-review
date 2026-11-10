@@ -26,7 +26,7 @@ async function setup(t){
  f.context.student=async(c,id)=>c==='1293'&&id===f.studentRef?{studentRef:id,name:'Học viên giả'}:undefined;
  const b=(await f.pool.query('SELECT * FROM reading_practice.binding')).rows[0];
  let value='Chữ nhập tay giữ nguyên\nReading thực chiến (tự động): '+old,link=b.last_doc_link,writes=0,loseAck=false;
- const paragraph=(index,text,url='')=>({paragraph:{elements:[{startIndex:index,endIndex:index+text.length,textRun:{content:text,textStyle:url?{link:{url}}:{}}},{startIndex:index+text.length,endIndex:index+text.length+1,textRun:{content:'\n'}}]}});
+ const paragraph=(index,text,url='')=>({paragraph:{elements:[{startIndex:index,endIndex:index+text.length,textRun:{content:text,textStyle:url?{link:{url},bold:writes>0}:{bold:writes>0}}},{startIndex:index+text.length,endIndex:index+text.length+1,textRun:{content:'\n'}}]}});
  const cell=(index,text,url='')=>({content:[paragraph(index,text,url)]});
  const docs={read:async id=>{assert.equal(id,target.documentId);return{documentId:id,revisionId:'fixture_rev',tabs:[{tabProperties:{tabId:'child'},documentTab:{body:{content:[paragraph(1,ROBOTS_CODE),{table:{tableRows:[{tableCells:[cell(100,STATUS_HEADING)]},{tableCells:[cell(200,value,link)]}]}}]}}}]};},
   write:async(id,plan)=>{assert.equal(id,target.documentId);writes++;
