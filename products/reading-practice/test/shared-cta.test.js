@@ -31,3 +31,18 @@ test('Bộ đăng ký Reading nhận Robots buổi 9 và chỉ thành công sau 
  const result=await registrar({doc_id:docId,classroom_course_id:'1',coursework_id:'2',submission_id:'3',student_id:'4',class_name:'IC1293'});
  assert.equal(result.status,'verified');assert.equal(seen.code,ROBOTS_CODE);assert.equal(seen.documentId,docId);assert.equal(seen.tabId,'t.0');
 });
+
+test('Legacy Reading CTA requires an explicitly enabled Classroom source',async()=>{
+ const docId='fixture_legacy_document_1234567890';
+ const paragraph=text=>({paragraph:{elements:[{textRun:{content:text+'\n'}}]}});
+ const document={documentId:docId,tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[paragraph(CTA),paragraph(CODE)]}}}]};
+ const event={doc_id:docId,classroom_course_id:'1',coursework_id:'2',class_name:'IC1234',check_only:true};
+ let checked=0;
+ const registrar=createCtaRegistrar({
+  docs:{read:async()=>document},service:{lessonCatalog:async()=>({classes:[{classCode:'IC1234'}]})},
+  verifyClassroomCopy:async()=>{checked++;},legacyCtaSources:new Set(['1:2'])
+ });
+ assert.equal((await registrar(event)).status,'eligible');
+ assert.equal((await registrar({...event,coursework_id:'3'})).status,'not_applicable');
+ assert.equal(checked,1);
+});

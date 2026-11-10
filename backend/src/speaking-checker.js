@@ -94,20 +94,23 @@ export async function analyzeInsertionStages(messages) {
   return JSON.parse(raw.trim().replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/, ''));
 }
 
-export function validInsertionStages(messages, analysis) {
-  if (!Array.isArray(analysis?.stages) || !Number.isFinite(analysis.confidence) || analysis.confidence < 0.65) return [];
+// Phân biệt chuỗi hợp lệ nhưng còn thiếu với dẫn chứng sai.
+function insertionStagePrefix(messages, analysis) {
+  if (!Array.isArray(analysis?.stages) || !Number.isFinite(analysis.confidence) || analysis.confidence < 0.65) return null;
   const expected = ['introduction', 'guided', 'free'];
-  const seen = new Set();
   let previous = 0;
-  for (const stage of analysis.stages) {
-    if (!expected.includes(stage?.name) || seen.has(stage.name)
+  for (const [index, stage] of analysis.stages.entries()) {
+    if (index >= expected.length || stage?.name !== expected[index]
       || !Number.isInteger(stage.evidenceMessage) || stage.evidenceMessage <= previous
-      || messages[stage.evidenceMessage - 1]?.role !== 'user') return [];
-    seen.add(stage.name);
+      || messages[stage.evidenceMessage - 1]?.role !== 'user') return null;
     previous = stage.evidenceMessage;
   }
-  return expected.every(name => seen.has(name)) && analysis.stages.map(stage => stage.name).join(',') === expected.join(',')
-    ? analysis.stages : [];
+  return analysis.stages;
+}
+
+export function validInsertionStages(messages, analysis) {
+  const stages = insertionStagePrefix(messages, analysis);
+  return stages?.length === 3 ? stages : [];
 }
 
 // Chỉ nhận dẫn chứng AI nếu thứ tự và vai trò từng lượt chat khớp bản đã đọc.
@@ -175,7 +178,8 @@ export async function checkSubmission(input, dependencies = {}) {
   if (mode === 'stages') {
     try {
       const analysis = await (dependencies.analyzeStages || analyzeInsertionStages)(messages);
-      const stages = validInsertionStages(messages, analysis);
+      const stages = insertionStagePrefix(messages, analysis);
+      if (!stages) throw new Error('STAGES_EVIDENCE_INVALID');
       return stages.length === 3
         ? { kind: 'pass', title: 'Đã kiểm tra hội thoại', message: 'Đã xác nhận đủ ba giai đoạn luyện Chèn điểm giữa.',
           count: 3, fingerprint, completedTurns: stages.map(stage => [stage.evidenceMessage]),
