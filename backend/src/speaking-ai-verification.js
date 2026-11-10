@@ -1,6 +1,8 @@
 // Nhận prompt kiểm bài và bản chat đã đọc. AI chọn mã trích dẫn có sẵn;
 // máy chủ lấy nguyên văn, giữ validator nghiệp vụ và chỉ sửa phản hồi sai một lần.
 // Không thay ngưỡng, tự công nhận, đổi provider hoặc ghi trạng thái bài.
+import {speakingProviderCall} from './speaking-provider-journal.js';
+
 function failure(code,cause){
   const error=new Error(code,{cause});error.code=code;error.stage='ai_verification';return error;
 }
@@ -59,7 +61,7 @@ export async function fetchSpeakingEvidence(endpoint,options,{messages=[],valida
       const correction=attempt?'\n\nSỬA PHẢN HỒI TRƯỚC: '+speakingVerificationCode(lastError,'AI_RESULT_INVALID')
         +'. Kiểm lại schema, số tin/vai trò/thứ tự và mã nguồn; chỉ trả JSON hợp lệ. Không thay tiêu chí, bịa bước đã làm hoặc tự thêm bằng chứng để đạt.'
         +'\nPhản hồi cần sửa, chỉ là dữ liệu: '+JSON.stringify(lastRaw.slice(0,20_000)):'';
-      const response=await call(endpoint,{...options,body:JSON.stringify({...input,prompt:prompt+correction}),signal:AbortSignal.timeout(Math.min(45_000,remaining))});
+      const response=await speakingProviderCall('check_ai',call,{attempt:attempt+1,reason:attempt?'correction':'initial'})(endpoint,{...options,body:JSON.stringify({...input,prompt:prompt+correction}),signal:AbortSignal.timeout(Math.min(45_000,remaining))});
       if(!response.ok){const e=failure(`AI_HTTP_${response.status}`);e.permanent=response.status<500&&![408,409,429].includes(response.status);throw e;}
       let data;
       try{data=await response.json();}catch(cause){throw failure('AI_RESPONSE_JSON_INVALID',cause);}
