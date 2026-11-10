@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture} from './helpers.js';
+import {docsTextBuffer} from '../../test-support/homework-docs.js';
 import {authoredLesson} from '../src/authored-content.js';
 import {createCtaRegistrar} from '../src/cta-registration.js';
 import {createDocsWorker,CTA,STATUS_HEADING} from '../src/docs.js';
@@ -15,15 +16,16 @@ function bundle(){
 }
 function document(id){
  const manual='Nhận xét tay giữ nguyên.';
- let link='https://old.test/listening',revision=0,value=manual,writes=0,statusLink='';
+ const status=docsTextBuffer(400,manual);
+ let link='https://old.test/listening',revision=0,writes=0;
  const paragraph=(start,text,url)=>({paragraph:{elements:[{startIndex:start,endIndex:start+text.length+1,textRun:{content:text+'\n',textStyle:url?{link:{url},bold:true}:{}}}]}});
- return{get link(){return link;},get writes(){return writes;},get value(){return value;},
-  docs:{read:async doc=>{assert.equal(doc,id);return{documentId:id,revisionId:'r'+revision,tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[paragraph(1,'Reading unchanged','https://reading.test/original'),paragraph(100,CTA,link),paragraph(200,code),{table:{tableRows:[{tableCells:[{content:[paragraph(300,STATUS_HEADING)]}]},{tableCells:[{content:[paragraph(400,value,statusLink)]}]}]}}]}}}]};},
+ return{get link(){return link;},get writes(){return writes;},get value(){return status.text;},
+  docs:{read:async doc=>{assert.equal(doc,id);return{documentId:id,revisionId:'r'+revision,tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[paragraph(1,'Reading unchanged','https://reading.test/original'),paragraph(100,CTA,link),paragraph(200,code),{table:{tableRows:[{tableCells:[{content:[paragraph(300,STATUS_HEADING)]}]},{tableCells:[{content:[{paragraph:{elements:status.elements()}}]}]}]}}]}}}]};},
    write:async(doc,plan)=>{assert.equal(doc,id);assert.equal(plan.revisionId,'r'+revision);for(const r of plan.requests){
     if(r.updateTextStyle?.range.startIndex===100)link=r.updateTextStyle.textStyle.link.url;
-    else if(r.insertText){const at=r.insertText.location.index-400;assert.ok(at>=manual.length);value=value.slice(0,at)+r.insertText.text+value.slice(at);}
-    else if(r.deleteContentRange){const range=r.deleteContentRange.range;assert.ok(range.startIndex>=400+manual.length);value=value.slice(0,range.startIndex-400)+value.slice(range.endIndex-400);}
-    else if(r.updateTextStyle?.range.startIndex>=400+manual.length){if(r.updateTextStyle.fields.includes('link'))statusLink=r.updateTextStyle.textStyle.link?.url||'';}
+    else if(r.insertText){const at=r.insertText.location.index-400;assert.ok(at>=manual.length);status.apply(r);}
+    else if(r.deleteContentRange){const range=r.deleteContentRange.range;assert.ok(range.startIndex>=400+manual.length);status.apply(r);}
+    else if(r.updateTextStyle?.range.startIndex>=400+manual.length){status.apply(r);}
     else throw Error('Unexpected write outside CTA/status');
    }revision++;writes++;}},
   withoutCta(){return{read:async()=>({documentId:id,revisionId:'r0',tabs:[]})};}
