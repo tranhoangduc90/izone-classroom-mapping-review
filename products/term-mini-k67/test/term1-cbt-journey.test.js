@@ -50,6 +50,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.ok(offer.ok,offer.text);
     assert.equal(offer.body.examMode,mode);
     assert.equal(offer.body.version,'term1-k67-cbt-journey-v1');
+    assert.equal(offer.body.readingDeadlineReviewVersion,1);
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-1'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
     const post=(route,body)=>api.post(slug+'/cbt-journey/'+route).set('x-term2-permit',offer.body.permit).send({...scope,...body});
@@ -86,6 +87,19 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
         const noReview=await post('seal',{...operation,operationId:randomUUID(),capturedAt:operation.eofAt+100});
         assert.equal(noReview.body.reasonCode,'AUTO_CAPTURE_BEFORE_DEADLINE');
       }else{
+        const reviewOnly={...operation,operationId:randomUUID(),capturedAt:operation.capturedAt+1};
+        const retained=await post('reading-review',reviewOnly);
+        assert.equal(retained.status,409);
+        assert.equal(retained.body.reasonCode,'READING_DRAFT_NOT_VERIFIED');
+        assert.ok(retained.body.held?.payloadHash);
+        assert.deepEqual((await post('status',{section,operationId:reviewOnly.operationId})).body,
+          {ok:true,persisted:false,receipt:null,held:retained.body.held});
+        const replay=await post('seal',reviewOnly);
+        assert.equal(replay.body.reasonCode,'READING_DRAFT_NOT_VERIFIED');
+        const {rows:[held]}=await f.db.query(`SELECT payload,review_only FROM assessment.term_k67_lr_submission_hold
+          WHERE session_id=$1 AND section=$2 AND operation_id=$3`,[scope.examSessionToken,section,reviewOnly.operationId]);
+        assert.equal(held.review_only,true);
+        assert.deepEqual(held.payload.answers,reviewOnly.answers);
         const wrongPrevious=await post('seal',{...operation,operationId:randomUUID(),previousOperationId:randomUUID()});
         assert.equal(wrongPrevious.body.reasonCode,'PREVIOUS_OPERATION_MISMATCH');
         assert.ok(wrongPrevious.body.held?.payloadHash);

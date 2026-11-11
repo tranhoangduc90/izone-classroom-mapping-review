@@ -127,7 +127,7 @@ function submissionHoldKey(body) {
 }
 
 async function readSubmissionHold(db, key) {
-  return (await db.query(`SELECT payload_hash,held_at,expires_at,payload IS NOT NULL AS has_payload FROM ${key.table}
+  return (await db.query(`SELECT payload_hash,held_at,expires_at,payload IS NOT NULL AS has_payload${key.lr?',review_only':''} FROM ${key.table}
     WHERE ${key.where}`,key.args)).rows[0];
 }
 
@@ -136,12 +136,13 @@ function heldMetadata(row, now) {
   return {payloadHash:row.payload_hash,heldAt:clock(row.held_at),expiresAt:clock(row.expires_at)};
 }
 
-async function retainSubmission(db, state, body, input, digest, key, {hours,limit}) {
+async function retainSubmission(db, state, body, input, digest, key, {hours,limit}, reviewOnly=false) {
   const receipt=state.journey.sections[body.section];
   if ((!key.lr||receipt?.operationId===body.operationId)&&checkReceipt(receipt,body.operationId,digest)) return undefined;
   const existing = await readSubmissionHold(db,key);
   if (existing) {
     if (existing.payload_hash !== digest) throw problem('OFFLINE_CONFLICT', 'Mã nộp đã có bản khác để đối soát.');
+    if(reviewOnly&&!existing.review_only)throw problem('OFFLINE_CONFLICT','Mã này đã được dùng để gửi bản khác.');
     const held = heldMetadata(existing,state.now);
     if (!held) throw problem('OFFLINE_HOLD_EXPIRED', 'Bản trên máy chủ đã hết hạn lưu. Hãy giữ bản trên thiết bị.');
     return held;
@@ -154,10 +155,10 @@ async function retainSubmission(db, state, body, input, digest, key, {hours,limi
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
   const row = (await db.query(`INSERT INTO ${key.table}
-    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section':''})
-    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8':''})
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section,review_only':''})
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8,$9':''})
     RETURNING payload_hash,held_at,expires_at,true AS has_payload`,
-  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section]:[]])).rows[0];
+  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section,reviewOnly]:[]])).rows[0];
   return heldMetadata(row,state.now);
 }
 
@@ -348,6 +349,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     ? {hours:config.termCbtLrHoldHours,limit:config.termCbtLrHoldLimit}:null;
   const lrHoldClasses=config[`${profile.writingHold}CbtLrHoldClasses`];
   const lrHoldAllowed=journey=>lrHoldOptions&&journey.lr_hold_cohort===true;
+  const readingReviewRequired=()=>problem('OFFLINE_REVIEW_REQUIRED',
+    'Chưa xác nhận được nháp Reading đã lưu trước hạn. Bài được giữ để đối soát.',409,'READING_DRAFT_NOT_VERIFIED');
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
     try {
@@ -398,6 +401,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
         ...(config.listeningContinuityEnabled?{listeningContinuityVersion:1}:{}),
+        ...(lrHoldAllowed(row)?{readingDeadlineReviewVersion:1}:{}),
         content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash),audioManifest:manifest,...audio};
     });
   }));
@@ -427,7 +431,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
     return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held},...conflict&&{conflict:true}};
   }));
-  const receive = interruption => async (body,req) => {
+  const receive = (interruption,reviewOnly=false) => async (body,req) => {
     const {deviceProof,...fields}=body;
     const answerEntries=Object.entries(fields.answers).sort(([left],[right])=>left.localeCompare(right));
     const outcome=interruption?{outcome:'interrupted'}:{};
@@ -474,6 +478,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const state=await authorizedState(db);
       const old=checkReceipt(state.journey.sections[body.section],body.operationId,digest);
       if(old) return {receipt:old,replayed:true};
+      if(body.section==='reading'&&state.journey.lr_hold_cohort===true
+          &&(await readSubmissionHold(db,submissionHoldKey(body)))?.review_only)throw readingReviewRequired();
       const timing=timingForAudio(assets,slug,state.journey.audio_hash);
       const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile,observation);
       if (shouldHold&&writing) {
@@ -500,13 +506,19 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
             }else{
               await readMiniSectionDefinition(db,state.session,body,slug);
             }
-            return retainSubmission(db,state,body,input,digest,holdKey,candidateOptions);
+            return retainSubmission(db,state,body,input,digest,holdKey,candidateOptions,reviewOnly);
           });
         } catch (error) {
           if (error.status) throw error;
           report('offline_hold_unconfirmed',undefined,'HOLD_TRANSACTION_UNCONFIRMED');
           throw problem('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
         }
+      }
+      if(reviewOnly){
+        if(!shouldHold)throw problem('OFFLINE_REVIEW_UNAVAILABLE','Chưa thể giữ bản Reading trên máy chủ.',503);
+        if(!held)throw problem('OFFLINE_CONFLICT','Phần Reading này đã có biên nhận.');
+        observation.deadlineAtMs=body.startedAt+assets.getTiming(slug).readingDurationMinutes*60_000;
+        throw readingReviewRequired();
       }
       result = await record();
     } catch (error) {
@@ -532,5 +544,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return {ok:true,receipt:result.receipt};
   };
   app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,receive(false)));
+  if(profile.writing)app.post(prefix+'/reading-review',writeLimiter,
+    route(attemptSection.extend({section:z.literal('reading'),automatic:z.literal(true)}),receive(false,true)));
   if (!profile.paper) app.post(prefix+'/interrupt',writeLimiter,route(interruptedListening,receive(true)));
 }

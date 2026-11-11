@@ -197,6 +197,23 @@ if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=
   const sections=receipt?.sections||{};
   res.json({receiptVerified:sections.writing?.operationId===operation,sections:Object.keys(sections).sort(),jobs,...held&&{held}});
 });
+if(lrHold.termCbtLrHoldHours)outer.get('/preview/reading-review',async(req,res)=>{
+  const {session,operation}=req.query;
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(typeof session!=='string'||typeof operation!=='string'||!uuid.test(session)||!uuid.test(operation))
+    return res.status(400).json({ok:false});
+  const {rows:[row]}=await fixture.db.query(`SELECT j.sections,h.payload_hash AS "payloadHash",h.review_only AS "reviewOnly",
+    h.payload->'answers' AS answers,
+    (SELECT count(*)::int FROM assessment.term_test_writing_grading_run r
+     JOIN assessment.term_test_attempt a ON a.id=r.attempt_id WHERE a.exam_session_id=j.session_id) AS jobs
+    FROM assessment.term_k67_cbt_journey j
+    LEFT JOIN assessment.term_k67_lr_submission_hold h
+      ON h.session_id=j.session_id AND h.generation=j.generation AND h.section='reading' AND h.operation_id=$2
+    WHERE j.session_id=$1`,[session,operation]);
+  if(!row)return res.status(404).json({ok:false});
+  const {sections,...held}=row;
+  res.json({...held,sections:Object.keys(sections).sort()});
+});
 // Readback chỉ trong bản thử localhost, trả mốc/hạn của phiên giả mà không trả đáp án.
 outer.get('/preview/audio-state',async(req,res)=>{
   if(!/^[0-9a-f-]{36}$/.test(req.query.id||''))return res.status(400).json({ok:false});

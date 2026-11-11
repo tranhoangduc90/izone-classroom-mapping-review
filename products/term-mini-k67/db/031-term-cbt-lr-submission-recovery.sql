@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS assessment.term_k67_lr_submission_hold (
   operation_id uuid NOT NULL,
   payload_hash text NOT NULL CHECK (payload_hash ~ '^[a-f0-9]{64}$'),
   payload jsonb,
+  review_only boolean NOT NULL DEFAULT false,
   held_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL CHECK (expires_at > held_at),
   PRIMARY KEY (session_id, generation, section, operation_id)
