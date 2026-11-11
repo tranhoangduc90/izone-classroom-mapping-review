@@ -49,6 +49,24 @@ test('D06/P04: nháp xem thử/nộp/reset ở DB riêng; grant hết hạn/đ�
     const draft=await drafts.create({classId:'1294',sessionNumber:3,operationId:crypto.randomUUID(),...checked.payload,reviewer});
     const sourceApp=express();sourceApp.use(express.json());sourceApp.use('/api/learning',createLearningRouter({pool,demoSourceSecret:secret,
       authenticate(req,_res,next){req.reviewer=reviewer;next();}}));
+    const incompletePayload=previewFormImport('type,prompt\nreflection,Practice question').payload;
+    const block=incompletePayload.definition.blocks[0],item=block.items[0];
+    block.title='Self-reflection - Listening';
+    Object.assign(item,{position:12,interactionType:'single_choice',layoutType:'choice_cards',pedagogicalTypeCode:'multiple_choice',
+      options:['First','Second','Third','Fourth','  '].map((label,index)=>({id:String(index+1),label}))});
+    const incomplete=await drafts.create({classId:'1294',sessionNumber:4,operationId:crypto.randomUUID(),...incompletePayload,reviewer});
+    const previewPath='/api/learning/teacher/form-drafts/'+incomplete.id+'/preview-grant';
+    const denied=await request(sourceApp).post(previewPath).send({expectedRevision:incomplete.revision}).expect(409);
+    assert.equal(denied.body.error,'DRAFT_PREVIEW_BLANK_OPTION');
+    assert.equal(denied.body.message,'Phần “Self-reflection - Listening”, câu 12: phương án E đang để trống. Hãy nhập nội dung hoặc bỏ phương án này.');
+    assert.equal(denied.body.grant,undefined);
+    const unchanged=await drafts.get({id:incomplete.id,reviewer});
+    assert.equal(unchanged.revision,incomplete.revision);
+    assert.equal(unchanged.definition.blocks[0].items[0].options[4].label,'  ');
+    unchanged.definition.blocks[0].items[0].options.pop();
+    const repaired=await drafts.save({id:incomplete.id,expectedRevision:incomplete.revision,sessionNumber:4,
+      definition:unchanged.definition,gradingKey:unchanged.gradingKey,reviewer});
+    await request(sourceApp).post(previewPath).send({expectedRevision:repaired.revision}).expect(200);
     const granted=await request(sourceApp).post('/api/learning/teacher/form-drafts/'+draft.id+'/preview-grant').send({expectedRevision:1}).expect(200);
     const grant=granted.body.grant;assert.equal(verifyLearningDemoGrant(grant,secret).draftId,draft.id);
     assert.ok(!Buffer.from(grant.split('.')[0],'base64url').toString().includes('gradingKey'));
@@ -84,7 +102,7 @@ test('D06/P04: nháp xem thử/nộp/reset ở DB riêng; grant hết hạn/đ�
     const counts=(await sourceDb.query(`SELECT (SELECT count(*)::integer FROM learning.form_assignment) AS assignments,
       (SELECT count(*)::integer FROM learning.submission) AS submissions,(SELECT count(*)::integer FROM learning.outbox_job) AS jobs,
       (SELECT count(*)::integer FROM learning.form_draft) AS drafts;`)).rows[0];
-    assert.deepEqual(counts,{assignments:0,submissions:0,jobs:0,drafts:1});
+    assert.deepEqual(counts,{assignments:0,submissions:0,jobs:0,drafts:2});
     // Grant cũ và quyền admin của Mapping không cấp quyền xem ngoài lớp trong Progress Log.
     const current=await drafts.get({id:draft.id,reviewer});
     await sourceDb.exec("DELETE FROM mapping.reviewer_class_access; UPDATE mapping.reviewer_account SET role='admin';");
