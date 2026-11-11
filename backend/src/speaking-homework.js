@@ -95,11 +95,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
       FROM mapping.student_mapping_review m
       WHERE m.erp_course_class_id = $1 AND m.status = 'approved'
         AND m.classroom_user_id IS NOT NULL
-        AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+        AND EXISTS (SELECT 1 FROM mapping.homework67_eligible_member e
           WHERE e.erp_course_class_id = m.erp_course_class_id
-            AND e.erp_student_contact_id = m.erp_student_contact_id
-            AND e.source_state = 'active'
-            AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))
+            AND e.erp_student_contact_id = m.erp_student_contact_id)
       ORDER BY m.erp_student_name_snapshot, m.public_id`,
     [assignment.class_id]);
     const parts = await pool.query(`SELECT part_key, display_title, practice_url, min_questions
@@ -169,11 +167,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
       SELECT 1 FROM mapping.student_mapping_review m
       WHERE m.public_id = $1 AND m.erp_course_class_id = $2 AND m.status = 'approved'
         AND m.classroom_user_id IS NOT NULL
-        AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+        AND EXISTS (SELECT 1 FROM mapping.homework67_eligible_member e
           WHERE e.erp_course_class_id = m.erp_course_class_id
-            AND e.erp_student_contact_id = m.erp_student_contact_id
-            AND e.source_state = 'active'
-            AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))`,
+            AND e.erp_student_contact_id = m.erp_student_contact_id)`,
     [studentRef, assignment.class_id]);
     if (!student.rows.length) {
       throw new SpeakingHomeworkError('STUDENT_NOT_FOUND', 'Học viên không thuộc lớp của bài này.', 403);
@@ -230,11 +226,9 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         ))) AND m.status = 'approved' AND c.status = 'approved'
         AND m.classroom_user_id IS NOT NULL
         AND EXISTS (
-          SELECT 1 FROM mapping.erp_class_membership_snapshot e
+          SELECT 1 FROM mapping.homework67_eligible_member e
           WHERE e.erp_course_class_id = a.class_id
             AND e.erp_student_contact_id = m.erp_student_contact_id
-            AND e.source_state = 'active'
-            AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold')
         )`, [tokenHash, studentRef]);
     if (rowCount(result) !== 1) {
       throw new SpeakingHomeworkError('ACCESS_DENIED', 'Link hoặc hồ sơ học viên không khớp bài này.', 403);

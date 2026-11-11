@@ -60,6 +60,7 @@ async function fixture({progressDocsEnabled=false}={}) {
       ('${secondStudentRef}', 2304, 2, 'Học viên B', 'classroom-B', 'approved');
     INSERT INTO mapping.erp_class_membership_snapshot VALUES (2304, 1, 'on_going'), (2304, 2, 'on_going');
   `);
+  await db.exec(await readFile(new URL('./fixtures/homework67-eligibility.sql', import.meta.url), 'utf8'));
   const migration = await readFile(new URL('../ops/migrations/202609270001_speaking_homework_candidate.sql', import.meta.url), 'utf8');
   await db.exec(migration);
   await db.exec(`CREATE TABLE speaking_homework.main_conversation_snapshot(link_id uuid PRIMARY KEY,original_fingerprint text,fingerprint text,messages jsonb,source text DEFAULT 'accepted',recovery_job_id uuid);
