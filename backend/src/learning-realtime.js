@@ -25,7 +25,7 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
       WHERE assignment.id=ANY($1::uuid[])`,[ids]);
     return new Map(rows.rows.map(row=>[row.assignment_id,row.revision]));
   }
-  async function read({assignmentId,reviewer,after='0',force=false}) {
+  async function read({assignmentId,reviewer,after='0',force=false,view='full'}) {
     const database=await pool.connect();
     try{
     await database.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL statement_timeout='8s'");
@@ -39,14 +39,17 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
     const {revision,changes}=result.rows[0];
     const full=force||BigInt(after)>BigInt(revision);
     const scopes=new Set(full?['dashboard','drafts','analytics']:changes.map(change=>change.scope));
-    const refs=changes.filter(change=>change.scope==='drafts').map(change=>change.studentRef);
+    if (view==='overview') scopes.delete('drafts');
+    if (view==='roster') scopes.delete('analytics');
+    const visibleChanges = view==='full' ? changes : changes.filter(change => scopes.has(change.scope));
+    const refs=visibleChanges.filter(change=>change.scope==='drafts').map(change=>change.studentRef);
     const allStudents=full||refs.includes(ZERO);
-    const payload={assignmentId,revision,generatedAt:new Date().toISOString(),full,changes};
+    const payload={assignmentId,revision,generatedAt:new Date().toISOString(),full,changes:visibleChanges};
     const jobs=[];
     if(scopes.has('dashboard'))jobs.push(()=>reader.getTeacherDashboard({assignmentId,reviewer}).then(value=>{payload.dashboard=value;}));
     if(scopes.has('drafts'))jobs.push(()=>reader.getTeacherLiveDrafts({assignmentId,reviewer,studentRefs:allStudents?null:[...new Set(refs)]})
       .then(value=>{payload.live={...value,partial:!allStudents};}));
-    if(scopes.has('analytics'))jobs.push(()=>reader.getQuestionAnalytics({assignmentId,reviewer}).then(value=>{payload.analytics=value;}));
+    if(scopes.has('analytics'))jobs.push(()=>reader.getQuestionAnalytics({assignmentId,reviewer,summaryOnly:view==='overview'}).then(value=>{payload.analytics=value;}));
     // Không đánh dấu revision mới nếu một vùng chưa đọc được; client giữ bản cũ và thử lại cùng mốc.
     for(const job of jobs)await job();
     await database.query('COMMIT');

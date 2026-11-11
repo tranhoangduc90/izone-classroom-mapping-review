@@ -1,8 +1,10 @@
+import {createHash} from 'node:crypto';
+
 // Nhận một bài hiện hành mỗi học viên và lần chấm hoàn tất mới nhất, trả thống kê xác định.
 // Câu mở/tự khai/điều kiện ẩn không biến thành câu sai; không gọi AI hoặc thay dữ liệu gốc.
-export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = null, students, capturedAt = new Date().toISOString() }) {
+export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = null, students, summaryOnly = false, itemVersionId = null, capturedAt = new Date().toISOString() }) {
   if (new Set(students.map(s=>s.studentRef)).size !== students.length) throw new Error('ANALYTICS_DUPLICATE_STUDENT');
-  const items = definition.blocks.flatMap(block => block.items);
+  const items = definition.blocks.flatMap(block => block.items).filter(item => !itemVersionId || item.itemVersionId === itemVersionId);
   const summaries = items.map(item => {
     const textSlots=item.graderType==='accepted_text_sequence'&&item.layoutType==='numbered_short_texts';
     // Câu điền từ có đáp án dùng kết quả máy chủ; câu chỉ đối chiếu vẫn không tính sai.
@@ -13,6 +15,7 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
       unanswered:0, answered:0, graded:0, correct:0, incorrect:0, pending:0, manual:0, ungraded:0 };
     const choices = new Map((item.options || []).map(option => [option.id,{optionId:option.id,label:option.label,count:0,incorrect:0}]));
     const studentResults = [];
+    const snapshot = summaryOnly || itemVersionId ? createHash('sha256') : null;
     for (const student of students) {
       if (!student.submissionId) continue;
       counts.submitted += 1;
@@ -39,8 +42,13 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
         const choice = choices.get(optionId);
         if (choice) { choice.count += 1; if (verdict === 'incorrect') choice.incorrect += 1; }
       }
-      studentResults.push({studentRef:student.studentRef,name:student.name,discriminator:student.discriminator||'',submissionId:student.submissionId,
-        answered,verdict,optionIds:values.filter(id=>choices.has(id))});
+      const row = {studentRef:student.studentRef,name:student.name,discriminator:student.discriminator||'',submissionId:student.submissionId,
+        answered,verdict,optionIds:values.filter(id=>choices.has(id))};
+      const answerState = response?.answerState || 'blank';
+      snapshot?.update(JSON.stringify([row, answerState, value ?? null]));
+      if (!summaryOnly) {
+        studentResults.push(itemVersionId ? {...row, answerState, answer: value ?? null} : row);
+      }
     }
     // Hàm này chỉ được gọi sau kiểm quyền giáo viên; không dùng output cho endpoint học viên.
     const key=gradingKey?.items?.[item.itemVersionId],optionLabel=id=>(item.options||[]).find(option=>option.id===id)?.label||id;
@@ -53,25 +61,35 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
       explanation:gradingKey?.explanations?.[item.itemVersionId]||'',
       interactionType:item.interactionType,objective,...(textSlots?{gradingUnit:'text_slots'}:{}),counts,
       errorRate:counts.graded ? counts.incorrect/counts.graded : null,
-      choices:[...choices.values()].sort((a,b)=>b.incorrect-a.incorrect || b.count-a.count),students:studentResults};
+      choices:[...choices.values()].sort((a,b)=>b.incorrect-a.incorrect || b.count-a.count),
+      ...(snapshot ? {responseVersion: snapshot.digest('base64url')} : {}),
+      ...(!summaryOnly ? {students:studentResults} : {})};
   });
   return {assignmentId,formVersionId:definition.formVersionId,capturedAt,rosterCount:students.length,
     submittedCount:students.filter(s=>s.submissionId).length,items:summaries};
 }
 
-export const fetchQuestionAnalyticsSql = `SELECT
+function questionAnalyticsSql(singleItem) {
+  const target = singleItem ? ' AND response.item_version_id = $2::uuid' : '';
+  const gradeTarget = singleItem ? ' AND result.item_version_id = $2::uuid' : '';
+  const responses = singleItem ? 'jsonb_build_object($2::uuid::text, submission.response_payload -> $2::uuid::text, COALESCE($3::text, $2::uuid::text), submission.response_payload -> COALESCE($3::text, $2::uuid::text))' : 'submission.response_payload';
+  return `SELECT
   status.student_ref::text AS "studentRef", status.student_name_snapshot AS name,
   status.display_discriminator AS discriminator,
-  submission.id::text AS "submissionId", submission.response_payload AS responses,
+  submission.id::text AS "submissionId", ${responses} AS responses,
   COALESCE(grading.status, submission.grading_status) AS "gradingStatus",
   COALESCE((SELECT jsonb_agg(jsonb_build_object('itemVersionId', response.item_version_id::text,
     'answerState', response.answer_state)) FROM learning.response_item AS response
-    WHERE response.submission_id = submission.id), '[]'::jsonb) AS "responseItems",
+    WHERE response.submission_id = submission.id${target}), '[]'::jsonb) AS "responseItems",
   COALESCE((SELECT jsonb_agg(jsonb_build_object('itemVersionId', result.item_version_id::text,
     'verdict', result.verdict)) FROM learning.grading_result_item AS result
-    WHERE result.grading_run_id = grading.id), '[]'::jsonb) AS "gradingItems"
+    WHERE result.grading_run_id = grading.id${gradeTarget}), '[]'::jsonb) AS "gradingItems"
 FROM learning.assignment_student_status AS status
+JOIN learning.form_assignment AS assignment ON assignment.id = status.assignment_id
 LEFT JOIN learning.submission AS submission ON submission.id = status.submission_id
+  AND submission.assignment_id = status.assignment_id
+  AND submission.student_ref = status.student_ref
+  AND submission.form_version_id = assignment.form_version_id
 LEFT JOIN LATERAL (
   SELECT run.id, run.status FROM learning.grading_run AS run
   WHERE run.submission_id = submission.id
@@ -80,3 +98,7 @@ LEFT JOIN LATERAL (
 ) AS grading ON true
 WHERE status.assignment_id = $1::uuid
 ORDER BY status.student_ref;`;
+}
+
+export const fetchQuestionAnalyticsSql = questionAnalyticsSql(false);
+export const fetchQuestionResponsesSql = questionAnalyticsSql(true);
