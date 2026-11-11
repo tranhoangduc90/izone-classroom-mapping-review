@@ -82,17 +82,7 @@ async function storedSeal(db, body) {
     WHERE session_id=$1 AND section=$2`, [body.examSessionToken, body.section])).rows[0];
 }
 
-export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
-  const { session, attempt, record, start, deadline, listening } = state;
-  const observed = Date.parse(body.capturedAt);
-  const serverNow = asTime(session.server_now);
-  if (observed < start - clockToleranceMs || observed > Math.min(serverNow + clockToleranceMs, deadline + clockToleranceMs)
-      || (body.automatic && (observed < deadline || serverNow < deadline))) {
-    throw fail('OFFLINE_REVIEW_REQUIRED', 'Mốc chốt trên máy chưa khớp giờ thi. Bài vẫn được giữ để đối soát.');
-  }
-  if (listening && (session.listening_audio_incident_id || (body.automatic && !session.listening_eof_at))) {
-    throw fail('AUDIO_END_NOT_CONFIRMED', 'Chưa xác nhận đã phát hết audio. Bài vẫn được giữ.');
-  }
+export async function readMiniSectionDefinition(db, session, body, testSlug=slug) {
   const definition = (await db.query(`SELECT slug AS test_slug,title AS test_title,version AS definition_version,
     listening_band_adjustment,listening_definition,reading_definition FROM assessment.test_definition
     WHERE slug=$1 AND version=$2`, [testSlug, session.definition_version])).rows[0];
@@ -100,6 +90,26 @@ export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
   const test = parseStoredTest(definition);
   const allowed = new Set(test[body.section + '_definition'].questions.map(question => String(question.number)));
   if (Object.keys(body.answers).some(key => !allowed.has(key))) throw fail('OFFLINE_INVALID', 'Có đáp án không thuộc phiên bản đề.', 400);
+  return test;
+}
+
+export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
+  const { session, attempt, record, start, deadline, listening } = state;
+  const observed = Date.parse(body.capturedAt);
+  const serverNow = asTime(session.server_now);
+  const timeError = () => fail('OFFLINE_REVIEW_REQUIRED', 'Mốc chốt trên máy chưa khớp giờ thi. Bài vẫn được giữ để đối soát.');
+  if (observed < start - clockToleranceMs || observed > serverNow + clockToleranceMs) {
+    throw Object.assign(timeError(),{reasonCode:'CAPTURE_TIMELINE_MISMATCH'});
+  }
+  if (observed > deadline + clockToleranceMs) throw Object.assign(timeError(),{reasonCode:'CAPTURE_AFTER_DEADLINE'});
+  if (body.automatic && observed < deadline) throw Object.assign(timeError(),{reasonCode:'AUTO_CAPTURE_BEFORE_DEADLINE'});
+  if (body.automatic && serverNow < deadline) {
+    throw Object.assign(timeError(),{reasonCode:'SERVER_BEFORE_DEADLINE',retryAfterMs:deadline-serverNow});
+  }
+  if (listening && (session.listening_audio_incident_id || (body.automatic && !session.listening_eof_at))) {
+    throw fail('AUDIO_END_NOT_CONFIRMED', 'Chưa xác nhận đã phát hết audio. Bài vẫn được giữ.');
+  }
+  const test = await readMiniSectionDefinition(db,session,body,testSlug);
   const currentRevision = Number(record[`${body.section}_draft_revision`]) || 0;
   const currentDraft = record[`${body.section}_draft`] || {};
   if (body.revision < currentRevision || (body.revision === currentRevision

@@ -116,6 +116,9 @@ const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
 const journalFixture=writingHoldEnabled&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
+const lrHold=process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
+  ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
+    ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
@@ -123,6 +126,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   writingHold:writingHoldEnabled ? {
     ...(holdSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:20,term2WritingHoldClasses:holdClass}),
+    ...lrHold,
     ...journalFixture&&{writingTestSyncSecret:fakeWorkerKey}} : {},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),

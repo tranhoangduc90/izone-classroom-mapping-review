@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
-import { sealMiniCbtSection } from './mini-cbt-offline.js';
+import { readMiniSectionDefinition, sealMiniCbtSection } from './mini-cbt-offline.js';
 import { buildCombinedResult } from './term-tests.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
@@ -37,21 +37,30 @@ const problem = (code, message, status = 409, reasonCode = code) => Object.assig
 const clock = value => new Date(value).getTime();
 const sha = value => createHash('sha256').update(value).digest('hex');
 const writingHoldTable = 'assessment.term_k67_writing_submission_hold';
+const lrHoldTable = 'assessment.term_k67_lr_submission_hold';
 
 export async function pruneExpiredWritingHolds(pool) {
+  return pruneExpiredHolds(pool,writingHoldTable);
+}
+
+export async function pruneExpiredLrHolds(pool) {
+  return pruneExpiredHolds(pool,lrHoldTable);
+}
+
+async function pruneExpiredHolds(pool,table) {
   // Xóa nội dung hết hạn trước. Giữ mã và dấu vân tay qua cửa sổ retry của permit.
+  const key=table===lrHoldTable?'session_id,generation,section,operation_id':'session_id,generation,operation_id';
+  const matches=key.split(',').map(column=>`held.${column}=expired.${column}`).join(' AND ');
   const cleared=await pool.query(`WITH expired AS (
-    SELECT session_id,generation,operation_id FROM ${writingHoldTable}
+    SELECT ${key} FROM ${table}
     WHERE payload IS NOT NULL AND expires_at<=statement_timestamp()
     ORDER BY expires_at LIMIT 500 FOR UPDATE SKIP LOCKED
-  ) UPDATE ${writingHoldTable} AS held SET payload=NULL FROM expired
-    WHERE (held.session_id,held.generation,held.operation_id)=(expired.session_id,expired.generation,expired.operation_id)`);
+  ) UPDATE ${table} AS held SET payload=NULL FROM expired WHERE ${matches}`);
   const removed=await pool.query(`WITH expired AS (
-    SELECT session_id,generation,operation_id FROM ${writingHoldTable}
+    SELECT ${key} FROM ${table}
     WHERE payload IS NULL AND expires_at<=statement_timestamp()-interval '72 hours'
     ORDER BY expires_at LIMIT 500 FOR UPDATE SKIP LOCKED
-  ) DELETE FROM ${writingHoldTable} AS held USING expired
-    WHERE (held.session_id,held.generation,held.operation_id)=(expired.session_id,expired.generation,expired.operation_id)`);
+  ) DELETE FROM ${table} AS held USING expired WHERE ${matches}`);
   return {cleared:cleared.rowCount,removed:removed.rowCount};
 }
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
@@ -110,38 +119,46 @@ function checkReceipt(receipt, operationId, digest, message = 'Mã nộp không 
   return receipt;
 }
 
-async function readWritingHold(db, body) {
-  return (await db.query(`SELECT payload_hash,held_at,expires_at,payload IS NOT NULL AS has_payload FROM ${writingHoldTable}
-    WHERE session_id=$1 AND generation=$2 AND operation_id=$3`,
-  [body.examSessionToken,body.generation,body.operationId])).rows[0];
+function submissionHoldKey(body) {
+  const lr=body.section!=='writing';
+  return {table:lr?lrHoldTable:writingHoldTable,lr,
+    args:[body.examSessionToken,body.generation,body.operationId,...lr?[body.section]:[]],
+    where:`session_id=$1 AND generation=$2 AND operation_id=$3${lr?' AND section=$4':''}`};
 }
 
-function heldWritingMetadata(row, now) {
+async function readSubmissionHold(db, key) {
+  return (await db.query(`SELECT payload_hash,held_at,expires_at,payload IS NOT NULL AS has_payload FROM ${key.table}
+    WHERE ${key.where}`,key.args)).rows[0];
+}
+
+function heldMetadata(row, now) {
   if (!row?.has_payload || clock(row.expires_at) <= clock(now)) return undefined;
   return {payloadHash:row.payload_hash,heldAt:clock(row.held_at),expiresAt:clock(row.expires_at)};
 }
 
-async function retainWriting(db, state, body, input, digest, {hours,limit}) {
-  if (checkReceipt(state.journey.sections.writing,body.operationId,digest)) return undefined;
-  const existing = await readWritingHold(db,body);
+async function retainSubmission(db, state, body, input, digest, key, {hours,limit}) {
+  const receipt=state.journey.sections[body.section];
+  if ((!key.lr||receipt?.operationId===body.operationId)&&checkReceipt(receipt,body.operationId,digest)) return undefined;
+  const existing = await readSubmissionHold(db,key);
   if (existing) {
     if (existing.payload_hash !== digest) throw problem('OFFLINE_CONFLICT', 'Mã nộp đã có bản khác để đối soát.');
-    const held = heldWritingMetadata(existing,state.now);
+    const held = heldMetadata(existing,state.now);
     if (!held) throw problem('OFFLINE_HOLD_EXPIRED', 'Bản trên máy chủ đã hết hạn lưu. Hãy giữ bản trên thiết bị.');
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`k67.${state.session.test_slug}.writing.hold-quota`]);
-  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable} held
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`k67.${state.session.test_slug}.${key.lr?'lr':'writing'}.hold-quota`]);
+  const count = (await db.query(`SELECT count(*)::int AS n FROM ${key.table} held
     JOIN assessment.term_test_exam_session owner ON owner.id=held.session_id
     WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2`,[state.now,state.session.test_slug])).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
-  const row = (await db.query(`INSERT INTO ${writingHoldTable}
-    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)
+  const row = (await db.query(`INSERT INTO ${key.table}
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section':''})
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8':''})
     RETURNING payload_hash,held_at,expires_at,true AS has_payload`,
-  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt])).rows[0];
-  return heldWritingMetadata(row,state.now);
+  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section]:[]])).rows[0];
+  return heldMetadata(row,state.now);
 }
 
 function timeline(body, state, timing, paper) {
@@ -327,6 +344,10 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
   const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
+  const lrHoldOptions=profile.writing && config.termCbtLrHoldHours>0 && config.termCbtLrHoldLimit>0
+    ? {hours:config.termCbtLrHoldHours,limit:config.termCbtLrHoldLimit}:null;
+  const lrHoldClasses=config[`${profile.writingHold}CbtLrHoldClasses`];
+  const lrHoldAllowed=journey=>lrHoldOptions&&journey.lr_hold_cohort===true;
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
     try {
@@ -365,9 +386,10 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       if (!journey && (session.listening_started_at || session.listening_submitted_at || attempt?.reading_started_at || attempt?.reading_submitted_at
           || session.audio_owner_id || mode !== 'on')) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
       const enroll=holdOptions && (holdClasses?.has('*') || holdClasses?.has(session.class_name_snapshot));
+      const enrollLr=lrHoldOptions && (lrHoldClasses?.has('*') || lrHoldClasses?.has(session.class_name_snapshot));
       const row = journey || (await db.query(`INSERT INTO ${table}
-        (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''})
-        VALUES($1,$2,$3,$4,$5${enroll?',true':''}) RETURNING *`,
+        (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''}${enrollLr?',lr_hold_cohort':''})
+        VALUES($1,$2,$3,$4,$5${enroll?',true':''}${enrollLr?',true':''}) RETURNING *`,
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
       const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
@@ -390,16 +412,20 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
   if(profile.writing||profile.paper)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
-    const {receipt,held}=await audioTransaction(pool,async db=>{
+    const {receipt,held,conflict}=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
-      const receipt=checkReceipt(state.journey.sections[body.section],body.operationId,null,'Phần này đã nhận mã nộp khác.')||null;
-      const held=body.section==='writing' && !receipt && writingHoldAllowed(state.journey)
-        ? heldWritingMetadata(await readWritingHold(db,body),state.now) : undefined;
-      return {receipt,held};
+      const holdAllowed=body.section==='writing'?writingHoldAllowed:lrHoldAllowed;
+      const canHold=holdAllowed(state.journey);
+      const existing=state.journey.sections[body.section];
+      const conflict=canHold&&body.section!=='writing'&&Boolean(existing)&&existing.operationId!==body.operationId;
+      const receipt=conflict?null:checkReceipt(existing,body.operationId,null,'Phần này đã nhận mã nộp khác.')||null;
+      const held=!receipt&&canHold
+        ? heldMetadata(await readSubmissionHold(db,submissionHoldKey(body)),state.now) : undefined;
+      return {receipt,held,conflict};
     });
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
-    return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held}};
+    return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held},...conflict&&{conflict:true}};
   }));
   const receive = interruption => async (body,req) => {
     const {deviceProof,...fields}=body;
@@ -407,7 +433,9 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     const outcome=interruption?{outcome:'interrupted'}:{};
     const input={...fields,answers:Object.fromEntries(answerEntries),...outcome};
     const digest=sha(JSON.stringify(input));
-    const writingHoldCandidate=holdOptions && body.section==='writing';
+    const writing=body.section==='writing';
+    const candidateOptions=writing?holdOptions:lrHoldOptions;
+    const holdKey=candidateOptions&&!interruption?submissionHoldKey(body):null;
     let shouldHold=false;
     let observation;
     let held;
@@ -433,6 +461,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       } else {
         observation.answeredCount = Object.values(body.answers).filter(Boolean).length;
       }
+      if(body.section==='listening'&&!profile.paper){
+        observation.audioAssetHash=state.journey.audio_hash;
+        if(body.eofAt!==null)observation.audioEofAtMs=body.eofAt;
+        observation.heardMs=Math.round(body.heardSeconds*1_000);
+      }
       if (interruption) observation.interrupted=true;
       if (held) observation.heldAtMs=held.heldAt;
       return state;
@@ -443,7 +476,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       if(old) return {receipt:old,replayed:true};
       const timing=timingForAudio(assets,slug,state.journey.audio_hash);
       const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile,observation);
-      if (shouldHold) {
+      if (shouldHold&&writing) {
         if (!queueWriting) throw problem('OFFLINE_GRADING_UNAVAILABLE','Chưa thể xác nhận hàng chờ chấm. Bản đã được giữ để đối soát.',503);
         await queueWriting(db,applied.attemptToken,slug);
       }
@@ -451,20 +484,23 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
         [state.session.id,JSON.stringify({...state.journey.sections,[body.section]:receipt})]);
-      if (shouldHold) await db.query(`DELETE FROM ${writingHoldTable} WHERE session_id=$1 AND generation=$2 AND operation_id=$3`,
-        [state.session.id,body.generation,body.operationId]);
+      if (shouldHold) await db.query(`DELETE FROM ${holdKey.table} WHERE ${holdKey.where}`,holdKey.args);
       return {receipt,replayed:false};
     });
     let result;
     try {
-      if (writingHoldCandidate) {
+      if (holdKey) {
         try {
           held=await audioTransaction(pool,async db=>{
             const state=await authorizedState(db);
-            shouldHold=writingHoldAllowed(state.journey);
+            shouldHold=writing?writingHoldAllowed(state.journey):lrHoldAllowed(state.journey);
             if(!shouldHold)return undefined;
-            if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
-            return retainWriting(db,state,body,input,digest,holdOptions);
+            if(writing){
+              if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
+            }else{
+              await readMiniSectionDefinition(db,state.session,body,slug);
+            }
+            return retainSubmission(db,state,body,input,digest,holdKey,candidateOptions);
           });
         } catch (error) {
           if (error.status) throw error;
@@ -489,7 +525,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     report(event, true,
       result.replayed ? 'RECEIPT_REPLAYED' : 'RECEIPT_COMMITTED');
     if(body.section==='writing' && (!shouldHold || result.replayed)) writingAccepted?.(result.receipt.attemptToken);
-    if(shouldHold && !result.replayed) {
+    if(writing&&shouldHold&&!result.replayed) {
       try { writingCommitted?.(); } catch {}
     }
     if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);

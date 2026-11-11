@@ -25,7 +25,8 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-1'].sha256]}));
   t.after(async()=>{await unlink(term1R2ConfigFile);await rmdir(directory);});
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',term1R2ConfigFile,
-    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:new Set([identity.classCode])},
+    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:new Set([identity.classCode]),
+      termCbtLrHoldHours:2,termCbtLrHoldLimit:20,term1CbtLrHoldClasses:new Set([identity.classCode])},
     termTestWritingGradingService:{ensureSubmission:input=>{
       const job=grading.ensureSubmission(input);gradingCalls.push(job);return job;
     },ensureSubmissionInTransaction:async (db,input)=>{
@@ -52,6 +53,15 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-1'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
     const post=(route,body)=>api.post(slug+'/cbt-journey/'+route).set('x-term2-permit',offer.body.permit).send({...scope,...body});
+    const withFixtureClock=async (now,run)=>{
+      const connect=f.pool.connect;
+      f.pool.connect=async()=>{
+        const db=await connect.call(f.pool);
+        return {release:()=>db.release(),query:(sql,params)=>sql==='SELECT clock_timestamp() AS now'
+          ? Promise.resolve({rows:[{now:new Date(now)}]}) : db.query(sql,params)};
+      };
+      try{return await run();}finally{f.pool.connect=connect;}
+    };
     assert.ok((await post('begin',{})).ok);
     assert.equal((await post('begin',{deviceProof:'b'.repeat(64)})).status,403);
     const wrongTest=await api.post('/api/term-tests/mini-test-lesson-5/cbt-journey/prepare').send({...identity,...scope});
@@ -67,17 +77,51 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     for(const section of order){
       const listening=section==='listening';
       const operation={section,operationId:randomUUID(),previousOperationId,startedAt:nextAt,
-        capturedAt:nextAt+(listening?8_000:2_000),revision:1,automatic:listening,eofAt:listening?nextAt+6_000:null,
+        capturedAt:nextAt+(listening?8_000:60_000),revision:1,automatic:true,eofAt:listening?nextAt+6_000:null,
         heardSeconds:listening?6:0,answers:listening?{11:'A'}:{14:'A'}};
       if(listening){
-        assert.equal((await post('seal',{...operation,eofAt:null})).body.error,'AUDIO_END_NOT_CONFIRMED');
-        assert.equal((await post('seal',{...operation,capturedAt:operation.eofAt+100})).body.error,'OFFLINE_REVIEW_REQUIRED');
+        const noEof=await post('seal',{...operation,operationId:randomUUID(),eofAt:null});
+        assert.equal(noEof.body.reasonCode,'AUDIO_END_NOT_CONFIRMED');
+        assert.ok(noEof.body.held?.payloadHash);
+        const noReview=await post('seal',{...operation,operationId:randomUUID(),capturedAt:operation.eofAt+100});
+        assert.equal(noReview.body.reasonCode,'AUTO_CAPTURE_BEFORE_DEADLINE');
+      }else{
+        const wrongPrevious=await post('seal',{...operation,operationId:randomUUID(),previousOperationId:randomUUID()});
+        assert.equal(wrongPrevious.body.reasonCode,'PREVIOUS_OPERATION_MISMATCH');
+        assert.ok(wrongPrevious.body.held?.payloadHash);
+        const invalid={...operation,operationId:randomUUID(),answers:{99:'invalid'}};
+        assert.equal((await post('seal',invalid)).status,400);
+        const invalidStatus=await post('status',{section,operationId:invalid.operationId});
+        assert.deepEqual(invalidStatus.body,{ok:true,persisted:false,receipt:null});
       }
+      await withFixtureClock(operation.capturedAt-500,async()=>{
+        const early=await post('seal',operation);
+        assert.equal(early.status,409);
+        assert.equal(early.body.reasonCode,'SERVER_BEFORE_DEADLINE');
+        assert.equal(early.body.retryAfterMs,500);
+        const status=await post('status',{section,operationId:operation.operationId});
+        assert.equal(status.body.persisted,false);
+        assert.deepEqual(status.body.held,early.body.held);
+        const {rows:[held]}=await f.db.query(`SELECT payload FROM assessment.term_k67_lr_submission_hold
+          WHERE session_id=$1 AND section=$2 AND operation_id=$3`,[scope.examSessionToken,section,operation.operationId]);
+        assert.deepEqual(held.payload.answers,operation.answers);
+        assert.equal(held.payload.deviceProof,undefined);
+        assert.equal((await post('status',{section,operationId:operation.operationId,deviceProof:'b'.repeat(64)})).status,403);
+      });
       const accepted=await post('seal',operation);
       assert.ok(accepted.ok,accepted.text);
       assert.equal(accepted.body.receipt.completed,false);
       assert.equal(accepted.body.receipt.nextSection,previousOperationId?'writing':order[1]);
       assert.deepEqual((await post('status',{section,operationId:operation.operationId})).body.receipt,accepted.body.receipt);
+      const second={...operation,operationId:randomUUID(),answers:listening?{11:'B'}:{14:'B'}};
+      assert.deepEqual((await post('status',{section,operationId:second.operationId})).body,
+        {ok:true,persisted:false,receipt:null,conflict:true});
+      const conflict=await post('seal',second);
+      assert.equal(conflict.body.reasonCode,'OFFLINE_CONFLICT');
+      assert.ok(conflict.body.held?.payloadHash);
+      assert.deepEqual((await post('status',{section,operationId:second.operationId})).body.held,conflict.body.held);
+      const original=await post('seal',operation);
+      assert.deepEqual(original.body.receipt,accepted.body.receipt);
       previousOperationId=operation.operationId;
       nextAt=operation.capturedAt+1_000;
       attemptToken=accepted.body.receipt.attemptToken;
@@ -95,13 +139,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.ok(review.body.held?.payloadHash);
     assert.equal((await post('seal',invalidTask)).status,400);
     const writingStatus=()=>post('status',{section:'writing',operationId:writing.operationId});
-    const connect=f.pool.connect;
-    f.pool.connect=async()=>{
-      const db=await connect.call(f.pool);
-      return {release:()=>db.release(),query:(sql,params)=>sql==='SELECT clock_timestamp() AS now'
-        ? Promise.resolve({rows:[{now:new Date(writing.capturedAt-500)}]}) : db.query(sql,params)};
-    };
-    try{
+    await withFixtureClock(writing.capturedAt-500,async()=>{
       const early=await post('seal',writing);
       assert.equal(early.status,409);
       assert.equal(early.body.reasonCode,'SERVER_BEFORE_DEADLINE');
@@ -114,7 +152,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
       assert.equal(held.rows.length,1);
       assert.deepEqual(held.rows[0].payload.answers,writing.answers);
       assert.equal(gradingCalls.length,0);
-    }finally{f.pool.connect=connect;}
+    });
     const sealed=await post('seal',writing);
     assert.ok(sealed.ok,sealed.text);
     assert.equal(sealed.body.receipt.completed,true);
