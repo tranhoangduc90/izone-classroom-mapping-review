@@ -6,20 +6,19 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 // Fixture-only loopback transport with the signed Collector receivers and native archive format.
-export async function startPreviewExamJournal(source,origin,testSlug) {
+export async function startPreviewExamJournal(source,origin,testSlug,{productId='term-mini-k67',schema='assessment',lookupQuery}={}) {
   const load=file=>import(pathToFileURL(resolve(source,file)).href);
   const [{ScopeJournalStore},{createRpcReceiver,signRpc},{createOperatorReceiver},
     {createProductJournal},{mountTermJournal,termOwnerResolver}]=await Promise.all([
     load('src/scope-store.mjs'),load('src/remote-store.mjs'),load('src/operator.mjs'),
     load('src/product.mjs'),load('adapters/term.mjs')
   ]);
-  const productId='term-mini-k67',schema='assessment';
-  const root=await mkdtemp(join(tmpdir(),'k67-preview-collector-'));
+  const root=await mkdtemp(join(tmpdir(),productId+'-preview-collector-'));
   const ingestKey=randomBytes(32),operatorKey=randomBytes(32),receiptKey=randomBytes(32);
   let offset=0,producer,resolver;
   const store=new ScopeJournalStore({file:join(root,'journal.sqlite'),allowedProduct:productId,
     keys:{fixture:randomBytes(32)},currentKeyId:'fixture',minFreeBytes:0,clock:()=>Date.now()+offset,
-    driveTransit:{folderId:'fixture-k67-archive',receiptKey}});
+    driveTransit:{folderId:'fixture-'+productId+'-archive',receiptKey}});
   const rpc=createRpcReceiver({store,productId,key:ingestKey});
   const operator=createOperatorReceiver({store,productId,key:operatorKey,driveTransit:true});
   const collector=createServer(async (req,res)=>{
@@ -35,9 +34,10 @@ export async function startPreviewExamJournal(source,origin,testSlug) {
   await new Promise(resolve=>collector.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${collector.address().port}`;
   function mount(app,options) {
-    const query=options.pool.query.bind(options.pool);
+    const nativeQuery=options.pool.query.bind(options.pool);
+    const query=lookupQuery ? (...args)=>lookupQuery(nativeQuery,...args) : nativeQuery;
     resolver=termOwnerResolver({query,schema});
-    producer=createProductJournal({productId,resolveOwner:resolver,allowedOrigins:[origin],build:'k67-browser-fixture',fixtureMode:true,
+    producer=createProductJournal({productId,resolveOwner:resolver,allowedOrigins:[origin],build:productId+'-browser-fixture',fixtureMode:true,
       fixtureConfig:{version:1,identityKey:randomBytes(32).toString('base64'),
         ticketKeys:{fixture:randomBytes(32).toString('base64')},currentTicketKeyId:'fixture',
         rpc:{endpoint:`${base}/rpc/${productId}`,key:ingestKey.toString('base64')}}});
