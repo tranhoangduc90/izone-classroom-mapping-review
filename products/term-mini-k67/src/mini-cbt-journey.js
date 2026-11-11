@@ -37,6 +37,23 @@ const problem = (code, message, status = 409, reasonCode = code) => Object.assig
 const clock = value => new Date(value).getTime();
 const sha = value => createHash('sha256').update(value).digest('hex');
 const writingHoldTable = 'assessment.term_k67_writing_submission_hold';
+
+export async function pruneExpiredWritingHolds(pool) {
+  // Xóa nội dung hết hạn trước. Giữ mã và dấu vân tay qua cửa sổ retry của permit.
+  const cleared=await pool.query(`WITH expired AS (
+    SELECT session_id,generation,operation_id FROM ${writingHoldTable}
+    WHERE payload IS NOT NULL AND expires_at<=statement_timestamp()
+    ORDER BY expires_at LIMIT 500 FOR UPDATE SKIP LOCKED
+  ) UPDATE ${writingHoldTable} AS held SET payload=NULL FROM expired
+    WHERE (held.session_id,held.generation,held.operation_id)=(expired.session_id,expired.generation,expired.operation_id)`);
+  const removed=await pool.query(`WITH expired AS (
+    SELECT session_id,generation,operation_id FROM ${writingHoldTable}
+    WHERE payload IS NULL AND expires_at<=statement_timestamp()-interval '72 hours'
+    ORDER BY expires_at LIMIT 500 FOR UPDATE SKIP LOCKED
+  ) DELETE FROM ${writingHoldTable} AS held USING expired
+    WHERE (held.session_id,held.generation,held.operation_id)=(expired.session_id,expired.generation,expired.operation_id)`);
+  return {cleared:cleared.rowCount,removed:removed.rowCount};
+}
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
 const peer = section => section === 'reading' ? 'listening' : 'reading';
 
@@ -94,13 +111,13 @@ function checkReceipt(receipt, operationId, digest, message = 'Mã nộp không 
 }
 
 async function readWritingHold(db, body) {
-  return (await db.query(`SELECT payload_hash,held_at,expires_at FROM ${writingHoldTable}
+  return (await db.query(`SELECT payload_hash,held_at,expires_at,payload IS NOT NULL AS has_payload FROM ${writingHoldTable}
     WHERE session_id=$1 AND generation=$2 AND operation_id=$3`,
   [body.examSessionToken,body.generation,body.operationId])).rows[0];
 }
 
 function heldWritingMetadata(row, now) {
-  if (!row || clock(row.expires_at) <= clock(now)) return undefined;
+  if (!row?.has_payload || clock(row.expires_at) <= clock(now)) return undefined;
   return {payloadHash:row.payload_hash,heldAt:clock(row.held_at),expiresAt:clock(row.expires_at)};
 }
 
@@ -115,12 +132,13 @@ async function retainWriting(db, state, body, input, digest, {hours,limit}) {
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended('k67.term2.writing.hold-quota',0))");
-  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable} WHERE expires_at>$1`,[state.now])).rows[0].n;
+  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable}
+    WHERE payload IS NOT NULL AND expires_at>$1`,[state.now])).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
   const row = (await db.query(`INSERT INTO ${writingHoldTable}
     (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)
-    RETURNING payload_hash,held_at,expires_at`,
+    RETURNING payload_hash,held_at,expires_at,true AS has_payload`,
   [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt])).rows[0];
   return heldWritingMetadata(row,state.now);
 }
@@ -298,7 +316,7 @@ async function preparePaper(db, profile, student, body, secret, timing, allowNew
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
 }
 
-function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted, observeSubmission, queueWriting }, profile) {
+function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting }, profile) {
   const {slug,table,version}=profile;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
   const mode=config[profile.mode];
@@ -441,13 +459,19 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
           });
         } catch (error) {
           if (error.status) throw error;
+          report('offline_hold_unconfirmed',undefined,'HOLD_TRANSACTION_UNCONFIRMED');
           throw problem('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
         }
       }
       result = await record();
     } catch (error) {
-      report('offline_submission_rejected', false, error.reasonCode ?? 'SUBMISSION_TRANSACTION_FAILED');
-      if (held && !error.status) error=problem('OFFLINE_SUBMISSION_UNAVAILABLE','Chưa xác nhận được bài nộp. Máy chủ đã giữ bản để đối soát.',503);
+      if (error.code==='OFFLINE_HOLD_UNAVAILABLE') throw error;
+      if (!error.status) {
+        report('offline_submission_unconfirmed',undefined,'SUBMISSION_TRANSACTION_UNCONFIRMED');
+        if (shouldHold) throw problem('OFFLINE_SUBMISSION_UNAVAILABLE','Chưa xác nhận được bài nộp. Hãy giữ bản trên thiết bị để tra lại.',503);
+        throw error;
+      }
+      report('offline_submission_rejected',false,error.reasonCode??error.code);
       if (held && error.status && error.code !== 'OFFLINE_SCOPE') error.held=held;
       throw error;
     }
@@ -456,6 +480,9 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     report(event, true,
       result.replayed ? 'RECEIPT_REPLAYED' : 'RECEIPT_COMMITTED');
     if(body.section==='writing' && (!shouldHold || result.replayed)) writingAccepted?.(result.receipt.attemptToken);
+    if(shouldHold && !result.replayed) {
+      try { writingCommitted?.(); } catch {}
+    }
     if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);
     return {ok:true,receipt:result.receipt};
   };

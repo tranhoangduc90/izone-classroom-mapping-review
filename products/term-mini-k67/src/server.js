@@ -5,6 +5,7 @@ import { createErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
 import { createTermTestWritingNotifier, withTermTestWritingNotifications } from './term-test-writing-notifier.js';
+import { pruneExpiredWritingHolds } from './mini-cbt-journey.js';
 
 // Đọc cấu hình riêng, xác nhận DB rồi chỉ khởi động thi/chấm K67.
 // Cấu hình lỗi dừng sớm; lỗi lúc chạy không in bài làm hoặc khóa bí mật.
@@ -24,9 +25,26 @@ const termTestWritingGradingService = withTermTestWritingNotifications(
   notifier
 );
 const app = createApp({ config, pool, syncErpGrades, termTestAssetService, termTestWritingGradingService });
+let holdCleanup;
+let holdCleanupRunning=false;
+async function expireWritingHolds() {
+  if (holdCleanupRunning) return;
+  holdCleanupRunning=true;
+  try {
+    await pruneExpiredWritingHolds(pool);
+  } catch {
+    console.error('K67_WRITING_HOLD_EXPIRY_FAILED');
+  } finally {
+    holdCleanupRunning=false;
+  }
+}
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Backend thi K67 đang lắng nghe tại cổng ${config.port}.`);
   notifier.kick();
+  if (config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0) {
+    void expireWritingHolds();
+    holdCleanup=setInterval(expireWritingHolds,60_000).unref();
+  }
 });
 server.requestTimeout = 15000;
 server.headersTimeout = 16000;
@@ -35,6 +53,7 @@ let stopping = false;
 function shutdown(signal) {
   if (stopping) return;
   stopping = true;
+  clearInterval(holdCleanup);
   notifier.close();
   console.log(`Nhận ${signal}; đang đóng backend K67 an toàn.`);
   server.close(async () => { await pool.end(); process.exit(0); });

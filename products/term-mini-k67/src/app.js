@@ -554,6 +554,7 @@ export function createApp({
   mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,
     observeSubmission:(...args)=>termJournal?.business(...args),
+    writingCommitted:()=>termTestWritingGradingService?.notifyCommitted?.(),
     queueWriting:termTestWritingGradingService?.ensureSubmissionInTransaction && (async (db,attemptToken,testSlug)=>{
       const content=await termTestAssetService.getContent(testSlug);
       await termTestWritingGradingService.ensureSubmissionInTransaction(db,{

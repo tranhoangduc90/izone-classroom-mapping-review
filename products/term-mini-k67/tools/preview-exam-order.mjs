@@ -5,6 +5,7 @@ import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 // Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên và đề đều giả.
 // API và giao diện thật dùng cùng origin; không nối Portal, n8n hoặc database production.
@@ -121,6 +122,17 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool});
+const sealClock=new AsyncLocalStorage();
+if (writingHoldEnabled) {
+  const connect=fixture.pool.connect.bind(fixture.pool);
+  fixture.pool.connect=async()=>{
+    const client=await connect();
+    const now=sealClock.getStore();
+    if (now===undefined) return client;
+    return {release:()=>client.release(),query:(sql,args)=>sql==='SELECT clock_timestamp() AS now'
+      ? Promise.resolve({rows:[{now:new Date(now)}]}) : client.query(sql,args)};
+  };
+}
 if(listeningContinuityEnabled){
   await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
 }
@@ -146,14 +158,21 @@ if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=
   const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
   if (typeof attempt!=='string'||typeof operation!=='string'||!uuid.test(attempt)||!uuid.test(operation))
     return res.status(400).json({ok:false});
-  const receipt=(await fixture.db.query(`SELECT j.sections->'writing'->>'operationId' AS operation
+  const receipt=(await fixture.db.query(`SELECT j.sections
     FROM assessment.term_test_attempt a JOIN assessment.term_k67_cbt_journey j ON j.session_id=a.exam_session_id
-    WHERE a.id=$1 AND a.writing_submitted_at IS NOT NULL`,[attempt])).rows[0];
+    WHERE a.id=$1`,[attempt])).rows[0];
   const jobs=(await fixture.db.query(`SELECT r.task_number AS task,count(*)::int AS jobs
     FROM assessment.term_test_writing_grading_run r
     JOIN assessment.term_test_writing_grading_job j ON j.run_id=r.id AND j.job_type='dispatch'
     WHERE r.attempt_id=$1 GROUP BY r.task_number ORDER BY r.task_number`,[attempt])).rows;
-  res.json({receiptVerified:receipt?.operation===operation,jobs});
+  const held=(await fixture.db.query(`SELECT h.payload_hash AS "payloadHash",
+    char_length(h.payload->'answers'->>'task1') AS "task1Length",
+    char_length(h.payload->'answers'->>'task2') AS "task2Length"
+    FROM assessment.term_k67_writing_submission_hold h
+    JOIN assessment.term_test_attempt a ON a.exam_session_id=h.session_id AND a.generation=h.generation
+    WHERE a.id=$1 AND h.operation_id=$2 AND h.expires_at>clock_timestamp() AND h.payload IS NOT NULL`,[attempt,operation])).rows[0];
+  const sections=receipt?.sections||{};
+  res.json({receiptVerified:sections.writing?.operationId===operation,sections:Object.keys(sections).sort(),jobs,...held&&{held}});
 });
 // Readback chỉ trong bản thử localhost, trả mốc/hạn của phiên giả mà không trả đáp án.
 outer.get('/preview/audio-state',async(req,res)=>{
@@ -243,6 +262,12 @@ outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-le
 });
 outer.use('/preview/reset',express.json(),async(_req,res)=>{await fixture.db.exec('UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');res.json({ok:true,fixtureOnly:true});});
 outer.use(express.static(pages));
+if (writingHoldEnabled) outer.use((req,_res,next)=>{
+  if(req.method!=='POST'||req.path!=='/api/term-tests/term-test-2/cbt-journey/seal')return next();
+  const now=Number(req.get('x-preview-seal-clock'));
+  if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
+  sealClock.run(now,next);
+});
 outer.use(fixture.app);
 const refresh=setInterval(()=>fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now()').catch(console.error),30000);
 const server=outer.listen(port,'127.0.0.1',()=>console.log(`Bản thử K67: http://127.0.0.1:${port}/term-tests/?class=IC2304`));

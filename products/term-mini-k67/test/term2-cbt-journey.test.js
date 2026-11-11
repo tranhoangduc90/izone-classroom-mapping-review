@@ -9,6 +9,7 @@ import request from 'supertest';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
 import {publicAudioCatalog} from '../src/public-audio-catalog.js';
+import {pruneExpiredWritingHolds} from '../src/mini-cbt-journey.js';
 
 const slug='/api/term-tests/term-test-2';
 const identity={classCode:'IC2304',studentRef:'11111111-1111-4111-8111-111111111111'};
@@ -111,11 +112,19 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.equal((await post('seal',wrongCapture)).body.error,'OFFLINE_REVIEW_REQUIRED');
     const connect=f.pool.connect;
     let serverNow=writing.capturedAt-500;
+    let loseCommit=false;
     f.pool.connect=async()=>{
       const client=await connect.call(f.pool);
-      return {release:()=>client.release(),query:(sql,args)=>{
+      let updatedWriting=false;
+      return {release:()=>client.release(),query:async (sql,args)=>{
         if(sql==='SELECT clock_timestamp() AS now') return {rows:[{now:new Date(serverNow)}]};
-        return client.query(sql,args);
+        const result=await client.query(sql,args);
+        if(sql.includes('UPDATE assessment.term_test_attempt SET writing_task_1=')) updatedWriting=true;
+        if(sql==='COMMIT'&&updatedWriting&&loseCommit){
+          loseCommit=false;
+          throw new Error('Synthetic lost acknowledgement after database commit');
+        }
+        return result;
       }};
     };
     const writingStatus=()=>post('status',{section:'writing',operationId:writing.operationId});
@@ -149,12 +158,22 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
       if (holdEnabled) {
         const failed=await post('seal',writing);
         assert.equal(failed.body.error,'OFFLINE_SUBMISSION_UNAVAILABLE');
-        assert.deepEqual(failed.body.held,early.body.held);
-        assert.equal((await writingStatus()).body.persisted,false);
+        assert.equal(failed.body.held,undefined);
+        const afterRollback=await writingStatus();
+        assert.equal(afterRollback.body.persisted,false);
+        assert.deepEqual(afterRollback.body.held,early.body.held);
         assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n,0);
         failQueue=false;
+        loseCommit=true;
+        const results=await Promise.all([post('seal',writing),post('seal',writing)]);
+        const missing=results.find(response=>response.status===503);
+        assert.equal(missing?.body.error,'OFFLINE_SUBMISSION_UNAVAILABLE');
+        assert.equal(missing.body.held,undefined);
+        sealed=results.find(response=>response.ok);
+        assert.deepEqual((await writingStatus()).body.receipt,sealed?.body.receipt);
+      }else{
+        sealed=await post('seal',writing);
       }
-      sealed=await post('seal',writing);
     } finally {
       f.pool.connect=connect;
     }
@@ -167,11 +186,13 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.equal(journal.find(row=>row.submission.operationId===wrongPrevious.operationId).reason,'PREVIOUS_OPERATION_MISMATCH');
     assert.equal(journal.find(row=>row.submission.operationId===wrongCapture.operationId).reason,'AUTO_CAPTURE_NOT_AT_DEADLINE');
     const observations=journal.filter(row=>row.submission.operationId===writing.operationId);
-    assert.deepEqual(observations.map(row=>row.reason),['SERVER_BEFORE_DEADLINE',...(holdEnabled?['OFFLINE_CONFLICT','SUBMISSION_TRANSACTION_FAILED']:[]),
-      'RECEIPT_COMMITTED','RECEIPT_REPLAYED','OFFLINE_CONFLICT']);
+    assert.deepEqual(observations.map(row=>row.reason).sort(),(holdEnabled?[
+      'SERVER_BEFORE_DEADLINE','OFFLINE_CONFLICT','SUBMISSION_TRANSACTION_UNCONFIRMED',
+      'SUBMISSION_TRANSACTION_UNCONFIRMED','RECEIPT_REPLAYED','RECEIPT_REPLAYED','OFFLINE_CONFLICT'
+    ]:['SERVER_BEFORE_DEADLINE','RECEIPT_COMMITTED','RECEIPT_REPLAYED','OFFLINE_CONFLICT']).sort());
     assert.equal(observations[0].submission.serverAtMs,writing.capturedAt-500);
     assert.equal(observations[0].submission.deadlineAtMs,writing.capturedAt);
-    const committed=observations.find(row=>row.event==='submission_completed');
+    const committed=observations.find(row=>row.event===(holdEnabled?'offline_submission_replayed':'submission_completed'));
     assert.equal(committed.submission.task1Length,task1.length);
     assert.equal(committed.submission.task2Length,essay.length);
     assert.doesNotMatch(JSON.stringify(observations), /synthetic Task|deviceProof|examSessionToken|permit/);
@@ -181,11 +202,23 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.equal(row.writing_task_1,task1);
     assert.equal(row.writing_task_2,essay);
     assert.equal(new Date(row.writing_submitted_at).getTime(),writing.capturedAt);
-    for(let n=0;n<40&&gradingCalls.length<3;n++)await delay(10);
-    assert.equal(gradingCalls.length,3);
+    const gradingReads=holdEnabled?5:3;
+    for(let n=0;n<40&&gradingCalls.length<gradingReads;n++)await delay(10);
+    assert.equal(gradingCalls.length,gradingReads);
     const results=await Promise.all(gradingCalls);
     assert.equal(results[0].writingScore,null);
     const jobs=await f.db.query("SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job WHERE job_type='dispatch'");
     assert.equal(jobs.rows[0].n,1);
+    if(holdEnabled){
+      await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold SET
+        held_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour'
+        WHERE operation_id=$1`,[wrongCapture.operationId]);
+      await pruneExpiredWritingHolds(f.pool);
+      const retained=(await f.db.query(`SELECT operation_id,payload IS NOT NULL AS has_payload
+        FROM assessment.term_k67_writing_submission_hold`)).rows;
+      assert.equal(retained.find(row=>row.operation_id===wrongCapture.operationId)?.has_payload,false);
+      assert.equal(retained.find(row=>row.operation_id===wrongPrevious.operationId)?.has_payload,true);
+      assert.deepEqual((await writingStatus()).body.receipt,sealed.body.receipt);
+    }
   }finally{await f.db.close();}
 });
