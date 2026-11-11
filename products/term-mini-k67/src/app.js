@@ -542,16 +542,7 @@ export function createApp({
     }};
   mountTerm1PaperJourney(app,paperJourneyServices);
   mountTerm2PaperJourney(app,paperJourneyServices);
-  mountTerm1CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
-    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
-      if(!termTestWritingGradingService)return;
-      // The receipt is committed already. Native grading ensures at most one job per submitted snapshot.
-      void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
-        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-1' AND superseded_at IS NULL`,[attemptToken])
-        .then(result=>ensureTermTestWritingGrading(result.rows[0]))
-        .catch(()=>logger.error('Term 1 offline Writing grading will retry on result read'));
-    }});
-  mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+  const termCbtServices=slug=>({pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,
     observeSubmission:(...args)=>termJournal?.business(...args),
     writingCommitted:()=>termTestWritingGradingService?.notifyCommitted?.(),
@@ -563,10 +554,12 @@ export function createApp({
     }),writingAccepted:attemptToken=>{
       if(!termTestWritingGradingService)return;
       void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
-        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-2' AND superseded_at IS NULL`,[attemptToken])
+        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug=$2 AND superseded_at IS NULL`,[attemptToken,slug])
         .then(result=>ensureTermTestWritingGrading(result.rows[0]))
-        .catch(()=>logger.error('Term 2 offline Writing grading will retry on result read'));
+        .catch(()=>logger.error(`${slug} offline Writing grading will retry on result read`));
     }});
+  mountTerm1CbtJourney(app,termCbtServices('term-test-1'));
+  mountTerm2CbtJourney(app,termCbtServices('term-test-2'));
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 

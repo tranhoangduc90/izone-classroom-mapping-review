@@ -109,16 +109,20 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
-const writingHoldEnabled=process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true';
+const holdSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
+  :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
+const writingHoldEnabled=Boolean(holdSlug);
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
 const journalFixture=writingHoldEnabled&&journalSource
-  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`) : null;
+  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
+const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
-  writingHold:writingHoldEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:20,
-    term2WritingHoldClasses:new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']),
+  writingHold:writingHoldEnabled ? {
+    ...(holdSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
+      :{term2WritingHoldHours:2,term2WritingHoldLimit:20,term2WritingHoldClasses:holdClass}),
     ...journalFixture&&{writingTestSyncSecret:fakeWorkerKey}} : {},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
@@ -283,7 +287,7 @@ outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-le
 outer.use('/preview/reset',express.json(),async(_req,res)=>{await fixture.db.exec('UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');res.json({ok:true,fixtureOnly:true});});
 outer.use(express.static(pages));
 if (writingHoldEnabled) outer.use((req,_res,next)=>{
-  if(req.method!=='POST'||req.path!=='/api/term-tests/term-test-2/cbt-journey/seal')return next();
+  if(req.method!=='POST'||req.path!==`/api/term-tests/${holdSlug}/cbt-journey/seal`)return next();
   const now=Number(req.get('x-preview-seal-clock'));
   if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
   sealClock.run(now,next);

@@ -41,7 +41,8 @@ async function expireWritingHolds() {
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Backend thi K67 đang lắng nghe tại cổng ${config.port}.`);
   notifier.kick();
-  if (config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0) {
+  if ((config.term1WritingHoldHours>0 && config.term1WritingHoldLimit>0)
+      || (config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0)) {
     void expireWritingHolds();
     holdCleanup=setInterval(expireWritingHolds,60_000).unref();
   }

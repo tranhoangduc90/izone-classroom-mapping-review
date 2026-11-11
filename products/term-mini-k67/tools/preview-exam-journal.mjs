@@ -6,7 +6,7 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 // Fixture-only loopback transport with the signed Collector receivers and native archive format.
-export async function startPreviewExamJournal(source,origin) {
+export async function startPreviewExamJournal(source,origin,testSlug) {
   const load=file=>import(pathToFileURL(resolve(source,file)).href);
   const [{ScopeJournalStore},{createRpcReceiver,signRpc},{createOperatorReceiver},
     {createProductJournal},{mountTermJournal,termOwnerResolver}]=await Promise.all([
@@ -52,7 +52,7 @@ export async function startPreviewExamJournal(source,origin) {
     return receipt.result;
   }
   async function read(attemptToken,archive) {
-    const owner=await resolver({attemptToken},{testSlug:'term-test-2'});
+    const owner=await resolver({attemptToken},{testSlug});
     const scope=producer.scopeForOwner(owner),scopeId=store.scopeId(scope);
     let packs=[];
     if(archive){

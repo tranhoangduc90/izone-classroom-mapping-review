@@ -9,10 +9,10 @@ import { publicAudioCatalog } from './public-audio-catalog.js';
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
 const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1CbtJourneyMode',
-  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true};
+  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,writingHold:'term1'};
 const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true};
 const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
-  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true};
+  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true,writingHold:'term2'};
 const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -131,9 +131,10 @@ async function retainWriting(db, state, body, input, digest, {hours,limit}) {
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  await db.query("SELECT pg_advisory_xact_lock(hashtextextended('k67.term2.writing.hold-quota',0))");
-  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable}
-    WHERE payload IS NOT NULL AND expires_at>$1`,[state.now])).rows[0].n;
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`k67.${state.session.test_slug}.writing.hold-quota`]);
+  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable} held
+    JOIN assessment.term_test_exam_session owner ON owner.id=held.session_id
+    WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2`,[state.now,state.session.test_slug])).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
   const row = (await db.query(`INSERT INTO ${writingHoldTable}
@@ -322,8 +323,9 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const mode=config[profile.mode];
   if (!['on','drain'].includes(mode)) return;
   const secret = config.termTestSessionSecret;
-  const holdOptions = profile===term2 && config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0
-    ? {hours:config.term2WritingHoldHours,limit:config.term2WritingHoldLimit} : null;
+  const hours=config[`${profile.writingHold}WritingHoldHours`],limit=config[`${profile.writingHold}WritingHoldLimit`];
+  const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
+  const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
@@ -362,8 +364,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       if (!journey && (session.listening_started_at || session.listening_submitted_at || attempt?.reading_started_at || attempt?.reading_submitted_at
           || session.audio_owner_id || mode !== 'on')) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
-      const enroll=holdOptions && (config.term2WritingHoldClasses?.has('*')
-        || config.term2WritingHoldClasses?.has(session.class_name_snapshot));
+      const enroll=holdOptions && (holdClasses?.has('*') || holdClasses?.has(session.class_name_snapshot));
       const row = journey || (await db.query(`INSERT INTO ${table}
         (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''})
         VALUES($1,$2,$3,$4,$5${enroll?',true':''}) RETURNING *`,
@@ -462,6 +463,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
             const state=await authorizedState(db);
             shouldHold=writingHoldAllowed(state.journey);
             if(!shouldHold)return undefined;
+            if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
             return retainWriting(db,state,body,input,digest,holdOptions);
           });
         } catch (error) {
