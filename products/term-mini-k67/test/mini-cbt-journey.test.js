@@ -9,8 +9,10 @@ const identity={classCode:'IC2304',studentRef:'11111111-1111-4111-8111-111111111
 const assets={supports:()=>true,getContent:()=>({title:'Fixture'}),getTiming:()=>({readingDurationMinutes:1,listeningDurationSeconds:6,
   listeningTotalSeconds:8,listeningReviewSeconds:2}),getSessionAudioKey:()=>Buffer.alloc(32)};
 
-for(const mode of ['lis_first','read_first'])test('Mini journey preserves native order and requires EOF '+mode,async()=>{
-  const f=await createMiniFixture({examOrder:true,assets,miniCbtJourneyMode:'on'});
+for(const recovery of [false,true])for(const mode of ['lis_first','read_first'])
+test(`Mini journey preserves native order and requires EOF ${mode} · recovery ${recovery}`,async()=>{
+  const f=await createMiniFixture({examOrder:true,assets,miniCbtJourneyMode:'on',writingHold:recovery
+    ?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbtLrHoldClasses:new Set([identity.classCode])}:{}});
   try{
     const api=request(f.app);
     const prepared=await api.post(slug+'/session/prepare').send({...identity,examMode:mode,examDelivery:'cbt',orderClientVersion:1});
@@ -19,6 +21,7 @@ for(const mode of ['lis_first','read_first'])test('Mini journey preserves native
     const offer=await api.post(slug+'/cbt-journey/prepare').send({...identity,...scope});
     assert.ok(offer.ok,offer.text);
     assert.equal(offer.body.examMode,mode);
+    assert.equal(offer.body.readingDeadlineReviewVersion,recovery?1:undefined);
     const post=(path,body)=>api.post(slug+'/cbt-journey/'+path).set('x-term2-permit',offer.body.permit).send({...scope,...body});
     const start=await post('begin',{});
     assert.ok(start.ok,start.text);
@@ -34,6 +37,7 @@ for(const mode of ['lis_first','read_first'])test('Mini journey preserves native
       capturedAt:firstAt+8_000,revision:1,automatic:true,eofAt:null,heardSeconds:0,answers:{11:'A'}};
     const rejected=await post('seal',premature);
     assert.equal(rejected.body.error,mode==='lis_first'?'AUDIO_END_NOT_CONFIRMED':'OFFLINE_TIMELINE',rejected.text);
+    assert.equal(Boolean(rejected.body.held),recovery);
     let nextAt=firstAt,previousOperationId=null;
     for(const section of order){
       const listening=section==='listening';
@@ -41,11 +45,20 @@ for(const mode of ['lis_first','read_first'])test('Mini journey preserves native
         capturedAt:nextAt+(listening?8_000:2_000),revision:1,automatic:listening,
         eofAt:listening?nextAt+6_000:null,heardSeconds:listening?6:0,answers:listening?{11:'A'}:{14:'A'}};
       if(listening){
-        const early=await post('seal',{...operation,capturedAt:operation.eofAt+100});
+        const early=await post('seal',{...operation,operationId:randomUUID(),capturedAt:operation.eofAt+100});
         assert.equal(early.body.error,'OFFLINE_REVIEW_REQUIRED',early.text);
+      }else if(recovery){
+        const review={...operation,operationId:randomUUID(),capturedAt:nextAt+60_001,automatic:true};
+        const held=await post('reading-review',review);
+        assert.equal(held.body.reasonCode,'READING_DRAFT_NOT_VERIFIED');
+        assert.ok(held.body.held?.payloadHash);
+        assert.deepEqual((await post('status',{section,operationId:review.operationId})).body,
+          {ok:true,persisted:false,receipt:null,held:held.body.held});
+        assert.equal((await post('seal',review)).body.reasonCode,'READING_DRAFT_NOT_VERIFIED');
       }
       const accepted=await post('seal',operation);
       assert.ok(accepted.ok,accepted.text);
+      if(recovery)assert.deepEqual((await post('status',{section,operationId:operation.operationId})).body.receipt,accepted.body.receipt);
       assert.deepEqual((await post('seal',operation)).body.receipt,accepted.body.receipt);
       assert.equal((await post('seal',{...operation,operationId:randomUUID()})).status,409);
       assert.equal(accepted.body.receipt.completed,Boolean(previousOperationId));

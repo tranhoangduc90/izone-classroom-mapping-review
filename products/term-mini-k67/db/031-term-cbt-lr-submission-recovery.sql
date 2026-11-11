@@ -1,7 +1,7 @@
 BEGIN;
 SET LOCAL lock_timeout='5s';
 
-ALTER TABLE assessment.term_k67_cbt_journey
+ALTER TABLE IF EXISTS assessment.term_k67_cbt_journey
   ADD COLUMN IF NOT EXISTS lr_hold_cohort boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS assessment.term_k67_lr_submission_hold (

@@ -345,9 +345,10 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
   const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
-  const lrHoldOptions=profile.writing && config.termCbtLrHoldHours>0 && config.termCbtLrHoldLimit>0
-    ? {hours:config.termCbtLrHoldHours,limit:config.termCbtLrHoldLimit}:null;
-  const lrHoldClasses=config[`${profile.writingHold}CbtLrHoldClasses`];
+  const lrHoldProfile=profile===mini?'mini':'term';
+  const lrHours=config[`${lrHoldProfile}CbtLrHoldHours`],lrLimit=config[`${lrHoldProfile}CbtLrHoldLimit`];
+  const lrHoldOptions=!profile.paper&&lrHours>0&&lrLimit>0?{hours:lrHours,limit:lrLimit}:null;
+  const lrHoldClasses=config[`${profile===mini?'mini':profile.writingHold}CbtLrHoldClasses`];
   const lrHoldAllowed=journey=>lrHoldOptions&&journey.lr_hold_cohort===true;
   const readingReviewRequired=()=>problem('OFFLINE_REVIEW_REQUIRED',
     'Chưa xác nhận được nháp Reading đã lưu trước hạn. Bài được giữ để đối soát.',409,'READING_DRAFT_NOT_VERIFIED');
@@ -415,7 +416,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile.writing||profile.paper)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
+  if(profile.writing||profile.paper||lrHoldOptions)app.post(prefix+'/status',readLimiter,
+    route(profile===mini?termStatus.extend({section:z.enum(['listening','reading'])}):termStatus,async(body,req)=>{
     const {receipt,held,conflict}=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
@@ -544,7 +546,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return {ok:true,receipt:result.receipt};
   };
   app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,receive(false)));
-  if(profile.writing)app.post(prefix+'/reading-review',writeLimiter,
+  if(profile.writing||lrHoldOptions)app.post(prefix+'/reading-review',writeLimiter,
     route(attemptSection.extend({section:z.literal('reading'),automatic:z.literal(true)}),receive(false,true)));
   if (!profile.paper) app.post(prefix+'/interrupt',writeLimiter,route(interruptedListening,receive(true)));
 }

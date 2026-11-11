@@ -531,7 +531,7 @@ export function createApp({
   mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
-    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, observeSubmission:(...args)=>termJournal?.business(...args) });
   const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
       void pool.query(fetchTermTestResultSql,[attemptToken]).then(({rows:[row]})=>{

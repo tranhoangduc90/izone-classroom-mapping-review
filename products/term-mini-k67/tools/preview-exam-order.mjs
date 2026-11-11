@@ -109,25 +109,28 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
-const holdSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
+const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
   :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
-const writingHoldEnabled=Boolean(holdSlug);
+const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
+const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
+const writingHoldEnabled=Boolean(termHoldSlug);
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
-const journalFixture=writingHoldEnabled&&journalSource
+const journalFixture=holdSlug&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
-const lrHold=process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
+const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbtLrHoldClasses:holdClass}
+  :process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
   ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
-  writingHold:writingHoldEnabled ? {
-    ...(holdSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
+  writingHold:{
+    ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
-    ...journalFixture&&{writingTestSyncSecret:fakeWorkerKey}} : {},
+    ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
     ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
@@ -140,7 +143,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool});
 const sealClock=new AsyncLocalStorage();
-if (writingHoldEnabled) {
+if (holdSlug) {
   const connect=fixture.pool.connect.bind(fixture.pool);
   fixture.pool.connect=async()=>{
     const client=await connect();
@@ -197,7 +200,7 @@ if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=
   const sections=receipt?.sections||{};
   res.json({receiptVerified:sections.writing?.operationId===operation,sections:Object.keys(sections).sort(),jobs,...held&&{held}});
 });
-if(lrHold.termCbtLrHoldHours)outer.get('/preview/reading-review',async(req,res)=>{
+if(lrHold.termCbtLrHoldHours||miniHoldEnabled)outer.get('/preview/reading-review',async(req,res)=>{
   const {session,operation}=req.query;
   const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if(typeof session!=='string'||typeof operation!=='string'||!uuid.test(session)||!uuid.test(operation))
@@ -206,7 +209,7 @@ if(lrHold.termCbtLrHoldHours)outer.get('/preview/reading-review',async(req,res)=
     h.payload->'answers' AS answers,
     (SELECT count(*)::int FROM assessment.term_test_writing_grading_run r
      JOIN assessment.term_test_attempt a ON a.id=r.attempt_id WHERE a.exam_session_id=j.session_id) AS jobs
-    FROM assessment.term_k67_cbt_journey j
+    FROM assessment.${miniHoldEnabled?'mini_k67_cbt_journey':'term_k67_cbt_journey'} j
     LEFT JOIN assessment.term_k67_lr_submission_hold h
       ON h.session_id=j.session_id AND h.generation=j.generation AND h.section='reading' AND h.operation_id=$2
     WHERE j.session_id=$1`,[session,operation]);
@@ -307,7 +310,7 @@ outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-le
 });
 outer.use('/preview/reset',express.json(),async(_req,res)=>{await fixture.db.exec('UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');res.json({ok:true,fixtureOnly:true});});
 outer.use(express.static(pages));
-if (writingHoldEnabled) outer.use((req,_res,next)=>{
+if (holdSlug) outer.use((req,_res,next)=>{
   if(req.method!=='POST'||req.path!==`/api/term-tests/${holdSlug}/cbt-journey/seal`)return next();
   const now=Number(req.get('x-preview-seal-clock'));
   if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
