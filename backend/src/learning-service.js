@@ -6,7 +6,7 @@ import { decorateSchedule, matchesConfirmedScheduleSlot } from './learning-sched
 import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js';
 import {canRefreshBoundSchedule,currentConfirmedDates} from './learning-schedule-identity.js';
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
-import { buildQuestionAnalytics, fetchQuestionAnalyticsSql } from './learning-question-analytics.js';
+import { buildQuestionAnalytics, fetchQuestionAnalyticsSql, fetchQuestionResponsesSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
 import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets } from './learning-portal-assignment-schedule.js';
 import { withTransaction } from './db.js';
@@ -1447,16 +1447,24 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         sessionComment:cell.sessionComment||null};
     },
 
-    async getQuestionAnalytics({assignmentId, reviewer}) {
+    async getQuestionAnalytics({assignmentId, reviewer, summaryOnly = false, itemVersionId = null}) {
       const access = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
         [assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
       assertSingleRow(access,'ASSIGNMENT_ACCESS_DENIED','Không tìm thấy phiếu trong phạm vi được cấp quyền.',404);
-      const definition = await pool.query(`SELECT version.public_definition,grading.private_definition FROM learning.form_assignment AS assignment
+      const definition = await pool.query(`SELECT assignment.session_number,version.public_definition,grading.private_definition FROM learning.form_assignment AS assignment
         JOIN learning.form_version AS version ON version.id = assignment.form_version_id
         LEFT JOIN learning.form_grading_key grading ON grading.form_version_id=version.id WHERE assignment.id = $1::uuid;`,[assignmentId]);
-      const students = await pool.query(fetchQuestionAnalyticsSql,[assignmentId]);
-      return buildQuestionAnalytics({assignmentId,definition:asObject(definition.rows[0].public_definition),
-        gradingKey:asObject(definition.rows[0].private_definition),students:students.rows});
+      const version = asObject(definition.rows[0].public_definition);
+      const item = itemVersionId && version.blocks.flatMap(block => block.items).find(question => question.itemVersionId === itemVersionId);
+      if (itemVersionId && !item) throw new LearningError('QUESTION_NOT_FOUND','Câu hỏi không thuộc phiên bản phiếu này.',404);
+      const students = item
+        ? await pool.query(fetchQuestionResponsesSql, [assignmentId, itemVersionId, item.interactionConfig?.visibleWhenItemVersionId || null])
+        : await pool.query(fetchQuestionAnalyticsSql, [assignmentId]);
+      const analytics = buildQuestionAnalytics({assignmentId, definition:version,
+        gradingKey:asObject(definition.rows[0].private_definition), students:students.rows, summaryOnly, itemVersionId});
+      if (!item) return analytics;
+      return {assignmentId, classId:String(access.rows[0].class_id), sessionNumber:Number(definition.rows[0].session_number),
+        formVersionId:analytics.formVersionId, capturedAt:analytics.capturedAt, ...analytics.items[0]};
     },
 
     async getTeacherDashboard({ assignmentId, reviewer }) {

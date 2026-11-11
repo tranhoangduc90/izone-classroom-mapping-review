@@ -246,7 +246,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
           operation:typeof req.route?.path==='string'?req.route.path:'teacher_request',method:req.method,
-          status:res.statusCode,...res.locals.classDraftDelivery,...res.locals.sharedDraft,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
+          status:res.statusCode,...res.locals.classDraftDelivery,...res.locals.sharedDraft,...res.locals.questionResponses,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
         catch { /* Lỗi logger không được làm hỏng nộp bài hoặc mutation đã commit. */ }
       });
     }
@@ -512,14 +512,15 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, reviewer: req.reviewer, ...options,
       assignments:(req.query.includeOrigins==='1'?await withAssignmentOrigins(pool,options.assignments):options.assignments).map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
-      capabilities:{liveUpdates:realtimeEnabled} });
+      capabilities:{liveUpdates:realtimeEnabled,questionResponses:true} });
   }));
 
   router.get('/teacher/assignments/:assignmentId/live-updates',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
-    const input=parseOrReply(z.object({after:z.string().regex(/^\d{1,18}$/).default('0'),force:z.enum(['0','1']).default('0')}).strict(),req.query,res,'INVALID_LIVE_REVISION');if(!input)return;
+    const input=parseOrReply(z.object({after:z.string().regex(/^\d{1,18}$/).default('0'),force:z.enum(['0','1']).default('0'),
+      view:z.enum(['full','overview','roster']).default('full')}).strict(),req.query,res,'INVALID_LIVE_REVISION');if(!input)return;
     res.set('Cache-Control','no-store');
-    return res.json({ok:true,update:await liveUpdates.read({...path,reviewer:req.reviewer,after:input.after,force:input.force==='1'})});
+    return res.json({ok:true,update:await liveUpdates.read({...path,reviewer:req.reviewer,after:input.after,force:input.force==='1',view:input.view})});
   }));
   router.get('/teacher/assignments/:assignmentId/events',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
@@ -789,9 +790,22 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.get('/teacher/assignments/:assignmentId/question-analytics', authenticate, asyncRoute(async (req,res) => {
     const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');
     if (!input) return;
-    const analytics=await service.getQuestionAnalytics({...input,reviewer:await assignmentRead(req.reviewer,input.assignmentId)});
+    const view=parseOrReply(z.object({view:z.enum(['full','summary']).default('full')}).strict(),req.query,res,'INVALID_ANALYTICS_VIEW');
+    if (!view) return;
+    const analytics=await service.getQuestionAnalytics({...input,summaryOnly:view.view==='summary',reviewer:await assignmentRead(req.reviewer,input.assignmentId)});
     res.set('Cache-Control','no-store');
     return res.json({ok:true,analytics});
+  }));
+
+  router.get('/teacher/assignments/:assignmentId/question-analytics/:itemVersionId/responses', authenticate, asyncRoute(async (req,res) => {
+    res.set('Cache-Control','no-store');
+    const input=parseOrReply(z.object({assignmentId:uuidSchema,itemVersionId:uuidSchema}).strict(),req.params,res,'INVALID_QUESTION');
+    if (!input) return;
+    const reviewer=await assignmentRead(req.reviewer,input.assignmentId);
+    const detail=await service.getQuestionAnalytics({...input,reviewer});
+    const body=JSON.stringify({ok:true,detail});
+    res.locals.questionResponses={rowCount:detail.students.length,responseBytes:Buffer.byteLength(body)};
+    return res.type('json').send(body);
   }));
 
   router.get('/teacher/classes/:classId/sessions/:sessionNumber/students/:studentRef', authenticate, asyncRoute(async (req,res) => {
