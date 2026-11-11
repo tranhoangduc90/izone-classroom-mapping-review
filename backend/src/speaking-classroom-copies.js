@@ -125,7 +125,12 @@ export function createSpeakingClassroomCopies({ pool }) {
       for (const item of submissions) {
         if (!item.documentId) continue;
         const mapped = await client.query(`SELECT m.public_id AS student_ref,
-          e.erp_student_contact_id AS member_id, e.source_state, e.registration_status
+          e.erp_student_contact_id AS member_id,
+          EXISTS (
+            SELECT 1 FROM mapping.homework67_eligible_member h
+            WHERE h.erp_course_class_id = m.erp_course_class_id
+              AND h.erp_student_contact_id = m.erp_student_contact_id
+          ) AS homework_eligible
           FROM mapping.student_mapping_review m
           LEFT JOIN mapping.erp_class_membership_snapshot e
             ON e.erp_course_class_id = m.erp_course_class_id
@@ -135,10 +140,9 @@ export function createSpeakingClassroomCopies({ pool }) {
         [a.class_id, item.userId]);
         if (mapped.rows.length !== 1 || mapped.rows[0].member_id == null) throw new SpeakingHomeworkError('STUDENT_MAPPING_INVALID',
           'Học viên Classroom chưa ghép duy nhất với lớp.', 409);
-        // Classroom còn bản sao của người nghỉ/tạm dừng: giữ lịch sử, không gắn CTA mới.
+        // Chỉ gắn CTA khi nguồn Homework xác nhận đúng người còn quyền.
         const member = mapped.rows[0];
-        if (member.source_state !== 'active'
-          || ['dropped', 'on_hold'].includes(String(member.registration_status || '').trim().toLowerCase())) {
+        if (!member.homework_eligible) {
           skippedExcluded++;
           continue;
         }

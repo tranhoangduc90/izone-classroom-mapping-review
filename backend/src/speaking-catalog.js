@@ -6,11 +6,9 @@ import { SpeakingHomeworkError } from './speaking-homework.js';
 const instant = value => value instanceof Date ? value.getTime() : Date.parse(value);
 
 const activeMember = `m.status = 'approved' AND m.classroom_user_id IS NOT NULL
-  AND EXISTS (SELECT 1 FROM mapping.erp_class_membership_snapshot e
+  AND EXISTS (SELECT 1 FROM mapping.homework67_eligible_member e
     WHERE e.erp_course_class_id = m.erp_course_class_id
-      AND e.erp_student_contact_id = m.erp_student_contact_id
-      AND e.source_state = 'active'
-      AND lower(trim(coalesce(e.registration_status, ''))) NOT IN ('dropped', 'on_hold'))`;
+      AND e.erp_student_contact_id = m.erp_student_contact_id)`;
 
 // Đầu vào: mã bài/lớp và UUID chính thức; bộ nhớ trình duyệt chỉ là gợi ý.
 // Việc chính: kiểm lớp 67 đã đối soát, giải quyết duy nhất bài và bản Docs.

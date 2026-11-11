@@ -43,6 +43,7 @@ async function fixture() {
     ADD COLUMN last_seen_at timestamptz NOT NULL DEFAULT '2026-09-01T00:00:00Z',
     ADD COLUMN missing_since timestamptz,
     ADD PRIMARY KEY (erp_course_class_id,erp_student_contact_id);`);
+  await db.exec(await readFile(new URL('./fixtures/homework67-eligibility.sql', import.meta.url), 'utf8'));
   for (const file of ['202609270001_speaking_homework_candidate.sql',
     '202609290001_speaking_doctor_lesson3.sql','202609290003_speaking_lesson4_practice.sql',
     '202609300001_speaking_direct_homework.sql']) {
@@ -323,4 +324,21 @@ test('roster tự chọn bao gồm học viên chưa ghép, còn roster xác nh�
     await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET source_state='missing' WHERE erp_course_class_id=2304 AND erp_student_contact_id=1");
     assert.equal((await source.context({assignmentCode:code,classCode:'IC2304'})).selectionStudents.length,0);
   }finally{await f.db.close();}
+});
+
+
+test('quyền Homework riêng mở đúng học viên đã nghỉ trong lớp đã duyệt và thu hồi được', async () => {
+  const f = await fixture();
+  try {
+    assert.deepEqual(await f.catalog.resolveIdentity({assignmentCode:code,studentRef:dropped}),{status:'missing'});
+    await f.pool.query(`INSERT INTO mapping.homework67_student_access
+      (erp_course_class_id,student_ref,classroom_course_id,google_user_id) VALUES (2304,$1,'100','3')`, [dropped]);
+    assert.deepEqual(await f.catalog.resolveIdentity({assignmentCode:code,studentRef:dropped}),
+      {status:'unique',classCode:'IC2304',studentRef:dropped});
+    assert.equal((await f.pool.query(`SELECT registration_status FROM mapping.erp_class_membership_snapshot
+      WHERE erp_course_class_id=2304 AND erp_student_contact_id=3`)).rows[0].registration_status,'dropped');
+    await f.pool.query(`UPDATE mapping.homework67_student_access SET revoked_at=statement_timestamp()
+      WHERE erp_course_class_id=2304 AND student_ref=$1`, [dropped]);
+    assert.deepEqual(await f.catalog.resolveIdentity({assignmentCode:code,studentRef:dropped}),{status:'missing'});
+  } finally { await f.db.close(); }
 });

@@ -39,6 +39,7 @@ async function fixture(t, eligibleDocuments, directDocEntryIds=[], registeredDoc
   t.after(() => db.close());
   const schema = await readFile(new URL('../../docs/schema.sql', import.meta.url), 'utf8');
   await db.exec(schema.split('CREATE SCHEMA IF NOT EXISTS assessment;')[0]);
+  await db.exec(await readFile(new URL('./fixtures/homework67-eligibility.sql', import.meta.url), 'utf8'));
   await db.exec('CREATE ROLE speaking_homework_api');
   for (const name of ['202609270001_speaking_homework_candidate.sql','202609290003_speaking_lesson4_practice.sql',
     '202609301329_speaking_course67_catalog.sql',
