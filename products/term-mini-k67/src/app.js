@@ -552,7 +552,14 @@ export function createApp({
         .catch(()=>logger.error('Term 1 offline Writing grading will retry on result read'));
     }});
   mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
-    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,
+    observeSubmission:(...args)=>termJournal?.business(...args),
+    queueWriting:termTestWritingGradingService?.ensureSubmissionInTransaction && (async (db,attemptToken,testSlug)=>{
+      const content=await termTestAssetService.getContent(testSlug);
+      await termTestWritingGradingService.ensureSubmissionInTransaction(db,{
+        attemptToken,testSlug,taskDefinitions:content?.writing?.tasks||[]
+      });
+    }),writingAccepted:attemptToken=>{
       if(!termTestWritingGradingService)return;
       void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
         FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-2' AND superseded_at IS NULL`,[attemptToken])

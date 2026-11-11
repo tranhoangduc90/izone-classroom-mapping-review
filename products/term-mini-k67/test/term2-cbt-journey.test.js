@@ -22,14 +22,27 @@ const assets={supports:()=>true,getContent:()=>({title:'Fixture',writing:{tasks:
 for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}`,async t=>{
   let grading;
   const gradingCalls=[];
+  const journal=[];
+  const holdEnabled=mode==='read_first';
+  let failQueue=holdEnabled;
   const directory=await mkdtemp(join(tmpdir(),'term2-r2-test-'));
   const term2R2ConfigFile=join(directory,'config.json');
   await writeFile(term2R2ConfigFile,JSON.stringify({enabled:true,accountId:'0'.repeat(32),bucket:'synthetic',
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-2'].sha256]}));
   t.after(async()=>{await unlink(term2R2ConfigFile);await rmdir(directory);});
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,
+    writingHold:holdEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:3} : {},
+    mountJournal:()=>({business(event,testSlug,_token,details){
+      if (testSlug==='term-test-2' && details.submission) journal.push({event,...details});
+      if (event==='submission_completed') throw new Error('Synthetic journal outage');
+    }}),
     termTestWritingGradingService:{ensureSubmission:input=>{
       const job=grading.ensureSubmission(input);gradingCalls.push(job);return job;
+    },ensureSubmissionInTransaction:async (db,input)=>{
+      const result=await grading.ensureSubmissionInTransaction(db,input);
+      if (failQueue) throw new Error('Synthetic failure after writing the jobs');
+      gradingCalls.push(result);
+      return result;
     }}});
   try{
     grading=createTermTestWritingGradingService({pool:f.pool});
@@ -60,7 +73,8 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     const firstAt=new Date(before.rows[0].activated_at).getTime();
     const writing={section:'writing',operationId:randomUUID(),previousOperationId:null,startedAt:firstAt,
       capturedAt:firstAt+60_000,revision:1,automatic:true,eofAt:null,heardSeconds:0,answers:{task1:'',task2:''}};
-    assert.equal((await post('seal',writing)).body.error,'OFFLINE_TIMELINE');
+    const wrongPrevious={...writing,operationId:randomUUID()};
+    assert.equal((await post('seal',wrongPrevious)).body.error,'OFFLINE_TIMELINE');
     let nextAt=firstAt,previousOperationId=null,attemptToken;
     const order=mode==='lis_first'?['listening','reading']:['reading','listening'];
     for(const section of order){
@@ -93,15 +107,74 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     const essay=mode==='lis_first'?'\u200b\u2060\u200d':'This is a synthetic Task 2 essay.';
     const task1=mode==='lis_first'?'This is a synthetic Task 1 report.':'\u200b\u2060\u200d';
     Object.assign(writing,{previousOperationId,startedAt:nextAt,capturedAt:nextAt+60_000,answers:{task1,task2:essay}});
-    assert.equal((await post('seal',{...writing,capturedAt:writing.capturedAt-1})).body.error,'OFFLINE_REVIEW_REQUIRED');
-    assert.equal((await post('status',{section:'writing',operationId:writing.operationId})).body.persisted,false);
-    const sealed=await post('seal',writing);
+    const wrongCapture={...writing,operationId:randomUUID(),capturedAt:writing.capturedAt-1};
+    assert.equal((await post('seal',wrongCapture)).body.error,'OFFLINE_REVIEW_REQUIRED');
+    const connect=f.pool.connect;
+    let serverNow=writing.capturedAt-500;
+    f.pool.connect=async()=>{
+      const client=await connect.call(f.pool);
+      return {release:()=>client.release(),query:(sql,args)=>{
+        if(sql==='SELECT clock_timestamp() AS now') return {rows:[{now:new Date(serverNow)}]};
+        return client.query(sql,args);
+      }};
+    };
+    const writingStatus=()=>post('status',{section:'writing',operationId:writing.operationId});
+    let sealed;
+    try {
+      const early=await post('seal',writing);
+      assert.equal(early.status,409);
+      assert.equal(early.body.error,'OFFLINE_REVIEW_REQUIRED');
+      const status=await writingStatus();
+      assert.equal(status.body.persisted,false);
+      if (holdEnabled) {
+        assert.equal(early.body.reasonCode,'SERVER_BEFORE_DEADLINE');
+        assert.equal(early.body.retryAfterMs,500);
+        assert.deepEqual(status.body.held,early.body.held);
+        const changed={...writing,answers:{task1:'',task2:'Unrelated text'}};
+        assert.equal((await post('seal',changed)).body.error,'OFFLINE_CONFLICT');
+        assert.equal((await post('seal',{...writing,operationId:randomUUID()})).body.error,'OFFLINE_HOLD_FULL');
+        const held=(await f.db.query(`SELECT payload FROM assessment.term_k67_writing_submission_hold
+          WHERE session_id=$1 AND operation_id=$2`,[scope.examSessionToken,writing.operationId])).rows[0].payload;
+        assert.deepEqual(held.answers,writing.answers);
+        assert.equal(held.deviceProof,undefined);
+        assert.equal((await post('status',{section:'writing',operationId:writing.operationId,deviceProof:'f'.repeat(64)})).status,403);
+      } else assert.equal(status.body.held,undefined);
+      const beforeWriting=(await f.db.query(
+        'SELECT writing_submitted_at, writing_task_1, writing_task_2 FROM assessment.term_test_attempt WHERE id=$1',
+        [attemptToken]
+      )).rows[0];
+      assert.deepEqual(beforeWriting,{writing_submitted_at:null,writing_task_1:'',writing_task_2:''});
+      assert.equal(gradingCalls.length,0);
+      serverNow=writing.capturedAt;
+      if (holdEnabled) {
+        const failed=await post('seal',writing);
+        assert.equal(failed.body.error,'OFFLINE_SUBMISSION_UNAVAILABLE');
+        assert.deepEqual(failed.body.held,early.body.held);
+        assert.equal((await writingStatus()).body.persisted,false);
+        assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n,0);
+        failQueue=false;
+      }
+      sealed=await post('seal',writing);
+    } finally {
+      f.pool.connect=connect;
+    }
     assert.ok(sealed.ok,sealed.text);
     assert.equal(sealed.body.receipt.completed,true);
     assert.equal(sealed.body.receipt.nextSection,'result');
     assert.deepEqual((await post('seal',writing)).body.receipt,sealed.body.receipt);
     assert.equal((await post('seal',{...writing,answers:{task1:'',task2:'Different'}})).body.error,'OFFLINE_CONFLICT');
     assert.deepEqual((await post('status',{section:'writing',operationId:writing.operationId})).body.receipt,sealed.body.receipt);
+    assert.equal(journal.find(row=>row.submission.operationId===wrongPrevious.operationId).reason,'PREVIOUS_OPERATION_MISMATCH');
+    assert.equal(journal.find(row=>row.submission.operationId===wrongCapture.operationId).reason,'AUTO_CAPTURE_NOT_AT_DEADLINE');
+    const observations=journal.filter(row=>row.submission.operationId===writing.operationId);
+    assert.deepEqual(observations.map(row=>row.reason),['SERVER_BEFORE_DEADLINE',...(holdEnabled?['OFFLINE_CONFLICT','SUBMISSION_TRANSACTION_FAILED']:[]),
+      'RECEIPT_COMMITTED','RECEIPT_REPLAYED','OFFLINE_CONFLICT']);
+    assert.equal(observations[0].submission.serverAtMs,writing.capturedAt-500);
+    assert.equal(observations[0].submission.deadlineAtMs,writing.capturedAt);
+    const committed=observations.find(row=>row.event==='submission_completed');
+    assert.equal(committed.submission.task1Length,task1.length);
+    assert.equal(committed.submission.task2Length,essay.length);
+    assert.doesNotMatch(JSON.stringify(observations), /synthetic Task|deviceProof|examSessionToken|permit/);
     const row=(await f.db.query('SELECT * FROM assessment.term_test_attempt WHERE id=$1',[attemptToken])).rows[0];
     assert.deepEqual(row.listening_answers,{11:'A'});
     assert.deepEqual(row.reading_answers,{14:'A'});

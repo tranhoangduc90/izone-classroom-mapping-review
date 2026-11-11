@@ -33,9 +33,10 @@ const interruptedListening = attemptSection.extend({
   answers: z.strictObject({})
 });
 const termStatus=scope.extend({section:z.enum(['listening','reading','writing']),operationId:z.uuid()});
-const problem = (code, message, status = 409) => Object.assign(new Error(message), { code, status });
+const problem = (code, message, status = 409, reasonCode = code) => Object.assign(new Error(message), { code, status, reasonCode });
 const clock = value => new Date(value).getTime();
 const sha = value => createHash('sha256').update(value).digest('hex');
+const writingHoldTable = 'assessment.term_k67_writing_submission_hold';
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
 const peer = section => section === 'reading' ? 'listening' : 'reading';
 
@@ -85,16 +86,59 @@ function authorize(body, state, supplied, secret, version) {
   }
 }
 
+function checkReceipt(receipt, operationId, digest, message = 'Mã nộp không khớp bản đã nhận.') {
+  if (receipt && (receipt.operationId !== operationId || (digest && receipt.payloadHash !== digest))) {
+    throw problem('OFFLINE_CONFLICT', message);
+  }
+  return receipt;
+}
+
+async function readWritingHold(db, body) {
+  return (await db.query(`SELECT payload_hash,held_at,expires_at FROM ${writingHoldTable}
+    WHERE session_id=$1 AND generation=$2 AND operation_id=$3`,
+  [body.examSessionToken,body.generation,body.operationId])).rows[0];
+}
+
+function heldWritingMetadata(row, now) {
+  if (!row || clock(row.expires_at) <= clock(now)) return undefined;
+  return {payloadHash:row.payload_hash,heldAt:clock(row.held_at),expiresAt:clock(row.expires_at)};
+}
+
+async function retainWriting(db, state, body, input, digest, {hours,limit}) {
+  if (checkReceipt(state.journey.sections.writing,body.operationId,digest)) return undefined;
+  const existing = await readWritingHold(db,body);
+  if (existing) {
+    if (existing.payload_hash !== digest) throw problem('OFFLINE_CONFLICT', 'Mã nộp đã có bản khác để đối soát.');
+    const held = heldWritingMetadata(existing,state.now);
+    if (!held) throw problem('OFFLINE_HOLD_EXPIRED', 'Bản trên máy chủ đã hết hạn lưu. Hãy giữ bản trên thiết bị.');
+    return held;
+  }
+  // A short separate transaction serializes quota allocation. It ends before business validation.
+  await db.query("SELECT pg_advisory_xact_lock(hashtextextended('k67.term2.writing.hold-quota',0))");
+  const count = (await db.query(`SELECT count(*)::int AS n FROM ${writingHoldTable} WHERE expires_at>$1`,[state.now])).rows[0].n;
+  if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
+  const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
+  const row = (await db.query(`INSERT INTO ${writingHoldTable}
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)
+    RETURNING payload_hash,held_at,expires_at`,
+  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt])).rows[0];
+  return heldWritingMetadata(row,state.now);
+}
+
 function timeline(body, state, timing, paper) {
   const { session, journey, now } = state;
   if (!journey.activated_at) throw problem('OFFLINE_NOT_STARTED', 'Chưa bắt đầu bài trên máy chủ.');
   const first = initial(session);
   const previous = journey.sections[body.section==='writing'?peer(first):first];
   const activation = clock(journey.activated_at);
-  if ((body.section === first && (body.previousOperationId !== null || (paper?body.startedAt<activation:body.startedAt!==activation)))
-      || (body.section !== first && (!previous || body.previousOperationId !== previous.operationId || body.startedAt < previous.capturedAt))
-      || body.capturedAt < body.startedAt || body.capturedAt > Math.min(clock(now) + 3_000, activation + recovery)) {
-    throw problem('OFFLINE_TIMELINE', 'Thứ tự hoặc mốc làm bài không khớp. Bản trên máy vẫn được giữ.');
+  const timelineMessage = 'Thứ tự hoặc mốc làm bài không khớp. Bản trên máy vẫn được giữ.';
+  if (body.previousOperationId !== (body.section === first ? null : previous?.operationId)) {
+    throw problem('OFFLINE_TIMELINE', timelineMessage, 409, 'PREVIOUS_OPERATION_MISMATCH');
+  }
+  if ((body.section === first && (paper?body.startedAt<activation:body.startedAt!==activation))
+      || (body.section !== first && body.startedAt < previous.capturedAt) || body.capturedAt < body.startedAt
+      || body.capturedAt > Math.min(clock(now) + 3_000, activation + recovery)) {
+    throw problem('OFFLINE_TIMELINE', timelineMessage, 409, 'CAPTURE_TIMELINE_MISMATCH');
   }
   if (body.section === 'reading') {
     if (body.eofAt !== null || body.heardSeconds !== 0) throw problem('OFFLINE_TIMELINE', 'Mốc Reading không hợp lệ.');
@@ -150,16 +194,25 @@ async function commitInterruption(db, state, body, timing, profile) {
   return {attemptToken:inserted.id,completed:false,nextSection:'reading'};
 }
 
-async function commit(db, state, body, timing, profile) {
+async function commit(db, state, body, timing, profile, observation) {
   const deadline = timeline(body, state, timing, profile.paper);
+  observation.deadlineAtMs = deadline;
   const listening = body.section === 'listening';
   const { session, attempt } = state;
   if(body.section==='writing'){
     if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
     if(!attempt?.completed_at||attempt.writing_scope!=='exam'||attempt.writing_started_at||attempt.writing_submitted_at
         || Number(attempt.writing_draft_revision)>0)throw problem('OFFLINE_CONFLICT','Phiên Writing đã thay đổi. Giữ bài để đối soát.');
-    if(!Number.isSafeInteger(deadline)||body.capturedAt>deadline||(body.automatic&&(body.capturedAt!==deadline||clock(state.now)<deadline))) {
-      throw problem('OFFLINE_REVIEW_REQUIRED','Mốc chốt Writing chưa khớp giờ thi. Bài vẫn được giữ.');
+    const reviewMessage = 'Mốc chốt Writing chưa khớp giờ thi. Bài vẫn được giữ.';
+    if (!Number.isSafeInteger(deadline) || body.capturedAt > deadline) {
+      throw problem('OFFLINE_REVIEW_REQUIRED', reviewMessage, 409, 'CAPTURE_AFTER_DEADLINE');
+    }
+    if (body.automatic && body.capturedAt !== deadline) {
+      throw problem('OFFLINE_REVIEW_REQUIRED', reviewMessage, 409, 'AUTO_CAPTURE_NOT_AT_DEADLINE');
+    }
+    if (body.automatic && clock(state.now) < deadline) {
+      throw Object.assign(problem('OFFLINE_REVIEW_REQUIRED', reviewMessage, 409, 'SERVER_BEFORE_DEADLINE'),
+        {retryAfterMs:deadline-clock(state.now)});
     }
     await db.query('SELECT set_config($1,$2,true)',[profile.guard,session.id]);
     await db.query(`UPDATE assessment.term_test_attempt SET writing_task_1=$2,writing_task_2=$3,writing_started_at=$4,
@@ -245,12 +298,14 @@ async function preparePaper(db, profile, student, body, secret, timing, allowNew
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
 }
 
-function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted }, profile) {
+function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted, observeSubmission, queueWriting }, profile) {
   const {slug,table,version}=profile;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
   const mode=config[profile.mode];
   if (!['on','drain'].includes(mode)) return;
   const secret = config.termTestSessionSecret;
+  const holdOptions = profile===term2 && config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0
+    ? {hours:config.term2WritingHoldHours,limit:config.term2WritingHoldLimit} : null;
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
     try {
@@ -260,7 +315,9 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       res.json(await action(body.data,req));
     } catch (error) {
       if (!error.status) return next(error);
-      res.status(error.status).json({ok:false,error:error.code,message:error.message});
+      res.status(error.status).json({ok:false,error:error.code,message:error.message,...error.held&&{
+        held:error.held,reasonCode:error.reasonCode,...error.retryAfterMs&&{retryAfterMs:error.retryAfterMs}
+      }});
     }
   };
   if(profile.paper)app.get(prefix+'/availability',readLimiter,(_req,res)=>{
@@ -310,40 +367,97 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
   if(profile.writing||profile.paper)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
-    const receipt=await audioTransaction(pool,async db=>{
+    const {receipt,held}=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
-      const saved=state.journey.sections[body.section]||null;
-      if(saved&&saved.operationId!==body.operationId)throw problem('OFFLINE_CONFLICT','Phần này đã nhận mã nộp khác.');
-      return saved;
+      const receipt=checkReceipt(state.journey.sections[body.section],body.operationId,null,'Phần này đã nhận mã nộp khác.')||null;
+      const held=holdOptions && body.section==='writing' && !receipt
+        ? heldWritingMetadata(await readWritingHold(db,body),state.now) : undefined;
+      return {receipt,held};
     });
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
-    return {ok:true,persisted:Boolean(receipt),receipt};
+    return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held}};
   }));
   const receive = interruption => async (body,req) => {
-    const result=await audioTransaction(pool,async db=>{
+    const {deviceProof,...fields}=body;
+    const answerEntries=Object.entries(fields.answers).sort(([left],[right])=>left.localeCompare(right));
+    const outcome=interruption?{outcome:'interrupted'}:{};
+    const input={...fields,answers:Object.fromEntries(answerEntries),...outcome};
+    const digest=sha(JSON.stringify(input));
+    const shouldHold=holdOptions && body.section==='writing';
+    let observation;
+    let held;
+    const report = (event, accepted, reason) => {
+      if (!observation) return;
+      try {
+        observeSubmission?.(event, slug, body.examSessionToken, {
+          section:body.section, revision:body.revision, accepted, reason, submission:observation
+        });
+      } catch {}
+    };
+    const authorizedState = async db => {
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
-      const {deviceProof,...input}=body;
-      const answerEntries=Object.entries(input.answers).sort(([left],[right])=>left.localeCompare(right));
-      const outcome=interruption?{outcome:'interrupted'}:{};
-      const digest=sha(JSON.stringify({...input,answers:Object.fromEntries(answerEntries),...outcome}));
-      const old=state.journey.sections[body.section];
-      if(old){
-        if(old.operationId!==body.operationId||old.payloadHash!==digest)throw problem('OFFLINE_CONFLICT','Mã nộp không khớp bản đã nhận.');
-        return {ok:true,receipt:old};
+      observation = {
+        operationId:body.operationId, previousOperationId:body.previousOperationId, generation:body.generation,
+        startedAtMs:body.startedAt, capturedAtMs:body.capturedAt, serverAtMs:clock(state.now),
+        automatic:body.automatic, definitionVersion:Number(state.session.definition_version), policyVersion:version
+      };
+      if (body.section === 'writing') {
+        observation.task1Length = body.answers.task1.length;
+        observation.task2Length = body.answers.task2.length;
+      } else {
+        observation.answeredCount = Object.values(body.answers).filter(Boolean).length;
       }
+      if (interruption) observation.interrupted=true;
+      if (held) observation.heldAtMs=held.heldAt;
+      return state;
+    };
+    const record = () => audioTransaction(pool,async db=>{
+      const state=await authorizedState(db);
+      const old=checkReceipt(state.journey.sections[body.section],body.operationId,digest);
+      if(old) return {receipt:old,replayed:true};
       const timing=timingForAudio(assets,slug,state.journey.audio_hash);
-      const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile);
+      const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile,observation);
+      if (shouldHold) {
+        if (!queueWriting) throw problem('OFFLINE_GRADING_UNAVAILABLE','Chưa thể xác nhận hàng chờ chấm. Bản đã được giữ để đối soát.',503);
+        await queueWriting(db,applied.attemptToken,slug);
+      }
       const receipt={...applied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
         [state.session.id,JSON.stringify({...state.journey.sections,[body.section]:receipt})]);
-      return {ok:true,receipt};
+      if (shouldHold) await db.query(`DELETE FROM ${writingHoldTable} WHERE session_id=$1 AND generation=$2 AND operation_id=$3`,
+        [state.session.id,body.generation,body.operationId]);
+      return {receipt,replayed:false};
     });
-    if(body.section==='writing')writingAccepted?.(result.receipt.attemptToken);
+    let result;
+    try {
+      if (shouldHold) {
+        try {
+          held=await audioTransaction(pool,async db=>{
+            const state=await authorizedState(db);
+            return retainWriting(db,state,body,input,digest,holdOptions);
+          });
+        } catch (error) {
+          if (error.status) throw error;
+          throw problem('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
+        }
+      }
+      result = await record();
+    } catch (error) {
+      report('offline_submission_rejected', false, error.reasonCode ?? 'SUBMISSION_TRANSACTION_FAILED');
+      if (held && !error.status) error=problem('OFFLINE_SUBMISSION_UNAVAILABLE','Chưa xác nhận được bài nộp. Máy chủ đã giữ bản để đối soát.',503);
+      if (held && error.status && error.code !== 'OFFLINE_SCOPE') error.held=held;
+      throw error;
+    }
+    const event=result.replayed ? 'offline_submission_replayed'
+      : interruption ? 'offline_interruption_committed' : 'submission_completed';
+    report(event, true,
+      result.replayed ? 'RECEIPT_REPLAYED' : 'RECEIPT_COMMITTED');
+    if(body.section==='writing' && (!shouldHold || result.replayed)) writingAccepted?.(result.receipt.attemptToken);
     if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);
-    return result;
+    return {ok:true,receipt:result.receipt};
   };
   app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,receive(false)));
   if (!profile.paper) app.post(prefix+'/interrupt',writeLimiter,route(interruptedListening,receive(true)));

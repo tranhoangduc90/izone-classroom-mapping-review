@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
+import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 
@@ -106,11 +107,20 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
+const writingHoldEnabled=process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true';
+let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+  writingHold:writingHoldEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:20} : {},
+  termTestWritingGradingService:writingHoldEnabled ? {
+    ensureSubmission:input=>writingGrading.ensureSubmission(input),
+    ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
+    getStatus:input=>writingGrading.getStatus(input)
+  } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool});
 if(listeningContinuityEnabled){
   await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
 }
@@ -131,6 +141,20 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
+  const {attempt,operation}=req.query;
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if (typeof attempt!=='string'||typeof operation!=='string'||!uuid.test(attempt)||!uuid.test(operation))
+    return res.status(400).json({ok:false});
+  const receipt=(await fixture.db.query(`SELECT j.sections->'writing'->>'operationId' AS operation
+    FROM assessment.term_test_attempt a JOIN assessment.term_k67_cbt_journey j ON j.session_id=a.exam_session_id
+    WHERE a.id=$1 AND a.writing_submitted_at IS NOT NULL`,[attempt])).rows[0];
+  const jobs=(await fixture.db.query(`SELECT r.task_number AS task,count(*)::int AS jobs
+    FROM assessment.term_test_writing_grading_run r
+    JOIN assessment.term_test_writing_grading_job j ON j.run_id=r.id AND j.job_type='dispatch'
+    WHERE r.attempt_id=$1 GROUP BY r.task_number ORDER BY r.task_number`,[attempt])).rows;
+  res.json({receiptVerified:receipt?.operation===operation,jobs});
+});
 // Readback chỉ trong bản thử localhost, trả mốc/hạn của phiên giả mà không trả đáp án.
 outer.get('/preview/audio-state',async(req,res)=>{
   if(!/^[0-9a-f-]{36}$/.test(req.query.id||''))return res.status(400).json({ok:false});
@@ -187,9 +211,10 @@ if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
-  outer.get(`/term-tests/${entry}/offline-assets.mjs`, async (_req,res,next) => {
+  const fixtureManifests=['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'];
+  outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
     try {
-      const source = await readFile(path.join(pages,'term-tests',entry,'offline-assets.mjs'),'utf8');
+      const source = await readFile(path.join(pages,'term-tests',entry,path.posix.basename(req.path)),'utf8');
       const hash = createHash('sha256').update(fixtureConfig).digest('hex');
       res.type('application/javascript').send(source.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
         (_match, before, after) => before + hash + after));
