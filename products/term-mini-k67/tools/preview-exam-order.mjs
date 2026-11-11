@@ -6,6 +6,7 @@ import {createTermTestWritingGradingService} from '../src/term-test-writing-grad
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {AsyncLocalStorage} from 'node:async_hooks';
+import {startPreviewExamJournal} from './preview-exam-journal.mjs';
 
 // Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên và đề đều giả.
 // API và giao diện thật dùng cùng origin; không nối Portal, n8n hoặc database production.
@@ -109,12 +110,20 @@ const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
 const writingHoldEnabled=process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true';
+const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
+const journalFixture=writingHoldEnabled&&journalSource
+  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`) : null;
+const fakeWorkerKey='fixture-k67-local-writing-grader-only';
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
-  writingHold:writingHoldEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:20} : {},
+  mountJournal:journalFixture?.mount,
+  writingHold:writingHoldEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:20,
+    term2WritingHoldClasses:new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']),
+    ...journalFixture&&{writingTestSyncSecret:fakeWorkerKey}} : {},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
     ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
+    claimJobs:input=>writingGrading.claimJobs(input),
     getStatus:input=>writingGrading.getStatus(input)
   } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
@@ -153,6 +162,12 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
+  const attempt=String(req.query.attempt||'');
+  if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
+  const result=await journalFixture.read(attempt,req.query.archive==='1');
+  res.json(result);
+});
 if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
   const {attempt,operation}=req.query;
   const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -193,7 +208,7 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
   if(recoveryUsed!==undefined)await fixture.db.query('UPDATE assessment.term_test_exam_session SET listening_recovery_seconds=$2 WHERE id=$1',[id,recoveryUsed]);
   res.json({ok:true,fixtureOnly:true});
 });
-const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`;
+const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''${journalFixture?',EXAM_JOURNAL_ENABLED:true':''}};`;
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
 const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
 if(previousPagesRevision){
@@ -204,16 +219,21 @@ if(previousPagesRevision){
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
+  if(term2JourneyMode==='on')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
+    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt-audio-status-v2.mjs',
+    'term-tests/term-test-2-computer-based/bootstrap-terms-cbt-audio-status-v2.js',
+    'term-tests/term-test-2-computer-based/enhance-terms-cbt.js',
+    'term-tests/shared/exam-journal/bridge.mjs');
   const previous=new Map(files.map(file=>[file,execFileSync('git',['show',previousPagesRevision+':'+file],
     {cwd:pages,encoding:'utf8'}).replace(/\r\n/g,'\n')]));
   let servingPrevious=true;
-  outer.post('/preview/switch-pages',(_req,res)=>{servingPrevious=false;res.json({ok:true});});
+  outer.post('/preview/switch-pages',(req,res)=>{servingPrevious=req.query.previous==='1';res.json({ok:true});});
   outer.use((req,res,next)=>{
     if(!servingPrevious||req.method!=='GET')return next();
     const file=req.path.replace(/^\//,'').replace(/\/$/,'/index.html');
     const content=previous.get(file);
     if(!content)return next();
-    const body=file.endsWith('/offline-assets.mjs')
+    const body=/\/offline-assets(?:-audio-status-v2)?\.mjs$/.test(file)
       ? content.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
           (_match,before,after)=>before+createHash('sha256').update(fixtureConfig).digest('hex')+after)
       : content;

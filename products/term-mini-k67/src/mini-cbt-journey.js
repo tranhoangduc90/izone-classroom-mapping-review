@@ -324,6 +324,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const secret = config.termTestSessionSecret;
   const holdOptions = profile===term2 && config.term2WritingHoldHours>0 && config.term2WritingHoldLimit>0
     ? {hours:config.term2WritingHoldHours,limit:config.term2WritingHoldLimit} : null;
+  const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
     try {
@@ -361,8 +362,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       if (!journey && (session.listening_started_at || session.listening_submitted_at || attempt?.reading_started_at || attempt?.reading_submitted_at
           || session.audio_owner_id || mode !== 'on')) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
+      const enroll=holdOptions && (config.term2WritingHoldClasses?.has('*')
+        || config.term2WritingHoldClasses?.has(session.class_name_snapshot));
       const row = journey || (await db.query(`INSERT INTO ${table}
-        (session_id,generation,student_ref,device_hash,audio_hash) VALUES($1,$2,$3,$4,$5) RETURNING *`,
+        (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''})
+        VALUES($1,$2,$3,$4,$5${enroll?',true':''}) RETURNING *`,
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
       const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
@@ -389,7 +393,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
       const receipt=checkReceipt(state.journey.sections[body.section],body.operationId,null,'Phần này đã nhận mã nộp khác.')||null;
-      const held=holdOptions && body.section==='writing' && !receipt
+      const held=body.section==='writing' && !receipt && writingHoldAllowed(state.journey)
         ? heldWritingMetadata(await readWritingHold(db,body),state.now) : undefined;
       return {receipt,held};
     });
@@ -402,7 +406,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     const outcome=interruption?{outcome:'interrupted'}:{};
     const input={...fields,answers:Object.fromEntries(answerEntries),...outcome};
     const digest=sha(JSON.stringify(input));
-    const shouldHold=holdOptions && body.section==='writing';
+    const writingHoldCandidate=holdOptions && body.section==='writing';
+    let shouldHold=false;
     let observation;
     let held;
     const report = (event, accepted, reason) => {
@@ -451,10 +456,12 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     });
     let result;
     try {
-      if (shouldHold) {
+      if (writingHoldCandidate) {
         try {
           held=await audioTransaction(pool,async db=>{
             const state=await authorizedState(db);
+            shouldHold=writingHoldAllowed(state.journey);
+            if(!shouldHold)return undefined;
             return retainWriting(db,state,body,input,digest,holdOptions);
           });
         } catch (error) {

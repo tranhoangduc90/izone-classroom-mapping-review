@@ -25,6 +25,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
   const gradingCalls=[];
   const journal=[];
   const holdEnabled=mode==='read_first';
+  const holdClasses=new Set([holdEnabled?identity.classCode:'FIXTURE-OTHER-CLASS']);
   let failQueue=holdEnabled;
   const directory=await mkdtemp(join(tmpdir(),'term2-r2-test-'));
   const term2R2ConfigFile=join(directory,'config.json');
@@ -32,7 +33,8 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-2'].sha256]}));
   t.after(async()=>{await unlink(term2R2ConfigFile);await rmdir(directory);});
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,
-    writingHold:holdEnabled ? {term2WritingHoldHours:2,term2WritingHoldLimit:3} : {},
+    writingHold:{term2WritingHoldHours:2,term2WritingHoldLimit:3,
+      term2WritingHoldClasses:holdClasses},
     mountJournal:()=>({business(event,testSlug,_token,details){
       if (testSlug==='term-test-2' && details.submission) journal.push({event,...details});
       if (event==='submission_completed') throw new Error('Synthetic journal outage');
@@ -61,6 +63,10 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.ok(offer.ok,offer.text);
     assert.equal(offer.body.examMode,mode);
     assert.equal(offer.body.version,'term2-k67-cbt-journey-v1');
+    assert.equal((await f.db.query('SELECT writing_hold_cohort FROM assessment.term_k67_cbt_journey WHERE session_id=$1',
+      [scope.examSessionToken])).rows[0].writing_hold_cohort,holdEnabled);
+    // Rollout may stop enrolling new sessions. This native session keeps its original policy.
+    holdClasses.clear();
     assert.equal(offer.body.audioManifest.sha256,publicAudioCatalog['term-test-2'].sha256);
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-2'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
