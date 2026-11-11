@@ -22,6 +22,23 @@ function dto(row,{includeKey=true}={}) {
     updatedAt:row.updated_at,assignmentId:row.published_assignment_id||null};
 }
 
+function validateDraftPreview(definition,gradingKey) {
+  // Xem trước cho phép thiếu đáp án, nhưng mỗi phương án hiển thị phải có nội dung.
+  const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
+  for(const [blockIndex,block] of checked.definition.blocks.entries()) {
+    for(const item of block.items) {
+      const optionIndex=item.options.findIndex(option=>!option.label.trim());
+      if(optionIndex<0)continue;
+      const section=block.title.trim()?`“${block.title.trim()}”`:blockIndex+1;
+      const option=optionIndex<26?String.fromCharCode(65+optionIndex):optionIndex+1;
+      throw error('DRAFT_PREVIEW_BLANK_OPTION',`Phần ${section}, câu ${item.position}: phương án ${option} đang để trống. Hãy nhập nội dung hoặc bỏ phương án này.`);
+    }
+  }
+  try{checked.definition=parseFormDefinition(checked.definition);}
+  catch{throw error('DRAFT_PREVIEW_INCOMPLETE','Hãy hoàn thiện nội dung và cấu trúc câu hỏi trước khi xem thử; đáp án có thể bổ sung sau.');}
+  return checked;
+}
+
 export function createLearningFormDraftService({pool,erpScheduleReader=null,portalAssignmentReader=null}) {
   async function authorizeClass(database,classId,reviewer) {
     const result=await database.query(authorizeLearningClassSql,[reviewer.email,reviewer.canAccessAllClasses,classId]);
@@ -88,6 +105,12 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       const payload=copyAuthoringPayload({definition:source.public_definition,gradingKey:source.private_definition});
       return create({...payload,classId,sessionNumber,operationId,reviewer});
     },
+    async getPreview({id,expectedRevision,reviewer}) {
+      const draft=dto(await owned(pool,id,reviewer));
+      if(draft.revision!==expectedRevision) throw error('DRAFT_STALE','Nháp đã đổi; tải và đối chiếu lại.');
+      validateDraftPreview(draft.definition,draft.gradingKey);
+      return draft;
+    },
     async demoSource({grant}) {
       const active=await pool.query(`SELECT account.email,
         EXISTS(SELECT 1 FROM learning.progress_log_admin AS admin WHERE lower(admin.reviewer_email)=lower(account.email)
@@ -97,10 +120,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       const account=active.rows[0],reviewer={email:account.email,canAccessAllClasses:account.progress_log_admin===true};
       const row=await owned(pool,grant.draftId,reviewer);
       if(Number(row.revision)!==grant.revision||row.content_hash!==grant.contentHash) throw error('DRAFT_PREVIEW_STALE','Nháp đã đổi; hãy mở lại bản xem thử.');
-      const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,allowIncomplete:true});
-      // Xem thử cho phép key/ô đáp án còn trống; nội dung và cấu trúc câu vẫn phải hợp lệ.
-      try{checked.definition=parseFormDefinition(checked.definition);}
-      catch{throw error('DRAFT_PREVIEW_INCOMPLETE','Hãy hoàn thiện nội dung và cấu trúc câu hỏi trước khi xem thử; đáp án có thể bổ sung sau.');}
+      const checked=validateDraftPreview(row.public_definition,row.private_definition);
       const shared=row.draft_scope==='izone';
       const target=shared?null:await authorizeClass(pool,row.erp_course_class_id,reviewer);
       return {sourceDraftId:row.id,sourceRevision:Number(row.revision),contentHash:row.content_hash,

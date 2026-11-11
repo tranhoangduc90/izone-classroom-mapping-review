@@ -719,8 +719,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       return res.status(201).json({ok:true,publication});
     }
     if(!demoSourceSecret) return res.status(503).json({ok:false,message:'Chưa cấu hình xem thử.'});
-    const draft=await drafts.get(args);
-    if(draft.revision!==input.expectedRevision) return res.status(409).json({ok:false,error:'DRAFT_STALE',message:'Nháp đã đổi; tải và đối chiếu lại.'});
+    const draft=await drafts.getPreview(args);
     return res.json({ok:true,grant:createLearningDraftDemoGrant({draft,reviewer:req.reviewer,secret:demoSourceSecret})});
   }));
   router.get('/teacher/form-drafts',authenticate,asyncRoute(async(req,res)=>{
