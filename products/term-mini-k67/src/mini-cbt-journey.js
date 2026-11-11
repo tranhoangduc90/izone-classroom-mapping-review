@@ -139,6 +139,27 @@ function heldMetadata(row, now) {
 async function retainSubmission(db, state, body, input, digest, key, {hours,limit}, reviewOnly=false) {
   const receipt=state.journey.sections[body.section];
   if ((!key.lr||receipt?.operationId===body.operationId)&&checkReceipt(receipt,body.operationId,digest)) return undefined;
+  const delivery=state.journey.audio_hash==='paper'?'paper':'cbt';
+  return retainUncommittedSubmission(db,state,body,input,digest,key,{hours,limit},delivery,reviewOnly);
+}
+
+export function readMiniPaperSubmissionHold(db, body, now) {
+  return readSubmissionHold(db,submissionHoldKey(body)).then(row=>heldMetadata(row,now));
+}
+
+export function retainMiniPaperSubmission(db, state, body, input, digest, options) {
+  return retainUncommittedSubmission(db,state,body,input,digest,submissionHoldKey(body),options,'paper',false);
+}
+
+export function removeMiniPaperSubmissionHold(db, body) {
+  return removeSubmissionHold(db,submissionHoldKey(body));
+}
+
+function removeSubmissionHold(db, key) {
+  return db.query(`DELETE FROM ${key.table} WHERE ${key.where}`,key.args);
+}
+
+async function retainUncommittedSubmission(db, state, body, input, digest, key, {hours,limit}, delivery, reviewOnly) {
   const existing = await readSubmissionHold(db,key);
   if (existing) {
     if (existing.payload_hash !== digest) throw problem('OFFLINE_CONFLICT', 'Mã nộp đã có bản khác để đối soát.');
@@ -148,7 +169,6 @@ async function retainSubmission(db, state, body, input, digest, key, {hours,limi
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  const delivery=state.journey.audio_hash==='paper'?'paper':'cbt';
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
     [`k67.${state.session.test_slug}.${key.lr?delivery:'writing'}.hold-quota`]);
   const count = (await db.query(`SELECT count(*)::int AS n FROM ${key.table} held
@@ -499,7 +519,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
         [state.session.id,JSON.stringify({...state.journey.sections,[body.section]:receipt})]);
-      if (shouldHold) await db.query(`DELETE FROM ${holdKey.table} WHERE ${holdKey.where}`,holdKey.args);
+      if (shouldHold) await removeSubmissionHold(db,holdKey);
       return {receipt,replayed:false};
     });
     let result;

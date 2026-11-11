@@ -17,11 +17,19 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
     if(term2Journeys)await db.exec(await readFile(new URL('../../db/024-term2-cbt-journey.sql',import.meta.url),'utf8'));
     if(writingHold.term1WritingHoldHours||writingHold.term2WritingHoldHours)
       await db.exec(await readFile(new URL('../../db/030-term2-writing-submission-recovery.sql',import.meta.url),'utf8'));
-    if(writingHold.termCbtLrHoldHours||writingHold.miniCbtLrHoldHours||writingHold.termPaperLrHoldHours)
+    if(writingHold.termCbtLrHoldHours||writingHold.miniCbtLrHoldHours||writingHold.termPaperLrHoldHours||writingHold.miniPaperLrHoldHours)
       await db.exec(await readFile(new URL('../../db/031-term-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));
     if(writingHold.miniCbtLrHoldHours)
       await db.exec(await readFile(new URL('../../db/032-mini-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));
     if(term1ListeningRetakeMode)await db.exec(await readFile(new URL('../../db/027-term1-listening-retake.sql',import.meta.url),'utf8'));
+  };
+  const installMiniPaper=async db=>{
+    if (miniPaperOffline) {
+      await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
+      await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
+      if (writingHold.miniPaperLrHoldHours)
+        await db.exec(await readFile(new URL('../../db/033-mini-paper-submission-recovery.sql',import.meta.url),'utf8'));
+    }
   };
   if(process.env.K67_ORDER_NATIVE_URL) {
     const {db,pool}=await createNativeOrderFixture({examOrder});
@@ -30,8 +38,9 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
     if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
     if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
     await installTermJourney(db);
+    await installMiniPaper(db);
     return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
-      config:{...miniR2,...writingHold,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,termTestSessionSecret,
+      config:{...miniR2,...writingHold,miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
@@ -69,10 +78,7 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
   if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
   if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
   await installTermJourney(db);
-  if (miniPaperOffline) {
-    await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
-    await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
-  }
+  await installMiniPaper(db);
   const section=(count,start)=>({questions:Array.from({length:count},(_,i)=>({number:i+start,type:'Câu thử',accepted:['A']}))});
   await db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
     VALUES('mini-test-lesson-5','Đề mô phỏng',1,$1,$2,true)`,[JSON.stringify(section(20,11)),JSON.stringify(section(13,14))]);

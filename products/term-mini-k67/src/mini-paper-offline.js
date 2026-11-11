@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { z } from 'zod';
 import { findStudentForTermTestSql, insertProtectedListeningAttemptSql } from './sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
+import { readMiniPaperSubmissionHold, retainMiniPaperSubmission, removeMiniPaperSubmissionHold } from './mini-cbt-journey.js';
 
 const slug = 'mini-test-lesson-5';
 const prefix = `/api/term-tests/${slug}`;
@@ -21,6 +22,7 @@ const prepareSchema = scope.extend({
   identityConfirmed: z.literal(true)
 }).strict();
 const statusSchema = scope.extend({ operationId: z.uuid() }).strict();
+const recoveryStatusSchema = statusSchema.extend({ section: sections.optional() }).strict();
 const operationSchema = statusSchema.extend({
   section: sections,
   kind: z.enum(['start', 'draft', 'seal']),
@@ -123,7 +125,7 @@ function verifyPermit(secret, run, scope, supplied) {
     && timingSafeEqual(Buffer.from(permit(secret, run), 'hex'), Buffer.from(supplied, 'hex'));
 }
 
-function stateOf({ session, attempt }, studentRef, run, secret) {
+function stateOf({ session, attempt }, studentRef, run, secret, recoveryEnabled) {
   const examMode = session.exam_mode || 'lis_first';
   const listeningSubmitted = Boolean(session.listening_submitted_at);
   const readingSubmitted = Boolean(attempt?.reading_submitted_at);
@@ -143,7 +145,8 @@ function stateOf({ session, attempt }, studentRef, run, secret) {
     readingStartedAt: attempt?.reading_started_at || null, readingDeadlineAt: null, listeningDeadlineAt: null,
     result: attempt?.combined_result || null, portalSyncStatus: 'not_applicable',
     serverNow: new Date().toISOString(),
-    offline: { policy, ownerId: run.owner_id, permit: permit(secret, run), preparedAt: new Date(run.prepared_at).toISOString() }
+    offline: { policy, ownerId: run.owner_id, permit: permit(secret, run), preparedAt: new Date(run.prepared_at).toISOString(),
+      ...(recoveryEnabled && run.lr_hold_cohort === true ? { submissionRecoveryVersion: 1 } : {}) }
   };
 }
 
@@ -153,6 +156,13 @@ async function definitionFor(db, session) {
     WHERE slug=$1 AND version=$2`, [slug, session.definition_version])).rows[0];
   if (!definition) throw problem('OFFLINE_DEFINITION', 'Chưa tìm thấy đúng phiên bản đề để nhận bài.');
   return parseStoredTest(definition);
+}
+
+function validateAnswerKeys(op, test) {
+  const allowed = new Set(test[op.section + '_definition'].questions.map(question => String(question.number)));
+  if (Object.keys(op.payload.answers).some(key => !allowed.has(key))) {
+    throw problem('OFFLINE_ANSWER_KEYS', 'Có ô không thuộc đúng phiên bản đề.', 400);
+  }
 }
 
 function nativeSection({ session, attempt }, section) {
@@ -197,9 +207,11 @@ async function writeSection(db, locked, op, test) {
     listening_started_at=coalesce(listening_started_at,now()),updated_at=now() WHERE id=$1`, [session.id]);
 }
 
-export function mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter, writeLimiter, draftLimiter }) {
+export function mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter, writeLimiter, draftLimiter, observeSubmission }) {
   if (!miniPaperOfflineAdvertised(config)) return;
   const secret = config.termTestSessionSecret;
+  const { miniPaperLrHoldHours: hours, miniPaperLrHoldLimit: limit, miniPaperLrHoldClasses: classes } = config;
+  const recoveryEnabled = hours > 0 && limit > 0;
   const route = fn => async (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     try {
@@ -207,7 +219,8 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       await fn(req, res);
     } catch (error) {
       if (!error.status) return next(error);
-      res.status(error.status).json({ ok: false, error: error.code, message: error.message });
+      res.status(error.status).json({ ok: false, error: error.code, message: error.message,
+        ...(error.held ? { held: error.held } : {}) });
     }
   };
   async function authorized(db, body, req) {
@@ -241,26 +254,31 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
         if (session.listening_submitted_at || Number(session.listening_draft_revision) > 0 || attempt?.reading_started_at) {
           throw problem('OFFLINE_LEGACY', 'Lượt đang làm tiếp tục bằng chế độ hiện hành.');
         }
+        const enroll = recoveryEnabled && (classes?.has('*') || classes?.has(body.classCode));
         run = (await db.query(`INSERT INTO assessment.mini_k67_paper_offline_run
-          (session_id,owner_id,student_ref,generation) VALUES($1,$2,$3,$4) RETURNING *`,
+          (session_id,owner_id,student_ref,generation${enroll ? ',lr_hold_cohort' : ''})
+          VALUES($1,$2,$3,$4${enroll ? ',true' : ''}) RETURNING *`,
           [session.id, body.ownerId, body.studentRef, body.generation])).rows[0];
       }
       if (run.owner_id !== body.ownerId || run.student_ref !== body.studentRef || Number(run.generation) !== body.generation) {
         throw problem('OFFLINE_OWNER_CONFLICT', 'Lượt này thuộc thiết bị khác. Hãy giữ nháp và liên hệ giảng viên.');
       }
-      return stateOf(locked, body.studentRef, run, secret);
+      return stateOf(locked, body.studentRef, run, secret, recoveryEnabled);
     });
     res.json(response);
   }));
 
   app.post(prefix + '/offline/status', readLimiter, route(async (req, res) => {
-    const body = parse(statusSchema, req.body);
-    const receipt = await transaction(pool, async db => {
-      await authorized(db, body, req);
-      return (await db.query(`SELECT receipt FROM assessment.mini_k67_paper_offline_operation
+    const body = parse(recoveryStatusSchema, req.body);
+    const result = await transaction(pool, async db => {
+      const { run } = await authorized(db, body, req);
+      const receipt = (await db.query(`SELECT receipt FROM assessment.mini_k67_paper_offline_operation
         WHERE operation_id=$1 AND session_id=$2`, [body.operationId, body.examSessionToken])).rows[0]?.receipt;
+      const held = !receipt && body.section && recoveryEnabled && run.lr_hold_cohort === true
+        ? await readMiniPaperSubmissionHold(db, body, new Date()) : undefined;
+      return { persisted: Boolean(receipt), receipt: receipt || null, ...(held ? { held } : {}) };
     });
-    res.json({ ok: true, persisted: Boolean(receipt), receipt: receipt || null });
+    res.json({ ok: true, ...result });
   }));
 
   app.post(prefix + '/offline/result', readLimiter, route(async (req, res) => {
@@ -268,7 +286,7 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
     const response = await transaction(pool, async db => {
       const locked = await authorized(db, body, req);
       if (!locked.attempt?.completed_at) throw problem('OFFLINE_PENDING', 'Đang chờ máy chủ nhận đủ hai phần.');
-      return stateOf(locked, locked.run.student_ref, locked.run, secret);
+      return stateOf(locked, locked.run.student_ref, locked.run, secret, recoveryEnabled);
     });
     res.json(response);
   }));
@@ -276,17 +294,28 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
   app.post(prefix + '/offline/operation', draftLimiter, route(async (req, res) => {
     const op = parse(operationSchema, req.body);
     const payloadHash = digest(op);
-    const receipt = await transaction(pool, async db => {
-      const locked = await authorized(db, op, req);
-      const { run, session } = locked;
+    let held, observation;
+    const readPrevious = async (db, session) => {
       const previous = (await db.query(`SELECT session_id,payload_hash,receipt FROM assessment.mini_k67_paper_offline_operation
         WHERE operation_id=$1`, [op.operationId])).rows[0];
-      if (previous) {
-        if (previous.session_id !== session.id || previous.payload_hash !== payloadHash) {
-          throw problem('OFFLINE_OPERATION_CONFLICT', 'Mã gửi đã có nội dung khác. Bài vẫn được giữ trên máy.');
-        }
-        return previous.receipt;
+      if (previous && (previous.session_id !== session.id || previous.payload_hash !== payloadHash)) {
+        throw problem('OFFLINE_OPERATION_CONFLICT', 'Mã gửi đã có nội dung khác. Bài vẫn được giữ trên máy.');
       }
+      return previous?.receipt;
+    };
+    const report = (event, accepted, reason) => {
+      if (!observation) return;
+      try {
+        observeSubmission?.(event, slug, op.examSessionToken, {
+          section: op.section, revision: op.revision, accepted, reason, submission: observation
+        });
+      } catch {}
+    };
+    const record = () => transaction(pool, async db => {
+      const locked = await authorized(db, op, req);
+      const { run, session } = locked;
+      const previous = await readPrevious(db, session);
+      if (previous) return { receipt: previous, replayed: true };
       const state = run.state;
       const item = state[op.section];
       const initial = first(session.exam_mode);
@@ -306,10 +335,7 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       }
       if (op.kind === 'seal' && op.payload.reason !== 'manual') throw problem('PAPER_MANUAL_ONLY', 'Phiếu giấy chỉ nộp khi học viên xác nhận.');
       const test = await definitionFor(db, session);
-      const allowed = new Set(test[op.section + '_definition'].questions.map(question => String(question.number)));
-      if (Object.keys(op.payload.answers).some(key => !allowed.has(key))) {
-        throw problem('OFFLINE_ANSWER_KEYS', 'Có ô không thuộc đúng phiên bản đề.', 400);
-      }
+      validateAnswerKeys(op, test);
       await writeSection(db, locked, op, test);
       const receipt = {
         version: 1, receiptId: randomUUID(), operationId: op.operationId, payloadHash,
@@ -326,8 +352,52 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       await db.query(`INSERT INTO assessment.mini_k67_paper_offline_operation
         (operation_id,session_id,payload_hash,receipt) VALUES($1,$2,$3,$4::jsonb)`,
         [op.operationId, session.id, payloadHash, JSON.stringify(receipt)]);
-      return receipt;
+      if (held) await removeMiniPaperSubmissionHold(db, op);
+      return { receipt, replayed: false };
     });
-    res.json({ ok: true, persisted: true, receipt });
+    let result;
+    try {
+      if (recoveryEnabled && op.kind === 'seal') {
+        try {
+          held = await transaction(pool, async db => {
+            const { run, session } = await authorized(db, op, req);
+            if (run.lr_hold_cohort !== true) return undefined;
+            const now = (await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
+            observation = {
+              operationId: op.operationId, previousOperationId: op.dependency, generation: op.generation,
+              startedAtMs: Date.parse(op.payload.startedAt), capturedAtMs: Date.parse(op.occurredAt),
+              serverAtMs: new Date(now).getTime(), automatic: false, delivery: 'paper',
+              definitionVersion: Number(session.definition_version), policyVersion: policy,
+              answeredCount: Object.values(op.payload.answers).filter(Boolean).length
+            };
+            if (await readPrevious(db, session)) return undefined;
+            const test = await definitionFor(db, session);
+            validateAnswerKeys(op, test);
+            const { ownerId, ...retained } = op;
+            return retainMiniPaperSubmission(db, { session, now }, op, retained, payloadHash, { hours, limit });
+          });
+        } catch (error) {
+          if (error.status) throw error;
+          report('offline_hold_unconfirmed', undefined, 'HOLD_TRANSACTION_UNCONFIRMED');
+          throw problem('OFFLINE_HOLD_UNAVAILABLE', 'Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.', 503);
+        }
+      }
+      if (held) observation.heldAtMs = held.heldAt;
+      result = await record();
+    } catch (error) {
+      if (error.code === 'OFFLINE_HOLD_UNAVAILABLE') throw error;
+      if (!error.status) {
+        report('offline_submission_unconfirmed', undefined, 'SUBMISSION_TRANSACTION_UNCONFIRMED');
+        if (held) throw problem('OFFLINE_SUBMISSION_UNAVAILABLE', 'Chưa xác nhận được bài nộp. Hãy giữ bản trên thiết bị.', 503);
+        throw error;
+      }
+      report('offline_submission_rejected', false, error.code);
+      if (held && error.code !== 'OFFLINE_SCOPE') error.held = held;
+      throw error;
+    }
+    if (observation) observation.receiptId = result.receipt.receiptId;
+    report(result.replayed ? 'offline_submission_replayed' : 'submission_completed', true,
+      result.replayed ? 'RECEIPT_REPLAYED' : 'RECEIPT_COMMITTED');
+    res.json({ ok: true, persisted: true, receipt: result.receipt });
   }));
 }

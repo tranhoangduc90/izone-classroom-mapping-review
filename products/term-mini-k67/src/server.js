@@ -33,7 +33,8 @@ if ((config.term1WritingHoldHours>0 && config.term1WritingHoldLimit>0)
   holdPruners.push([pruneExpiredWritingHolds,'K67_WRITING_HOLD_EXPIRY_FAILED']);
 }
 if ((config.termCbtLrHoldHours>0&&config.termCbtLrHoldLimit>0)||(config.miniCbtLrHoldHours>0&&config.miniCbtLrHoldLimit>0)
-    ||(config.termPaperLrHoldHours>0&&config.termPaperLrHoldLimit>0)) {
+    ||(config.termPaperLrHoldHours>0&&config.termPaperLrHoldLimit>0)
+    ||(config.miniPaperLrHoldHours>0&&config.miniPaperLrHoldLimit>0)) {
   holdPruners.push([pruneExpiredLrHolds,'K67_LR_HOLD_EXPIRY_FAILED']);
 }
 async function expireSubmissionHolds() {

@@ -527,7 +527,7 @@ export function createApp({
   mountMiniAnswerSheet(app, { pool, config, requireContext, readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
   mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
-    writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
+    writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter, observeSubmission: (...args) => termJournal?.business(...args) });
   mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
