@@ -1,7 +1,7 @@
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
 import { speakingMessages, speakingFingerprint, completionFallback, COMPLETION_POLICY } from './speaking-completion-policy.js';
-import { conversationSnapshot } from './speaking-conversation-snapshot.js';
+import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
 import { fetchSpeakingEvidence, speakingVerificationCode } from './speaking-ai-verification.js';
 
 const endpoint = process.env.SPEAKING_CHECK_AI_ENDPOINT || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
@@ -11,7 +11,7 @@ const stages = ['opening', 'before', 'during', 'after'];
 // Kết quả dùng số tin, câu hỏi và câu học viên viết; lỗi AI không được coi là làm thiếu.
 export async function analyzeStory(section, messages) {
   const transcript = messages.map((m, i) => `[${i + 1}] ${m.role === 'user' ? 'HỌC VIÊN' : 'CHATBOT'}: ${m.text}`).join('\n');
-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
+  assertSpeakingConversationLength(messages);
   const criteria = section === 'story_context'
     ? [
       'Bài Xây dựng bối cảnh 4+2: một lượt đầy đủ có BA tình huống Part 2 khác nhau được chatbot giao. Với mỗi tình huống, học viên đã tự ghép đoạn bối cảnh hoàn chỉnh sau các bước gợi mở, rồi nhận góp ý. Chấp nhận còn lỗi; không yêu cầu nói lại, thành thạo hay đủ cả lý do VÀ rủi ro: một trong hai là đủ. Khi ở một mình không bắt có người khác.',
@@ -105,7 +105,7 @@ export async function checkStorySubmission(input, dependencies = {}) {
   const read = dependencies.readShare || readSpeakingShare;
   const readShare = async url => (conversation ??= await read(url));
   const standard = await checkStandardStorySubmission(input, { ...dependencies, readShare });
-  if (!conversation) return standard;
+  if (!conversation || standard.errorCode === 'SHARE_TOO_LONG') return standard;
   try {
     const title = input.section === 'story_context' ? 'Xây dựng bối cảnh 4+2: ba tình huống' : 'Kể chuyện Mở đầu – Trước – Trong – Sau, mỗi phần ba câu';
     const result = standard.kind === 'pass'

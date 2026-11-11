@@ -2,13 +2,24 @@ import { createHash } from 'node:crypto';
 
 export const MAX_SPEAKING_CONVERSATION_CHARS = 160_000;
 
+export function assertSpeakingConversationLength(messages, code = 'SHARE_TOO_LONG') {
+  if (messages.reduce((count, message) => count + message.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) {
+    throw new Error(code);
+  }
+}
+
+export function speakingCheckErrorCode(error, fallback) {
+  const code = error?.code || error?.message;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(code) ? code : fallback;
+}
+
 // Nhận đúng hội thoại đã kiểm; giữ nguyên lời nói, bỏ metadata không dùng cho phân tích.
 // Trả bản chụp và mã nội dung. Dữ liệu sai làm transaction công nhận rollback.
 export function conversationSnapshot(conversation) {
   const messages = conversation?.messages?.filter(m => ['user', 'assistant'].includes(m?.role)
     && typeof m.text === 'string' && m.text.trim()).map(m => ({ role: m.role, text: m.text }));
-  if (!messages?.length || messages.some(m => !m.text.isWellFormed() || m.text.includes('\u0000'))
-    || messages.reduce((n, m) => n + m.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) throw new Error('DOCTOR_SNAPSHOT_INVALID');
+  if (!messages?.length || messages.some(m => !m.text.isWellFormed() || m.text.includes('\u0000'))) throw new Error('DOCTOR_SNAPSHOT_INVALID');
+  assertSpeakingConversationLength(messages, 'DOCTOR_SNAPSHOT_INVALID');
   const fingerprint = createHash('sha256').update(messages.map(m => `${m.role}\u0000${m.text.trim()}`).join('\u0001')).digest('hex');
   return { messages, fingerprint };
 }
