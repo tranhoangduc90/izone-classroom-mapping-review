@@ -178,6 +178,24 @@ def stage_journal(source):
         + "    if (k56Offline) data.checkpointState = k56Offline;")
 
 
+
+def stage_fixture(source):
+    anchors = [
+        ("dropResponse,record=()=>{}}={}){", "dropResponse,record=()=>{},mountJournal}={}){"),
+        (" app.use(express.json({limit:'1mb'}));",
+         " app.use(express.json({limit:'1mb'}));" + chr(10)
+         + " const adapter=mountJournal?.(app,{pool,config:{allowedOrigins:[]}});"),
+        ("resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),record,",
+         "resultFor:x=>({listening:x.listening_result,reading:x.reading_result}),limiter:(_q,_r,next)=>next(),"
+         + "record:(...args)=>{adapter?.business(...args);record(...args);},"),
+    ]
+    for before, after in anchors:
+        if source.count(before) != 1:
+            raise ValueError('Unexpected local Term 1 fixture')
+        source = source.replace(before, after)
+    return source
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('baseline', type=Path)
@@ -200,6 +218,11 @@ def main():
     shutil.copytree(baseline / 'src', candidate / 'src')
     (candidate / journal / 'term.mjs').write_text(adapter_source, encoding='utf8', newline=chr(10))
     shutil.copy2(journal_module, candidate / journal)
+    fixture = Path('term1-offline-20261107/test.mjs')
+    if (baseline / fixture).is_file():
+        (candidate / fixture.parent).mkdir()
+        (candidate / fixture).write_text(stage_fixture((baseline / fixture).read_text(encoding='utf8')),
+                                          encoding='utf8', newline=chr(10))
     (candidate / 'src' / MODULE).write_text(candidate_source, encoding='utf8', newline='\n')
     shutil.copy2(Path(__file__).with_name('term1-submission-hold.mjs'), candidate / 'src')
     print(hashlib.sha256((candidate / 'src' / MODULE).read_bytes()).hexdigest())
