@@ -148,17 +148,20 @@ async function retainSubmission(db, state, body, input, digest, key, {hours,limi
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`k67.${state.session.test_slug}.${key.lr?'lr':'writing'}.hold-quota`]);
+  const delivery=state.journey.audio_hash==='paper'?'paper':'cbt';
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+    [`k67.${state.session.test_slug}.${key.lr?delivery:'writing'}.hold-quota`]);
   const count = (await db.query(`SELECT count(*)::int AS n FROM ${key.table} held
     JOIN assessment.term_test_exam_session owner ON owner.id=held.session_id
-    WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2`,[state.now,state.session.test_slug])).rows[0].n;
+    WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2${key.lr?' AND held.delivery=$3':''}`,
+    [state.now,state.session.test_slug,...key.lr?[delivery]:[]])).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
   const row = (await db.query(`INSERT INTO ${key.table}
-    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section,review_only':''})
-    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8,$9':''})
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section,review_only,delivery':''})
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8,$9,$10':''})
     RETURNING payload_hash,held_at,expires_at,true AS has_payload`,
-  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section,reviewOnly]:[]])).rows[0];
+  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section,reviewOnly,delivery]:[]])).rows[0];
   return heldMetadata(row,state.now);
 }
 
@@ -287,7 +290,7 @@ export function mountTerm1PaperJourney(app, services) {mountCbtJourney(app,servi
 export function mountTerm2CbtJourney(app, services) {mountCbtJourney(app,services,term2);}
 export function mountTerm2PaperJourney(app, services) {mountCbtJourney(app,services,term2Paper);}
 
-async function preparePaper(db, profile, student, body, secret, timing, allowNew) {
+async function preparePaper(db, profile, student, body, secret, timing, {allowNew,enroll,holdEnabled}) {
   const {slug,table,version}=profile;
   const {class_id:classId,student_id:studentId,definition_version:definition}=student;
   const owner=[slug,classId,studentId,definition];
@@ -325,13 +328,14 @@ async function preparePaper(db, profile, student, body, secret, timing, allowNew
     }
     // Reserve native writes as soon as the permit is issued. The Reading clock starts separately.
     row=(await db.query(`INSERT INTO ${table}
-      (session_id,generation,student_ref,device_hash,audio_hash,activated_at)
-      VALUES($1,$2,$3,$4,'paper',clock_timestamp()) RETURNING *`,[current.id,current.generation,body.studentRef,deviceHash])).rows[0];
+      (session_id,generation,student_ref,device_hash,audio_hash,activated_at${enroll?',lr_hold_cohort':''})
+      VALUES($1,$2,$3,$4,'paper',clock_timestamp()${enroll?',true':''}) RETURNING *`,[current.id,current.generation,body.studentRef,deviceHash])).rows[0];
   }
   const now=(await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
   return {ok:true,version,examSessionToken:current.id,generation:Number(row.generation),attemptToken:current.attempt_id||current.id,
     studentRef:body.studentRef,studentName:current.student_name_snapshot,className:current.class_name_snapshot,
     examMode:current.exam_mode,activatedAt:clock(row.activated_at),serverNow:clock(now),permit:signature(secret,row,version),
+    ...(holdEnabled&&row.lr_hold_cohort===true?{submissionRecoveryVersion:1}:{}),
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
 }
 
@@ -345,10 +349,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
   const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
-  const lrHoldProfile=profile===mini?'mini':'term';
-  const lrHours=config[`${lrHoldProfile}CbtLrHoldHours`],lrLimit=config[`${lrHoldProfile}CbtLrHoldLimit`];
-  const lrHoldOptions=!profile.paper&&lrHours>0&&lrLimit>0?{hours:lrHours,limit:lrLimit}:null;
-  const lrHoldClasses=config[`${profile===mini?'mini':profile.writingHold}CbtLrHoldClasses`];
+  const lrHoldProfile=profile===mini?'miniCbt':profile.paper?'termPaper':'termCbt';
+  const lrHours=config[`${lrHoldProfile}LrHoldHours`],lrLimit=config[`${lrHoldProfile}LrHoldLimit`];
+  const lrHoldOptions=lrHours>0&&lrLimit>0?{hours:lrHours,limit:lrLimit}:null;
+  const lrHoldClasses=config[`${profile===mini?'mini':profile.writingHold}${profile.paper?'Paper':'Cbt'}LrHoldClasses`];
+  const enrollLr=classCode=>Boolean(lrHoldOptions&&(lrHoldClasses?.has('*')||lrHoldClasses?.has(classCode)));
   const lrHoldAllowed=journey=>lrHoldOptions&&journey.lr_hold_cohort===true;
   const readingReviewRequired=()=>problem('OFFLINE_REVIEW_REQUIRED',
     'Chưa xác nhận được nháp Reading đã lưu trước hạn. Bài được giữ để đối soát.',409,'READING_DRAFT_NOT_VERIFIED');
@@ -373,7 +378,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     const selected=(await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     if(!selected)throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
     const allowNew=mode==='on'&&(body.examMode!=='read_first'||config.readFirstNewEnabled);
-    return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),allowNew));
+    return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),
+      {allowNew,enroll:enrollLr(selected.class_name),holdEnabled:Boolean(lrHoldOptions)}));
   }));
   else app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
@@ -390,10 +396,10 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       if (!journey && (session.listening_started_at || session.listening_submitted_at || attempt?.reading_started_at || attempt?.reading_submitted_at
           || session.audio_owner_id || mode !== 'on')) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
       const enroll=holdOptions && (holdClasses?.has('*') || holdClasses?.has(session.class_name_snapshot));
-      const enrollLr=lrHoldOptions && (lrHoldClasses?.has('*') || lrHoldClasses?.has(session.class_name_snapshot));
+      const enrollListeningReading=enrollLr(session.class_name_snapshot);
       const row = journey || (await db.query(`INSERT INTO ${table}
-        (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''}${enrollLr?',lr_hold_cohort':''})
-        VALUES($1,$2,$3,$4,$5${enroll?',true':''}${enrollLr?',true':''}) RETURNING *`,
+        (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''}${enrollListeningReading?',lr_hold_cohort':''})
+        VALUES($1,$2,$3,$4,$5${enroll?',true':''}${enrollListeningReading?',true':''}) RETURNING *`,
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
       const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
@@ -459,7 +465,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       observation = {
         operationId:body.operationId, previousOperationId:body.previousOperationId, generation:body.generation,
         startedAtMs:body.startedAt, capturedAtMs:body.capturedAt, serverAtMs:clock(state.now),
-        automatic:body.automatic, definitionVersion:Number(state.session.definition_version), policyVersion:version
+        automatic:body.automatic, delivery:profile.paper?'paper':'cbt',
+        definitionVersion:Number(state.session.definition_version), policyVersion:version
       };
       if (body.section === 'writing') {
         observation.task1Length = body.answers.task1.length;
@@ -542,11 +549,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     if(writing&&shouldHold&&!result.replayed) {
       try { writingCommitted?.(); } catch {}
     }
-    if(profile.paper&&result.receipt.completed)paperAccepted?.(result.receipt.attemptToken,slug);
+    if(profile.paper&&result.receipt.completed&&(!shouldHold||!result.replayed))paperAccepted?.(result.receipt.attemptToken,slug);
     return {ok:true,receipt:result.receipt};
   };
   app.post(prefix+'/seal',writeLimiter,route(profile.writing?termSection:attemptSection,receive(false)));
-  if(profile.writing||lrHoldOptions)app.post(prefix+'/reading-review',writeLimiter,
+  if(!profile.paper&&(profile.writing||lrHoldOptions))app.post(prefix+'/reading-review',writeLimiter,
     route(attemptSection.extend({section:z.literal('reading'),automatic:z.literal(true)}),receive(false,true)));
   if (!profile.paper) app.post(prefix+'/interrupt',writeLimiter,route(interruptedListening,receive(true)));
 }

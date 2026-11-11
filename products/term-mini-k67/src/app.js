@@ -533,6 +533,7 @@ export function createApp({
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, observeSubmission:(...args)=>termJournal?.business(...args) });
   const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    observeSubmission:(...args)=>termJournal?.business(...args),
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
       void pool.query(fetchTermTestResultSql,[attemptToken]).then(({rows:[row]})=>{
         if(row?.test_slug===slug&&row.writing_scope==='lr_only'&&row.combined_result) {

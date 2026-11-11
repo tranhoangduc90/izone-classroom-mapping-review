@@ -51,8 +51,8 @@ export async function startPreviewExamJournal(source,origin,testSlug) {
     if(!response.ok||receipt.nonce!==envelope.nonce||signRpc(operatorKey,receipt)!==signature)throw Error('Fixture Collector read failed');
     return receipt.result;
   }
-  async function read(attemptToken,archive) {
-    const owner=await resolver({attemptToken},{testSlug});
+  async function read(token,archive,bySession=false) {
+    const owner=await resolver(bySession?{examSessionToken:token}:{attemptToken:token},{testSlug});
     const scope=producer.scopeForOwner(owner),scopeId=store.scopeId(scope);
     let packs=[];
     if(archive){
@@ -68,5 +68,9 @@ export async function startPreviewExamJournal(source,origin,testSlug) {
     const result=await call('transitRead',scope,{maxEvents:2000});
     return {scopeId,events:result.events,packs};
   }
-  return {mount,read};
+  async function close(){
+    await new Promise(resolve=>collector.close(resolve));
+    store.close();
+  }
+  return {mount,read,close};
 }

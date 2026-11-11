@@ -17,7 +17,7 @@ export async function createMiniFixture({examOrder=false,assets=null,syncErpGrad
     if(term2Journeys)await db.exec(await readFile(new URL('../../db/024-term2-cbt-journey.sql',import.meta.url),'utf8'));
     if(writingHold.term1WritingHoldHours||writingHold.term2WritingHoldHours)
       await db.exec(await readFile(new URL('../../db/030-term2-writing-submission-recovery.sql',import.meta.url),'utf8'));
-    if(writingHold.termCbtLrHoldHours||writingHold.miniCbtLrHoldHours)
+    if(writingHold.termCbtLrHoldHours||writingHold.miniCbtLrHoldHours||writingHold.termPaperLrHoldHours)
       await db.exec(await readFile(new URL('../../db/031-term-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));
     if(writingHold.miniCbtLrHoldHours)
       await db.exec(await readFile(new URL('../../db/032-mini-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));

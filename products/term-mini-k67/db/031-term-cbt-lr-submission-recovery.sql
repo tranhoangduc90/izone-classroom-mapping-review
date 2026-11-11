@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS assessment.term_k67_lr_submission_hold (
   session_id uuid NOT NULL REFERENCES assessment.term_test_exam_session(id) ON DELETE CASCADE,
   generation bigint NOT NULL CHECK (generation >= 0),
   section text NOT NULL CHECK (section IN ('listening','reading')),
+  delivery text NOT NULL DEFAULT 'cbt' CHECK (delivery IN ('cbt','paper')),
   operation_id uuid NOT NULL,
   payload_hash text NOT NULL CHECK (payload_hash ~ '^[a-f0-9]{64}$'),
   payload jsonb,
