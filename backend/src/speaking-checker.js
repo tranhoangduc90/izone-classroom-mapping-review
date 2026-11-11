@@ -7,7 +7,7 @@ import { checkStoryOutcomeSubmission } from './speaking-story-outcome-checker.js
 import { checkPersonSubmission } from './speaking-person-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
-import { MAX_SPEAKING_CONVERSATION_CHARS } from './speaking-conversation-snapshot.js';
+import { assertSpeakingConversationLength, speakingCheckErrorCode } from './speaking-conversation-snapshot.js';
 
 const GEMINI_ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
 const sectionRules = {
@@ -31,9 +31,7 @@ export async function readConversation(url) {
 export async function analyzeConversation(section, messages) {
   const rule = sectionRules[section];
   // Dùng cùng giới hạn với bản chụp, giữ nguyên nội dung và số thứ tự tin.
-  if (messages.reduce((length, message) => length + message.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) {
-    throw new Error('SHARE_TOO_LONG');
-  }
+  assertSpeakingConversationLength(messages);
   const transcript = messages.map((message, index) =>
     `[${index + 1}] ${message.role === 'user' ? 'HỌC VIÊN' : 'CHATGPT'}: ${message.text}`,
   ).join('\n');
@@ -76,7 +74,7 @@ export async function analyzeConversation(section, messages) {
 export async function analyzeInsertionStages(messages) {
   const transcript = messages.map((message, index) =>
     `[${index + 1}] ${message.role === 'user' ? 'HỌC VIÊN' : 'CHATGPT'}: ${message.text}`).join('\n');
-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
+  assertSpeakingConversationLength(messages);
   const response = await fetch(GEMINI_ENDPOINT, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: [
@@ -159,6 +157,7 @@ export async function checkSubmission(input, dependencies = {}) {
     const missing = /HTTP 40[134]|HTTP 404|NOT_FOUND/i.test(String(error?.message || ''));
     return {
       kind: missing ? 'blocked' : 'error',
+      errorCode: missing ? 'SHARE_UNAVAILABLE' : 'SHARE_READ_UNAVAILABLE',
       title: missing ? 'Chưa mở được hội thoại' : 'Chưa kiểm tra được link',
       message: missing
         ? 'Link này chưa cho người khác xem được. Hãy tạo lại ChatGPT Share rồi xác nhận lần nữa.'
@@ -187,8 +186,8 @@ export async function checkSubmission(input, dependencies = {}) {
         : { kind: 'blocked', title: 'Chưa đủ ba giai đoạn',
           message: 'Hãy luyện lần lượt phần giới thiệu, bài có hướng dẫn và bài tự do trong cùng hội thoại.',
           count: stages.length, fingerprint };
-    } catch {
-      return { kind: 'error', title: 'Chưa phân tích được hội thoại',
+    } catch (error) {
+      return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'STAGES_CHECK_UNAVAILABLE'), title: 'Chưa phân tích được hội thoại',
         message: 'Bước kiểm ba giai đoạn đang gặp lỗi. Link chưa được nhận; hãy thử lại sau.' };
     }
   }
@@ -206,7 +205,7 @@ export async function checkSubmission(input, dependencies = {}) {
   try {
     analysis = await analyzer(section, messages);
   } catch (error) {
-    return { kind: 'error', ...(error?.message === 'SHARE_TOO_LONG' ? { errorCode: 'SHARE_TOO_LONG' } : {}),
+    return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'CONTENT_CHECK_UNAVAILABLE'),
       title: 'Chưa phân tích được hội thoại', message: 'Bước kiểm nội dung đang gặp lỗi. Bài chưa được nhận; hãy thử lại sau.' };
   }
   if (!Array.isArray(analysis?.completed) || !Number.isFinite(analysis?.confidence) || analysis.confidence < 0.65) {

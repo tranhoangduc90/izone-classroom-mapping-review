@@ -1,0 +1,120 @@
+--- a/src/speaking-checker.js
++++ b/src/speaking-checker.js
+@@ -3 +3 @@
+-import { conversationSnapshot, MAX_SPEAKING_CONVERSATION_CHARS } from './speaking-conversation-snapshot.js';
++import { conversationSnapshot, assertSpeakingConversationLength, speakingCheckErrorCode } from './speaking-conversation-snapshot.js';
+@@ -40,3 +40 @@
+-  if (messages.reduce((length, message) => length + message.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) {
+-    throw new Error('SHARE_TOO_LONG');
+-  }
++  assertSpeakingConversationLength(messages);
+@@ -95 +93 @@
+-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -195,0 +194 @@
++      errorCode: missing ? 'SHARE_UNAVAILABLE' : 'SHARE_READ_UNAVAILABLE',
+@@ -224,2 +223,2 @@
+-    } catch {
+-      return { kind: 'error', title: 'Chưa phân tích được hội thoại',
++    } catch (error) {
++      return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'STAGES_CHECK_UNAVAILABLE'), title: 'Chưa phân tích được hội thoại',
+@@ -243 +242 @@
+-    return { kind: 'error', ...(error?.message === 'SHARE_TOO_LONG' ? { errorCode: 'SHARE_TOO_LONG' } : {}),
++    return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'CONTENT_CHECK_UNAVAILABLE'),
+@@ -305 +304 @@
+-  if (!conversation) return standard;
++  if (!conversation || standard.errorCode === 'SHARE_TOO_LONG') return standard;
+@@ -313 +312 @@
+-      errorCode: /^COMPLETION_[A-Z_]+$/.test(error?.message || '') ? error.message : 'COMPLETION_CHECK_UNAVAILABLE',
++      errorCode: standard.errorCode || speakingCheckErrorCode(error, 'COMPLETION_CHECK_UNAVAILABLE'),
+--- a/src/speaking-comparison-checker.js
++++ b/src/speaking-comparison-checker.js
+@@ -0,0 +1 @@
++import { assertSpeakingConversationLength, speakingCheckErrorCode } from './speaking-conversation-snapshot.js';
+@@ -18 +19 @@
+-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -49 +50 @@
+-  catch { return { kind: 'error', title: 'Chưa đọc được hội thoại', message: 'Bài chưa được nhận. Hãy kiểm tra link Share hoặc thử lại sau.' }; }
++  catch { return { kind: 'error', errorCode: 'SHARE_READ_UNAVAILABLE', title: 'Chưa đọc được hội thoại', message: 'Bài chưa được nhận. Hãy kiểm tra link Share hoặc thử lại sau.' }; }
+@@ -55 +56 @@
+-  catch { return { kind: 'error', title: 'Chưa phân tích được hội thoại', message: 'Bài chưa được nhận; bạn có thể thử lại sau.' }; }
++  catch (error) { return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'CONTENT_CHECK_UNAVAILABLE'), title: 'Chưa phân tích được hội thoại', message: 'Bài chưa được nhận; bạn có thể thử lại sau.' }; }
+--- a/src/speaking-conversation-snapshot.js
++++ b/src/speaking-conversation-snapshot.js
+@@ -3,0 +4,11 @@
++
++export function assertSpeakingConversationLength(messages, code = 'SHARE_TOO_LONG') {
++  if (messages.reduce((count, message) => count + message.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) {
++    throw new Error(code);
++  }
++}
++
++export function speakingCheckErrorCode(error, fallback) {
++  const code = error?.code || error?.message;
++  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(code) ? code : fallback;
++}
+@@ -10,2 +21,2 @@
+-  if (!messages?.length || messages.some(m => !m.text.isWellFormed() || m.text.includes('\u0000'))
+-    || messages.reduce((n, m) => n + m.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) throw new Error('DOCTOR_SNAPSHOT_INVALID');
++  if (!messages?.length || messages.some(m => !m.text.isWellFormed() || m.text.includes('\u0000'))) throw new Error('DOCTOR_SNAPSHOT_INVALID');
++  assertSpeakingConversationLength(messages, 'DOCTOR_SNAPSHOT_INVALID');
+--- a/src/speaking-how-to-checker.js
++++ b/src/speaking-how-to-checker.js
+@@ -0,0 +1 @@
++import { assertSpeakingConversationLength, speakingCheckErrorCode } from './speaking-conversation-snapshot.js';
+@@ -12 +13 @@
+-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -61 +62 @@
+-  catch { return { kind: 'error', title: 'Chưa đọc được hội thoại', message: 'Bài chưa được nhận. Hãy kiểm tra link Share hoặc thử lại sau.' }; }
++  catch { return { kind: 'error', errorCode: 'SHARE_READ_UNAVAILABLE', title: 'Chưa đọc được hội thoại', message: 'Bài chưa được nhận. Hãy kiểm tra link Share hoặc thử lại sau.' }; }
+@@ -67 +68 @@
+-  catch { return { kind: 'error', title: 'Chưa phân tích được hội thoại', message: 'Bài chưa được nhận; bạn có thể thử lại sau.' }; }
++  catch (error) { return { kind: 'error', errorCode: speakingCheckErrorCode(error, 'CONTENT_CHECK_UNAVAILABLE'), title: 'Chưa phân tích được hội thoại', message: 'Bài chưa được nhận; bạn có thể thử lại sau.' }; }
+--- a/src/speaking-practice-worker.js
++++ b/src/speaking-practice-worker.js
+@@ -2 +2 @@
+-import { conversationSnapshot } from './speaking-conversation-snapshot.js';
++import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
+@@ -30 +30 @@
+-  if (transcript.length > 80_000) throw new Error('PRACTICE_SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages, 'PRACTICE_SHARE_TOO_LONG');
+@@ -89 +89,5 @@
+-    catch (error) { standardError = error; result = { completed: false }; }
++    catch (error) {
++      if (error?.message === 'PRACTICE_SHARE_TOO_LONG') throw error;
++      standardError = error;
++      result = { completed: false };
++    }
+--- a/src/speaking-story-checker.js
++++ b/src/speaking-story-checker.js
+@@ -4 +4 @@
+-import { conversationSnapshot } from './speaking-conversation-snapshot.js';
++import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
+@@ -14 +14 @@
+-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -108 +108 @@
+-  if (!conversation) return standard;
++  if (!conversation || standard.errorCode === 'SHARE_TOO_LONG') return standard;
+--- a/src/speaking-story-detail-checker.js
++++ b/src/speaking-story-detail-checker.js
+@@ -4 +4 @@
+-import { conversationSnapshot } from './speaking-conversation-snapshot.js';
++import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
+@@ -15 +15 @@
+-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -72,0 +73 @@
++  if (standard.errorCode === 'SHARE_TOO_LONG') return standard;
+--- a/src/speaking-story-outcome-checker.js
++++ b/src/speaking-story-outcome-checker.js
+@@ -4 +4 @@
+-import { conversationSnapshot, MAX_SPEAKING_CONVERSATION_CHARS } from './speaking-conversation-snapshot.js';
++import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
+@@ -15 +15 @@
+-  if (messages.reduce((n, m) => n + m.text.length, 0) > MAX_SPEAKING_CONVERSATION_CHARS) throw new Error('SHARE_TOO_LONG');
++  assertSpeakingConversationLength(messages);
+@@ -81,0 +82 @@
++  if (standard.errorCode === 'SHARE_TOO_LONG') return standard;

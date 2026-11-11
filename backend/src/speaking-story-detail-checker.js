@@ -1,7 +1,7 @@
 import { parseSpeakingShareUrl } from './speaking-homework.js';
 import { readSpeakingShare } from './speaking-share-reader.js';
 import { speakingMessages, speakingFingerprint, completionFallback, COMPLETION_POLICY } from './speaking-completion-policy.js';
-import { conversationSnapshot } from './speaking-conversation-snapshot.js';
+import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
 import { fetchSpeakingEvidence,speakingVerificationCode } from './speaking-ai-verification.js';
 
 const endpoint = process.env.SPEAKING_CHECK_AI_ENDPOINT || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
@@ -12,7 +12,7 @@ const title = 'Kể chuyện Diễn biến chi tiết: một chủ đề, bốn 
 // Trả dẫn chứng để kiểm lại nguyên văn; lỗi dịch vụ không được coi là học viên làm thiếu.
 async function analyzeStoryDetail(messages) {
   const transcript = messages.map((m, i) => `[${i + 1}] ${m.role === 'user' ? 'HỌC VIÊN' : 'CHATBOT'}: ${m.text}`).join('\n');
-  if (transcript.length > 80_000) throw new Error('SHARE_TOO_LONG');
+  assertSpeakingConversationLength(messages);
   const response = await fetchSpeakingEvidence(endpoint, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: [
@@ -70,6 +70,7 @@ export async function checkStoryDetailSubmission(input, dependencies = {}) {
   } catch (error) {
     standard = { kind: 'error',errorCode:speakingVerificationCode(error),title: 'Chưa xác minh được hội thoại', message: 'Hệ thống chưa xác định chắc các bước luyện. Đây không phải kết luận bạn làm thiếu.' };
   }
+  if (standard.errorCode === 'SHARE_TOO_LONG') return standard;
   try {
     const result = standard.kind === 'pass' ? { ...standard, acceptanceBasis: 'standard', policyVersion: COMPLETION_POLICY }
       : await completionFallback(messages, title, standard, dependencies.analyzeCompletion);
