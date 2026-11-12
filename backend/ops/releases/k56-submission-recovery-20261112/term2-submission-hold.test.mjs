@@ -47,7 +47,7 @@ async function startWriting(f, mode) {
 }
 
 for (const mode of ['read_first', 'lis_first']) {
-  test('Term 2 K56 retains stale Writing and accepts a valid seal once after lost ACK · ' + mode, async t => {
+  test('Term 2 K56 retains stale Writing and accepts a valid seal once with a full hold store and lost ACK · ' + mode, async t => {
     let dropped, logFailure = false;
     const observations = [];
     const f = await setup(t, mode, {
@@ -78,8 +78,11 @@ for (const mode of ['read_first', 'lis_first']) {
     assert.ok(observations.some(([name,,,data]) => name === 'offline_submission_held' &&
       data.operationId === stale.operationId && data.task1Length === stale.payload.task1.length));
     assert.ok(!JSON.stringify(observations).includes(stale.payload.task1));
+    await f.db.query('UPDATE assessment.term2_offline_run SET submission_hold_limit=1 WHERE attempt_id=$1',
+      [f.scope.attemptToken]);
     f.advance(Date.parse(writing.startedAt) + f.timing.writingDurationMinutes * 60000 - 500 - f.clock);
     const valid = op(f, 'writing', 'seal', { ...writing, revision: 3, task1: 'Valid final Writing Task 1.' });
+    assert.equal((await f.request('/offline/hold', valid)).error, 'OFFLINE_HOLD_FULL');
     dropped = valid.operationId;
     logFailure = true;
     await assert.rejects(() => submit(f, valid));

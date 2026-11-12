@@ -70,9 +70,9 @@ export function createSubmissionRecovery({ profile, record, fail, transaction, a
         return store.hold(client, a.attempt_token, body, hash, run, a.erp_course_class_id);
       });
     } catch (error) {
-      if (product === 'mini_k56' && !required && error.code === 'OFFLINE_HOLD_FULL') {
+      if (!required && ['OFFLINE_HOLD_FULL', 'OFFLINE_HOLD_EXPIRED'].includes(error.code)) {
         note('offline_hold_unconfirmed', profile.slug, body.attemptToken, {
-          ...trace, phase: 'hold', reason: 'OFFLINE_HOLD_FULL'
+          ...trace, phase: 'hold', reason: error.code
         });
         return;
       }

@@ -179,18 +179,43 @@ test('Term 1 respects quota and expires the held payload without renewing the sa
   const first = op(f, 'reading', 'seal');
   const later = op(f, 'reading', 'seal');
   assert.equal((await post(f, first)).error, 'OFFLINE_START_REQUIRED');
-  const full = await post(f, later);
+  const full = await f.request('/offline/hold', later);
   assert.equal(full.error, 'OFFLINE_HOLD_FULL');
   assert.equal(full.status, 503);
   assert.equal(full.held, undefined);
+  assert.equal((await post(f, later)).error, 'OFFLINE_START_REQUIRED');
   await f.db.query(`UPDATE assessment.term1_submission_hold SET
     held_at=statement_timestamp()-interval '2 hours',expires_at=statement_timestamp()-interval '1 hour'
     WHERE attempt_id=$1 AND operation_id=$2`, [f.scope.attemptToken, first.operationId]);
   await expireTerm1Holds(f.db);
   assert.equal((await f.request('/offline/status', { ...f.scope, operationId: first.operationId })).held, undefined);
-  assert.equal((await post(f, first)).error, 'OFFLINE_HOLD_EXPIRED');
+  assert.equal((await f.request('/offline/hold', first)).error, 'OFFLINE_HOLD_EXPIRED');
+  assert.equal((await post(f, first)).error, 'OFFLINE_START_REQUIRED');
   assert.equal((await f.db.query('SELECT payload FROM assessment.term1_submission_hold')).rows[0].payload, null);
   assert.ok((await post(f, later)).held?.payloadHash);
+  const start = op(f, 'reading', 'start', { startedAt: first.payload.startedAt });
+  assert.equal((await post(f, start)).receipt?.status, 'accepted');
+  assert.equal((await post(f, first)).receipt?.status, 'accepted');
+});
+
+test('Term 1 main keeps a timing review in the expiring store and reads its metadata', async t => {
+  const f = await setup(t, 'read_first');
+  const start = op(f, 'reading', 'start');
+  assert.equal((await post(f, start)).receipt?.status, 'accepted');
+  const seal = op(f, 'reading', 'seal', { startedAt: start.payload.startedAt });
+  seal.payload.timeValid = false;
+  const review = await post(f, seal);
+  assert.equal(review.receipt?.status, 'review_required');
+  assert.equal(review.receipt?.reason, 'TIME_REVIEW_REQUIRED');
+  assert.ok(review.held?.payloadHash);
+  const status = await f.request('/offline/status', { ...f.scope, operationId: seal.operationId });
+  assert.deepEqual(status.held, review.held);
+  assert.deepEqual(status.receipt, review.receipt);
+  const {rows:[recorded]} = await f.db.query(`SELECT
+    (SELECT payload FROM assessment.term1_offline_operation WHERE operation_id=$1) AS operation,
+    (SELECT payload->'payload'->'answers' FROM assessment.term1_submission_hold WHERE operation_id=$1) AS answers,
+    (SELECT count(*)::int FROM assessment.k56_portal_field_dispatch) AS grades`, [seal.operationId]);
+  assert.deepEqual(recorded, { operation: {}, answers: seal.payload.answers, grades: 0 });
 });
 
 test('Term 1 main permit cannot retain or read a hold once a skill grant is bound', async t => {

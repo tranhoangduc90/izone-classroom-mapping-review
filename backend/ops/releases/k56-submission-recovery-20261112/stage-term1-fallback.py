@@ -68,7 +68,7 @@ def fallback_core(source):
     source = replace(source, '''   if(receipt||grant||!isHoldRun(run))return {receipt};
    const pending=await readTerm1Hold(client,a.attempt_token,b);
    if(pending)await rejectMainSkillIfBound(client,a,pending.section);
-   return {receipt,held:pending?.held,section:pending?.section};''', '''   if(receipt||!isHoldRun(run))return {receipt};
+   return {receipt,held:pending?.held,section:pending?.section};''', '''   if(receipt?.status==='accepted'||!isHoldRun(run))return {receipt};
    const pending=await readTerm1Hold(client,a.attempt_token,b,{clientAttemptToken:b.attemptToken});
    if(grant&&pending?.section!==grant.section)return {receipt};
    if(!grant&&pending)await rejectMainSkillIfBound(client,a,pending.section);
@@ -86,11 +86,30 @@ def fallback_core(source):
     for event in ['offline_hold_unconfirmed', 'offline_submission_held', 'offline_submission_unconfirmed', 'offline_writing_start_failed']:
         source = replace(source, f"note('{event}',SLUG,b.attemptToken,",
                          f"note('{event}',SLUG,req.term1FallbackAttemptId??b.attemptToken,")
-    return replace(source, '''   if(!interruption)validateContent(a,b);
+    source = replace(source, '''   }catch(error){
+    if(error.status)throw error;
+    note('offline_hold_unconfirmed',SLUG,req.term1FallbackAttemptId??b.attemptToken,''', '''   }catch(error){
+    if(!required&&['OFFLINE_HOLD_FULL','OFFLINE_HOLD_EXPIRED'].includes(error.code)){
+     note('offline_hold_unconfirmed',SLUG,req.term1FallbackAttemptId??b.attemptToken,{...baseMeta,phase:'hold',reason:error.code});
+     return;
+    }
+    if(error.status)throw error;
+    note('offline_hold_unconfirmed',SLUG,req.term1FallbackAttemptId??b.attemptToken,''')
+    source = replace(source, '   if(isHoldRun(run))await assertTerm1HoldIdentity(client,a.attempt_token,b,hash);',
+                     '   const recoveryEnabled=isHoldRun(run);\n'
+                     '   if(recoveryEnabled)await assertTerm1HoldIdentity(client,a.attempt_token,b,hash);')
+    source = replace(source, '''   if(!interruption)validateContent(a,b);
    const receipt=''', '''   if(!interruption)validateContent(a,b);
-   // A retained fallback seal under review stays in the expiring store. It has no official receipt or grade.
-   if(grant&&hold&&review)throw fail(review,'Bản đã chốt cần đối soát trước khi nhận chính thức.');
+   // An opted-in fallback seal under review gets no official receipt or grade.
+   if(grant&&recoveryEnabled&&b.kind==='seal'&&review)throw fail(review,'Bản đã chốt cần đối soát trước khi nhận chính thức.');
    const receipt=''')
+    source = replace(source, 'b.section,b.kind,JSON.stringify(b),JSON.stringify(receipt)]);',
+                     'b.section,b.kind,JSON.stringify(review&&recoveryEnabled?{}:b),JSON.stringify(receipt)]);')
+    source = replace(source, '   if(hold)await clearTerm1Hold(client,a.attempt_token,b);',
+                     '   if(!review&&hold)await clearTerm1Hold(client,a.attempt_token,b);')
+    return replace(source, '  res.json({ok:true,persisted:true,receipt:out.receipt});',
+                   '  res.json({ok:true,persisted:true,receipt:out.receipt,'
+                   '...(hold&&out.receipt.status===\'review_required\'?{held:hold.held}:{})});')
 
 
 def journal_overlay(source, journal_source):
