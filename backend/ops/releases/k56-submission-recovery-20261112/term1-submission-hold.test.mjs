@@ -120,6 +120,31 @@ test('Term 1 retries an unchanged seal after the missing start arrives', async t
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.k56_portal_field_dispatch')).rows[0].n, 1);
 });
 
+test('Term 1 holds later Writing independently without committing it or queuing a grade', async t => {
+  const f = await setup(t, 'read_first');
+  const reading = op(f, 'reading', 'seal');
+  assert.equal((await post(f, reading)).error, 'OFFLINE_START_REQUIRED');
+  const writing = op(f, 'writing', 'seal', { dependency: reading.operationId,
+    task1: 'A later Writing answer with no accepted prerequisite.' });
+  const retained = await f.request('/offline/hold', writing);
+  assert.equal(retained.status, 200);
+  assert.ok(retained.held?.payloadHash);
+  assert.equal(retained.alreadyRecorded, false);
+  assert.deepEqual((await f.request('/offline/hold', writing)).held, retained.held);
+  const status = await f.request('/offline/status', { ...f.scope, operationId: writing.operationId });
+  assert.deepEqual(status.held, retained.held);
+  assert.equal(status.persisted, false);
+  assert.equal(status.receipt, null);
+  assert.equal((await f.request('/offline/hold', { ...writing, generation: 1 })).status, 403);
+  assert.equal((await f.request('/offline/hold', op(f, 'writing', 'draft'))).status, 403);
+  const { rows: [row] } = await f.db.query(`SELECT
+    (SELECT payload->'payload'->>'task2' FROM assessment.term1_submission_hold WHERE operation_id=$1) AS essay,
+    (SELECT count(*)::int FROM assessment.term1_offline_operation) AS receipts,
+    (SELECT count(*)::int FROM assessment.term_test_writing_grading_job) AS jobs,
+    (SELECT count(*)::int FROM assessment.k56_portal_field_dispatch) AS grades`, [writing.operationId]);
+  assert.deepEqual(row, { essay: writing.payload.task2, receipts: 0, jobs: 0, grades: 0 });
+});
+
 
 test('Term 1 keeps a held copy when the receipt transaction fails', async t => {
   let failReceipt;

@@ -57,7 +57,7 @@ import {term1HoldPolicy, term1HoldEnabled, readTerm1Hold, holdTerm1Seal,
      VALUES($1,$2,$3,$4,$5¤{enroll?',$6,$7':''}) RETURNING *§),
      [a.attempt_token,a.exam_session_token,body.generation,body.ownerId,POLICY,...(enroll?[holdPolicy.hours,holdPolicy.limit]:[])])).rows[0];""")
     replace("preparedAt:run.prepared_at,sendWindowHours:24},",
-"""preparedAt:run.prepared_at,sendWindowHours:24,...(isHoldRun(run)?{submissionRecoveryVersion:1}:{})},""")
+"""preparedAt:run.prepared_at,sendWindowHours:24,...(isHoldRun(run)?{submissionRecoveryVersion:1,submissionHoldOnly:true}:{})},""")
     replace("""  const result=await transaction(async client=>{const {a,grant}=await admitted(client,b,req.get('x-term2-permit'),req.get('x-term1-skill-grant'));
    return (await client.query(tables(§SELECT receipt FROM assessment.term2_offline_operation
      WHERE operation_id=$1 AND attempt_id=$2 AND ($3::text IS NULL OR section=$3)
@@ -83,26 +83,35 @@ import {term1HoldPolicy, term1HoldEnabled, readTerm1Hold, holdTerm1Seal,
    heldAtMs:result.held.heldAt,expiresAtMs:result.held.expiresAt
   });
   res.json({ok:true,persisted:Boolean(result.receipt),receipt:result.receipt||null,...(result.held?{held:result.held}:{})});""")
-    replace("""  const b=parse(operation,req.body),hash=digest(b);
+    replace(""" router.post('/:testSlug/offline/operation',onlyThis,draftLimiter,route(async(req,res)=>{
+  const b=parse(operation,req.body),hash=digest(b);
   const out=await transaction(async client=>{
    let {a,run,grant}=await admitted(client,b,req.get('x-term2-permit'),req.get('x-term1-skill-grant'));
    const previous=(await client.query(tables('SELECT * FROM assessment.term2_offline_operation WHERE operation_id=$1'),[b.operationId])).rows[0];
    if(previous){if(previous.attempt_id!==a.attempt_token||(grant&&previous.section!==grant.section)||previous.payload_hash!==hash)throw fail('OPERATION_CONFLICT','Mã gửi đã có nội dung khác. Bản trên máy được giữ.');return {receipt:previous.receipt,a};}""",
-"""  const b=parse(operation,req.body),hash=digest(b);
-  const baseMeta={section:b.section,operationId:b.operationId,requestId:requestId(req),revision:b.revision};
-  const previousReceipt=async (client,a,grant)=>{
+""" const operationMeta=(req,b)=>({section:b.section,operationId:b.operationId,requestId:requestId(req),revision:b.revision});
+ async function previousReceipt(client,a,b,hash,grant){
    const previous=(await client.query(tables('SELECT attempt_id,section,payload_hash,receipt FROM assessment.term2_offline_operation WHERE operation_id=$1'),[b.operationId])).rows[0];
    if(previous&&(previous.attempt_id!==a.attempt_token||(grant&&previous.section!==grant.section)
      ||previous.payload_hash!==hash))throw fail('OPERATION_CONFLICT','Mã gửi đã có nội dung khác. Bản trên máy được giữ.');
    return previous?.receipt;
-  };
-  let hold, observation;
+ }
   // Retention ends its transaction before the operation can be rejected by a business guard.
-  if(profile.tablePrefix==='term1'&&b.kind==='seal'&&req.get('x-term1-skill-grant')===undefined){
+ async function retainSeal(req,b,hash,{required=false}={}){
+   if(profile.tablePrefix!=='term1'||b.kind!=='seal'||req.get('x-term1-skill-grant')!==undefined){
+    if(required)throw fail('OFFLINE_HOLD_NOT_ALLOWED','Không thể giữ bản qua đường nộp này.',403);
+    return;
+   }
+   const baseMeta=operationMeta(req,b);
+   let hold, observation;
    try{
     hold=await transaction(async client=>{
      const {a,run}=await admitted(client,b,req.get('x-term2-permit'));
-     if(!isHoldRun(run)||await previousReceipt(client,a,null))return;
+     if(!isHoldRun(run)){
+      if(required)throw fail('OFFLINE_HOLD_NOT_ALLOWED','Lượt này chưa có quyền lưu để đối soát.',403);
+      return;
+     }
+     if(await previousReceipt(client,a,b,hash,null))return;
      await rejectMainSkillIfBound(client,a,b.section);
      if(b.payload.interruptionReason!==undefined)throw fail('OFFLINE_INVALID','Trạng thái gián đoạn không khớp kỹ năng.',400);
      validateContent(a,b);
@@ -122,14 +131,23 @@ import {term1HoldPolicy, term1HoldEnabled, readTerm1Hold, holdTerm1Seal,
     note('offline_hold_unconfirmed',SLUG,b.attemptToken,{...baseMeta,phase:'hold',reason:'HOLD_TRANSACTION_UNCONFIRMED'});
     throw fail('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
    }
-  }
-  if(hold)note('offline_submission_held',SLUG,b.attemptToken,{...baseMeta,phase:'hold',...observation,
-   heldAtMs:hold.held.heldAt,expiresAtMs:hold.held.expiresAt,replayed:hold.replayed});
+   if(hold)note('offline_submission_held',SLUG,b.attemptToken,{...baseMeta,phase:'hold',...observation,
+    heldAtMs:hold.held.heldAt,expiresAtMs:hold.held.expiresAt,replayed:hold.replayed});
+   return hold&&{...hold,observation};
+ }
+ if(profile.tablePrefix==='term1')router.post('/:testSlug/offline/hold',onlyThis,draftLimiter,route(async(req,res)=>{
+  const b=parse(operation,req.body);
+  const hold=await retainSeal(req,b,digest(b),{required:true});
+  res.json({ok:true,held:hold?.held||null,alreadyRecorded:!hold});
+ }));
+ router.post('/:testSlug/offline/operation',onlyThis,draftLimiter,route(async(req,res)=>{
+  const b=parse(operation,req.body),hash=digest(b),baseMeta=operationMeta(req,b);
+  const hold=await retainSeal(req,b,hash),observation=hold?.observation;
   let out;
   try{
    out=await transaction(async client=>{
    let {a,run,grant}=await admitted(client,b,req.get('x-term2-permit'),req.get('x-term1-skill-grant'));
-   const previous=await previousReceipt(client,a,grant);
+   const previous=await previousReceipt(client,a,b,hash,grant);
    if(previous)return {receipt:previous,a,replayed:true};
    if(isHoldRun(run))await assertTerm1HoldIdentity(client,a.attempt_token,b,hash);""")
     replace("""   if(b.section==='writing'&&typeof p[profile.taskId]!=='string')throw fail('OFFLINE_WRITING_REQUIRED','Chưa có trường bài Writing đúng Task; không coi là bài trắng.',400);
@@ -193,7 +211,7 @@ def stage_fixture(source):
         ("dropResponse,record=()=>{}}={}){",
          "dropResponse,record=()=>{},mountJournal,writingMigration,syncErpGrades}={}){"),
         ("CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY, test_slug text,",
-         "CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY, class_name_snapshot text DEFAULT 'IC5601', test_slug text,"),
+         "CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY, class_name_snapshot text, test_slug text,"),
         (" CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY",
          " `);" + chr(10) + " if(writingMigration)await db.exec(writingMigration);" + chr(10)
          + " else await db.exec(`CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY"),

@@ -9,6 +9,9 @@ Luồng thử bắt đầu ở bài chính. VPS kiểm permit, lượt, thế h�
 định nghĩa và kích thước bài trước khi giữ một bản chốt. Kiểm thứ tự, mốc giờ và
 revision chạy sau khi giao dịch giữ đã kết thúc. API tra lại trả hash và thời hạn
 giữ cho đúng phạm vi. Biên nhận chính thức và điểm tiếp tục theo sổ operation.
+Khi một kỹ năng còn cần đối soát, lượt có cờ submissionHoldOnly vẫn gửi được
+bản đã chốt của kỹ năng sau qua /offline/hold. API áp dụng cùng quyền và quota,
+trả mã/hash để tra bản giữ. Thứ tự nhận chính thức tiếp tục theo /offline/operation.
 Mã đã giữ gắn với cùng dấu vân tay qua các lần thử. Bản đã chuyển vào sổ operation
 bỏ bản nội dung trùng khỏi kho giữ. Chỉ giữ bộ đếm và mã tham chiếu trong nhật ký.
 
