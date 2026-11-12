@@ -107,11 +107,13 @@ export function termStudentIdentitySql({ k56 = false } = {}) {
       AND NOT EXISTS(SELECT 1 FROM assessment.term_test_roster r
         WHERE r.test_slug=$4 AND r.erp_course_class_id=c.erp_course_class_id)`;
   return `WITH definition AS (
-    SELECT slug FROM assessment.test_definition WHERE slug=$4 AND is_active
+    SELECT to_jsonb(t)->'open_class_ids' AS open_class_ids
+    FROM assessment.test_definition t WHERE slug=$4 AND is_active
   ), target_classes AS (
     SELECT c.erp_course_class_id,c.erp_class_name_snapshot FROM mapping.classroom_course_mapping c
     CROSS JOIN definition d WHERE c.erp_course_class_id>0
       AND ($3::text IS NULL OR upper(trim(c.erp_class_name_snapshot))=$3::text) ${access}
+      ${k56 ? '' : "AND ($4 <> 'pretest-lesson-16' OR d.open_class_ids ? c.erp_course_class_id::text)"}
   ), candidates AS (
     SELECT r.erp_student_contact_id::text AS person_id,r.student_ref::text AS student_ref,
       r.erp_course_class_id::text AS class_id,c.erp_class_name_snapshot AS class_code,
@@ -155,7 +157,7 @@ export function mountMappingStudentIdentity(app, { pool, middleware = [], readOn
 export function mountTermStudentIdentity(app, { pool, k56 = false, middleware = [], readOnce = pendingIdentityReads() } = {}) {
   const sql = termStudentIdentitySql({ k56 });
   app.post('/api/term-tests/:testSlug/student-identity', ...middleware, (req, res, next) => {
-    if (!/^(?:term-test-[1-9][0-9]*(?:-k56)?|mini-test-[a-z0-9-]+)$/.test(req.params.testSlug || ''))
+    if (!/^(?:term-test-[1-9][0-9]*(?:-k56)?|mini-test-[a-z0-9-]+|pretest-lesson-16)$/.test(req.params.testSlug || ''))
       return res.status(400).json({ ok: false, error: 'INVALID_TEST_SLUG', message: 'Mã bài test chưa hợp lệ.' });
     return createStudentIdentityHandler({ resolve: async input => {
       const params = [...studentIdentityParameters(input), req.params.testSlug];

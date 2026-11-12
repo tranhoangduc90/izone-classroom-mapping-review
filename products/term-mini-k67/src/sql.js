@@ -27,6 +27,15 @@ export function teacherCanReadClass(email, authorization, classId) {
   )`;
 }
 
+// Scope the shortened exam by ERP class without changing legacy roster behavior.
+export function termTestClassOpen(slug, classId) {
+  return `(${slug} <> 'pretest-lesson-16' OR EXISTS (
+    SELECT 1 FROM assessment.test_definition AS scope
+    WHERE scope.slug = ${slug} AND scope.is_active
+      AND (to_jsonb(scope)->'open_class_ids') ? (${classId})::text
+  ))`;
+}
+
 export const listTermTestRosterSql = `WITH definition AS (
   SELECT slug, title, version
   FROM assessment.test_definition
@@ -37,6 +46,7 @@ target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
   FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+    AND ${termTestClassOpen('$2', 'erp_course_class_id')}
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -142,6 +152,7 @@ export const findStudentForTermTestSql = `WITH target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
   FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+    AND ${termTestClassOpen('$2', 'erp_course_class_id')}
 ),
 roster_mode AS (
   SELECT EXISTS (
@@ -905,11 +916,12 @@ FROM assessment.term_test_attempt AS attempt
 WHERE attempt.id = $1::uuid
   AND attempt.completed_at IS NOT NULL
   AND (
-    attempt.test_slug = 'mini-test-lesson-5'
+    attempt.test_slug IN ('mini-test-lesson-5','pretest-lesson-16')
     OR attempt.writing_submitted_at IS NOT NULL
   );`;
 
-export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
+export function termTestTeacherOptionsSql(pretest = false) {
+  return `WITH allowed_classes AS (
   SELECT
     course.erp_course_class_id::text AS class_id,
     course.erp_class_name_snapshot AS class_name,
@@ -921,11 +933,13 @@ export const listTermTestTeacherOptionsSql = `WITH allowed_classes AS (
     ) AS is_assigned_teacher
   FROM mapping.classroom_course_mapping AS course
   WHERE ${teacherCanReadClass('$1', '$2', 'course.erp_course_class_id')}
+    ${pretest ? `AND ${termTestClassOpen("'pretest-lesson-16'", 'course.erp_course_class_id')}` : ''}
 ),
 active_tests AS (
   SELECT slug, title, version
   FROM assessment.test_definition
   WHERE is_active = true
+    AND slug ${pretest ? '=' : '<>'} 'pretest-lesson-16'
 )
 SELECT jsonb_build_object(
   'classes', COALESCE((
@@ -948,6 +962,9 @@ SELECT jsonb_build_object(
     FROM active_tests
   ), '[]'::jsonb)
 ) AS response;`;
+}
+
+export const listTermTestTeacherOptionsSql = termTestTeacherOptionsSql();
 
 export const listTermTestTeacherResultsSql = `WITH definition AS (
   SELECT slug, title, version
@@ -959,6 +976,7 @@ target_classes AS (
   SELECT erp_course_class_id, erp_class_name_snapshot
   FROM mapping.classroom_course_mapping
   WHERE upper(trim(erp_class_name_snapshot)) = upper(trim($1))
+    AND ${termTestClassOpen('$2', 'erp_course_class_id')}
 ),
 authorized_classes AS (
   SELECT
@@ -1308,7 +1326,7 @@ latest_attempt AS (
   WHERE attempt.test_slug = $2
     AND attempt.completed_at IS NOT NULL
     AND (
-      attempt.test_slug = 'mini-test-lesson-5'
+      attempt.test_slug IN ('mini-test-lesson-5','pretest-lesson-16')
       OR attempt.writing_submitted_at IS NOT NULL
     )
     AND (

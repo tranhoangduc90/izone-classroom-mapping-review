@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { sealMiniCbtSection } from './mini-cbt-offline.js';
 import { buildCombinedResult } from './term-tests.js';
-import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
+import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
@@ -14,6 +14,10 @@ const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1Pap
 const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true};
 const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true};
+const pretest = {slug:'pretest-lesson-16',version:'pretest-lesson-16-k67-cbt-v1',mode:'pretestCbtJourneyMode',
+  table:term2.table,guard:term2.guard,receiptStatus:true,lrOnly:true,privateAudio:true};
+const pretestPaper = {...pretest,version:'pretest-lesson-16-k67-paper-v1',mode:'pretestPaperJourneyMode',
+  privateAudio:false,paper:true};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
@@ -39,9 +43,9 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const initial = session => session.exam_mode === 'read_first' ? 'reading' : 'listening';
 const peer = section => section === 'reading' ? 'listening' : 'reading';
 
-function timingForAudio(assets, slug, audioHash) {
+function timingForAudio(assets, slug, audioHash, pinnedManifest) {
   const timing = assets.getTiming(slug);
-  const audio = publicAudioCatalog[slug];
+  const audio = pinnedManifest || publicAudioCatalog[slug];
   if (audio?.sha256 !== audioHash || !Number.isFinite(audio?.durationSeconds)) return timing;
   return { ...timing, listeningDurationSeconds: audio.durationSeconds,
     listeningTotalSeconds: audio.durationSeconds + timing.listeningReviewSeconds };
@@ -146,6 +150,7 @@ async function commitInterruption(db, state, body, timing, profile) {
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'lis_first','cbt',$10,$11) RETURNING id`,
     [body.operationId,session.test_slug,session.definition_version,session.erp_course_class_id,session.class_name_snapshot,
       session.erp_student_contact_id,session.student_name_snapshot,session.id,session.attempt_mode,session.generation,at])).rows[0];
+  if (profile.lrOnly) await db.query(`UPDATE assessment.term_test_attempt SET writing_scope='lr_only' WHERE id=$1`, [inserted.id]);
   await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2,updated_at=now() WHERE id=$1', [session.id,inserted.id]);
   return {attemptToken:inserted.id,completed:false,nextSection:'reading'};
 }
@@ -188,10 +193,14 @@ async function commit(db, state, body, timing, profile) {
     record: row, start: body.startedAt, deadline, listening }, { ...body, capturedAt: new Date(body.capturedAt).toISOString() },profile.slug);
   if(profile.paper&&!attempt)await db.query(`UPDATE assessment.term_test_attempt
     SET exam_delivery='answer_sheet',writing_scope='lr_only' WHERE id=$1`,[result.attemptToken]);
+  if(profile.lrOnly&&!profile.paper&&!attempt)await db.query(`UPDATE assessment.term_test_attempt
+    SET writing_scope='lr_only' WHERE id=$1`,[result.attemptToken]);
   return profile.writing&&result.completed?{...result,completed:false,nextSection:'writing'}:result;
 }
 
 export function mountMiniCbtJourney(app, services) {mountCbtJourney(app,services,mini);}
+export function mountPretestCbtJourney(app, services) {mountCbtJourney(app,services,pretest);}
+export function mountPretestPaperJourney(app, services) {mountCbtJourney(app,services,pretestPaper);}
 export function mountTerm1CbtJourney(app, services) {mountCbtJourney(app,services,term1);}
 export function mountTerm1PaperJourney(app, services) {mountCbtJourney(app,services,term1Paper);}
 export function mountTerm2CbtJourney(app, services) {mountCbtJourney(app,services,term2);}
@@ -245,7 +254,7 @@ async function preparePaper(db, profile, student, body, secret, timing, allowNew
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
 }
 
-function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted }, profile) {
+function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, paperAccepted, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
   const mode=config[profile.mode];
@@ -274,7 +283,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   }));
   else app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
-    const manifest = assets.getJourneyManifest?.(slug) || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
+    // Read protected asset metadata after identifying a permitted roster member and outside the DB transaction.
+    if (!selected) throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
+    const manifest = await assets.getJourneyManifest?.(slug)
+      || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
+    if (!manifest) throw problem('OFFLINE_UNAVAILABLE', 'Chưa chuẩn bị được audio đúng bài.',503);
     return audioTransaction(pool,async db => {
       const {session,attempt,journey,now} = await lock(db,body,profile);
       if (!selected || String(selected.class_id) !== String(session.erp_course_class_id)
@@ -291,14 +304,47 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         [session.id,body.generation,body.studentRef,sha(body.deviceProof),manifest.sha256])).rows[0];
       if (row.audio_hash !== manifest.sha256 || Number(row.generation) !== body.generation) throw problem('OFFLINE_SCOPE','Bản đề đã thay đổi.',403);
       const audio=profile===mini?miniR2Audio({config,slug,row:{...session,attempt_mode:'cbt'},manifest,requested:R2_POLICY}):
-        profile===term1?term1JourneyR2Audio({config,row:session,manifest}):term2JourneyR2Audio({config,row:session,manifest});
+        profile===term1?term1JourneyR2Audio({config,row:session,manifest}):
+        profile===term2?term2JourneyR2Audio({config,row:session,manifest}):
+        profile===pretest?pretestJourneyR2Audio({config,row:session,manifest}):{};
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
         ...(config.listeningContinuityEnabled?{listeningContinuityVersion:1}:{}),
-        content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash),audioManifest:manifest,...audio};
+        content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash,manifest),audioManifest:manifest,...audio};
     });
   }));
+  if (profile.privateAudio) {
+    app.post(prefix + '/audio', readLimiter, async (req, res, next) => {
+      res.set('Cache-Control', 'no-store, private');
+      try {
+        const parsed = scope.safeParse(req.body);
+        if (!secret || !assets || !parsed.success) throw problem('OFFLINE_INVALID', 'Yêu cầu tải audio chưa hợp lệ.', 400);
+        const pin = await audioTransaction(pool, async db => {
+          const state = await lock(db, parsed.data, profile);
+          authorize(parsed.data, state, req.get('x-term2-permit'), secret, version);
+          return state.journey.audio_hash;
+        });
+        const manifest = await assets.getJourneyManifest(slug);
+        if (!manifest?.private || manifest.sha256 !== pin) {
+          throw problem('OFFLINE_SCOPE', 'Tệp nghe không khớp bản đã cấp.', 403);
+        }
+        const log = event => {
+          try {
+            logEvent(event, slug, parsed.data.examSessionToken, {
+              source: 'private-api', byteLength: Number(res.getHeader('content-length')) || 0, status: res.statusCode
+            });
+          } catch {}
+        };
+        res.once('finish', () => log('private_audio_response_finished'));
+        res.once('close', () => { if (!res.writableFinished) log('private_audio_response_interrupted'); });
+        await assets.streamDemoAudio(slug, req, res);
+      } catch (error) {
+        if (!error.status || res.headersSent) return next(error);
+        res.status(error.status).json({ ok: false, error: error.code, message: error.message });
+      }
+    });
+  }
   if(!profile.paper)app.post(prefix+'/begin',writeLimiter,route(scope,(body,req)=>audioTransaction(pool,async db => {
     const state=await lock(db,body,profile);
     authorize(body,state,req.get('x-term2-permit'),secret,version);
@@ -309,7 +355,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile.writing||profile.paper)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
+  if(profile.writing||profile.paper||profile.receiptStatus)app.post(prefix+'/status',readLimiter,route(termStatus,async(body,req)=>{
     const receipt=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);

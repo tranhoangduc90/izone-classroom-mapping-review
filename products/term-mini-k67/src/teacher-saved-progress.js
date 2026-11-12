@@ -1,12 +1,13 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import {teacherCanReadClass} from './sql.js';
+import {teacherCanReadClass,termTestClassOpen} from './sql.js';
 
 // Chỉ đọc bản máy chủ đã lưu. Không gọi resume/result vì các đường đó có thể thu bài,
 // cập nhật đồng hồ hoặc ghi điểm. Mã phiên học viên không được đưa ra dashboard.
 export const teacherSavedProgressSql=`WITH target AS (
  SELECT erp_course_class_id,erp_class_name_snapshot FROM mapping.classroom_course_mapping
  WHERE upper(trim(erp_class_name_snapshot))=upper(trim($1))
+  AND ${termTestClassOpen('$2','erp_course_class_id')}
 ), allowed AS (
  SELECT * FROM target t WHERE ${teacherCanReadClass('$3','$4','t.erp_course_class_id')}
 ), identities AS (
@@ -71,7 +72,7 @@ export async function readTeacherSavedProgress(pool,input,email,authorization){
 
 export function mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter,auth}){
  const schema=z.object({class:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/),
-  test:z.string().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/),student:z.uuid()}).strict();
+  test:z.string().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+|pretest-lesson-16)$/),student:z.uuid()}).strict();
  app.get('/api/term-tests/teacher/saved-progress',limiter,authenticate,requireContext,async(req,res,next)=>{
   res.set('Cache-Control','private, no-store');
   const parsed=schema.safeParse(req.query);if(!parsed.success)return res.status(400).json({ok:false,error:'INVALID_QUERY',message:'Yêu cầu xem tiến trình không hợp lệ.'});
