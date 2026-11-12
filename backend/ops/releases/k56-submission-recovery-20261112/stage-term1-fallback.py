@@ -2,8 +2,9 @@
 
 from hashlib import sha256
 from pathlib import Path
+import argparse
+import json
 import shutil
-import sys
 
 
 def replace(source, before, after):
@@ -92,7 +93,41 @@ def fallback_core(source):
    const receipt=''')
 
 
-def main(source, destination):
+def journal_overlay(source, journal_source):
+    runtime = source / 'src' / 'exam-journal-runtime'
+    old_adapter = (runtime / 'adapters/term.mjs').read_text(encoding='utf-8')
+    adapter = (journal_source / 'adapters/term.mjs').read_text(encoding='utf-8')
+
+    def resolver(text):
+        return text[text.index('export function termOwnerResolver('):text.index('export function mountTermJournal(')]
+
+    old_adapter = replace(old_adapter, resolver(old_adapter), resolver(adapter))
+    old_adapter = replace(old_adapter, '  const resolver = termOwnerResolver({query,schema});',
+                          '  const allowSkillFallback = productId === \'term-mini-k56\';\n'
+                          '  const resolver = termOwnerResolver({query,schema,allowSkillFallback});')
+    mount = '  mountExpressJournal(app,{journal});'
+    scoped_mount = adapter[adapter.index(mount):adapter.index('  let pending = 0')].rstrip()
+    old_adapter = replace(old_adapter, mount, scoped_mount)
+
+    old_product = (runtime / 'src/product.mjs').read_text(encoding='utf-8')
+    product = (journal_source / 'src/product.mjs').read_text(encoding='utf-8')
+    old_product = replace(old_product, "{ origin, ip = 'unknown', testSlug } = {}",
+                          "{ origin, ip = 'unknown', testSlug, credential } = {}")
+    old_product = replace(old_product, 'resolveOwner(proof, { testSlug })',
+                          'resolveOwner(proof, { testSlug, credential })')
+    anchor = 'export function mountExpressJournal('
+    old_product = old_product[:old_product.index(anchor)] + product[product.index(anchor):]
+    outputs = {'adapters/term.mjs': old_adapter.encode('utf-8'), 'src/product.mjs': old_product.encode('utf-8')}
+    inventory = json.loads((runtime / 'SOURCE.json').read_text(encoding='utf-8'))
+    for row in inventory['files']:
+        if row['file'] in outputs:
+            value = outputs[row['file']]
+            row.update(sha256=sha256(value).hexdigest(), bytes=len(value))
+    outputs['SOURCE.json'] = (json.dumps(inventory, indent=2) + '\n').encode('utf-8')
+    return outputs
+
+
+def main(source, destination, journal_source):
     patches = {
         'term1-skill-offline-core.mjs': ('b1fa0ec4c396da6f2c8947c70b258fa998ad12bb80e7294d470b2ad7a78c3a9e', fallback_core),
         'term1-skill-routes.mjs': ('2b708398b07ddad0ffbf22e2b59acab745dadd94a1d2ff1e87a95a9fa265ffd5', fallback_routes),
@@ -104,10 +139,18 @@ def main(source, destination):
         if sha256(original).hexdigest() != expected:
             raise ValueError(f'Unexpected candidate fingerprint: {name}')
         output[name] = patch(original.decode('utf-8'))
+    journal_output = journal_overlay(source, journal_source)
     shutil.copytree(source, destination)
     for name, data in output.items():
         (destination / 'src' / name).write_text(data, encoding='utf-8', newline='\n')
+    for name, data in journal_output.items():
+        (destination / 'src' / 'exam-journal-runtime' / name).write_bytes(data)
 
 
 if __name__ == '__main__':
-    main(*(Path(value).resolve() for value in sys.argv[1:]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('source', type=Path)
+    parser.add_argument('destination', type=Path)
+    parser.add_argument('--journal-source', required=True, type=Path)
+    args = parser.parse_args()
+    main(args.source.resolve(), args.destination.resolve(), args.journal_source.resolve())

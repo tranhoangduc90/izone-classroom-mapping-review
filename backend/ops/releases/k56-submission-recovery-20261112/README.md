@@ -110,7 +110,8 @@ các bài khác và đối soát lớp thí điểm có ca riêng trong kế ho�
 
 - Dựng thêm bằng `stage-term1-fallback.py` trên ứng viên đã có Writing
   online. Script kiểm hash ba module trước khi ghép và cần thư mục đích
-  riêng. Dùng migration Term 1 hiện có. Mỗi lượt mới mở qua đường dự phòng
+  riêng. `--journal-source` trỏ đến `tools/exam-journal` có phần cấp quyền
+  context cho link dự phòng. Dùng migration Term 1 hiện có. Mỗi lượt mới mở qua đường dự phòng
   dùng chung cấu hình lớp, thời hạn và quota Term 1. Lượt đã có chính sách
   tiếp tục dùng giá trị đã ghi. Tắt cấp mới qua danh sách lớp để giữ đường
   đọc và xử lý các bản đã lưu.
