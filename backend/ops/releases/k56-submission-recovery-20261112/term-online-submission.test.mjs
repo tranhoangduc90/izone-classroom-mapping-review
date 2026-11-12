@@ -116,7 +116,7 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true, wri
         1 AS definition_version FROM assessment.term_test_roster
         WHERE class_code=$1 AND test_slug=$2 AND student_ref=$3`, params);
     }
-    if (fault.receipt && sql.startsWith('UPDATE assessment.term_online_submission_hold SET receipt='))
+    if (fault.receipt && sql.startsWith('INSERT INTO assessment.term_online_submission_hold AS snapshot'))
       throw Error('Synthetic failure before receipt commit');
     if (fault.grade && sql.includes('INSERT INTO assessment.term_test_writing_grading_job'))
       throw Error('Synthetic failure before job commit');
@@ -220,8 +220,14 @@ if (!process.env.K56_ONLINE_FIXTURE_IMPORT_ONLY) {
         (SELECT count(*)::int FROM assessment.k56_portal_field_dispatch) AS scores`, [pending.recovery.operationId]);
       assert.deepEqual(before, { answers: pending.answers, scores: 0 });
 
+      await f.db.query('UPDATE assessment.term_test_attempt SET submission_hold_limit=1 WHERE id=$1', [f.a]);
       const opening = f.op(first, { 1: 'A' });
       assert.ok((await f.request(first, opening)).receipt?.receiptId);
+      assert.deepEqual((await f.status(later, pending)).held, denied.held);
+      await f.db.query(`UPDATE assessment.term_online_submission_hold
+        SET held_at=now()-interval '2 hours', expires_at=now()-interval '1 hour' WHERE operation_id=$1`,
+      [pending.recovery.operationId]);
+      assert.equal((await f.status(later, pending)).held, undefined);
       f.fault.drop = pending.recovery.operationId;
       f.fault.logger = true;
       await assert.rejects(() => f.request(later, pending));

@@ -125,7 +125,13 @@ export function createTermOnlineRecovery({ pool, transaction, load, assertRetain
       await store.assertIdentity(client, a.attempt_token, operation, hash);
       const receipt = await stored(client, a, operation);
       if (receipt) return { receipt, a };
-      return store.hold(client, a.attempt_token, operation, hash, a);
+      try {
+        return await store.hold(client, a.attempt_token, operation, hash, a);
+      } catch (error) {
+        if (!['OFFLINE_HOLD_FULL', 'OFFLINE_HOLD_EXPIRED'].includes(error.code)) throw error;
+        record('offline_hold_unconfirmed', slug, proof.attemptToken, { ...meta, phase: 'hold', reason: error.code });
+        return {};
+      }
     }).catch(error => {
       record('offline_request_failed', slug, proof.attemptToken, { ...meta, phase: 'hold',
         errorCode: error.status ? error.code : 'OFFLINE_HOLD_UNAVAILABLE' });
@@ -186,10 +192,17 @@ export function createTermOnlineRecovery({ pool, transaction, load, assertRetain
     const result = { version: 1, receiptId: randomUUID(), operationId: operation.operationId, testSlug: a.test_slug,
       attemptToken: a.attempt_token, examSessionToken: a.exam_session_token, generation: proof.generation, section,
       revision: operation.revision, payloadHash: hash, submittedAt: new Date(a[section + '_submitted_at']).toISOString() };
-    const written = await client.query(`UPDATE assessment.term_online_submission_hold SET receipt=$4::jsonb,payload=NULL
-      WHERE attempt_id=$1 AND generation=$2 AND operation_id=$3 AND receipt IS NULL
-        AND payload IS NOT NULL AND expires_at>clock_timestamp() RETURNING receipt`,
-    [a.attempt_token, proof.generation, operation.operationId, JSON.stringify(result)]);
+    const written = await client.query(`INSERT INTO assessment.term_online_submission_hold AS snapshot
+      (attempt_id,generation,operation_id,section,payload_hash,payload,receipt,held_at,expires_at)
+      VALUES($1,$2,$3,$4,$5,NULL,$6::jsonb,statement_timestamp(),
+        statement_timestamp()+$7::int*interval '1 hour')
+      ON CONFLICT (attempt_id,generation,operation_id) DO UPDATE
+      SET receipt=excluded.receipt,payload=NULL
+      WHERE snapshot.receipt IS NULL AND snapshot.section=excluded.section
+        AND snapshot.payload_hash=excluded.payload_hash
+      RETURNING receipt`,
+    [a.attempt_token, proof.generation, operation.operationId, section, hash, JSON.stringify(result),
+      Number(a.submission_hold_hours)]);
     if (written.rowCount !== 1) throw Error('Online submission receipt could not be committed');
     return { receipt: result };
   }

@@ -110,4 +110,27 @@ if (!process.env.K56_WRITING_FIXTURE_IMPORT_ONLY) for (const term of [1, 2]) {
     assert.deepEqual((await f.db.query("SELECT field,grade::float FROM assessment.k56_portal_field_dispatch WHERE field='writing'")).rows,
       [{ field: 'writing', grade: 0 }]);
   });
+
+  test('Term ' + term + ' online Writing receives valid work when the temporary store is full', async t => {
+    const f = await writingFixture(t, term, 'read_first');
+    await f.prepare();
+    await f.db.query('UPDATE assessment.term_test_attempt SET submission_hold_limit=1 WHERE id=$1', [f.a]);
+    await f.db.query(`INSERT INTO assessment.term_online_submission_hold
+      (attempt_id,generation,operation_id,section,payload_hash,payload,held_at,expires_at)
+      VALUES($1,0,$2,'reading',$3,'{}',now(),now()+interval '1 hour')`, [f.a, randomUUID(), 'a'.repeat(64)]);
+    const essay = 'Writing fixture submitted while the temporary store is full.';
+    const body = f.requestBody(essay);
+    f.fault.drop = body.recovery.operationId;
+    await assert.rejects(f.submit(body), /fetch failed/i);
+    const status = await f.status('writing', body);
+    assert.ok(status.receipt?.receiptId);
+    assert.equal((await f.submit(body)).receipt.receiptId, status.receipt.receiptId);
+    assert.equal((await f.submit({ ...body, [f.activeTask]: 'Different text' })).error, 'OPERATION_CONFLICT');
+    const native = await f.state(body);
+    assert.equal(native.essay, essay);
+    assert.equal(native.graded, essay);
+    assert.equal(native.held, null);
+    assert.equal(native.receipts, 1);
+    assert.equal(native.jobs, 1);
+  });
 }

@@ -76,7 +76,8 @@ export function registerTermOnlineWriting(router, {
       record('offline_request_failed', slug, attemptToken, { ...meta, phase: 'after_commit',
         errorCode: saved.review, reason: saved.reason, submitted: Boolean(saved.row?.writing_submitted_at) });
       return res.status(409).json({ ok: false, error: saved.review, held: retained.held,
-        message: 'Máy chủ đã giữ bản chốt để đối soát. Bản này chưa có biên nhận nộp.' });
+        message: retained.held ? 'Máy chủ đã giữ bản chốt để đối soát. Bản này chưa có biên nhận nộp.'
+          : 'Chưa có biên nhận nộp. Hãy giữ bản chốt trên thiết bị để đối soát.' });
     }
     record('offline_operation_committed', slug, attemptToken, { ...meta, phase: 'after_commit',
       receiptId: saved.receipt.receiptId, accepted: true, replayed: !saved.canonicalCommitted });
