@@ -457,18 +457,10 @@
     ],
     "groups": [
       {
-        "id": "ferry-details",
+        "id": "ferry-notes",
         "kind": "completion",
-        "label": "Ferry details",
+        "label": "Note completion",
         "start": 1,
-        "end": 4,
-        "instruction": "Complete the notes below. Write ONE WORD AND/OR A NUMBER for each answer."
-      },
-      {
-        "id": "ferry-advice",
-        "kind": "completion",
-        "label": "Advice",
-        "start": 5,
         "end": 10,
         "instruction": "Complete the notes below. Write ONE WORD AND/OR A NUMBER for each answer."
       },
@@ -529,34 +521,10 @@
         "instruction": "What comment do the speakers make about each of the following semi-synthetic fabrics? Choose SIX answers from the box and write the correct letter, A-H, next to Questions 25-30."
       },
       {
-        "id": "invasive-impact",
+        "id": "invasive-notes",
         "kind": "completion",
-        "label": "Impact",
+        "label": "Note completion",
         "start": 31,
-        "end": 32,
-        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
-      },
-      {
-        "id": "invasive-spread",
-        "kind": "completion",
-        "label": "How invasive species spread",
-        "start": 33,
-        "end": 34,
-        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
-      },
-      {
-        "id": "invasive-examples",
-        "kind": "completion",
-        "label": "Examples of invasive species",
-        "start": 35,
-        "end": 37,
-        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
-      },
-      {
-        "id": "invasive-monitoring",
-        "kind": "completion",
-        "label": "Tackling invasive species",
-        "start": 38,
         "end": 40,
         "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
       }
