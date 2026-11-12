@@ -135,15 +135,18 @@ export function createTermTestWritingNotifier({
 // Chỉ báo sau khi lời gọi lưu/commit thành công; lỗi thông báo không đổi kết quả nộp/chấm.
 export function withTermTestWritingNotifications(service, notifier) {
   if (!service) return null;
-  const wrapped = { ...service };
+  function notifyCommitted() {
+    try {
+      notifier.kick();
+    } catch {
+      // Công việc đã commit; lịch dự phòng vẫn giữ khả năng nhận lại.
+    }
+  }
+  const wrapped = { ...service, notifyCommitted };
   for (const name of ['ensureSubmission', 'claimJobs', 'completeDispatch', 'completeResult', 'failJob']) {
     wrapped[name] = async (...args) => {
       const result = await service[name](...args);
-      try {
-        notifier.kick();
-      } catch {
-        // Công việc đã commit; lịch dự phòng vẫn giữ khả năng nhận lại.
-      }
+      notifyCommitted();
       return result;
     };
   }

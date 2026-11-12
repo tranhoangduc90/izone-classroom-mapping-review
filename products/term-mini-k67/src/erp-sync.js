@@ -53,3 +53,20 @@ export function createErpGradeSync({ config, fetchImpl = globalThis.fetch }) {
     return parsed.data;
   };
 }
+
+// Production bundles the shared Portal source under src/portal-sync. The legacy
+// HTTP adapter remains available for environments that have not moved to Hub.
+export async function createRuntimeErpGradeSync({ config, pool, env = process.env }) {
+  if (env.PORTAL_EXAM_DELIVERY_MODE !== 'hub') return createErpGradeSync({ config });
+  if (!pool) throw new Error('EXAM_NATIVE_POOL_REQUIRED');
+  const { createExamPublisher } = await import('./portal-sync/client/exam-source.mjs');
+  return createExamPublisher({ pool, family: 'k67', cutoverAt: env.PORTAL_EXAM_CUTOVER_AT });
+}
+
+export async function deliverErpGrades(sync, payload, legacyFallback = 'not_applicable') {
+  if (sync.durableDelivery === true) {
+    const { finishDurablePortalEnqueue, nativePortalStatus } = await import('./portal-sync/client/native-grade-ack.mjs');
+    return nativePortalStatus(sync, await finishDurablePortalEnqueue(sync, payload));
+  }
+  return (await sync(payload))?.status === 'synced' ? 'synced' : legacyFallback;
+}
