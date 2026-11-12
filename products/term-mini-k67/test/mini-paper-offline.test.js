@@ -3,12 +3,54 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import request from 'supertest';
 import { createMiniFixture } from './helpers/mini-answer-sheet-fixture.js';
+import { retainMiniPaperSubmission } from '../src/mini-cbt-journey.js';
 
 const prefix = '/api/term-tests/mini-test-lesson-5';
 const studentRef = '11111111-1111-4111-8111-111111111111';
 const otherStudent = '44444444-4444-4444-8444-444444444444';
 const baseIdentity = { classCode: 'IC2304', studentRef, identityConfirmed: true };
 const assets = { getTiming: () => ({ readingDurationMinutes: 20 }) };
+
+test('Mini K67 paper hold quota counts the selected class only', async () => {
+  const fixture = await createMiniFixture({ examOrder:true, miniPaperOffline:'on', assets,
+    writingHold:{ miniPaperLrHoldHours:24, miniPaperLrHoldLimit:1 } });
+  try {
+    const run = async (classId, classCode, studentId) => {
+      const sessionId = randomUUID(), operationId = randomUUID();
+      const {rows:[session]} = await fixture.db.query(`INSERT INTO assessment.term_test_exam_session
+        (id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,student_name_snapshot,attempt_mode)
+        VALUES($1,'mini-test-lesson-5',1,$2,$3,$4,'Fixture','answer_sheet') RETURNING *`,
+      [sessionId,classId,classCode,studentId]);
+      const {rows:[{now}]} = await fixture.db.query('SELECT clock_timestamp() AS now');
+      const body = { examSessionToken:sessionId,generation:0,operationId,section:'reading' };
+      return {session,now,body};
+    };
+    const hold = async ({session,now,body}) => {
+      const db = await fixture.pool.connect();
+      try {
+        await db.query('BEGIN');
+        const result = await retainMiniPaperSubmission(db,{session,now},body,body,'a'.repeat(64),{hours:24,limit:1});
+        await db.query('COMMIT');
+        return result;
+      } catch (error) {
+        await db.query('ROLLBACK');
+        throw error;
+      } finally { db.release(); }
+    };
+    const first = await run(1293,'IC2304',900010);
+    const sameClass = await run(1293,'IC2304',900011);
+    const otherClass = await run(1294,'IC2305',900012);
+    const parallel = await Promise.allSettled([hold(first),hold(sameClass)]);
+    const accepted = parallel.filter(result=>result.status==='fulfilled');
+    const refused = parallel.filter(result=>result.status==='rejected');
+    assert.equal(accepted.length,1);
+    assert.equal(refused.length,1);
+    assert.equal(refused[0].reason.code,'OFFLINE_HOLD_FULL');
+    assert.ok((await hold(otherClass)).payloadHash);
+    const {rows:[{n}]} = await fixture.db.query('SELECT count(*)::int AS n FROM assessment.term_k67_lr_submission_hold');
+    assert.equal(n,2);
+  } finally { await fixture.db.close(); }
+});
 
 for (const mode of ['lis_first', 'read_first']) for (const recovery of [false,true])
 test('Mini K67 paper offline ' + mode + (recovery ? ' with submission recovery' : ''), async () => {

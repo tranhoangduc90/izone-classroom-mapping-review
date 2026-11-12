@@ -32,6 +32,8 @@ const schema = z.object({
     value.split(',').map(email=>email.trim().toLowerCase()).filter(Boolean)).pipe(z.array(z.email()).max(30)),
   K67_TERM_CBT_LR_HOLD_HOURS: positive(0,72,0),
   K67_TERM_CBT_LR_HOLD_LIMIT: positive(0,20_000,0),
+  K67_LR_HOLD_EXPORT_REVIEWERS: z.string().default('').transform(value=>
+    value.split(',').map(email=>email.trim().toLowerCase()).filter(Boolean)).pipe(z.array(z.email()).max(30)),
   K67_TERM_PAPER_LR_HOLD_HOURS: positive(0,72,0),
   K67_TERM_PAPER_LR_HOLD_LIMIT: positive(0,20_000,0),
   K67_TERM1_PAPER_LR_HOLD_CLASSES: z.string().regex(/^(?:\*|[A-Z0-9._-]{2,32}(?:,[A-Z0-9._-]{2,32})*)?$/).default(''),
@@ -142,6 +144,7 @@ export function loadConfig(env = process.env) {
     term1HoldExportReviewers: new Set(p.K67_TERM1_HOLD_EXPORT_REVIEWERS),
     termCbtLrHoldHours: p.K67_TERM_CBT_LR_HOLD_HOURS,
     termCbtLrHoldLimit: p.K67_TERM_CBT_LR_HOLD_LIMIT,
+    lrHoldExportReviewers: new Set(p.K67_LR_HOLD_EXPORT_REVIEWERS),
     termPaperLrHoldHours: p.K67_TERM_PAPER_LR_HOLD_HOURS,
     termPaperLrHoldLimit: p.K67_TERM_PAPER_LR_HOLD_LIMIT,
     term1PaperLrHoldClasses: new Set(p.K67_TERM1_PAPER_LR_HOLD_CLASSES.split(',').filter(Boolean)),
