@@ -28,7 +28,7 @@ function metadata(row) {
   } : undefined;
 }
 
-const products = new Set(['term1', 'term2', 'mini_k56']);
+const products = new Set(['term1', 'term2', 'mini_k56', 'term_online']);
 
 export function createK56HoldStore(product) {
   if (!products.has(product)) throw Error('Unknown K56 submission hold store');

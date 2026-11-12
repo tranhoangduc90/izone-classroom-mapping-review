@@ -66,3 +66,23 @@ các bài khác và đối soát lớp thí điểm có ca riêng trong kế ho�
   Bộ Mini cần K56_MINI_FIXTURE_FILE trỏ test.mjs của gói Mini 20261107 và
   K56_MINI_RECOVERY_MIGRATION trỏ migration Mini. Cả hai dùng Collector
   localhost và dữ liệu giả.
+
+## Phiếu Term 1/2 và đường tương thích online
+
+- stage-online.py chỉ ghép k56-exam-order.js nếu hash đúng router đang chạy
+  trên VPS1. Hai phiếu Term gọi Listening/Reading của router này với mode
+  native cbt theo phiên cũ. Mode answer_sheet riêng tiếp tục dành cho Mini.
+- Migration term-online-submission-hold.sql cấp kho riêng cho Nghe/Đọc.
+  Cấu hình K56_TERM_ONLINE_HOLD_CLASSES/HOURS/LIMIT mặc định tắt. Lượt nhận
+  capability khi client đề nghị qua attempt/prepare và lớp đã xác thực
+  nằm trong cấu hình. Tắt danh sách lớp để dừng cấp mới. Giữ TTL, quota
+  và API cùng quyền đọc biên nhận cho các lượt đã cấp.
+- Chỉ nhận bản chốt khớp định danh lớp, lượt, phiên, thế hệ, kỹ năng và
+  định nghĩa. Nội dung được giữ qua một giao dịch trước khi kiểm thứ tự
+  và mốc bắt đầu. Giao dịch chính thức ghi bài, điểm vào outbox và biên
+  nhận cùng lúc. Khi luồng cũ dùng bản nháp server theo luật thời gian,
+  giữ bản vừa gửi riêng, không gắn nhầm biên nhận hoặc đổi điểm chính thức.
+- Chạy term-online-submission.test.mjs với TERM2_RUNTIME_ROOT trỏ ứng viên
+  đã dựng và TERM2_DEPS_PACKAGE trỏ package cách ly. Kiểm browser
+  k56-term-online-recovery-browser.mjs dùng K56_ONLINE_FIXTURE trỏ file
+  test native trên cùng ứng viên và các biến Collector thử đã nêu trên.
