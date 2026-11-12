@@ -21,10 +21,10 @@ async function analyzeStoryDetail(messages) {
       'slow_down: học viên bẻ một hành động lớn thành ba hành động nhỏ; zoom_in: thêm hai chi tiết giác quan cho hành động nhỏ; action_emotion: nối hành động với suy nghĩ/cảm xúc; emotion_action: từ cảm xúc nêu hành động tiếp có chi tiết cử chỉ.',
       'chain_three: tự ghép ba nhịp Hành động 1 → Cảm xúc 1 → Hành động 2; beat_four: nêu cảm xúc/suy nghĩ 2 do Hành động 2; beat_five: nêu Hành động 3 do cảm xúc 2 có chi tiết nhỏ; chain_five: học viên tự ghép cả năm nhịp thành đoạn diễn biến hoàn chỉnh.',
       'Mỗi bước cần yêu cầu của chatbot, trả lời thực hành của học viên và phản hồi/góp ý chatbot sau đó. Phản hồi có thể đồng thời giao bước kế tiếp. Không đếm prompt, câu mẫu chatbot, lời sẵn sàng, câu hỏi chưa làm hoặc ghép bước của các chủ đề khác nhau.',
-      'Chỉ trả JSON {"confidence":0.9,"completed":[{"stage":"slow_down","questionMessage":3,"questionText":"trích nguyên văn yêu cầu","answerMessage":4,"answerQuote":"trích nguyên văn câu thực hành","feedbackMessage":5}]}. Chỉ số tin từ 1. Một bộ tối đa tám bước. Các bước chưa có bằng chứng bỏ khỏi mảng. Không bịa trích dẫn.',
+      'Chỉ trả JSON {"confidence":0.9,"completed":[{"stage":"slow_down","questionMessage":3,"questionText":"@m3.s1","answerMessage":4,"answerQuote":"@m4.s1","feedbackMessage":5}]}. Chỉ số tin từ 1. Một bộ tối đa tám bước. Các bước chưa có bằng chứng bỏ khỏi mảng. Không bịa dẫn chứng.',
       transcript
     ].join('\n\n'), anh_minh_hoa: '' }), signal: AbortSignal.timeout(45_000)
-  }, {messages,validate:analysis=>{
+  }, {messages,requireReferences:true,validate:analysis=>{
     if(!Array.isArray(analysis?.completed)||!Number.isFinite(analysis.confidence)||analysis.confidence<0.65||analysis.confidence>1)throw new Error('STORY_DETAIL_UNCERTAIN');
     validateEvidence(messages,analysis.completed);
   }});
