@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { checkSubmission } from '../src/speaking-checker.js';
 import { analyzeHowTo } from '../src/speaking-how-to-checker.js';
 import { runSpeakingCheckJob } from '../src/speaking-check-worker.js';
+import { bindFixtureReferences } from '../test-support/speaking-reference-fixture.js';
 
 // Dữ liệu giả có hai câu mỗi giai đoạn; kiểm ranh giới đọc/AI/worker, không gọi production.
 const url = 'https://chatgpt.com/share/11111111-1111-4111-8111-111111111111';
@@ -88,12 +89,20 @@ test('worker từ chối bốn câu cùng một phần và giữ đúng job', as
 });
 test('request AI mô tả đúng hai giai đoạn và không yêu cầu nói lại', async () => {
   const original = globalThis.fetch;
-  let body;
+  const requests=[];
+  const references=completed.map(item=>({...item,questionText:`@m${item.questionMessage}.s${[1,5].includes(item.questionMessage)?3:1}`}));
   try {
-    globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ text: JSON.stringify({ completed, confidence: 0.9 }) }) }; };
-    await analyzeHowTo(messages);
-    assert.match(body.prompt, /guided/); assert.match(body.prompt, /free/);
-    assert.match(body.prompt, /Không yêu cầu nói lại/);
-    assert.match(body.prompt, /DỮ LIỆU/);
+    globalThis.fetch = async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      const analysis={completed:requests.length===1?completed:references,confidence:0.9};
+      return Response.json({text:JSON.stringify(bindFixtureReferences(analysis,requests.at(-1).prompt))});
+    };
+    const result=await analyzeHowTo(messages);
+    assert.deepEqual(result.completed,completed);
+    assert.equal(requests.length,2);
+    assert.match(requests[0].prompt, /guided/); assert.match(requests[0].prompt, /free/);
+    assert.match(requests[0].prompt, /Không yêu cầu nói lại/);
+    assert.match(requests[0].prompt, /DỮ LIỆU/);
+    assert.match(requests[1].prompt,/AI_EVIDENCE_REFERENCE_INVALID/);
   } finally { globalThis.fetch = original; }
 });

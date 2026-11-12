@@ -4,6 +4,7 @@ import { checkSubmission } from '../src/speaking-checker.js';
 import { checkObjectSubmission, validObjectEvidence } from '../src/speaking-object-checker.js';
 import { speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { progressPayload } from '../src/speaking-progress-docs.js';
+import { bindFixtureReferences } from '../test-support/speaking-reference-fixture.js';
 
 const url = 'https://chatgpt.com/share/6906288f-7cb4-8011-bc18-643333fa38b4';
 const intro = ['identity', 'origin', 'reason', 'combined'];
@@ -45,6 +46,29 @@ test('mô tả một vật chấp nhận không có nội dung và không yêu c
 test('thiếu đoạn tự ghép chưa hoàn thành lượt',async()=>{
   const f=fixture([description.slice(0,-1)]);const r=await checkObjectSubmission({section:'object_description',url},dependencies(f));
   assert.equal(r.kind,'blocked');assert.equal(r.count,0);
+});
+
+test('tả vật yêu cầu mã đoạn và sửa một lần khi AI tự chép câu',async t=>{
+  const f=fixture([description]);
+  const anchored=f.rounds.map(round=>({evidence:round.evidence.map(item=>({
+    ...item,questionText:`@m${item.questionMessage}.s1`,answerQuote:`@m${item.answerMessage}.s1`,
+  }))}));
+  const prompts=[];
+  t.mock.method(globalThis,'fetch',async (_url, options)=>{
+    prompts.push(JSON.parse(options.body).prompt);
+    const analysis={confidence:0.95,rounds:prompts.length===1?f.rounds:anchored};
+    return Response.json({text:JSON.stringify(bindFixtureReferences(analysis,prompts.at(-1)))});
+  });
+  const outcome=await checkObjectSubmission({section:'object_description',url},{
+    readShare:async()=>({messages:f.messages,source:'fixture'}),
+    analyzeCompletion:async()=>({completed:false,confidence:1}),
+  });
+  assert.equal(outcome.kind,'pass');
+  assert.equal(outcome.count,1);
+  assert.deepEqual(outcome.snapshot.messages,f.messages);
+  assert.equal(prompts.length,2);
+  assert.match(prompts[0],/@m1\.s1/);
+  assert.match(prompts[1],/AI_EVIDENCE_REFERENCE_INVALID/);
 });
 test('bài tự luyện được gộp các ý trong một câu trả lời đầy đủ',()=>{
   const f=fixture([intro]);const e=f.rounds[0].evidence[0];

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { checkSubmission } from '../src/speaking-checker.js';
 import { analyzePracticeConversation } from '../src/speaking-practice-worker.js';
+import { bindFixtureReferences } from '../test-support/speaking-reference-fixture.js';
 
 // Dữ liệu giả nhận vào là chu trình hỏi–trả lời–góp ý–trả lời lại.
 // Kiểm chính sách mới và giữ ngưỡng riêng; lỗi hiển thị trong runner Node.
@@ -43,8 +44,9 @@ test('prompt bài bổ trợ không yêu cầu AI xác định nói hay gõ', as
   const c=conversation(1);
   const result=await analyzePracticeConversation(c.messages,'Luyện câu trả lời', async (_url,options) => {
     prompt=JSON.parse(options.body).prompt;
-    return {ok:true,json:async()=>({text:JSON.stringify({confidence:.95,matched:true,completed:true,...c.completed[0],
-      questionText:c.messages[0].text,answerQuote:c.messages[1].text,repeatQuote:c.messages[3].text})})};
+    const analysis={confidence:.95,matched:true,completed:true,...c.completed[0],
+      questionText:'@m1.s1',answerQuote:'@m2.s1',repeatQuote:'@m4.s1'};
+    return Response.json({text:JSON.stringify(bindFixtureReferences(analysis,prompt))});
   });
   assert.equal(result.completed,true);
   assert.doesNotMatch(prompt,/typingEvidence|lỗi gõ|dấu hiệu gõ/i);

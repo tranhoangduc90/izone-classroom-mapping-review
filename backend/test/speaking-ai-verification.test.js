@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {checkSubmission} from '../src/speaking-checker.js';
 import {analyzePracticeConversation} from '../src/speaking-practice-worker.js';
 import {analyzeChatbotCompletion} from '../src/speaking-completion-policy.js';
+import {bindFixtureReferences} from '../test-support/speaking-reference-fixture.js';
 
 // Dữ liệu giả tại ranh giới AI thật: bắt dẫn chứng sai, sửa hữu hạn và giữ luật bài.
 const url='https://chatgpt.com/share/11111111-1111-4111-8111-111111111111';
@@ -19,7 +20,7 @@ async function fixture(t,responses){
  globalThis.fetch=async(_url,options)=>{
   calls.push(JSON.parse(options.body));
   assert.ok(responses.length,'unexpected extra AI request');
-  return Response.json({text:JSON.stringify(responses.shift())});
+  return Response.json({text:JSON.stringify(bindFixtureReferences(responses.shift(),calls.at(-1).prompt))});
  };
  t.after(()=>{globalThis.fetch=original;});
  const run=()=>checkSubmission({section:'story_sequence',url,minimum:1},{readShare:async()=>({source:'fixture',messages})});
@@ -42,8 +43,7 @@ test('source references cannot move an answer to a different message or role',as
  assert.equal((await f.run()).kind,'error');assert.equal(f.calls.length,2);
 });
 test('valid incomplete work remains incomplete and does not request an AI repair',async t=>{
- const literal=completed.slice(0,3).map(c=>({...c,questionText:messages[c.questionMessage-1].text,answers:c.answers.map((a,i)=>({...a,quote:messages[a.message-1].text.split('\n')[i]}))}));
- const f=await fixture(t,[{confidence:0.95,completed:literal}]);
+ const f=await fixture(t,[{confidence:0.95,completed:completed.slice(0,3)}]);
  assert.equal((await f.run()).kind,'blocked');assert.equal(f.calls.length,1);
 });
 test('unknown source references remain a technical error after the bounded repair',async t=>{
@@ -56,8 +56,17 @@ test('an invalid repeat before feedback can be corrected to incomplete without g
  const replies=[{confidence:.95,matched:true,completed:true,questionMessage:1,questionText:'@m1.s1',answerMessage:2,answerQuote:'@m2.s1',feedbackMessage:3,repeatMessage:2,repeatQuote:'@m2.s1'},
    {confidence:.95,matched:true,completed:false}];
  let calls=0;
- const result=await analyzePracticeConversation(chat,'Luyện đọc',async()=>{calls++;return Response.json({text:JSON.stringify(replies.shift())});});
+ const result=await analyzePracticeConversation(chat,'Luyện đọc',async(_url,options)=>{
+  calls++;return Response.json({text:JSON.stringify(bindFixtureReferences(replies.shift(),JSON.parse(options.body).prompt))});
+ });
  assert.equal(calls,2);assert.equal(result.completed,false);
+});
+test('a code from an older snapshot cannot select a same-numbered message in the current snapshot',async t=>{
+ const wrong=structuredClone(completed);wrong[0].questionText='@m1.s1.k0000000000000000';
+ const f=await fixture(t,[{confidence:0.95,completed:wrong},{confidence:0.95,completed:wrong}]);
+ const result=await f.run();
+ assert.equal(result.kind,'error');assert.equal(result.errorCode,'AI_EVIDENCE_SOURCE_MISMATCH');
+ assert.match(f.calls[1].prompt,/AI_EVIDENCE_SOURCE_MISMATCH/);
 });
 test('completion output missing confidence is repaired, without inventing a confidence or completion',async()=>{
  const chat=[{role:'assistant',text:'Bạn đã hoàn thành bước 1; tiếp theo còn phần luyện tự do.'}];
