@@ -67,9 +67,15 @@ export function createSubmissionRecovery({ profile, record, fail, transaction, a
             ? { [profile.taskId + 'Length']: p[profile.taskId].length }
             : { answeredCount: Object.values(p.answers).filter(Boolean).length })
         };
-        return store.hold(client, a.attempt_token, body, hash, run);
+        return store.hold(client, a.attempt_token, body, hash, run, a.erp_course_class_id);
       });
     } catch (error) {
+      if (product === 'mini_k56' && !required && error.code === 'OFFLINE_HOLD_FULL') {
+        note('offline_hold_unconfirmed', profile.slug, body.attemptToken, {
+          ...trace, phase: 'hold', reason: 'OFFLINE_HOLD_FULL'
+        });
+        return;
+      }
       if (error.status) throw error;
       note('offline_hold_unconfirmed', profile.slug, body.attemptToken, {
         ...trace, phase: 'hold', reason: 'HOLD_TRANSACTION_UNCONFIRMED'

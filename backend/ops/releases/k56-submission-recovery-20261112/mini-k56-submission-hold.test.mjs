@@ -7,7 +7,7 @@ process.env.K56_MINI_FIXTURE_IMPORT_ONLY = '1';
 process.env.MINI_K56_CBT_OFFLINE_NEW = 'true';
 process.env.MINI_K56_PAPER_OFFLINE_NEW = 'true';
 process.env.K56_MINI_HOLD_CLASSES = 'FIXTURE';
-process.env.K56_MINI_HOLD_HOURS = '2';
+process.env.K56_MINI_HOLD_HOURS = '24';
 process.env.K56_MINI_HOLD_LIMIT = '8';
 process.env.K56_MINI_HOLD_PAPER = 'true';
 const { fixture } = await import('../mini-k56-offline-20261107/test.mjs');
@@ -42,12 +42,16 @@ for (const mode of ['lis_first', 'read_first']) {
       assert.equal(held.status, 409);
       assert.equal(held.error, 'OFFLINE_START_REQUIRED');
       assert.ok(held.held?.payloadHash);
+      assert.equal(held.held.expiresAt - held.held.heldAt, 24 * 3_600_000);
       assert.equal((await read(invalid)).receipt, null);
       assert.deepEqual((await read(invalid)).held, held.held);
       assert.equal((await f.request('hold', { ...invalid, operationId: randomUUID(), ownerId: randomUUID() })).status, 403);
       const { rows: [stored] } = await f.db.query(`SELECT payload,section FROM assessment.mini_k56_submission_hold
         WHERE attempt_id=$1 AND operation_id=$2`, [f.a, invalid.operationId]);
       assert.deepEqual(stored.payload.payload.answers, invalid.payload.answers);
+      assert.equal(stored.payload.ownerId, undefined);
+      assert.equal(stored.payload.attemptToken, undefined);
+      assert.equal(stored.payload.examSessionToken, undefined);
       assert.equal(stored.section, skills[0]);
       assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.k56_portal_field_dispatch')).rows[0].n, 0);
 
@@ -109,4 +113,34 @@ test('Mini paper recovery opt-in can be disabled independently of CBT', async t 
   const prepared = await f.prepare();
   assert.equal(prepared.status, 200);
   assert.equal(prepared.offline.submissionRecoveryVersion, undefined);
+});
+
+test('Mini quota is isolated per ERP class and a full hold quota still accepts valid work', async t => {
+  const previous = process.env.K56_MINI_HOLD_CLASSES;
+  process.env.K56_MINI_HOLD_CLASSES = '*';
+  const f = await fixture('read_first', true);
+  process.env.K56_MINI_HOLD_CLASSES = previous;
+  t.after(() => f.close());
+  await f.db.exec('CREATE ROLE k56_shared_api NOLOGIN');
+  await f.db.exec(migration);
+  assert.equal((await f.prepare()).offline.submissionRecoveryVersion, 1);
+  await f.db.query('UPDATE assessment.mini_k56_offline_run SET submission_hold_limit=1 WHERE attempt_id=$1', [f.a]);
+  const otherAttempt = randomUUID();
+  await f.db.query("INSERT INTO assessment.term_test_attempt(id,test_slug,erp_course_class_id) VALUES($1,'mini-test-k56',5602)", [otherAttempt]);
+  await f.db.query(`INSERT INTO assessment.mini_k56_offline_run(attempt_id,session_id,generation,owner_id,policy)
+    SELECT $1,session_id,generation,owner_id,policy FROM assessment.mini_k56_offline_run WHERE attempt_id=$2`, [otherAttempt,f.a]);
+  await f.db.query(`INSERT INTO assessment.mini_k56_submission_hold
+    VALUES($1,0,$2,'reading',$3,'{}',now(),now()+interval '24 hours')`, [otherAttempt,randomUUID(),'a'.repeat(64)]);
+  const startedAt = f.clock();
+  const seal = { ...f.scope, operationId: randomUUID(), section: 'reading', kind: 'seal', revision: 1,
+    dependency: null, occurredAt: startedAt, payload: { startedAt, deadlineAt: null, timeValid: true, answers: {1:'A'}, reason:'manual' } };
+  const first = await f.request('operation', seal);
+  assert.equal(first.error, 'OFFLINE_START_REQUIRED');
+  assert.ok(first.held?.payloadHash);
+  assert.equal((await f.request('hold', {...seal,operationId:randomUUID()})).error, 'OFFLINE_HOLD_FULL');
+  const start = {...seal, operationId: randomUUID(), kind:'start', revision:0,
+    payload:{startedAt,deadlineAt:null,timeValid:true,answers:{}}};
+  assert.equal((await f.request('operation', start)).receipt?.status, 'accepted');
+  const accepted = await f.request('operation', {...seal, operationId:randomUUID()});
+  assert.equal(accepted.receipt?.status, 'accepted');
 });

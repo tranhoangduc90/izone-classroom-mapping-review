@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+
 const holdError = (code, message, status = 409) => Object.assign(new Error(message), { code, status });
+
+const validClass = code => typeof code === 'string' && /^[A-Z0-9._-]{2,32}$/.test(code);
 
 function holdPolicy(prefix, env) {
   const integer = (name, max) => {
@@ -9,9 +13,21 @@ function holdPolicy(prefix, env) {
   const hours = integer(prefix + '_HOURS', 72);
   const limit = integer(prefix + '_LIMIT', 20_000);
   const classes = (env[prefix + '_CLASSES'] || '').split(',').filter(Boolean);
-  if (classes.some(code => !/^[A-Z0-9._-]{2,32}$/.test(code))) throw Error('Invalid ' + prefix + '_CLASSES');
+  const mini = prefix === 'K56_MINI_HOLD';
+  const classesFile = mini ? env.K56_MINI_HOLD_CLASSES_FILE : undefined;
+  const allMiniClasses = mini && classes.length === 1 && classes[0] === '*';
+  if (!allMiniClasses && classes.some(code => !validClass(code))) throw Error('Invalid ' + prefix + '_CLASSES');
+  function enrolledClass(classCode) {
+    if (!classesFile) return allMiniClasses || classes.includes(classCode);
+    try {
+      const scope = JSON.parse(readFileSync(classesFile, 'utf8')).classes;
+      return scope === null || (Array.isArray(scope) && scope.every(validClass) && scope.includes(classCode));
+    } catch {
+      return false;
+    }
+  }
   return { hours, limit, configured: hours > 0 && limit > 0,
-    admits(classCode) { return hours > 0 && limit > 0 && classes.includes(classCode); } };
+    admits(classCode) { return hours > 0 && limit > 0 && validClass(classCode) && enrolledClass(classCode); } };
 }
 
 export function holdEnabled(run) {
@@ -46,7 +62,7 @@ export function createK56HoldStore(product) {
     return held ? { section: row.section, held } : undefined;
   }
 
-  async function hold(db, attemptId, operation, payloadHash, run) {
+  async function hold(db, attemptId, operation, payloadHash, run, classId) {
     const existing = await findHold(db, attemptId, operation);
     if (existing) {
       if (existing.payload_hash !== payloadHash || existing.section !== operation.section) {
@@ -57,11 +73,20 @@ export function createK56HoldStore(product) {
       return { held, replayed: true };
     }
     const { ownerId, ...body } = operation;
+    const scopedToClass = product === 'mini_k56';
+    if (scopedToClass) {
+      if (!/^[1-9][0-9]*$/.test(String(classId))) throw Error('Missing Mini hold class scope');
+      delete body.attemptToken;
+      delete body.examSessionToken;
+    }
     const payload = JSON.stringify(body);
     if (Buffer.byteLength(payload) > 490_000) throw holdError('OFFLINE_INVALID', 'Bản bài làm quá lớn.', 400);
-    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended('k56.${product}.submission-hold',0))`);
-    const { rows: [{ n }] } = await db.query(`SELECT count(*)::int AS n FROM ${table}
-      WHERE payload IS NOT NULL AND expires_at > statement_timestamp()`);
+    const quotaKey = `k56.${product}.submission-hold` + (scopedToClass ? ':' + classId : '');
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [quotaKey]);
+    const join = scopedToClass ? 'JOIN assessment.term_test_attempt a ON a.id=held.attempt_id' : '';
+    const scope = scopedToClass ? ' AND a.erp_course_class_id=$1' : '';
+    const { rows: [{ n }] } = await db.query(`SELECT count(*)::int AS n FROM ${table} held ${join}
+      WHERE held.payload IS NOT NULL AND held.expires_at > statement_timestamp()${scope}`, scopedToClass ? [classId] : []);
     if (n >= Number(run.submission_hold_limit)) {
       throw holdError('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.', 503);
     }
