@@ -370,5 +370,164 @@
         "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
       }
     ]
+  },
+  {
+    "code": "67-practice-listening_c21_t3_full_test",
+    "title": "Cambridge 21 · Test 3 · Full Listening",
+    "lesson": 19,
+    "book": 21,
+    "test": 3,
+    "sourceLabel": "Cambridge 21 · Test 3 · Full Listening",
+    "subtitle": "Nghe một lượt ở tốc độ gốc.\n40 câu và 2 phút rà bài sau audio.",
+    "totalMs": 1677953,
+    "audioMs": 1557953,
+    "reviewMs": 120000,
+    "parts": [
+      {
+        "id": "part1",
+        "title": "Part 1 · Ferry to Shetland Islands",
+        "start": 1,
+        "end": 10,
+        "startMs": 0,
+        "endMs": 330449
+      },
+      {
+        "id": "part2",
+        "title": "Part 2 · Street food businesses",
+        "start": 11,
+        "end": 20,
+        "startMs": 330449,
+        "endMs": 710243,
+        "splitAfter": 16
+      },
+      {
+        "id": "part3",
+        "title": "Part 3 · Ethical and sustainable fashion",
+        "start": 21,
+        "end": 30,
+        "startMs": 710243,
+        "endMs": 1071203,
+        "splitAfter": 24
+      },
+      {
+        "id": "part4",
+        "title": "Part 4 · Invasive species",
+        "start": 31,
+        "end": 40,
+        "startMs": 1071203,
+        "endMs": 1557953
+      }
+    ],
+    "paragraphs": [
+      "part1",
+      "part2",
+      "part3",
+      "part4"
+    ],
+    "preparationGroups": [
+      {
+        "label": "Multiple choice — chọn 2",
+        "preparationSteps": [
+          "Đọc câu hỏi và cả năm lựa chọn, xác định tiêu chí để chọn đúng hai ý.",
+          "Nghe cách diễn đạt tương đương và loại các ý trái nghĩa hoặc thiếu bằng chứng."
+        ]
+      },
+      {
+        "label": "Multiple choice — chọn 1",
+        "preparationSteps": [
+          "Đọc câu hỏi, xác định kịch bản audio",
+          "Đọc A–C: đọc hiểu, diễn đạt lại và so sánh các lựa chọn.",
+          "Nghe thái độ người nói và xác định ít nhất hai trong ba lựa chọn."
+        ]
+      },
+      {
+        "label": "Matching",
+        "preparationSteps": [
+          "Đọc câu hỏi và so sánh các lựa chọn trong danh sách.",
+          "Nghe cách diễn đạt tương đương và ghép đúng chữ cái."
+        ]
+      },
+      {
+        "label": "Note completion",
+        "preparationSteps": [
+          "Đọc tiêu đề và nhóm ý, khoanh giới hạn từ.",
+          "Dự đoán loại từ cần điền và nghe theo thứ tự của ghi chú."
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "id": "ferry-notes",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 1,
+        "end": 10,
+        "instruction": "Complete the notes below. Write ONE WORD AND/OR A NUMBER for each answer."
+      },
+      {
+        "id": "street-food-popularity",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 11,
+        "end": 12,
+        "instruction": "Choose TWO letters, A-E."
+      },
+      {
+        "id": "street-food-venues",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 13,
+        "end": 14,
+        "instruction": "Choose TWO letters, A-E."
+      },
+      {
+        "id": "street-food-advice",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 1",
+        "start": 15,
+        "end": 16,
+        "instruction": "Choose the correct letter, A, B or C."
+      },
+      {
+        "id": "street-food-problems",
+        "kind": "matching",
+        "label": "Matching",
+        "start": 17,
+        "end": 20,
+        "instruction": "What problem did the owners of each of the following street food businesses experience? Choose FOUR answers from the box and write the correct letter, A-F, next to Questions 17-20."
+      },
+      {
+        "id": "fashion-terminology",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 21,
+        "end": 22,
+        "instruction": "Choose TWO letters, A-E."
+      },
+      {
+        "id": "wool-production",
+        "kind": "mcq",
+        "label": "Multiple choice — chọn 2",
+        "start": 23,
+        "end": 24,
+        "instruction": "Choose TWO letters, A-E."
+      },
+      {
+        "id": "semi-synthetic-fabrics",
+        "kind": "matching",
+        "label": "Matching",
+        "start": 25,
+        "end": 30,
+        "instruction": "What comment do the speakers make about each of the following semi-synthetic fabrics? Choose SIX answers from the box and write the correct letter, A-H, next to Questions 25-30."
+      },
+      {
+        "id": "invasive-notes",
+        "kind": "completion",
+        "label": "Note completion",
+        "start": 31,
+        "end": 40,
+        "instruction": "Complete the notes below. Write ONE WORD ONLY for each answer."
+      }
+    ]
   }
 ]
