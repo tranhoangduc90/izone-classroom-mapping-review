@@ -5,7 +5,7 @@
 // Khi lỗi: transaction rollback toàn bộ thay đổi của bước hiện tại và trả mã lỗi không chứa nội dung bài viết.
 
 import crypto from 'node:crypto';
-import { buildErpGradePayload } from './erp-sync.js';
+import { buildErpGradePayload, deliverErpGrades } from './erp-sync.js';
 
 const GRADING_VERSION = 1;
 const TASK_CRITERIA = Object.freeze({
@@ -310,93 +310,95 @@ async function refreshFinal(client, attemptId) {
 }
 
 export function createTermTestWritingGradingService({ pool, syncErpGrades = null }) {
-  async function ensureSubmission({ attemptToken, testSlug, task1, task2, taskDefinitions }) {
-    return inTransaction(pool, async client => {
-      const attemptResult = await client.query(`SELECT id::text, test_slug, writing_scope,
-        writing_task_1, writing_task_2, writing_submitted_at
-      FROM assessment.term_test_attempt
-      WHERE id = $1::uuid
-        AND test_slug = $2
-        AND completed_at IS NOT NULL
-        AND writing_submitted_at IS NOT NULL
-      FOR UPDATE;`, [attemptToken, testSlug]);
-      if (attemptResult.rows.length !== 1) {
-        throw new TermTestWritingGradingError(
-          'WRITING_GRADING_ATTEMPT_NOT_READY',
-          'Bài Writing chưa được máy chủ xác nhận nộp.',
-          409
-        );
-      }
+  function ensureSubmission(input) {
+    return inTransaction(pool, client=>ensureSubmissionInTransaction(client,input));
+  }
 
-      const attempt = attemptResult.rows[0];
-      if (attempt.writing_scope === 'lr_only') return {
-        status:'not_applicable',ready:false,taskStates:{},task1Score:null,task2Score:null,writingScore:null,tasks:[]
-      };
-      // Quyết định bài trắng từ nội dung canonical đã nộp, không tin payload gọi lại.
-      const essays = { 1: cleanText(attempt.writing_task_1, 120_000), 2: cleanText(attempt.writing_task_2, 180_000) };
-      const taskNumbers = Array.from(taskDefinitions || [])
-        .map(task => Number(String(task?.id || '').replace(/\D/g, '')))
-        .filter(taskNumber => [1, 2].includes(taskNumber));
-      if (!taskNumbers.length || new Set(taskNumbers).size !== taskNumbers.length) {
-        throw new TermTestWritingGradingError(
-          'WRITING_GRADING_TASKS_INVALID',
-          'Cấu hình đề Writing không có Task hợp lệ.',
-          500
-        );
-      }
-      for (const taskNumber of taskNumbers) {
-        const source = taskSource(taskDefinitions, taskNumber);
-        const runKey = buildRunKey(testSlug, attemptToken, taskNumber);
-        const blank = countWords(essays[taskNumber]) === 0;
-        const ruleResult = blank ? {
-          taskNumber,taskScore:0,criteria:[],gradingMethod:'blank_rule',ruleVersion:'blank-writing-v1',
-          reasonCode:'BLANK_SUBMISSION',source:{attemptId:attemptToken,taskNumber,submittedAt:attempt.writing_submitted_at},
-          report:'## Điểm theo quy tắc bài trắng\n\nKhông có nội dung bài làm. Task bắt buộc đã được máy chủ xác nhận nộp nhận Band 0. Không gọi AI và không tạo nhận xét từ vựng hoặc ngữ pháp.'
-        } : null;
-        await client.query(`INSERT INTO assessment.term_test_writing_grading_run (
-          attempt_id, task_number, grading_version, run_key,
-          prompt_text, prompt_image_url, essay_text, word_count, status,task_score,result_json,completed_at
-        ) VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9,$10,$11::jsonb,
-          CASE WHEN $9='complete' THEN now() ELSE NULL END)
-        ON CONFLICT (attempt_id, task_number, grading_version) DO NOTHING;`, [
-          attemptToken,
-          taskNumber,
-          GRADING_VERSION,
-          runKey,
-          source.prompt,
-          source.imageUrl,
-          essays[taskNumber],
-          countWords(essays[taskNumber]),blank?'complete':'queued',blank?0:null,ruleResult?JSON.stringify(ruleResult):null
-        ]);
-        const runResult = await client.query(`SELECT id::text,status
-        FROM assessment.term_test_writing_grading_run
-        WHERE attempt_id = $1::uuid AND task_number = $2 AND grading_version = $3;`, [
-          attemptToken,
-          taskNumber,
-          GRADING_VERSION
-        ]);
-        if (runResult.rows[0].status !== 'complete') await client.query(`INSERT INTO assessment.term_test_writing_grading_job (
-          run_id, job_type, idempotency_key, status, max_attempts, next_attempt_at
-        ) VALUES ($1::uuid, 'dispatch', $2, 'queued', 8, now())
-        ON CONFLICT (idempotency_key) DO NOTHING;`, [
-          runResult.rows[0].id,
-          `${runKey}:dispatch`
-        ]);
-      }
-      if (!(await readStatus(client,attemptToken)).ready) await refreshFinal(client, attemptToken);
-      // Dùng hàng việc hiện có để gửi điểm 0 bền vững, không chuyển bài trắng sang AI.
-      // Việc collect có nhãn blank_rule được claimJobs xử lý nội bộ trước khi trả việc cho n8n.
-      const localRuns = await client.query(`SELECT id::text,run_key FROM assessment.term_test_writing_grading_run
-        WHERE attempt_id=$1 AND grading_version=$2 ORDER BY task_number DESC`,[attemptToken,GRADING_VERSION]);
-      const status = await readStatus(client,attemptToken);
-      if (status.ready && status.tasks.length && status.tasks.every(t=>t.gradingMethod==='blank_rule')) {
-        await client.query(`INSERT INTO assessment.term_test_writing_grading_job
-          (run_id,job_type,idempotency_key,status,max_attempts,next_attempt_at)
-          VALUES($1,'collect',$2,'queued',120,now()) ON CONFLICT(idempotency_key) DO NOTHING`,
-          [localRuns.rows[0].id,`${testSlug}:${attemptToken}:v${GRADING_VERSION}:blank-portal`]);
-      }
-      return readStatus(client, attemptToken);
-    });
+  async function ensureSubmissionInTransaction(client, {attemptToken,testSlug,taskDefinitions}) {
+    const attemptResult = await client.query(`SELECT id::text, test_slug, writing_scope,
+      writing_task_1, writing_task_2, writing_submitted_at
+    FROM assessment.term_test_attempt
+    WHERE id = $1::uuid
+      AND test_slug = $2
+      AND completed_at IS NOT NULL
+      AND writing_submitted_at IS NOT NULL
+    FOR UPDATE;`, [attemptToken, testSlug]);
+    if (attemptResult.rows.length !== 1) {
+      throw new TermTestWritingGradingError(
+        'WRITING_GRADING_ATTEMPT_NOT_READY',
+        'Bài Writing chưa được máy chủ xác nhận nộp.',
+        409
+      );
+    }
+
+    const attempt = attemptResult.rows[0];
+    if (attempt.writing_scope === 'lr_only') return {
+      status:'not_applicable',ready:false,taskStates:{},task1Score:null,task2Score:null,writingScore:null,tasks:[]
+    };
+    // Quyết định bài trắng từ nội dung canonical đã nộp, không tin payload gọi lại.
+    const essays = { 1: cleanText(attempt.writing_task_1, 120_000), 2: cleanText(attempt.writing_task_2, 180_000) };
+    const taskNumbers = Array.from(taskDefinitions || [])
+      .map(task => Number(String(task?.id || '').replace(/\D/g, '')))
+      .filter(taskNumber => [1, 2].includes(taskNumber));
+    if (!taskNumbers.length || new Set(taskNumbers).size !== taskNumbers.length) {
+      throw new TermTestWritingGradingError(
+        'WRITING_GRADING_TASKS_INVALID',
+        'Cấu hình đề Writing không có Task hợp lệ.',
+        500
+      );
+    }
+    for (const taskNumber of taskNumbers) {
+      const source = taskSource(taskDefinitions, taskNumber);
+      const runKey = buildRunKey(testSlug, attemptToken, taskNumber);
+      const blank = countWords(essays[taskNumber]) === 0;
+      const ruleResult = blank ? {
+        taskNumber,taskScore:0,criteria:[],gradingMethod:'blank_rule',ruleVersion:'blank-writing-v1',
+        reasonCode:'BLANK_SUBMISSION',source:{attemptId:attemptToken,taskNumber,submittedAt:attempt.writing_submitted_at},
+        report:'## Điểm theo quy tắc bài trắng\n\nKhông có nội dung bài làm. Task bắt buộc đã được máy chủ xác nhận nộp nhận Band 0. Không gọi AI và không tạo nhận xét từ vựng hoặc ngữ pháp.'
+      } : null;
+      await client.query(`INSERT INTO assessment.term_test_writing_grading_run (
+        attempt_id, task_number, grading_version, run_key,
+        prompt_text, prompt_image_url, essay_text, word_count, status,task_score,result_json,completed_at
+      ) VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9,$10,$11::jsonb,
+        CASE WHEN $9='complete' THEN now() ELSE NULL END)
+      ON CONFLICT (attempt_id, task_number, grading_version) DO NOTHING;`, [
+        attemptToken,
+        taskNumber,
+        GRADING_VERSION,
+        runKey,
+        source.prompt,
+        source.imageUrl,
+        essays[taskNumber],
+        countWords(essays[taskNumber]),blank?'complete':'queued',blank?0:null,ruleResult?JSON.stringify(ruleResult):null
+      ]);
+      const runResult = await client.query(`SELECT id::text,status
+      FROM assessment.term_test_writing_grading_run
+      WHERE attempt_id = $1::uuid AND task_number = $2 AND grading_version = $3;`, [
+        attemptToken,
+        taskNumber,
+        GRADING_VERSION
+      ]);
+      if (runResult.rows[0].status !== 'complete') await client.query(`INSERT INTO assessment.term_test_writing_grading_job (
+        run_id, job_type, idempotency_key, status, max_attempts, next_attempt_at
+      ) VALUES ($1::uuid, 'dispatch', $2, 'queued', 8, now())
+      ON CONFLICT (idempotency_key) DO NOTHING;`, [
+        runResult.rows[0].id,
+        `${runKey}:dispatch`
+      ]);
+    }
+    if (!(await readStatus(client,attemptToken)).ready) await refreshFinal(client, attemptToken);
+    // Dùng hàng việc hiện có để gửi điểm 0 bền vững, không chuyển bài trắng sang AI.
+    // Việc collect có nhãn blank_rule được claimJobs xử lý nội bộ trước khi trả việc cho n8n.
+    const localRuns = await client.query(`SELECT id::text,run_key FROM assessment.term_test_writing_grading_run
+      WHERE attempt_id=$1 AND grading_version=$2 ORDER BY task_number DESC`,[attemptToken,GRADING_VERSION]);
+    const status = await readStatus(client,attemptToken);
+    if (status.ready && status.tasks.length && status.tasks.every(t=>t.gradingMethod==='blank_rule')) {
+      await client.query(`INSERT INTO assessment.term_test_writing_grading_job
+        (run_id,job_type,idempotency_key,status,max_attempts,next_attempt_at)
+        VALUES($1,'collect',$2,'queued',120,now()) ON CONFLICT(idempotency_key) DO NOTHING`,
+        [localRuns.rows[0].id,`${testSlug}:${attemptToken}:v${GRADING_VERSION}:blank-portal`]);
+    }
+    return readStatus(client, attemptToken);
   }
 
   async function claimJobs({ workerId, limit = 4 }) {
@@ -480,8 +482,8 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           if (found.rows.length!==1) throw new Error('BLANK_IDENTITY_NOT_FOUND');
           const attempt=found.rows[0];
           if (typeof syncErpGrades==='function' && attempt.class_name!=='CODEXDEMO806') {
-            const synced=await syncErpGrades(buildErpGradePayload(attempt,attempt.combined_result,{writing:grading.writingScore}));
-            if (synced?.status!=='synced') throw new Error('BLANK_PORTAL_ACK_INVALID');
+            const status=await deliverErpGrades(syncErpGrades,buildErpGradePayload(attempt,attempt.combined_result,{writing:grading.writingScore}));
+            if (syncErpGrades.durableDelivery!==true && status!=='synced') throw new Error('BLANK_PORTAL_ACK_INVALID');
           }
           const completed=await pool.query(`UPDATE assessment.term_test_writing_grading_job SET status='complete',
             completed_at=now(),lease_until=NULL,last_error_code=NULL,updated_at=now()
@@ -665,12 +667,11 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     let portalSyncStatus = 'not_applicable';
     if (!isDemo && /^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || ''))) {
       try {
-        const syncResult = await syncErpGrades(buildErpGradePayload(
+        portalSyncStatus = await deliverErpGrades(syncErpGrades, buildErpGradePayload(
           attempt,
           attempt.combined_result,
           { writing: stored.grading.writingScore }
         ));
-        portalSyncStatus = syncResult?.status === 'synced' ? 'synced' : 'not_applicable';
       } catch {
         // Giữ job ở trạng thái processing để n8n gọi /fail và đưa lại vào hàng chờ.
         // Kết quả chấm đã được lưu; chỉ riêng bước ghi Portal sẽ tự thử lại.
@@ -762,5 +763,5 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     return result.rows[0]?.prompt_image_url || null;
   }
 
-  return { ensureSubmission, claimJobs, completeDispatch, completeResult, failJob, getStatus, getJobImage };
+  return { ensureSubmission, ensureSubmissionInTransaction, claimJobs, completeDispatch, completeResult, failJob, getStatus, getJobImage };
 }

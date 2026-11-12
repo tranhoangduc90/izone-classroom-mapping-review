@@ -25,7 +25,11 @@ test('Pretest goes Reading → Listening → result and recovers the committed r
   const fixture = await createMiniFixture({
     examOrder: true,
     assets,
-    pretestCbtJourneyMode: 'on'
+    pretestCbtJourneyMode: 'on',
+    writingHold: {
+      term2WritingHoldHours: 2, term2WritingHoldLimit: 3, term2WritingHoldClasses: new Set([identity.classCode]),
+      termCbtLrHoldHours: 2, termCbtLrHoldLimit: 3, term2CbtLrHoldClasses: new Set([identity.classCode])
+    }
   });
   t.after(() => fixture.db.close());
 
@@ -74,6 +78,11 @@ test('Pretest goes Reading → Listening → result and recovers the committed r
   assert.equal(offer.status, 200, offer.text);
   assert.equal(offer.body.examMode, 'read_first');
   assert.deepEqual(offer.body.audioManifest, audioManifest);
+  assert.equal(offer.body.readingDeadlineReviewVersion, undefined);
+  const {rows:[cohort]} = await fixture.db.query(`
+    SELECT writing_hold_cohort,lr_hold_cohort FROM assessment.term_k67_cbt_journey WHERE session_id=$1
+  `, [scope.examSessionToken]);
+  assert.deepEqual(cohort, {writing_hold_cohort:false,lr_hold_cohort:false});
   const post = (path, body) => api.post(prefix + '/cbt-journey/' + path)
     .set('x-term2-permit', offer.body.permit)
     .send({ ...scope, ...body });
@@ -125,4 +134,10 @@ test('Pretest goes Reading → Listening → result and recovers the committed r
   assert.equal(attempt.listening_result.correct, 2);
   assert.equal(attempt.reading_result.correct, 1);
   assert.ok(attempt.completed_at);
+  for (const table of ['term_k67_writing_submission_hold','term_k67_lr_submission_hold']) {
+    const {rows:[{count}]} = await fixture.db.query(`
+      SELECT count(*)::int AS count FROM assessment.${table} WHERE session_id=$1
+    `, [scope.examSessionToken]);
+    assert.equal(count, 0);
+  }
 });

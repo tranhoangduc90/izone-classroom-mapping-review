@@ -31,6 +31,8 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
   const portal=[];
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1PaperJourneyMode:'on',term1CbtJourneyMode:'on',
     term2PaperJourneyMode:'on',term2CbtJourneyMode:'on',
+    writingHold:{termPaperLrHoldHours:2,termPaperLrHoldLimit:20,
+      term1PaperLrHoldClasses:new Set([identity.classCode]),term2PaperLrHoldClasses:new Set([identity.classCode])},
     syncErpGrades:async payload=>portal.push(payload)});
   t.after(()=>f.db.close());
   await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
@@ -45,6 +47,7 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
   assert.equal(ready.body.audioManifest,undefined);
   assert.equal(ready.body.content,undefined);
   assert.equal(ready.body.examMode,examMode);
+  assert.equal(ready.body.submissionRecoveryVersion,1);
   assert.equal((await prepare({deviceProof:'b'.repeat(64)})).status,403);
   const reopened=await prepare({examMode:examMode==='lis_first'?'read_first':'lis_first'});
   assert.equal(reopened.body.examSessionToken,ready.body.examSessionToken);
@@ -66,8 +69,18 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
     const operation={section,previousOperationId,operationId:randomUUID(),startedAt,
       capturedAt:startedAt+(listening?1000:60*60_000),revision:1,automatic:!listening,eofAt:null,heardSeconds:0,
       answers:listening?{11:'A'}:{14:'A'}};
-    if(listening)assert.equal((await post('seal',{...operation,automatic:true})).body.error,'PAPER_MANUAL_ONLY');
-    else assert.equal((await post('seal',{...operation,capturedAt:operation.capturedAt-1})).body.error,'OFFLINE_REVIEW_REQUIRED');
+    const rejected={...operation,operationId:randomUUID(),
+      ...(listening?{automatic:true}:{capturedAt:operation.capturedAt-1})};
+    const savedForReview=await post('seal',rejected);
+    assert.equal(savedForReview.body.reasonCode,listening?'PAPER_MANUAL_ONLY':'AUTO_CAPTURE_BEFORE_DEADLINE');
+    assert.ok(savedForReview.body.held?.payloadHash);
+    assert.deepEqual((await post('status',{section,operationId:rejected.operationId})).body,
+      {ok:true,persisted:false,receipt:null,held:savedForReview.body.held});
+    const {rows:[held]}=await f.db.query(`SELECT payload,delivery FROM assessment.term_k67_lr_submission_hold
+      WHERE session_id=$1 AND section=$2 AND operation_id=$3`,[scope.examSessionToken,section,rejected.operationId]);
+    assert.deepEqual(held.payload.answers,operation.answers);
+    assert.equal(held.delivery,'paper');
+    assert.equal(portal.length,0);
     assert.equal((await post('status',{section,operationId:operation.operationId})).body.persisted,false);
     const saved=await post('seal',operation);
     assert.ok(saved.ok,saved.text);
@@ -89,7 +102,7 @@ for(const slug of ['term-test-1','term-test-2'])for(const examMode of ['lis_firs
   assert.equal(session.listening_deadline_at,null);
   assert.equal(session.listening_eof_at,null);
   for(let n=0;n<30&&!portal.length;n++)await delay(10);
-  assert.ok(portal.length>0);
+  assert.equal(portal.length,1);
   assert.equal(portal[0].testSlug,slug);
   assert.equal(portal[0].attemptToken,row.id);
   assert.equal(portal[0].classId,'1293');

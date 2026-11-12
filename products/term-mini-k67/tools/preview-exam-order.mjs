@@ -1,10 +1,14 @@
 import express from 'express';
 import path from 'node:path';
-import {randomBytes,createCipheriv,createHash} from 'node:crypto';
+import {randomBytes,randomUUID,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
+import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
+import {createErpGradeSync} from '../src/erp-sync.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {startPreviewExamJournal} from './preview-exam-journal.mjs';
 
 // Bản thử chỉ nghe trên localhost, PostgreSQL nhúng trong RAM, toàn bộ tên và đề đều giả.
 // API và giao diện thật dùng cùng origin; không nối Portal, n8n hoặc database production.
@@ -122,11 +126,59 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
+const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
+  :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
+const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
+const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
+const writingHoldEnabled=Boolean(termHoldSlug);
+const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
+const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
+const journalFixture=holdSlug&&journalSource
+  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
+const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
+const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbtLrHoldClasses:holdClass}
+  :process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
+  ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
+    ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
+const fakeWorkerKey='fixture-k67-local-writing-grader-only';
+const gradingRoundTrip=Boolean(termHoldSlug&&journalFixture)
+  &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
+const fixtureGradeRequests=[];
+let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+  mountJournal:journalFixture?.mount,
+  writingHold:{
+    ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
+      :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
+    ...lrHold,
+    ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
+  termTestWritingGradingService:writingHoldEnabled ? {
+    ensureSubmission:input=>writingGrading.ensureSubmission(input),
+    ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
+    claimJobs:input=>writingGrading.claimJobs(input),
+    completeDispatch:input=>writingGrading.completeDispatch(input),
+    completeResult:input=>writingGrading.completeResult(input),
+    getStatus:input=>writingGrading.getStatus(input)
+  } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool,
+  syncErpGrades:gradingRoundTrip ? createErpGradeSync({config:{
+    erpSyncUrl:`http://127.0.0.1:${port}/preview/writing-portal`,erpSyncSecret:fakeWorkerKey,erpSyncTimeoutMs:5000
+  }}) : null});
+const sealClock=new AsyncLocalStorage();
+if (holdSlug) {
+  const connect=fixture.pool.connect.bind(fixture.pool);
+  fixture.pool.connect=async()=>{
+    const client=await connect();
+    const now=sealClock.getStore();
+    if (now===undefined) return client;
+    return {release:()=>client.release(),query:(sql,args)=>sql==='SELECT clock_timestamp() AS now'
+      ? Promise.resolve({rows:[{now:new Date(now)}]}) : client.query(sql,args)};
+  };
+}
 if(listeningContinuityEnabled&&!pretestMode){
   await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
 }
@@ -165,6 +217,68 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (gradingRoundTrip) {
+  outer.post('/preview/writing-portal',express.json(),(req,res)=>{
+    if(req.get('x-term-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
+    fixtureGradeRequests.push(req.body);
+    return res.json({ok:true,status:'synced',attemptToken:req.body.attemptToken});
+  });
+  outer.get('/preview/writing-portal',(_req,res)=>res.json(fixtureGradeRequests));
+  outer.post('/preview/writing-collect-due/:attempt',async(req,res)=>{
+    if(req.get('x-writing-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
+    const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    if(!uuid.test(req.params.attempt))return res.sendStatus(400);
+    // Advance only the synthetic collector delay. Keep leases and result writes on the real HTTP routes.
+    const updated=await fixture.db.query(`UPDATE assessment.term_test_writing_grading_job job
+      SET next_attempt_at=now() FROM assessment.term_test_writing_grading_run run
+      WHERE run.id=job.run_id AND run.attempt_id=$1 AND job.job_type='collect' AND job.status='retry_wait'`,[req.params.attempt]);
+    return res.json({jobs:updated.affectedRows});
+  });
+}
+if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
+  const attempt=String(req.query.attempt||'');
+  if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
+  const result=await journalFixture.read(attempt,req.query.archive==='1');
+  res.json(result);
+});
+if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
+  const {attempt,operation}=req.query;
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if (typeof attempt!=='string'||typeof operation!=='string'||!uuid.test(attempt)||!uuid.test(operation))
+    return res.status(400).json({ok:false});
+  const receipt=(await fixture.db.query(`SELECT j.sections
+    FROM assessment.term_test_attempt a JOIN assessment.term_k67_cbt_journey j ON j.session_id=a.exam_session_id
+    WHERE a.id=$1`,[attempt])).rows[0];
+  const jobs=(await fixture.db.query(`SELECT r.task_number AS task,count(*)::int AS jobs
+    FROM assessment.term_test_writing_grading_run r
+    JOIN assessment.term_test_writing_grading_job j ON j.run_id=r.id AND j.job_type='dispatch'
+    WHERE r.attempt_id=$1 GROUP BY r.task_number ORDER BY r.task_number`,[attempt])).rows;
+  const held=(await fixture.db.query(`SELECT h.payload_hash AS "payloadHash",
+    char_length(h.payload->'answers'->>'task1') AS "task1Length",
+    char_length(h.payload->'answers'->>'task2') AS "task2Length"
+    FROM assessment.term_k67_writing_submission_hold h
+    JOIN assessment.term_test_attempt a ON a.exam_session_id=h.session_id AND a.generation=h.generation
+    WHERE a.id=$1 AND h.operation_id=$2 AND h.expires_at>clock_timestamp() AND h.payload IS NOT NULL`,[attempt,operation])).rows[0];
+  const sections=receipt?.sections||{};
+  res.json({receiptVerified:sections.writing?.operationId===operation,sections:Object.keys(sections).sort(),jobs,...held&&{held}});
+});
+if(lrHold.termCbtLrHoldHours||miniHoldEnabled)outer.get('/preview/reading-review',async(req,res)=>{
+  const {session,operation}=req.query;
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(typeof session!=='string'||typeof operation!=='string'||!uuid.test(session)||!uuid.test(operation))
+    return res.status(400).json({ok:false});
+  const {rows:[row]}=await fixture.db.query(`SELECT j.sections,h.payload_hash AS "payloadHash",h.review_only AS "reviewOnly",
+    h.payload->'answers' AS answers,
+    (SELECT count(*)::int FROM assessment.term_test_writing_grading_run r
+     JOIN assessment.term_test_attempt a ON a.id=r.attempt_id WHERE a.exam_session_id=j.session_id) AS jobs
+    FROM assessment.${miniHoldEnabled?'mini_k67_cbt_journey':'term_k67_cbt_journey'} j
+    LEFT JOIN assessment.term_k67_lr_submission_hold h
+      ON h.session_id=j.session_id AND h.generation=j.generation AND h.section='reading' AND h.operation_id=$2
+    WHERE j.session_id=$1`,[session,operation]);
+  if(!row)return res.status(404).json({ok:false});
+  const {sections,...held}=row;
+  res.json({...held,sections:Object.keys(sections).sort()});
+});
 // Readback chỉ trong bản thử localhost, trả mốc/hạn của phiên giả mà không trả đáp án.
 outer.get('/preview/audio-state',async(req,res)=>{
   if(!/^[0-9a-f-]{36}$/.test(req.query.id||''))return res.status(400).json({ok:false});
@@ -184,7 +298,7 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
   if(recoveryUsed!==undefined)await fixture.db.query('UPDATE assessment.term_test_exam_session SET listening_recovery_seconds=$2 WHERE id=$1',[id,recoveryUsed]);
   res.json({ok:true,fixtureOnly:true});
 });
-const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''};`;
+const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''${journalFixture?',EXAM_JOURNAL_ENABLED:true':''}};`;
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
 const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
 if(previousPagesRevision){
@@ -195,16 +309,21 @@ if(previousPagesRevision){
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
+  if(term2JourneyMode==='on')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
+    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt-audio-status-v2.mjs',
+    'term-tests/term-test-2-computer-based/bootstrap-terms-cbt-audio-status-v2.js',
+    'term-tests/term-test-2-computer-based/enhance-terms-cbt.js',
+    'term-tests/shared/exam-journal/bridge.mjs');
   const previous=new Map(files.map(file=>[file,execFileSync('git',['show',previousPagesRevision+':'+file],
     {cwd:pages,encoding:'utf8'}).replace(/\r\n/g,'\n')]));
   let servingPrevious=true;
-  outer.post('/preview/switch-pages',(_req,res)=>{servingPrevious=false;res.json({ok:true});});
+  outer.post('/preview/switch-pages',(req,res)=>{servingPrevious=req.query.previous==='1';res.json({ok:true});});
   outer.use((req,res,next)=>{
     if(!servingPrevious||req.method!=='GET')return next();
     const file=req.path.replace(/^\//,'').replace(/\/$/,'/index.html');
     const content=previous.get(file);
     if(!content)return next();
-    const body=file.endsWith('/offline-assets.mjs')
+    const body=/\/offline-assets(?:-audio-status-v2)?\.mjs$/.test(file)
       ? content.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
           (_match,before,after)=>before+createHash('sha256').update(fixtureConfig).digest('hex')+after)
       : content;
@@ -222,10 +341,11 @@ if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
-  const manifest=entry.startsWith('pretest-lesson-16')?'offline-assets-audio-status-v2.mjs':'offline-assets.mjs';
-  outer.get(`/term-tests/${entry}/${manifest}`, async (_req,res,next) => {
+  const fixtureManifests=entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
+    :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'];
+  outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
     try {
-      const source = await readFile(path.join(pages,'term-tests',entry,manifest),'utf8');
+      const source = await readFile(path.join(pages,'term-tests',entry,path.posix.basename(req.path)),'utf8');
       const hash = createHash('sha256').update(fixtureConfig).digest('hex');
       res.type('application/javascript').send(source.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
         (_match, before, after) => before + hash + after));
@@ -253,7 +373,23 @@ outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-le
   }catch(e){next(e);}
 });
 outer.use('/preview/reset',express.json(),async(_req,res)=>{await fixture.db.exec('UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');res.json({ok:true,fixtureOnly:true});});
+if(fullWritingHold)outer.post('/preview/fill-writing-hold/:attempt',async(req,res)=>{
+  const {attempt}=req.params;
+  if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
+  const {rows}=await fixture.db.query(`INSERT INTO assessment.term_k67_writing_submission_hold
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+    SELECT a.exam_session_id,a.generation,$2,$3,'{}',clock_timestamp(),clock_timestamp()+interval '2 hours'
+    FROM assessment.term_test_attempt a WHERE a.id=$1 AND a.test_slug=$4
+    RETURNING operation_id`,[attempt,randomUUID(),'a'.repeat(64),termHoldSlug]);
+  res.json({holds:rows.length});
+});
 outer.use(express.static(pages));
+if (holdSlug) outer.use((req,_res,next)=>{
+  if(req.method!=='POST'||req.path!==`/api/term-tests/${holdSlug}/cbt-journey/seal`)return next();
+  const now=Number(req.get('x-preview-seal-clock'));
+  if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
+  sealClock.run(now,next);
+});
 outer.use(fixture.app);
 const refresh=setInterval(()=>fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now()').catch(console.error),30000);
 const server=outer.listen(port,'127.0.0.1',()=>console.log(`Bản thử K67: http://127.0.0.1:${port}/term-tests/?class=IC2304`));

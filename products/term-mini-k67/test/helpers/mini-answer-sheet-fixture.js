@@ -5,7 +5,8 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,termTestWritingGradingService,allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+  const journal = mountJournal ? {mountJournal,journalEnv:{EXAM_JOURNAL_ENABLED:'1'}} : {};
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
   const term2Journeys=term2CbtJourneyMode||term2PaperJourneyMode||pretestCbtJourneyMode||pretestPaperJourneyMode;
   const termJourneys=term1CbtJourneyMode||term1PaperJourneyMode||term2Journeys;
@@ -20,6 +21,20 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
       await db.exec(await readFile(new URL('../../db/029-demo-reset-interrupted-listening.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/030-pretest-lesson-16.sql',import.meta.url),'utf8'));
     }
+    if(writingHold.term1WritingHoldHours||writingHold.term2WritingHoldHours)
+      await db.exec(await readFile(new URL('../../db/031-term2-writing-submission-recovery.sql',import.meta.url),'utf8'));
+    if(writingHold.termCbtLrHoldHours||writingHold.miniCbtLrHoldHours||writingHold.termPaperLrHoldHours||writingHold.miniPaperLrHoldHours)
+      await db.exec(await readFile(new URL('../../db/032-term-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));
+    if(writingHold.miniCbtLrHoldHours)
+      await db.exec(await readFile(new URL('../../db/033-mini-cbt-lr-submission-recovery.sql',import.meta.url),'utf8'));
+  };
+  const installMiniPaper=async db=>{
+    if (miniPaperOffline) {
+      await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
+      await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
+      if (writingHold.miniPaperLrHoldHours)
+        await db.exec(await readFile(new URL('../../db/034-mini-paper-submission-recovery.sql',import.meta.url),'utf8'));
+    }
   };
   if(process.env.K67_ORDER_NATIVE_URL) {
     const {db,pool}=await createNativeOrderFixture({examOrder});
@@ -28,8 +43,9 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
     if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
     await installTermJourney(db);
-    return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,
-      config:{...miniR2,termTestAssetDir,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
+    await installMiniPaper(db);
+    return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
+      config:{...miniR2,...writingHold,termTestAssetDir,miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
@@ -70,10 +86,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   if(miniCbtOfflineMode)await db.exec(await readFile(new URL('../../db/020-mini-cbt-offline.sql',import.meta.url),'utf8'));
   if(miniCbtJourneyMode)await db.exec(await readFile(new URL('../../db/021-mini-cbt-journey.sql',import.meta.url),'utf8'));
   await installTermJourney(db);
-  if (miniPaperOffline) {
-    await db.exec(await readFile(new URL('../../db/017-writing-scope.sql',import.meta.url),'utf8'));
-    await db.exec(await readFile(new URL('../../db/018-mini-paper-offline.sql',import.meta.url),'utf8'));
-  }
+  await installMiniPaper(db);
   const section=(count,start)=>({questions:Array.from({length:count},(_,i)=>({number:i+start,type:'Câu thử',accepted:['A']}))});
   await db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
     VALUES('mini-test-lesson-5','Đề mô phỏng',1,$1,$2,true)`,[JSON.stringify(section(20,11)),JSON.stringify(section(13,14))]);
@@ -81,8 +94,8 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   let queue=Promise.resolve();
   const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
-  return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,
-    config:{...miniR2,termTestAssetDir,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
+  return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
+    config:{...miniR2,...writingHold,termTestAssetDir,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
       miniPaperOfflineMode:miniPaperOffline,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
       term1ListeningRetakeMode,term1ListeningRetakeSecret,
       allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};

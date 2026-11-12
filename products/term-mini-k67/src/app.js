@@ -31,11 +31,12 @@ import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
 import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
+import {mountTeacherSubmissionHoldExport} from './teacher-submission-hold.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
-import { buildErpGradePayload } from "./erp-sync.js";
+import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
 
@@ -313,8 +314,7 @@ async function trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingS
   if (String(attempt?.class_name || '').trim().toUpperCase() === 'CODEXDEMO806') return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult, { writing: writingScore });
-    await syncErpGrades(payload);
-    return 'synced';
+    return await deliverErpGrades(syncErpGrades, payload, 'synced');
   } catch (error) {
     // Không chặn học viên xem kết quả; lần mở kết quả tiếp theo sẽ tự thử lại.
     console.error(`ERP grade sync failed type=${error?.name || 'Error'}`);
@@ -530,14 +530,15 @@ export function createApp({
   mountMiniAnswerSheet(app, { pool, config, requireContext, readLimiter:testReadLimiter,
     writeLimiter:testWriteLimiter, draftLimiter:testDraftLimiter });
   mountMiniPaperOffline(app, { pool, config, requireContext, readLimiter: testReadLimiter,
-    writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter });
+    writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter, observeSubmission: (...args) => termJournal?.business(...args) });
   mountMiniCbtOffline(app, { pool, config, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
-    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, observeSubmission:(...args)=>termJournal?.business(...args) });
   mountPretestCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, logEvent: logTermTestEvent });
   const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    observeSubmission:(...args)=>termJournal?.business(...args),
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
       void pool.query(fetchTermTestResultSql,[attemptToken]).then(({rows:[row]})=>{
         if(row?.test_slug===slug&&row.writing_scope==='lr_only'&&row.combined_result) {
@@ -549,23 +550,24 @@ export function createApp({
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountTerm1PaperJourney(app,paperJourneyServices);
   mountTerm2PaperJourney(app,paperJourneyServices);
-  mountTerm1CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
-    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
+  const termCbtServices=slug=>({pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,
+    observeSubmission:(...args)=>termJournal?.business(...args),
+    writingCommitted:()=>termTestWritingGradingService?.notifyCommitted?.(),
+    queueWriting:termTestWritingGradingService?.ensureSubmissionInTransaction && (async (db,attemptToken,testSlug)=>{
+      const content=await termTestAssetService.getContent(testSlug);
+      await termTestWritingGradingService.ensureSubmissionInTransaction(db,{
+        attemptToken,testSlug,taskDefinitions:content?.writing?.tasks||[]
+      });
+    }),writingAccepted:attemptToken=>{
       if(!termTestWritingGradingService)return;
-      // The receipt is committed already. Native grading ensures at most one job per submitted snapshot.
       void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
-        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-1' AND superseded_at IS NULL`,[attemptToken])
+        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug=$2 AND superseded_at IS NULL`,[attemptToken,slug])
         .then(result=>ensureTermTestWritingGrading(result.rows[0]))
-        .catch(()=>logger.error('Term 1 offline Writing grading will retry on result read'));
+        .catch(()=>logger.error(`${slug} offline Writing grading will retry on result read`));
     }});
-  mountTerm2CbtJourney(app, {pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
-    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,writingAccepted:attemptToken=>{
-      if(!termTestWritingGradingService)return;
-      void pool.query(`SELECT id::text AS attempt_token,test_slug,writing_scope,writing_task_1,writing_task_2,writing_submitted_at
-        FROM assessment.term_test_attempt WHERE id=$1 AND test_slug='term-test-2' AND superseded_at IS NULL`,[attemptToken])
-        .then(result=>ensureTermTestWritingGrading(result.rows[0]))
-        .catch(()=>logger.error('Term 2 offline Writing grading will retry on result read'));
-    }});
+  mountTerm1CbtJourney(app,termCbtServices('term-test-1'));
+  mountTerm2CbtJourney(app,termCbtServices('term-test-2'));
 
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
@@ -1366,7 +1368,7 @@ export function createApp({
     });
   }));
 
-  registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
+  app.locals.termTestResultStream = registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
   mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter });
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
@@ -1454,6 +1456,9 @@ export function createApp({
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
   mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
+  mountTeacherSubmissionHoldExport(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth,
+    reviewersByTest:{'term-test-1':config.term1HoldExportReviewers,'term-test-2':config.term2HoldExportReviewers},
+    logEvent:logTermTestEvent});
   mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});

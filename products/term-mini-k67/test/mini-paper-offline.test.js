@@ -10,11 +10,14 @@ const otherStudent = '44444444-4444-4444-8444-444444444444';
 const baseIdentity = { classCode: 'IC2304', studentRef, identityConfirmed: true };
 const assets = { getTiming: () => ({ readingDurationMinutes: 20 }) };
 
-for (const mode of ['lis_first', 'read_first']) test('Mini K67 paper offline ' + mode, async () => {
+for (const mode of ['lis_first', 'read_first']) for (const recovery of [false,true])
+test('Mini K67 paper offline ' + mode + (recovery ? ' with submission recovery' : ''), async () => {
   let portalCalls = 0;
   const fixture = await createMiniFixture({
     examOrder: true, assets, miniPaperOffline: 'on',
-    syncErpGrades: async () => { portalCalls++; }
+    syncErpGrades: async () => { portalCalls++; },
+    ...(recovery ? {writingHold:{miniPaperLrHoldHours:2,miniPaperLrHoldLimit:2,
+      miniPaperLrHoldClasses:new Set(['IC2304'])}} : {})
   });
   try {
     const api = request(fixture.app);
@@ -29,6 +32,7 @@ for (const mode of ['lis_first', 'read_first']) test('Mini K67 paper offline ' +
     const prep = await api.post(prefix + '/offline/prepare').send(claim).expect(200);
     assert.equal(prep.body.examMode, mode);
     assert.equal(prep.body.policy.timed, false);
+    assert.equal(prep.body.offline.submissionRecoveryVersion, recovery ? 1 : undefined);
     const grant = prep.body.offline.permit;
     await api.post(prefix + '/offline/prepare').send({ ...claim, ownerId: randomUUID() }).expect(409);
     const legacyDraft = await api.post(prefix + '/answer-sheet/listening/draft')
@@ -54,6 +58,34 @@ for (const mode of ['lis_first', 'read_first']) test('Mini K67 paper offline ' +
     const draft = op(first, 'draft', null, first === 'listening' ? { 11: 'A' } : { 24: 'A' }, 1);
     await send(draft).expect(200);
     const seal = op(first, 'seal', null, draft.payload.answers, 1);
+    if (recovery) {
+      const rejected = {...seal,operationId:randomUUID(),revision:0};
+      const blocked = await send(rejected).expect(409);
+      assert.equal(blocked.body.error,'OFFLINE_REVISION');
+      assert.match(blocked.body.held.payloadHash,/^[a-f0-9]{64}$/);
+      assert.equal(blocked.body.held.expiresAt-blocked.body.held.heldAt,2*60*60_000);
+      const check = {...scope,operationId:rejected.operationId,section:first};
+      const status = await api.post(prefix+'/offline/status').set('x-term2-permit',grant).send(check).expect(200);
+      assert.equal(status.body.persisted,false);
+      assert.deepEqual(status.body.held,blocked.body.held);
+      await api.post(prefix+'/offline/status').set('x-term2-permit','0'.repeat(64)).send(check).expect(403);
+      const {rows:[retained]} = await fixture.db.query(`SELECT payload,delivery FROM assessment.term_k67_lr_submission_hold
+        WHERE session_id=$1 AND operation_id=$2`,[token,rejected.operationId]);
+      assert.deepEqual(retained.payload.payload.answers,rejected.payload.answers);
+      assert.equal(retained.payload.ownerId,undefined);
+      assert.equal(retained.payload.attemptToken,undefined);
+      assert.equal(retained.payload.examSessionToken,undefined);
+      assert.equal(retained.delivery,'paper');
+      const count = await fixture.db.query(`SELECT count(*)::int AS n FROM assessment.mini_k67_paper_offline_operation
+        WHERE operation_id=$1`,[rejected.operationId]);
+      assert.equal(count.rows[0].n,0);
+      const collision = await send({...rejected,payload:{...rejected.payload,answers:{}}}).expect(409);
+      assert.equal(collision.body.error,'OFFLINE_CONFLICT');
+      assert.equal(collision.body.held,undefined);
+      const secondHeld = await send({...rejected,operationId:randomUUID()}).expect(409);
+      assert.equal(secondHeld.body.error,'OFFLINE_REVISION');
+      assert.ok(secondHeld.body.held?.payloadHash);
+    }
     const sealed = await send(seal).expect(200);
     const retry = await send(seal).expect(200);
     assert.deepEqual(retry.body.receipt, sealed.body.receipt);
@@ -74,6 +106,11 @@ for (const mode of ['lis_first', 'read_first']) test('Mini K67 paper offline ' +
     assert.equal(attempts[0].writing_scope, 'lr_only');
     assert.equal(attempts[0].reading_deadline_at, null);
     assert.equal(portalCalls, 0);
+    if (recovery) {
+      const {rows:[retained]} = await fixture.db.query(`SELECT count(*)::int AS n FROM assessment.term_k67_lr_submission_hold
+        WHERE session_id=$1`,[token]);
+      assert.equal(retained.n,2,'Only the two rejected seals remain in the recovery store');
+    }
   } finally {
     await fixture.db.close();
   }
