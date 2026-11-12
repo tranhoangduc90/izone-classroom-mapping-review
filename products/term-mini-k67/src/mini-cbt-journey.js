@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { readMiniSectionDefinition, sealMiniCbtSection } from './mini-cbt-offline.js';
@@ -187,11 +188,13 @@ async function retainUncommittedSubmission(db, state, body, input, digest, key, 
     quotaArgs)).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);
+  // The row already owns the session. Keep the original digest for receipt checks.
+  const {examSessionToken: _sessionToken,...payload}=input;
   const row = (await db.query(`INSERT INTO ${key.table}
     (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at${key.lr?',section,review_only,delivery':''})
     VALUES($1,$2,$3,$4,$5::jsonb,$6,$7${key.lr?',$8,$9,$10':''})
     RETURNING payload_hash,held_at,expires_at,true AS has_payload`,
-  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(input),state.now,expiresAt,...key.lr?[body.section,reviewOnly,delivery]:[]])).rows[0];
+  [state.session.id,body.generation,body.operationId,digest,JSON.stringify(payload),state.now,expiresAt,...key.lr?[body.section,reviewOnly,delivery]:[]])).rows[0];
   return heldMetadata(row,state.now);
 }
 
@@ -374,6 +377,17 @@ async function preparePaper(db, profile, student, body, secret, timing, {allowNe
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
 }
 
+function writingHoldClassesFromFile(file) {
+  try {
+    const {classes}=JSON.parse(readFileSync(file,'utf8'));
+    if(classes===null)return new Set(['*']);
+    if(Array.isArray(classes)&&classes.every(code=>typeof code==='string'&&/^[A-Z0-9._-]{2,32}$/.test(code))) {
+      return new Set(classes);
+    }
+  } catch {}
+  return new Set();
+}
+
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
@@ -383,6 +397,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const hours=config[`${profile.writingHold}WritingHoldHours`],limit=config[`${profile.writingHold}WritingHoldLimit`];
   const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
   const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
+  const holdClassesFile=profile===term2?config.term2WritingHoldClassesFile:undefined;
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
   const lrHoldProfile=profile===mini?'miniCbt':profile.paper?'termPaper':'termCbt';
   const lrHours=config[`${lrHoldProfile}LrHoldHours`],lrLimit=config[`${lrHoldProfile}LrHoldLimit`];
@@ -401,8 +416,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       res.json(await action(body.data,req));
     } catch (error) {
       if (!error.status) return next(error);
-      res.status(error.status).json({ok:false,error:error.code,message:error.message,...error.held&&{
-        held:error.held,reasonCode:error.reasonCode,...error.retryAfterMs&&{retryAfterMs:error.retryAfterMs}
+      res.status(error.status).json({ok:false,error:error.code,message:error.message,...(error.held||error.retryWithoutHold)&&{
+        ...error.held&&{held:error.held},reasonCode:error.reasonCode,...error.retryAfterMs&&{retryAfterMs:error.retryAfterMs}
       }});
     }
   };
@@ -423,6 +438,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     const manifest = await assets.getJourneyManifest?.(slug)
       || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
     if (!manifest) throw problem('OFFLINE_UNAVAILABLE', 'Chưa chuẩn bị được audio đúng bài.',503);
+    const eligibleClasses=holdOptions&&holdClassesFile?writingHoldClassesFromFile(holdClassesFile):holdClasses;
     return audioTransaction(pool,async db => {
       const {session,attempt,journey,now} = await lock(db,body,profile);
       if (!selected || String(selected.class_id) !== String(session.erp_course_class_id)
@@ -434,7 +450,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       if (!journey && (session.listening_started_at || session.listening_submitted_at || attempt?.reading_started_at || attempt?.reading_submitted_at
           || session.audio_owner_id || mode !== 'on')) throw problem('OFFLINE_NEW_DISABLED','Lượt này tiếp tục bằng cách đã mở.');
-      const enroll=holdOptions && (holdClasses?.has('*') || holdClasses?.has(session.class_name_snapshot));
+      const enroll=holdOptions && (eligibleClasses?.has('*') || eligibleClasses?.has(session.class_name_snapshot));
       const enrollListeningReading=enrollLr(session.class_name_snapshot);
       const row = journey || (await db.query(`INSERT INTO ${table}
         (session_id,generation,student_ref,device_hash,audio_hash${enroll?',writing_hold_cohort':''}${enrollListeningReading?',lr_hold_cohort':''})
@@ -519,6 +535,16 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         });
       } catch {}
     }
+    if(held&&body.section==='writing'&&profile===term2){
+      try {
+        observeSubmission?.('offline_submission_hold_read',slug,body.examSessionToken,{
+          section:body.section,reason:'HOLD_READ',submission:{
+            operationId:body.operationId,generation:body.generation,serverAtMs,
+            heldAtMs:held.heldAt,expiresAtMs:held.expiresAt,policyVersion:version,delivery:'cbt'
+          }
+        });
+      } catch {}
+    }
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
     return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held},...conflict&&{conflict:true}};
   }));
@@ -563,7 +589,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         observation.heardMs=Math.round(body.heardSeconds*1_000);
       }
       if (interruption) observation.interrupted=true;
-      if (held) observation.heldAtMs=held.heldAt;
+      if (held) Object.assign(observation,{heldAtMs:held.heldAt,expiresAtMs:held.expiresAt});
       return state;
     };
     const record = () => audioTransaction(pool,async db=>{
@@ -601,9 +627,14 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
             return retainSubmission(db,state,body,input,digest,holdKey,candidateOptions,reviewOnly);
           });
         } catch (error) {
-          if (error.status) throw error;
-          report('offline_hold_unconfirmed',undefined,'HOLD_TRANSACTION_UNCONFIRMED');
-          throw problem('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
+          if (writing&&profile.twoTasks&&['OFFLINE_HOLD_FULL','OFFLINE_HOLD_EXPIRED'].includes(error.code)) {
+            // The official transaction still validates time and identity when no hold is available.
+            report('offline_hold_unconfirmed',undefined,error.code);
+          } else {
+            if (error.status) throw error;
+            report('offline_hold_unconfirmed',undefined,'HOLD_TRANSACTION_UNCONFIRMED');
+            throw problem('OFFLINE_HOLD_UNAVAILABLE','Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.',503);
+          }
         }
       }
       if(reviewOnly){
@@ -622,6 +653,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       report('offline_submission_rejected',false,error.reasonCode??error.code);
       if (held && error.status && error.code !== 'OFFLINE_SCOPE') error.held=held;
+      if (profile===term2&&writing&&shouldHold&&error.reasonCode==='SERVER_BEFORE_DEADLINE') error.retryWithoutHold=true;
       throw error;
     }
     const event=result.replayed ? 'offline_submission_replayed'

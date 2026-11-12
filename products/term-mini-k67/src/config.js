@@ -21,6 +21,7 @@ const schema = z.object({
   K67_TERM2_WRITING_HOLD_HOURS: z.coerce.number().int().min(0).max(72).default(0),
   K67_TERM2_WRITING_HOLD_LIMIT: z.coerce.number().int().min(0).max(20_000).default(0),
   K67_TERM2_WRITING_HOLD_CLASSES: z.string().regex(/^(?:\*|[A-Z0-9._-]{2,32}(?:,[A-Z0-9._-]{2,32})*)?$/).default(''),
+  K67_TERM2_WRITING_HOLD_CLASSES_FILE: z.string().min(1).optional(),
   K67_TERM2_HOLD_EXPORT_REVIEWERS: z.string().default('').transform(value=>
     value.split(',').map(email=>email.trim().toLowerCase()).filter(Boolean)).pipe(z.array(z.email()).max(30)),
   K67_TERM1_WRITING_HOLD_HOURS: z.coerce.number().int().min(0).max(72).default(0),
@@ -129,6 +130,7 @@ export function loadConfig(env = process.env) {
     term2WritingHoldHours: p.K67_TERM2_WRITING_HOLD_HOURS,
     term2WritingHoldLimit: p.K67_TERM2_WRITING_HOLD_LIMIT,
     term2WritingHoldClasses: new Set(p.K67_TERM2_WRITING_HOLD_CLASSES.split(',').filter(Boolean)),
+    term2WritingHoldClassesFile: p.K67_TERM2_WRITING_HOLD_CLASSES_FILE,
     term2HoldExportReviewers: new Set(p.K67_TERM2_HOLD_EXPORT_REVIEWERS),
     term1WritingHoldHours: p.K67_TERM1_WRITING_HOLD_HOURS,
     term1WritingHoldLimit: p.K67_TERM1_WRITING_HOLD_LIMIT,

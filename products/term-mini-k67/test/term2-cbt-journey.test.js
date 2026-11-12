@@ -20,21 +20,29 @@ const assets={supports:()=>true,getContent:()=>({title:'Fixture',writing:{tasks:
   getTiming:()=>({readingDurationMinutes:1,listeningDurationSeconds:1844,listeningTotalSeconds:1964,
     listeningReviewSeconds:reviewSeconds,writingDurationMinutes:1}),getSessionAudioKey:()=>Buffer.alloc(32)};
 
-for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}`,async t=>{
+for(const [mode,holdFailure] of [['lis_first',''],['read_first',''],['read_first','full'],['read_first','expired']])
+test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}${holdFailure?` · ${holdFailure} hold`:''}`,async t=>{
   let grading;
   const gradingCalls=[];
   const journal=[];
   const holdEnabled=mode==='read_first';
-  const holdClasses=new Set([holdEnabled?identity.classCode:'FIXTURE-OTHER-CLASS']);
+  const fullQuota=holdFailure==='full';
+  const holdClasses=new Set([holdEnabled&&!fullQuota?identity.classCode:'FIXTURE-OTHER-CLASS']);
   let failQueue=holdEnabled;
   const directory=await mkdtemp(join(tmpdir(),'term2-r2-test-'));
   const term2R2ConfigFile=join(directory,'config.json');
+  const holdScopeFile=join(directory,'hold-scope.json');
   await writeFile(term2R2ConfigFile,JSON.stringify({enabled:true,accountId:'0'.repeat(32),bucket:'synthetic',
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-2'].sha256]}));
-  t.after(async()=>{await unlink(term2R2ConfigFile);await rmdir(directory);});
+  t.after(async()=>{
+    if(fullQuota)await unlink(holdScopeFile);
+    await unlink(term2R2ConfigFile);
+    await rmdir(directory);
+  });
+  if(fullQuota)await writeFile(holdScopeFile,'{"classes":null}');
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,
     writingHold:{term2WritingHoldHours:24,term2WritingHoldLimit:3,
-      term2WritingHoldClasses:holdClasses},
+      term2WritingHoldClasses:holdClasses,term2WritingHoldClassesFile:fullQuota?holdScopeFile:undefined},
     mountJournal:()=>({business(event,testSlug,_token,details){
       if (testSlug==='term-test-2' && details.submission) journal.push({event,...details});
       if (event==='submission_completed') throw new Error('Synthetic journal outage');
@@ -67,6 +75,12 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
       [scope.examSessionToken])).rows[0].writing_hold_cohort,holdEnabled);
     // Rollout may stop enrolling new sessions. This native session keeps its original policy.
     holdClasses.clear();
+    if(fullQuota) {
+      await writeFile(holdScopeFile,'{"classes":[]}');
+      assert.ok((await api.post(slug+'/cbt-journey/prepare').send({...identity,...scope})).ok);
+      assert.equal((await f.db.query('SELECT writing_hold_cohort FROM assessment.term_k67_cbt_journey WHERE session_id=$1',
+        [scope.examSessionToken])).rows[0].writing_hold_cohort,true);
+    }
     assert.equal(offer.body.audioManifest.sha256,publicAudioCatalog['term-test-2'].sha256);
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-2'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
@@ -161,11 +175,43 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
         assert.deepEqual(status.body.held,early.body.held);
         const changed={...writing,answers:{task1:'',task2:'Unrelated text'}};
         assert.equal((await post('seal',changed)).body.error,'OFFLINE_CONFLICT');
-        assert.equal((await post('seal',{...writing,operationId:randomUUID()})).body.error,'OFFLINE_HOLD_FULL');
+        const newOperation={...writing,operationId:randomUUID()};
+        if(holdFailure){
+          failQueue=false;
+          serverNow=writing.capturedAt;
+          if(holdFailure==='expired'){
+            await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold
+              SET expires_at=held_at+interval '100 milliseconds' WHERE session_id=$1 AND operation_id=$2`,
+              [scope.examSessionToken,writing.operationId]);
+            assert.equal((await writingStatus()).body.held,undefined);
+          }
+          const operation=fullQuota?newOperation:writing;
+          const accepted=await post('seal',operation);
+          assert.ok(accepted.ok,accepted.text);
+          assert.equal(accepted.body.receipt.operationId,operation.operationId);
+          assert.deepEqual((await post('seal',operation)).body.receipt,accepted.body.receipt);
+          const replayed=await post('status',{section:'writing',operationId:operation.operationId});
+          assert.deepEqual(replayed.body.receipt,accepted.body.receipt);
+          assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n,1);
+          const other=(await f.db.query(`SELECT payload FROM assessment.term_k67_writing_submission_hold
+            WHERE session_id=$1 AND operation_id=$2`,[scope.examSessionToken,writing.operationId])).rows[0];
+          if(fullQuota)assert.deepEqual(other.payload.answers,writing.answers);
+          else assert.equal(other,undefined);
+          const reason=fullQuota?'OFFLINE_HOLD_FULL':'OFFLINE_HOLD_EXPIRED';
+          assert.equal(journal.filter(row=>row.submission.operationId===operation.operationId&&row.reason===reason).length,1);
+          return;
+        }
+        const earlyWithoutHold=await post('seal',newOperation);
+        assert.equal(earlyWithoutHold.status,409,earlyWithoutHold.text);
+        assert.equal(earlyWithoutHold.body.error,'OFFLINE_REVIEW_REQUIRED');
+        assert.equal(earlyWithoutHold.body.held,undefined);
+        assert.equal(earlyWithoutHold.body.reasonCode,'SERVER_BEFORE_DEADLINE');
+        assert.equal(earlyWithoutHold.body.retryAfterMs,500);
         const held=(await f.db.query(`SELECT payload FROM assessment.term_k67_writing_submission_hold
           WHERE session_id=$1 AND operation_id=$2`,[scope.examSessionToken,writing.operationId])).rows[0].payload;
         assert.deepEqual(held.answers,writing.answers);
         assert.equal(held.deviceProof,undefined);
+        assert.equal(held.examSessionToken,undefined);
         assert.equal((await post('status',{section:'writing',operationId:writing.operationId,deviceProof:'f'.repeat(64)})).status,403);
       } else assert.equal(status.body.held,undefined);
       const beforeWriting=(await f.db.query(
@@ -214,7 +260,13 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
       assert.equal(read.submission.capturedAtMs,writing.capturedAt);
       assert.equal(read.submission.delivery,'cbt');
     }
-    const observations=writingEvents.filter(row=>row.event!=='offline_submission_receipt_read');
+    const holdReads=writingEvents.filter(row=>row.event==='offline_submission_hold_read');
+    assert.equal(holdReads.length,holdEnabled?2:0);
+    for(const row of holdReads){
+      assert.equal(row.reason,'HOLD_READ');
+      assert.equal(row.submission.expiresAtMs-row.submission.heldAtMs,24*3_600_000);
+    }
+    const observations=writingEvents.filter(row=>!['offline_submission_receipt_read','offline_submission_hold_read'].includes(row.event));
     assert.deepEqual(observations.map(row=>row.reason).sort(),(holdEnabled?[
       'SERVER_BEFORE_DEADLINE','OFFLINE_CONFLICT','SUBMISSION_TRANSACTION_UNCONFIRMED',
       'SUBMISSION_TRANSACTION_UNCONFIRMED','RECEIPT_REPLAYED','RECEIPT_REPLAYED','OFFLINE_CONFLICT'

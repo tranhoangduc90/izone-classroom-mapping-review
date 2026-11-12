@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'node:path';
-import {randomBytes,createCipheriv,createHash} from 'node:crypto';
+import {randomBytes,randomUUID,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
 import {createErpGradeSync} from '../src/erp-sync.js';
@@ -131,6 +131,7 @@ const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-tes
 const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
 const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
+const fullWritingHold=termHoldSlug==='term-test-2'&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
 const journalFixture=holdSlug&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
@@ -148,7 +149,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
-      :{term2WritingHoldHours:2,term2WritingHoldLimit:20,term2WritingHoldClasses:holdClass}),
+      :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
     ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
   termTestWritingGradingService:writingHoldEnabled ? {
@@ -372,6 +373,16 @@ outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-le
   }catch(e){next(e);}
 });
 outer.use('/preview/reset',express.json(),async(_req,res)=>{await fixture.db.exec('UPDATE assessment.term_test_exam_session SET attempt_id=NULL;UPDATE assessment.term_test_attempt SET exam_session_id=NULL;DELETE FROM assessment.term_test_attempt;DELETE FROM assessment.term_test_exam_session;');res.json({ok:true,fixtureOnly:true});});
+if(fullWritingHold)outer.post('/preview/fill-writing-hold/:attempt',async(req,res)=>{
+  const {attempt}=req.params;
+  if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
+  const {rows}=await fixture.db.query(`INSERT INTO assessment.term_k67_writing_submission_hold
+    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+    SELECT a.exam_session_id,a.generation,$2,$3,'{}',clock_timestamp(),clock_timestamp()+interval '2 hours'
+    FROM assessment.term_test_attempt a WHERE a.id=$1 AND a.test_slug='term-test-2'
+    RETURNING operation_id`,[attempt,randomUUID(),'a'.repeat(64)]);
+  res.json({holds:rows.length});
+});
 outer.use(express.static(pages));
 if (holdSlug) outer.use((req,_res,next)=>{
   if(req.method!=='POST'||req.path!==`/api/term-tests/${holdSlug}/cbt-journey/seal`)return next();
