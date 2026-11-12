@@ -1,0 +1,7 @@
+# Mini Test K56 submission recovery — 12/11/2026
+
+Apply the patch only to the exact K56 runtime checked in source-checksums.json. Normalize the selected JavaScript sources to LF, then apply the zero-context patch with git apply --unidiff-zero. Add the new files from overlay and apply the Mini-only SQL in assessment_k56. The shared Term receiver stays at its current path. The Mini receiver uses its own recovery core. Its renderer and grader can read results for a verified Listening interruption without assigning a Listening mark.
+
+The receiver records the official receipt once. The held copy expires after 24 hours and has a shared limit of 100 pending copies per ERP class across Mini CBT and paper. A full reconciliation store does not block a valid official submission. The new hold excludes attempt, session and owner capabilities. Event metadata links requests, operations and jobs without essay or answer text.
+
+The operator validates the live image, bind hashes, active work, signed journal route and Compose ownership. It backs up the existing schema and configuration, starts the new receiver with enrollment closed and reads the deployed files back. The separate enable step allows classes that already have permission to open Mini. Drain stops enrollment while previously issued sessions can submit and recover receipts. Keep the new receiver running through their send window before rolling it back. Never restore a previous database backup over subsequent attempts.

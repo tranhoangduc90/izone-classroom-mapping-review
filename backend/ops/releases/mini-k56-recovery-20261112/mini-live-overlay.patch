@@ -1,0 +1,70 @@
+--- a/src/app.js
++++ b/src/app.js
+@@ -1678,0 +1679 @@
++      ...(row.test_slug==='mini-test-k56'?{listeningInterrupted:Boolean(row.listening_interrupted_at)}:{}),
+--- a/src/sql.js
++++ b/src/sql.js
+@@ -1304,0 +1305 @@
++  to_jsonb(attempt)->>'listening_interrupted_at' AS listening_interrupted_at,
+@@ -1333 +1334,6 @@
+-  AND attempt.listening_submitted_at IS NOT NULL
++  AND (attempt.listening_submitted_at IS NOT NULL OR (
++    attempt.test_slug='mini-test-k56'
++    AND attempt.attempt_mode='cbt' AND attempt.superseded_at IS NULL
++    AND to_jsonb(attempt)->>'listening_interrupted_at' IS NOT NULL
++    AND attempt.reading_submitted_at IS NOT NULL AND jsonb_typeof(attempt.combined_result->'reading')='object'
++  ))
+--- a/src/term-test-writing-grading.js
++++ b/src/term-test-writing-grading.js
+@@ -22,0 +23,27 @@
++const K56_OFFLINE_WRITING_POLICIES = new Map([
++  ['mini-test-k56', ['mini_k56', 'mini-k56-offline-v1']]
++]);
++
++function writingAllowedWithoutCompleteExam(testSlug) {
++  if (testSlug==='term-test-1-k56') return TERM1_SKILL_WRITING_SEALED;
++  const policy = K56_OFFLINE_WRITING_POLICIES.get(testSlug);
++  if (!policy) return 'false';
++  const [prefix, name] = policy;
++  // Dựa vào sổ operation của đúng lượt và thế hệ. Thiếu điểm Nghe không đủ làm bằng chứng.
++  const interrupted = `(attempt_mode='cbt' AND superseded_at IS NULL
++    AND to_jsonb(term_test_attempt)->>'listening_interrupted_at' IS NOT NULL
++    AND listening_submitted_at IS NULL AND reading_submitted_at IS NOT NULL
++    AND EXISTS (
++      SELECT 1 FROM assessment.${prefix}_offline_run run
++      JOIN assessment.${prefix}_offline_operation audio ON audio.attempt_id=run.attempt_id
++        AND audio.operation_id::text=run.state->'listening'->>'operationId'
++      JOIN assessment.${prefix}_offline_operation writing ON writing.attempt_id=run.attempt_id
++        AND writing.operation_id::text=run.state->'writing'->>'operationId'
++      WHERE run.attempt_id=term_test_attempt.id AND run.session_id=term_test_attempt.exam_session_id
++        AND run.generation=term_test_attempt.generation AND run.policy='${name}'
++        AND audio.section='listening' AND audio.kind='interrupt' AND audio.receipt->>'status'='accepted'
++        AND writing.section='writing' AND writing.kind='seal' AND writing.receipt->>'status'='accepted'
++    ))`;
++  return interrupted;
++}
++
+@@ -438 +465 @@
+-        AND (completed_at IS NOT NULL OR ${testSlug==='term-test-1-k56'?TERM1_SKILL_WRITING_SEALED:'false'})
++        AND (completed_at IS NOT NULL OR ${writingAllowedWithoutCompleteExam(testSlug)})
+@@ -770 +797 @@
+-    const writingFallback = stored.testSlug==='term-test-1-k56'?TERM1_SKILL_WRITING_SEALED:'false';
++    const writingFallback = writingAllowedWithoutCompleteExam(stored.testSlug);
+--- a/src/exam-journal-runtime/adapters/term.mjs
++++ b/src/exam-journal-runtime/adapters/term.mjs
+@@ -0,0 +1 @@
++import { k56OfflineObservation, k56WritingReceipt } from './term-k56-offline.mjs';
+@@ -23,0 +25 @@
++  if (row.submission_receipt_id) Object.assign(state,{submissionOperationId:row.submission_operation_id,submissionReceiptId:row.submission_receipt_id});
+@@ -188 +190,3 @@
+-    void observe({testSlug,token,type,data,content});
++    const miniOffline=testSlug==='mini-test-k56' && k56OfflineObservation(event,testSlug,details);
++    if(miniOffline)data.checkpointState=miniOffline;
++    void observe({testSlug,token,type,data,content:miniOffline?undefined:content});
+@@ -224,0 +229 @@
++        if(owner.test_slug==='mini-test-k56')Object.assign(owner,await k56WritingReceipt(query,productId,schema,owner));
+--- a/src/mini-offline.mjs
++++ b/src/mini-offline.mjs
+@@ -2 +2 @@
+-import {createK56Offline} from './k56-offline-core.mjs';
++import {createK56Offline} from './mini-k56-recovery-core.mjs';

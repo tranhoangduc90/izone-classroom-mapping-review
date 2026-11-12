@@ -1,0 +1,27 @@
+{
+  "live": {
+    "app.js": "fb6a997a3f1e25d1795a004ca59834dfda45dbcccafe1d03b7f95c3d990c4abb",
+    "sql.js": "598d3e8c302ba81ae5951ec0a61ed8a20d2502d28515370f9f6b04e40f6e89e4",
+    "mini-offline.mjs": "211f24e4aaa16aef253eada9c5efcda37dfdf8710e4d06cb57c7df26c21e4a47",
+    "mini-tests.js": "cb0c759eae6afa4fd66ea4576ae2e703fde957658fe204c78f5ec7ee7f1835e8",
+    "k56-offline-core.mjs": "2a9bd27a250896cdaca8ecd8fea87e52c2958876298a0246a07c4c90cc149770",
+    "term-test-writing-grading.js": "a029d06f2e65fb8f1d817ab2074854148222863347a80e90d6bc07ca12cb0afa",
+    "term-test-writing-notifier.js": "1752a45cf9592a14095d5ba16b155b981484932ff9b27dd9a8708ec5320acea2",
+    "k56-submission-recovery.mjs": null,
+    "term1-submission-hold.mjs": null,
+    "exam-journal-runtime/adapters/term.mjs": "b8ead64ed70480f4d959ec6399112b2803759d713e888250edf5f6ec64a376bb",
+    "exam-journal-runtime/adapters/term-k56-offline.mjs": null
+  },
+  "files": {
+    "app.js": "5a4b0f3db4dae84465e026eff2e7e2744104243b553bc2442d17863fbc08c45b",
+    "sql.js": "482bea7fe6391c3faac544bf12028a7c49a3607b7cdc61a283ef1038d5a32f3a",
+    "term-test-writing-grading.js": "84f58de002db651c715a35f2239cdd4f3f763dfcb14a11891b5a074c65c4d78e",
+    "exam-journal-runtime/adapters/term.mjs": "45a9c5ccfdc73f18400cc53a65a071998ee5ea91fc26dc3d3832493fe4ea86bb",
+    "mini-offline.mjs": "d9bd60ab6ad7888e29becf60dcd51175df9dbc811ef74feb70e77843ca5e10a8",
+    "mini-k56-recovery-core.mjs": "35ca9fa8b4fb8f263edb600b88ceab92cf517167bb7515bdd91a2aa576238896",
+    "k56-submission-recovery.mjs": "df05682fe705199c8627bff998906001834af415c7c6217f40d0e5aa93380f2c",
+    "term1-submission-hold.mjs": "69c9dac3753bd890b55cf52a97970c4c1202a09c5facf706a4ba4f4fb2b24eb6",
+    "exam-journal-runtime/adapters/term-k56-offline.mjs": "f4fd2881a28a736fb517406849a937ae9c8a1fc8b063ae99d9af92c4337ad790"
+  },
+  "migration": "76228257142fee55765b6c560e3b43849e400b7e9dd5c1aa0bbbbffc0e71fd2d"
+}
