@@ -119,19 +119,21 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     const connect=f.pool.connect;
     let serverNow=writing.capturedAt-500;
     let loseCommit=false;
-    f.pool.connect=async()=>{
-      const client=await connect.call(f.pool);
-      let updatedWriting=false;
-      return {release:()=>client.release(),query:async (sql,args)=>{
-        if(sql==='SELECT clock_timestamp() AS now') return {rows:[{now:new Date(serverNow)}]};
-        const result=await client.query(sql,args);
-        if(sql.includes('UPDATE assessment.term_test_attempt SET writing_task_1=')) updatedWriting=true;
-        if(sql==='COMMIT'&&updatedWriting&&loseCommit){
-          loseCommit=false;
-          throw new Error('Synthetic lost acknowledgement after database commit');
-        }
-        return result;
-      }};
+    f.pool.connect=(...args)=>{
+      if(args.length) return connect.apply(f.pool,args);
+      return connect.call(f.pool).then(client=>{
+        let updatedWriting=false;
+        return {release:()=>client.release(),query:async (sql,args)=>{
+          if(sql==='SELECT clock_timestamp() AS now') return {rows:[{now:new Date(serverNow)}]};
+          const result=await client.query(sql,args);
+          if(sql.includes('UPDATE assessment.term_test_attempt SET writing_task_1=')) updatedWriting=true;
+          if(sql==='COMMIT'&&updatedWriting&&loseCommit){
+            loseCommit=false;
+            throw new Error('Synthetic lost acknowledgement after database commit');
+          }
+          return result;
+        }};
+      });
     };
     const writingStatus=()=>post('status',{section:'writing',operationId:writing.operationId});
     let sealed;

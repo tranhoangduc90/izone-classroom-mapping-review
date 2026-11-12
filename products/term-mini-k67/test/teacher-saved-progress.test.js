@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import request from 'supertest';
+import {createApp} from '../src/app.js';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 import {readTeacherSavedProgress} from '../src/teacher-saved-progress.js';
 
@@ -10,8 +11,8 @@ const session='60000000-0000-4000-8000-000000000001',attempt='60000000-0000-4000
 const input={class:'IC2304',test:'mini-test-lesson-5',student:ref};
 const email='teacher@fixture.test',authorization={source:'google_bearer',googleSubject:'subject-fixture'};
 
-async function fixture(){
- const f=await createMiniFixture({examOrder:true,completeSchema:true});
+async function fixture(options){
+ const f=await createMiniFixture({examOrder:true,completeSchema:true,...options});
  const schema=await readFile(new URL('../db/001-context.sql',import.meta.url),'utf8');
  for(const name of ['reviewer_account','reviewer_class_access','reviewer_session'])await f.db.exec(schema.match(new RegExp(`CREATE TABLE mapping\\.${name} \\([\\s\\S]*?\\n\\);`))[0].replace('CREATE TABLE mapping.','CREATE TABLE IF NOT EXISTS mapping.'));
  await f.db.query(`INSERT INTO mapping.reviewer_account(email,google_subject,role,status) VALUES($1,$2,'teacher','active')`,[email,authorization.googleSubject]);
@@ -67,5 +68,47 @@ test('K67 HTTP: phiên GV bắt buộc, query lạ bị từ chối và phản h
   await request(f.app).get(url).set('x-review-token','fixture-only-key').query({...input,extra:'bad'}).expect(400);
   const response=await request(f.app).get(url).set('x-review-token','fixture-only-key').query(input).expect(200);
   assert.match(response.headers['cache-control'],/no-store/);assert.equal(response.body.attempts[0].listening.answers['11'],'B');
+ }finally{await f.db.close();}
+});
+
+test('K67 Term 2: xuất nguyên văn bản giữ chỉ với quyền lớp và mã thao tác còn hạn',async()=>{
+ const f=await fixture({term2CbtJourneyMode:'on',writingHold:{term2WritingHoldHours:2}});
+ try{
+  const operationId='60000000-0000-4000-8000-000000000003';
+  const payload={section:'writing',previousOperationId:null,startedAt:1000,capturedAt:2000,revision:1,
+   automatic:false,answers:{task1:'Dòng 1\nDòng 2',task2:'  Bản gốc  '},examSessionToken:session};
+  await f.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+   SELECT 'term-test-2','Đề giả Term 2',1,listening_definition,reading_definition,true
+   FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
+  await f.db.query("UPDATE assessment.term_test_exam_session SET test_slug='term-test-2' WHERE id=$1",[session]);
+  await f.db.query(`INSERT INTO assessment.term_k67_cbt_journey(session_id,generation,student_ref,device_hash,audio_hash)
+   VALUES($1,0,$2,$3,$3)`,[session,ref,'a'.repeat(64)]);
+  await f.db.query(`INSERT INTO assessment.term_k67_writing_submission_hold
+   (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+   VALUES($1,0,$2,$3,$4,now(),now()+interval '1 hour')`,[session,operationId,'b'.repeat(64),payload]);
+  const audit=[];
+  const app=createApp({pool:f.pool,config:{authMode:'google',term2HoldExportReviewers:new Set([email]),allowedOrigins:new Set()},
+   logger:{info:line=>audit.push(line),error:()=>{}},
+   verifyGoogleToken:()=>({email,sub:authorization.googleSubject,email_verified:true})});
+  const url='/api/term-tests/teacher/submission-hold/export';
+  const scope={classCode:'IC2304',studentRef:ref,generation:0,operationId};
+  const send=(body)=>request(app).post(url).set('Authorization','Bearer synthetic-reviewer-token').send(body);
+  await request(app).post(url).send(scope).expect(401);
+  await send({...scope,studentRef:emptyRef}).expect(404);
+  await send({...scope,generation:1}).expect(404);
+  const exported=await send(scope).expect(200);
+  assert.deepEqual(exported.body.answers,payload.answers);
+  assert.equal(exported.body.examSessionToken,undefined);
+  assert.match(exported.headers['cache-control'],/no-store/);
+  const events=audit.map(line=>JSON.parse(line)).filter(event=>event.event==='submission_hold_exported');
+  assert.equal(events.length,1);
+  assert.equal(events[0].operationId,operationId);
+  assert.doesNotMatch(JSON.stringify(events),/Dòng|Bản gốc|examSessionToken|teacher@fixture/);
+  await f.db.query('DELETE FROM mapping.reviewer_class_access WHERE reviewer_email=$1',[email]);
+  await send(scope).expect(404);
+  await f.db.query('INSERT INTO mapping.reviewer_class_access VALUES($1,1293)',[email]);
+  await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold
+   SET held_at=now()-interval '2 hours',expires_at=now()-interval '1 hour' WHERE operation_id=$1`,[operationId]);
+  await send(scope).expect(404);
  }finally{await f.db.close();}
 });

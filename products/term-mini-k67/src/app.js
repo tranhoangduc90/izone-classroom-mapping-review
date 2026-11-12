@@ -31,6 +31,7 @@ import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
 import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
+import {mountTeacherSubmissionHoldExport} from './teacher-submission-hold.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
@@ -1456,6 +1457,8 @@ export function createApp({
   app.delete('/api/auth/session', authenticate, asyncRoute(auth.logout));
 
   mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
+  mountTeacherSubmissionHoldExport(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth,
+    reviewers:config.term2HoldExportReviewers,logEvent:logTermTestEvent});
   mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});
