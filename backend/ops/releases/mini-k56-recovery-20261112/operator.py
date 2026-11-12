@@ -151,25 +151,39 @@ def prepare():
     return m,old,sources,migration,command,sql,delta,persistent(old,sources,delta)
 
 
-def apply():
-    m,old,sources,migration,command,sql,delta,(operator,original,planned)=prepare()
-    names=set(cmd('docker','ps','-a','--format','{{.Names}}').splitlines())
-    must(not {OLD,NEW}&names,'K56_RELEASE_CONTAINER_ALREADY_EXISTS')
-    before=mini['data_digest'](sql)
-    backup=command('pg_dump','--format=custom','--schema=assessment_k56','--lock-wait-timeout=4s')
-    listing=cmd('docker','exec','-i','mapping-postgres','pg_restore','--list',data=backup,timeout=35)
-    must(backup.startswith(b'PGDMP') and 'term_test_attempt' in listing,'K56_BACKUP_VERIFICATION_FAILED')
-    atomic(ROOT/'database-before.private.dump',backup)
-    atomic(ROOT/'compose-before.private.yml',original)
-    sql(migration.decode().replace('assessment.','assessment_k56.'))
-    must(mini['data_digest'](sql)==before,'K56_NATIVE_DATA_DRIFT_DURING_SCHEMA_CHANGE')
-    payload=switch.clone_payload(old,sources)
+def container_spec(old,sources,delta):
+    expected=copy.deepcopy(old)
+    # This older container describes every bind in Binds and omits Mounts.
+    expected['HostConfig'].setdefault('Mounts',[])
+    payload=switch.clone_payload(expected,sources)
     endpoints=payload['NetworkingConfig']['EndpointsConfig']
     addresses={k:v['IPAddress'] for k,v in old['NetworkSettings']['Networks'].items()}
     must(addresses=={'izone-k56-demo_default':'172.25.0.4','mapping-api-net':'172.20.0.16'},'K56_NETWORK_DRIFT')
     for network,address in addresses.items(): endpoints[network]['IPAMConfig']={'IPv4Address':address}
     payload['Env']=[f'{key}={val}' for key,val in {**env_of(old),**delta}.items()]
-    expected=copy.deepcopy(old);expected['Config']['Env']=payload['Env']
+    expected['Config']['Env']=payload['Env']
+    return payload,expected,addresses
+
+
+def apply():
+    m,old,sources,migration,command,sql,delta,(operator,original,planned)=prepare()
+    payload,expected,addresses=container_spec(old,sources,delta)
+    names=set(cmd('docker','ps','-a','--format','{{.Names}}').splitlines())
+    must(not {OLD,NEW}&names,'K56_RELEASE_CONTAINER_ALREADY_EXISTS')
+    before=mini['data_digest'](sql)
+    backup_path=ROOT/'database-before.private.dump'
+    backup=backup_path.read_bytes() if backup_path.exists() else command(
+        'pg_dump','--format=custom','--schema=assessment_k56','--lock-wait-timeout=4s')
+    listing=cmd('docker','exec','-i','mapping-postgres','pg_restore','--list',data=backup,timeout=35)
+    must(backup.startswith(b'PGDMP') and 'term_test_attempt' in listing,'K56_BACKUP_VERIFICATION_FAILED')
+    if not backup_path.exists(): atomic(backup_path,backup)
+    compose_before=ROOT/'compose-before.private.yml'
+    if compose_before.exists():
+        must(compose_before.read_bytes()==original,'K56_COMPOSE_CHANGED_SINCE_BACKUP')
+    else:
+        atomic(compose_before,original)
+    sql(migration.decode().replace('assessment.','assessment_k56.'))
+    must(mini['data_digest'](sql)==before,'K56_NATIVE_DATA_DRIFT_DURING_SCHEMA_CHANGE')
     candidate=switch.engine('POST','/v1.48/containers/create?name='+NEW,payload,(201,))['Id']
     switch.compare_mounts(expected,switch.inspect(candidate),sources)
     check_idle(sql)
@@ -222,7 +236,10 @@ if __name__=='__main__':
     os.umask(0o077)
     must(Path.cwd()==ROOT and os.geteuid()==0,'K56_RELEASE_DIRECTORY_REQUIRED')
     mode=sys.argv[1] if len(sys.argv)==2 else ''
-    if mode=='preflight': prepare();print('K56_MINI_COMPATIBILITY_PREFLIGHT_PASSED')
+    if mode=='preflight':
+        _,old,sources,_,_,_,delta,_=prepare()
+        container_spec(old,sources,delta)
+        print('K56_MINI_COMPATIBILITY_PREFLIGHT_PASSED')
     elif mode=='apply': apply()
     elif mode in ('enable','drain'): scope(mode)
     else: raise SystemExit('Use preflight, apply, enable or drain')
