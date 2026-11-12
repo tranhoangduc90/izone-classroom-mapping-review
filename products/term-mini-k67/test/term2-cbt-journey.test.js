@@ -33,7 +33,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-2'].sha256]}));
   t.after(async()=>{await unlink(term2R2ConfigFile);await rmdir(directory);});
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,
-    writingHold:{term2WritingHoldHours:2,term2WritingHoldLimit:3,
+    writingHold:{term2WritingHoldHours:24,term2WritingHoldLimit:3,
       term2WritingHoldClasses:holdClasses},
     mountJournal:()=>({business(event,testSlug,_token,details){
       if (testSlug==='term-test-2' && details.submission) journal.push({event,...details});
@@ -116,6 +116,17 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     Object.assign(writing,{previousOperationId,startedAt:nextAt,capturedAt:nextAt+60_000,answers:{task1,task2:essay}});
     const wrongCapture={...writing,operationId:randomUUID(),capturedAt:writing.capturedAt-1};
     assert.equal((await post('seal',wrongCapture)).body.error,'OFFLINE_REVIEW_REQUIRED');
+    if(holdEnabled){
+      // A held submission from another class must not consume this class's quota.
+      await f.db.query(`WITH other_session AS (
+        INSERT INTO assessment.term_test_exam_session
+          (test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,student_name_snapshot)
+        VALUES('term-test-2',1,1294,'IC2305',900003,'Other fixture learner') RETURNING id
+      ) INSERT INTO assessment.term_k67_writing_submission_hold
+        (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+      SELECT id,0,$1,$2,$3::jsonb,now(),now()+interval '2 hours' FROM other_session`,
+      [randomUUID(),'a'.repeat(64),JSON.stringify({answers:{task1:'Other fixture report.',task2:''}})]);
+    }
     const connect=f.pool.connect;
     let serverNow=writing.capturedAt-500;
     let loseCommit=false;
@@ -139,13 +150,14 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     let sealed;
     try {
       const early=await post('seal',writing);
-      assert.equal(early.status,409);
+      assert.equal(early.status,409,early.text);
       assert.equal(early.body.error,'OFFLINE_REVIEW_REQUIRED');
       const status=await writingStatus();
       assert.equal(status.body.persisted,false);
       if (holdEnabled) {
         assert.equal(early.body.reasonCode,'SERVER_BEFORE_DEADLINE');
         assert.equal(early.body.retryAfterMs,500);
+        assert.equal(early.body.held.expiresAt-serverNow,24*3_600_000);
         assert.deepEqual(status.body.held,early.body.held);
         const changed={...writing,answers:{task1:'',task2:'Unrelated text'}};
         assert.equal((await post('seal',changed)).body.error,'OFFLINE_CONFLICT');

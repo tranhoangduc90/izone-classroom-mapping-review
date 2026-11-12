@@ -20,6 +20,10 @@ const lookup = `
     AND j.student_ref=$2::uuid AND held.generation=$3 AND held.operation_id=$4::uuid
     AND held.payload IS NOT NULL AND held.expires_at>statement_timestamp()
     AND ${teacherCanReadClass('$5','$6','s.erp_course_class_id')}
+    AND EXISTS (
+      SELECT 1 FROM mapping.reviewer_account AS exporter
+      WHERE exporter.email=$5 AND exporter.role='admin'
+    )
   LIMIT 2`;
 
 const heldPayload = z.object({

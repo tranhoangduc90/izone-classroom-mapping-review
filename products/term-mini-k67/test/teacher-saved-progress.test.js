@@ -71,7 +71,7 @@ test('K67 HTTP: phiên GV bắt buộc, query lạ bị từ chối và phản h
  }finally{await f.db.close();}
 });
 
-test('K67 Term 2: xuất nguyên văn bản giữ chỉ với quyền lớp và mã thao tác còn hạn',async()=>{
+test('K67 Term 2: xuất nguyên văn bản giữ chỉ với tài khoản admin được chỉ định và mã thao tác còn hạn',async()=>{
  const f=await fixture({term2CbtJourneyMode:'on',writingHold:{term2WritingHoldHours:2}});
  try{
   const operationId='60000000-0000-4000-8000-000000000003';
@@ -94,6 +94,9 @@ test('K67 Term 2: xuất nguyên văn bản giữ chỉ với quyền lớp và 
   const scope={classCode:'IC2304',studentRef:ref,generation:0,operationId};
   const send=(body)=>request(app).post(url).set('Authorization','Bearer synthetic-reviewer-token').send(body);
   await request(app).post(url).send(scope).expect(401);
+  await send(scope).expect(404);
+  await f.db.query("UPDATE mapping.reviewer_account SET role='admin' WHERE email=$1",[email]);
+  await send({...scope,classCode:'IC2305'}).expect(404);
   await send({...scope,studentRef:emptyRef}).expect(404);
   await send({...scope,generation:1}).expect(404);
   const exported=await send(scope).expect(200);
@@ -104,9 +107,9 @@ test('K67 Term 2: xuất nguyên văn bản giữ chỉ với quyền lớp và 
   assert.equal(events.length,1);
   assert.equal(events[0].operationId,operationId);
   assert.doesNotMatch(JSON.stringify(events),/Dòng|Bản gốc|examSessionToken|teacher@fixture/);
-  await f.db.query('DELETE FROM mapping.reviewer_class_access WHERE reviewer_email=$1',[email]);
+  await f.db.query("UPDATE mapping.reviewer_account SET role='teacher' WHERE email=$1",[email]);
   await send(scope).expect(404);
-  await f.db.query('INSERT INTO mapping.reviewer_class_access VALUES($1,1293)',[email]);
+  await f.db.query("UPDATE mapping.reviewer_account SET role='admin' WHERE email=$1",[email]);
   await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold
    SET held_at=now()-interval '2 hours',expires_at=now()-interval '1 hour' WHERE operation_id=$1`,[operationId]);
   await send(scope).expect(404);
