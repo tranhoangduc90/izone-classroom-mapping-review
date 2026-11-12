@@ -80,6 +80,9 @@ test('Mini K67 paper offline ' + mode + (recovery ? ' with submission recovery' 
       const collision = await send({...rejected,payload:{...rejected.payload,answers:{}}}).expect(409);
       assert.equal(collision.body.error,'OFFLINE_CONFLICT');
       assert.equal(collision.body.held,undefined);
+      const secondHeld = await send({...rejected,operationId:randomUUID()}).expect(409);
+      assert.equal(secondHeld.body.error,'OFFLINE_REVISION');
+      assert.ok(secondHeld.body.held?.payloadHash);
     }
     const sealed = await send(seal).expect(200);
     const retry = await send(seal).expect(200);
@@ -104,7 +107,7 @@ test('Mini K67 paper offline ' + mode + (recovery ? ' with submission recovery' 
     if (recovery) {
       const {rows:[retained]} = await fixture.db.query(`SELECT count(*)::int AS n FROM assessment.term_k67_lr_submission_hold
         WHERE session_id=$1`,[token]);
-      assert.equal(retained.n,1,'Only the rejected seal remains in the recovery store');
+      assert.equal(retained.n,2,'Only the two rejected seals remain in the recovery store');
     }
   } finally {
     await fixture.db.close();

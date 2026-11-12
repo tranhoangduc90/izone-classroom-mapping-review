@@ -25,7 +25,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-1'].sha256]}));
   t.after(async()=>{await unlink(term1R2ConfigFile);await rmdir(directory);});
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',term1R2ConfigFile,
-    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:new Set([identity.classCode]),
+    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:mode==='lis_first'?2:20,term1WritingHoldClasses:new Set([identity.classCode]),
       termCbtLrHoldHours:2,termCbtLrHoldLimit:20,term1CbtLrHoldClasses:new Set([identity.classCode])},
     termTestWritingGradingService:{ensureSubmission:input=>{
       const job=grading.ensureSubmission(input);gradingCalls.push(job);return job;
@@ -122,6 +122,13 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
         assert.equal(held.payload.deviceProof,undefined);
         assert.equal((await post('status',{section,operationId:operation.operationId,deviceProof:'b'.repeat(64)})).status,403);
       });
+      if(mode==='read_first'&&!previousOperationId){
+        await f.db.query(`UPDATE assessment.term_k67_lr_submission_hold
+          SET held_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour'
+          WHERE session_id=$1 AND operation_id=$2`,[scope.examSessionToken,operation.operationId]);
+        const changed=await post('seal',{...operation,answers:{14:'B'}});
+        assert.equal(changed.body.error,'OFFLINE_CONFLICT');
+      }
       const accepted=await post('seal',operation);
       assert.ok(accepted.ok,accepted.text);
       assert.equal(accepted.body.receipt.completed,false);
@@ -163,10 +170,13 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
       assert.deepEqual(status.body.held,early.body.held);
       const held=await f.db.query(`SELECT operation_id,payload FROM assessment.term_k67_writing_submission_hold
         WHERE session_id=$1 AND operation_id IN ($2,$3)`,[scope.examSessionToken,writing.operationId,invalidTask.operationId]);
-      assert.equal(held.rows.length,1);
-      assert.deepEqual(held.rows[0].payload.answers,writing.answers);
+      assert.equal(held.rows.length,mode==='lis_first'?0:1);
+      if(mode==='read_first')assert.deepEqual(held.rows[0].payload.answers,writing.answers);
       assert.equal(gradingCalls.length,0);
     });
+    if(mode==='read_first')await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold
+      SET held_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour'
+      WHERE session_id=$1 AND operation_id=$2`,[scope.examSessionToken,writing.operationId]);
     const sealed=await post('seal',writing);
     assert.ok(sealed.ok,sealed.text);
     assert.equal(sealed.body.receipt.completed,true);

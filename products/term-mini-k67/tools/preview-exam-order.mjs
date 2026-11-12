@@ -131,7 +131,7 @@ const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-tes
 const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
 const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
-const fullWritingHold=termHoldSlug==='term-test-2'&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
+const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
 const journalFixture=holdSlug&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
@@ -148,7 +148,7 @@ let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
   writingHold:{
-    ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
+    ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
     ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
@@ -379,8 +379,8 @@ if(fullWritingHold)outer.post('/preview/fill-writing-hold/:attempt',async(req,re
   const {rows}=await fixture.db.query(`INSERT INTO assessment.term_k67_writing_submission_hold
     (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
     SELECT a.exam_session_id,a.generation,$2,$3,'{}',clock_timestamp(),clock_timestamp()+interval '2 hours'
-    FROM assessment.term_test_attempt a WHERE a.id=$1 AND a.test_slug='term-test-2'
-    RETURNING operation_id`,[attempt,randomUUID(),'a'.repeat(64)]);
+    FROM assessment.term_test_attempt a WHERE a.id=$1 AND a.test_slug=$4
+    RETURNING operation_id`,[attempt,randomUUID(),'a'.repeat(64),termHoldSlug]);
   res.json({holds:rows.length});
 });
 outer.use(express.static(pages));

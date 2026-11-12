@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { z } from 'zod';
 import { findStudentForTermTestSql, insertProtectedListeningAttemptSql } from './sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
-import { readMiniPaperSubmissionHold, retainMiniPaperSubmission, removeMiniPaperSubmissionHold } from './mini-cbt-journey.js';
+import { canSubmitWithoutHold, readMiniPaperSubmissionHold, retainMiniPaperSubmission, removeMiniPaperSubmissionHold } from './mini-cbt-journey.js';
 
 const slug = 'mini-test-lesson-5';
 const prefix = `/api/term-tests/${slug}`;
@@ -352,7 +352,7 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       await db.query(`INSERT INTO assessment.mini_k67_paper_offline_operation
         (operation_id,session_id,payload_hash,receipt) VALUES($1,$2,$3,$4::jsonb)`,
         [op.operationId, session.id, payloadHash, JSON.stringify(receipt)]);
-      if (held) await removeMiniPaperSubmissionHold(db, op);
+      if (recoveryEnabled && op.kind==='seal' && run.lr_hold_cohort===true) await removeMiniPaperSubmissionHold(db, op);
       return { receipt, replayed: false };
     });
     let result;
@@ -377,9 +377,13 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
             return retainMiniPaperSubmission(db, { session, now }, op, retained, payloadHash, { hours, limit });
           });
         } catch (error) {
-          if (error.status) throw error;
-          report('offline_hold_unconfirmed', undefined, 'HOLD_TRANSACTION_UNCONFIRMED');
-          throw problem('OFFLINE_HOLD_UNAVAILABLE', 'Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.', 503);
+          if (canSubmitWithoutHold(error)) {
+            report('offline_hold_unconfirmed', undefined, error.code);
+          } else {
+            if (error.status) throw error;
+            report('offline_hold_unconfirmed', undefined, 'HOLD_TRANSACTION_UNCONFIRMED');
+            throw problem('OFFLINE_HOLD_UNAVAILABLE', 'Chưa lưu được bản đối soát. Hãy giữ bản trên thiết bị.', 503);
+          }
         }
       }
       if (held) observation.heldAtMs = held.heldAt;

@@ -160,6 +160,10 @@ export function removeMiniPaperSubmissionHold(db, body) {
   return removeSubmissionHold(db,submissionHoldKey(body));
 }
 
+export function canSubmitWithoutHold(error) {
+  return ['OFFLINE_HOLD_FULL','OFFLINE_HOLD_EXPIRED'].includes(error.code);
+}
+
 function removeSubmissionHold(db, key) {
   return db.query(`DELETE FROM ${key.table} WHERE ${key.where}`,key.args);
 }
@@ -406,7 +410,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const enrollLr=classCode=>Boolean(lrHoldOptions&&(lrHoldClasses?.has('*')||lrHoldClasses?.has(classCode)));
   const lrHoldAllowed=journey=>lrHoldOptions&&journey.lr_hold_cohort===true;
   const readingReviewRequired=()=>problem('OFFLINE_REVIEW_REQUIRED',
-    'Chưa xác nhận được nháp Reading đã lưu trước hạn. Bài được giữ để đối soát.',409,'READING_DRAFT_NOT_VERIFIED');
+    'Chưa xác nhận được nháp Reading đã lưu trước hạn. Hãy giữ bản trên thiết bị để đối soát.',409,'READING_DRAFT_NOT_VERIFIED');
   const route = (schema, action) => async (req,res,next) => {
     res.set('Cache-Control','no-store');
     try {
@@ -627,7 +631,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
             return retainSubmission(db,state,body,input,digest,holdKey,candidateOptions,reviewOnly);
           });
         } catch (error) {
-          if (writing&&profile.twoTasks&&['OFFLINE_HOLD_FULL','OFFLINE_HOLD_EXPIRED'].includes(error.code)) {
+          if (!reviewOnly&&canSubmitWithoutHold(error)) {
             // The official transaction still validates time and identity when no hold is available.
             report('offline_hold_unconfirmed',undefined,error.code);
           } else {
@@ -653,7 +657,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       report('offline_submission_rejected',false,error.reasonCode??error.code);
       if (held && error.status && error.code !== 'OFFLINE_SCOPE') error.held=held;
-      if (profile===term2&&writing&&shouldHold&&error.reasonCode==='SERVER_BEFORE_DEADLINE') error.retryWithoutHold=true;
+      if (shouldHold&&!reviewOnly&&error.reasonCode==='SERVER_BEFORE_DEADLINE') error.retryWithoutHold=true;
       throw error;
     }
     const event=result.replayed ? 'offline_submission_replayed'
