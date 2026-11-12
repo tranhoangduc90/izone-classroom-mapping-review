@@ -539,12 +539,12 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         });
       } catch {}
     }
-    if(held&&body.section==='writing'&&profile===term2){
+    if(held){
       try {
         observeSubmission?.('offline_submission_hold_read',slug,body.examSessionToken,{
           section:body.section,reason:'HOLD_READ',submission:{
             operationId:body.operationId,generation:body.generation,serverAtMs,
-            heldAtMs:held.heldAt,expiresAtMs:held.expiresAt,policyVersion:version,delivery:'cbt'
+            heldAtMs:held.heldAt,expiresAtMs:held.expiresAt,policyVersion:version,delivery:profile.paper?'paper':'cbt'
           }
         });
       } catch {}

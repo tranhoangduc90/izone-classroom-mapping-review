@@ -19,6 +19,7 @@ const assets={supports:()=>true,getContent:()=>({title:'Fixture',writing:{tasks:
 for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order and one Writing receipt · ${mode}`,async t=>{
   let grading;
   const gradingCalls=[];
+  const holdReads=[];
   const directory=await mkdtemp(join(tmpdir(),'term1-r2-test-'));
   const term1R2ConfigFile=join(directory,'config.json');
   const holdScopeFile=mode==='lis_first'?join(directory,'hold-scope.json'):undefined;
@@ -31,6 +32,9 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     await rmdir(directory);
   });
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',term1R2ConfigFile,
+    mountJournal:()=>({business(event,testSlug,_token,details){
+      if(event==='offline_submission_hold_read'&&testSlug==='term-test-1')holdReads.push(details);
+    }}),
     writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:mode==='lis_first'?2:20,
       term1WritingHoldClasses:new Set(holdScopeFile?[]:[identity.classCode]),term1WritingHoldClassesFile:holdScopeFile,
       termCbtLrHoldHours:2,termCbtLrHoldLimit:20,term1CbtLrHoldClasses:new Set([identity.classCode])},
@@ -139,6 +143,9 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
         const status=await post('status',{section,operationId:operation.operationId});
         assert.equal(status.body.persisted,false);
         assert.deepEqual(status.body.held,early.body.held);
+        const [read]=holdReads.filter(row=>row.submission.operationId===operation.operationId);
+        assert.equal(read?.section,section);
+        assert.equal(read.reason,'HOLD_READ');
         const {rows:[held]}=await f.db.query(`SELECT payload FROM assessment.term_k67_lr_submission_hold
           WHERE session_id=$1 AND section=$2 AND operation_id=$3`,[scope.examSessionToken,section,operation.operationId]);
         assert.deepEqual(held.payload.answers,operation.answers);
@@ -188,6 +195,18 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.equal(review.body.error,'OFFLINE_REVIEW_REQUIRED');
     assert.equal(review.body.reasonCode,'AUTO_CAPTURE_NOT_AT_DEADLINE');
     assert.ok(review.body.held?.payloadHash);
+    const reviewStatus=await post('status',{section:'writing',operationId:wrongCapture.operationId});
+    assert.deepEqual(reviewStatus.body.held,review.body.held);
+    const [holdRead]=holdReads.filter(row=>row.submission.operationId===wrongCapture.operationId);
+    assert.equal(holdRead?.section,'writing');
+    assert.equal(holdRead.reason,'HOLD_READ');
+    const {serverAtMs,...details}=holdRead.submission;
+    assert.ok(Number.isFinite(serverAtMs));
+    assert.deepEqual(details,{
+      operationId:wrongCapture.operationId,generation:0,
+      heldAtMs:review.body.held.heldAt,expiresAtMs:review.body.held.expiresAt,
+      policyVersion:'term1-k67-cbt-journey-v1',delivery:'cbt'
+    });
     assert.equal((await post('seal',invalidTask)).status,400);
     const writingStatus=()=>post('status',{section:'writing',operationId:writing.operationId});
     await withFixtureClock(writing.capturedAt-500,async()=>{
