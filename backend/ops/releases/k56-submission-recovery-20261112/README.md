@@ -105,3 +105,22 @@ các bài khác và đối soát lớp thí điểm có ca riêng trong kế ho�
   k56-term-online-writing-browser.mjs dùng K56_WRITING_FIXTURE trỏ file
   test đó và Collector localhost. Test cắt kết nối sau commit để xác
   minh lần đọc lại và kiểm số việc chấm trực tiếp trong kho.
+
+### Ba đường dự phòng Term 1 K56
+
+- Dựng thêm bằng `stage-term1-fallback.py` trên ứng viên đã có Writing
+  online. Script kiểm hash ba module trước khi ghép và cần thư mục đích
+  riêng. Dùng migration Term 1 hiện có. Mỗi lượt mới mở qua đường dự phòng
+  dùng chung cấu hình lớp, thời hạn và quota Term 1. Lượt đã có chính sách
+  tiếp tục dùng giá trị đã ghi. Tắt cấp mới qua danh sách lớp để giữ đường
+  đọc và xử lý các bản đã lưu.
+- Bản chốt cần đối soát được lưu sau khi xác thực đúng link, thiết bị,
+  thế hệ và kỹ năng. Link dự phòng tra bản giữ của chính nó. Khi nhận
+  chính thức, cùng operation ID trả lại cùng biên nhận. Bài chính và
+  link dự phòng cùng dùng lượt native và đích điểm của kỹ năng đó.
+- `term1-submission-hold.test.mjs` chạy qua HTTP và PGlite, kiểm bản giữ
+  nguyên văn, một biên nhận, chặn ghi từ bài chính khi link dự phòng đang
+  sở hữu kỹ năng và đọc lại khi phản hồi sau commit bị cắt. Log native
+  dùng mã lượt chính thức, nối bằng operation ID và receipt ID, không
+  chứa bài làm hoặc khóa link. Kiểm trình duyệt, xác thực log trình duyệt
+  và cache ba đường dự phòng là phần bàn giao tiếp theo.

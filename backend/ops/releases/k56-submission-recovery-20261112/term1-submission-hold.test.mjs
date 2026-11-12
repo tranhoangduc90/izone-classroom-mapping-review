@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +20,8 @@ const { expireTerm1Holds } = await import(pathToFileURL(resolve(process.env.TERM
   'src/term1-submission-hold.mjs'))).catch(() => ({}));
 const { issueSkillGrant, bindSkillGrant } = await import(pathToFileURL(resolve(process.env.TERM2_RUNTIME_ROOT,
   'src/term1-skill-grant.mjs')));
+const { registerTerm1SkillRoutes } = await import(pathToFileURL(resolve(process.env.TERM2_RUNTIME_ROOT,
+  'src/term1-skill-routes.mjs')));
 
 async function setup(t, mode, options) {
   const f = await fixture(mode, { skipPrepare: true, ...options });
@@ -201,4 +204,108 @@ test('Term 1 main permit cannot retain or read a hold once a skill grant is boun
   assert.equal(read.error, 'TERM1_SKILL_OWNED_BY_FALLBACK');
   assert.equal(read.held, undefined);
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term1_submission_hold')).rows[0].n, 1);
+});
+
+async function verifyFallbackSeal(t, section) {
+  let drop;
+  const observations = [];
+  const f = await setup(t, 'read_first', {
+    record: (...args) => observations.push(args),
+    dropResponse: (body, response) => body?.operationId === drop && response.receipt?.status === 'accepted'
+  });
+  const grantScope = { attemptId: f.scope.attemptToken, sessionId: f.scope.examSessionToken,
+    generation: 0, classId: '5601', studentRef: randomUUID(), section };
+  const issued = await issueSkillGrant(f.db, grantScope);
+  const ownerId = randomUUID();
+  const grant = await bindSkillGrant(f.db, grantScope, issued.token, ownerId, issued.activationCode);
+  const scope = { attemptToken: grant.id, examSessionToken: grant.id, generation: 0, ownerId };
+  const send = async (path, body) => {
+    const response = await fetch(f.base + path, { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-term1-skill-grant': issued.token }, body: JSON.stringify(body) });
+    return { status: response.status, ...await response.json() };
+  };
+  const start = { ...op(f, section, 'start'), ...scope };
+  const seal = { ...op(f, section, 'seal', { startedAt: start.payload.startedAt, revision: 1,
+    task1: 'Writing fallback fixture. Keep the last line.\nDòng cuối có dấu.' }), ...scope };
+  const rejected = await send('/offline/operation', seal);
+  assert.equal(rejected.error, 'OFFLINE_START_REQUIRED');
+  assert.ok(rejected.held?.payloadHash);
+  const lookup = { ...scope, operationId: seal.operationId };
+  const retained = await send('/offline/status', lookup);
+  assert.equal(retained.persisted, false);
+  assert.deepEqual(retained.held, rejected.held);
+  const main = await f.request('/offline/status', { ...f.scope, operationId: seal.operationId });
+  assert.equal(main.held, undefined);
+  const { ownerId: ignored, ...expected } = seal;
+  assert.deepEqual((await f.db.query(`SELECT payload FROM assessment.term1_submission_hold
+    WHERE operation_id=$1`, [seal.operationId])).rows, [{ payload: expected }]);
+  assert.deepEqual((await f.db.query('SELECT field FROM assessment.k56_portal_field_dispatch')).rows, []);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n, 0);
+  assert.equal((await send('/offline/operation', start)).receipt.status, 'accepted');
+  if (section === 'listening') {
+    const premature = { ...seal, operationId: randomUUID(), payload: { ...seal.payload, reason: 'ended' } };
+    const review = await send('/offline/operation', premature);
+    assert.equal(review.error, 'AUDIO_NOT_FINISHED');
+    assert.ok(review.held?.payloadHash);
+    assert.equal((await send('/offline/status', { ...scope, operationId: premature.operationId })).receipt, null);
+  }
+  drop = seal.operationId;
+  await assert.rejects(() => send('/offline/operation', seal));
+  drop = null;
+  const recovered = await send('/offline/status', lookup);
+  assert.equal(recovered.receipt.status, 'accepted');
+  assert.equal(recovered.held, undefined);
+  assert.deepEqual((await send('/offline/operation', seal)).receipt, recovered.receipt);
+  const competing = await post(f, op(f, section, 'seal', { startedAt: start.payload.startedAt, revision: 1 }));
+  assert.equal(competing.error, 'TERM1_SKILL_OWNED_BY_FALLBACK');
+  assert.ok(observations.some(([name, , attempt, meta]) => name === 'offline_request_failed'
+    && attempt === f.scope.attemptToken && meta.operationId === seal.operationId && meta.errorCode === 'OFFLINE_START_REQUIRED'));
+  assert.ok(observations.some(([name, , attempt, meta]) => name === 'offline_operation_committed'
+    && attempt === f.scope.attemptToken && meta.receiptId === recovered.receipt.receiptId));
+  assert.ok(!JSON.stringify(observations).includes(issued.token));
+  assert.ok(!JSON.stringify(observations).includes('Writing fallback fixture'));
+  assert.deepEqual((await f.db.query('SELECT field,grade FROM assessment.k56_portal_field_dispatch')).rows
+    .map(({ field, grade }) => [field, Number(grade)]), section === 'writing' ? [] : [[section, 1]]);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n,
+    section === 'writing' ? 1 : 0);
+}
+
+for (const section of ['reading', 'listening', 'writing']) {
+  test(`Term 1 ${section} fallback retains the exact rejected seal and shares one canonical result`,
+    t => verifyFallbackSeal(t, section));
+}
+
+test('Term 1 fallback pins recovery for a new run and preserves an older run without it', async t => {
+  const f = await fixture('read_first', { skipPrepare: true });
+  t.after(f.close);
+  await f.db.exec('CREATE ROLE k56_shared_api NOLOGIN');
+  await f.db.exec(migration);
+  const require = createRequire(process.env.TERM2_DEPS_PACKAGE);
+  const express = require('express');
+  const app = express();
+  const router = express.Router();
+  app.use(express.json());
+  const pass = (_req, _res, next) => next();
+  registerTerm1SkillRoutes(router, { authenticate: pass, limiter: pass, readLimiter: pass,
+    transaction: f.transaction, readTeacherScope: async () => {}, load: f.load,
+    prepare: (slug, _input, _create, db) => f.load(db, slug, f.a),
+    findStudent: async () => ({ class_id: '5601', student_id: '5602' }),
+    policy: 'term1-offline-v1', allowNew: () => true });
+  app.use('/api/term-tests', router);
+  const api = require('supertest')(app);
+  const prefix = '/api/term-tests/term-test-1-k56/skill-fallback/';
+  const identity = { classCode: 'FIXTURE', studentRef: randomUUID(), section: 'reading' };
+  const ownerId = randomUUID();
+  const issued = (await api.post(prefix + 'issue').send(identity).expect(200)).body;
+  const open = () => api.post(prefix + 'open').set('x-term1-skill-grant', issued.token)
+    .send({ ...identity, ownerId, activationCode: issued.activationCode }).expect(200);
+  const opened = (await open()).body;
+  assert.equal(opened.submissionRecoveryVersion, 1);
+  assert.ok(!JSON.stringify(opened).includes(f.a));
+  assert.deepEqual((await f.db.query(`SELECT submission_hold_hours, submission_hold_limit
+    FROM assessment.term1_offline_run WHERE attempt_id=$1`, [f.a])).rows,
+    [{ submission_hold_hours: 2, submission_hold_limit: 8 }]);
+  await f.db.query(`UPDATE assessment.term1_offline_run SET submission_hold_hours=0,submission_hold_limit=0
+    WHERE attempt_id=$1`, [f.a]);
+  assert.equal((await open()).body.submissionRecoveryVersion, undefined);
 });
