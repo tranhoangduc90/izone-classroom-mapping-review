@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-assert.equal(process.env.TERM2_TEST_PG_URL || '', '', 'This suite uses isolated PGlite.');
+const native = Boolean(process.env.TERM2_TEST_PG_URL);
 assert.ok(process.env.K56_RECOVERY_FIXTURE, 'Set the local fixture path.');
 process.env.K56_TEST_PRODUCT = '1';
 process.env.TERM2_FIXTURE_IMPORT_ONLY = '1';
@@ -23,11 +23,15 @@ const { issueSkillGrant, bindSkillGrant } = await import(pathToFileURL(resolve(p
 const { registerTerm1SkillRoutes } = await import(pathToFileURL(resolve(process.env.TERM2_RUNTIME_ROOT,
   'src/term1-skill-routes.mjs')));
 
+async function prepareHoldStorage(f) {
+  if (!native) await f.db.exec('CREATE ROLE k56_shared_api NOLOGIN');
+  await f.db.exec(migration);
+}
+
 async function setup(t, mode, options) {
   const f = await fixture(mode, { skipPrepare: true, ...options });
   t.after(() => f.close());
-  await f.db.exec('CREATE ROLE k56_shared_api NOLOGIN');
-  await f.db.exec(migration);
+  await prepareHoldStorage(f);
   const { scope, permit } = await f.newRun();
   return { ...f, scope, permit, get clock() { return f.clock; },
     request(path, body, auth = permit) { return f.request(path, body, auth); } };
@@ -278,8 +282,7 @@ for (const section of ['reading', 'listening', 'writing']) {
 test('Term 1 fallback pins recovery for a new run and preserves an older run without it', async t => {
   const f = await fixture('read_first', { skipPrepare: true });
   t.after(f.close);
-  await f.db.exec('CREATE ROLE k56_shared_api NOLOGIN');
-  await f.db.exec(migration);
+  await prepareHoldStorage(f);
   const require = createRequire(process.env.TERM2_DEPS_PACKAGE);
   const express = require('express');
   const app = express();
