@@ -39,7 +39,10 @@ def private_db(container):
 
 
 def scalar(sql, query):
-    return sql("BEGIN READ ONLY; SET LOCAL statement_timeout='4s'; "+query+"; ROLLBACK;").decode().strip()
+    output=sql("BEGIN READ ONLY; SET LOCAL statement_timeout='4s'; "+query+"; ROLLBACK;").decode().splitlines()
+    rows=[line.strip() for line in output if line.strip() not in ('','BEGIN','SET','ROLLBACK')]
+    must(len(rows)==1,'K56_EXPECTED_ONE_READONLY_RESULT')
+    return rows[0]
 
 
 def check_idle(sql):
