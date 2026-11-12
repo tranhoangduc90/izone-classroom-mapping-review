@@ -36,7 +36,7 @@ import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
-import { buildErpGradePayload } from "./erp-sync.js";
+import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
 
@@ -314,8 +314,7 @@ async function trySyncErpGrades(syncErpGrades, attempt, combinedResult, writingS
   if (String(attempt?.class_name || '').trim().toUpperCase() === 'CODEXDEMO806') return 'not_applicable';
   try {
     const payload = buildErpGradePayload(attempt, combinedResult, { writing: writingScore });
-    await syncErpGrades(payload);
-    return 'synced';
+    return await deliverErpGrades(syncErpGrades, payload, 'synced');
   } catch (error) {
     // Không chặn học viên xem kết quả; lần mở kết quả tiếp theo sẽ tự thử lại.
     console.error(`ERP grade sync failed type=${error?.name || 'Error'}`);

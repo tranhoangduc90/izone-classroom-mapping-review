@@ -5,7 +5,7 @@
 // Khi lỗi: transaction rollback toàn bộ thay đổi của bước hiện tại và trả mã lỗi không chứa nội dung bài viết.
 
 import crypto from 'node:crypto';
-import { buildErpGradePayload } from './erp-sync.js';
+import { buildErpGradePayload, deliverErpGrades } from './erp-sync.js';
 
 const GRADING_VERSION = 1;
 const TASK_CRITERIA = Object.freeze({
@@ -482,8 +482,8 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
           if (found.rows.length!==1) throw new Error('BLANK_IDENTITY_NOT_FOUND');
           const attempt=found.rows[0];
           if (typeof syncErpGrades==='function' && attempt.class_name!=='CODEXDEMO806') {
-            const synced=await syncErpGrades(buildErpGradePayload(attempt,attempt.combined_result,{writing:grading.writingScore}));
-            if (synced?.status!=='synced') throw new Error('BLANK_PORTAL_ACK_INVALID');
+            const status=await deliverErpGrades(syncErpGrades,buildErpGradePayload(attempt,attempt.combined_result,{writing:grading.writingScore}));
+            if (syncErpGrades.durableDelivery!==true && status!=='synced') throw new Error('BLANK_PORTAL_ACK_INVALID');
           }
           const completed=await pool.query(`UPDATE assessment.term_test_writing_grading_job SET status='complete',
             completed_at=now(),lease_until=NULL,last_error_code=NULL,updated_at=now()
@@ -667,12 +667,11 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
     let portalSyncStatus = 'not_applicable';
     if (!isDemo && /^term-test-[1-9][0-9]*$/.test(String(attempt.test_slug || ''))) {
       try {
-        const syncResult = await syncErpGrades(buildErpGradePayload(
+        portalSyncStatus = await deliverErpGrades(syncErpGrades, buildErpGradePayload(
           attempt,
           attempt.combined_result,
           { writing: stored.grading.writingScore }
         ));
-        portalSyncStatus = syncResult?.status === 'synced' ? 'synced' : 'not_applicable';
       } catch {
         // Giữ job ở trạng thái processing để n8n gọi /fail và đưa lại vào hàng chờ.
         // Kết quả chấm đã được lưu; chỉ riêng bước ghi Portal sẽ tự thử lại.

@@ -1,7 +1,7 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabasePool, verifyDatabaseBoundary } from './db.js';
-import { createErpGradeSync } from './erp-sync.js';
+import { createRuntimeErpGradeSync } from './erp-sync.js';
 import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
 import { createTermTestWritingNotifier, withTermTestWritingNotifications } from './term-test-writing-notifier.js';
@@ -11,9 +11,12 @@ import { pruneExpiredLrHolds, pruneExpiredWritingHolds } from './mini-cbt-journe
 // Cấu hình lỗi dừng sớm; lỗi lúc chạy không in bài làm hoặc khóa bí mật.
 const config = loadConfig();
 const pool = createDatabasePool(config);
-try { await verifyDatabaseBoundary(pool, config); }
+let syncErpGrades;
+try {
+  await verifyDatabaseBoundary(pool, config);
+  syncErpGrades = await createRuntimeErpGradeSync({ config, pool });
+}
 catch (error) { await pool.end(); throw error; }
-const syncErpGrades = createErpGradeSync({ config });
 const termTestAssetService = createTermTestAssetService({
   assetDir: config.termTestAssetDir, sessionSecret: config.termTestSessionSecret
 });
