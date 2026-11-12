@@ -1457,7 +1457,8 @@ export function createApp({
 
   mountTeacherSavedProgress(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth});
   mountTeacherSubmissionHoldExport(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth,
-    reviewers:config.term2HoldExportReviewers,logEvent:logTermTestEvent});
+    reviewersByTest:{'term-test-1':config.term1HoldExportReviewers,'term-test-2':config.term2HoldExportReviewers},
+    logEvent:logTermTestEvent});
   mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});

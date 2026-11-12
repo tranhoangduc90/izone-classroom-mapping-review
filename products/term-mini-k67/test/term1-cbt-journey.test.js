@@ -154,6 +154,13 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     Object.assign(writing,{previousOperationId,startedAt:nextAt,capturedAt:nextAt+60_000,answers:{task1:'',task2:essay}});
     const wrongCapture={...writing,operationId:randomUUID(),capturedAt:writing.capturedAt-1};
     const invalidTask={...writing,operationId:randomUUID(),answers:{task1:'Invalid Task 1',task2:essay}};
+    if(mode==='lis_first')await f.db.query(`WITH other_session AS (
+      INSERT INTO assessment.term_test_exam_session
+        (test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,student_name_snapshot)
+      VALUES('term-test-1',1,1294,'IC2305',900003,'Other fixture learner') RETURNING id
+    ) INSERT INTO assessment.term_k67_writing_submission_hold
+      (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+    SELECT id,0,$1,$2,'{}'::jsonb,now(),now()+interval '2 hours' FROM other_session`,[randomUUID(),'a'.repeat(64)]);
     const review=await post('seal',wrongCapture);
     assert.equal(review.body.error,'OFFLINE_REVIEW_REQUIRED');
     assert.equal(review.body.reasonCode,'AUTO_CAPTURE_NOT_AT_DEADLINE');

@@ -71,7 +71,7 @@ test('K67 HTTP: phiên GV bắt buộc, query lạ bị từ chối và phản h
  }finally{await f.db.close();}
 });
 
-test('K67 Term 2: xuất nguyên văn bản giữ chỉ với tài khoản admin được chỉ định và mã thao tác còn hạn',async()=>{
+test('K67 Term 1/2: xuất nguyên văn bản giữ theo đúng đề, tài khoản admin và thời hạn',async()=>{
  const f=await fixture({term2CbtJourneyMode:'on',writingHold:{term2WritingHoldHours:2}});
  try{
   const operationId='60000000-0000-4000-8000-000000000003';
@@ -87,12 +87,14 @@ test('K67 Term 2: xuất nguyên văn bản giữ chỉ với tài khoản admin
    (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
    VALUES($1,0,$2,$3,$4,now(),now()+interval '1 hour')`,[session,operationId,'b'.repeat(64),payload]);
   const audit=[];
-  const app=createApp({pool:f.pool,config:{authMode:'google',term2HoldExportReviewers:new Set([email]),allowedOrigins:new Set()},
+  const makeApp=term1HoldExportReviewers=>createApp({pool:f.pool,
+   config:{authMode:'google',term2HoldExportReviewers:new Set([email]),term1HoldExportReviewers,allowedOrigins:new Set()},
    logger:{info:line=>audit.push(line),error:()=>{}},
    verifyGoogleToken:()=>({email,sub:authorization.googleSubject,email_verified:true})});
+  const app=makeApp(undefined);
   const url='/api/term-tests/teacher/submission-hold/export';
   const scope={classCode:'IC2304',studentRef:ref,generation:0,operationId};
-  const send=(body)=>request(app).post(url).set('Authorization','Bearer synthetic-reviewer-token').send(body);
+  const send=(body,target=app)=>request(target).post(url).set('Authorization','Bearer synthetic-reviewer-token').send(body);
   await request(app).post(url).send(scope).expect(401);
   await send(scope).expect(404);
   await f.db.query("UPDATE mapping.reviewer_account SET role='admin' WHERE email=$1",[email]);
@@ -113,5 +115,25 @@ test('K67 Term 2: xuất nguyên văn bản giữ chỉ với tài khoản admin
   await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold
    SET held_at=now()-interval '2 hours',expires_at=now()-interval '1 hour' WHERE operation_id=$1`,[operationId]);
   await send(scope).expect(404);
+  await f.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+   SELECT 'term-test-1','Đề giả Term 1',1,listening_definition,reading_definition,true
+   FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
+  await f.db.query("UPDATE assessment.term_test_exam_session SET test_slug='term-test-1' WHERE id=$1",[session]);
+  const term1Scope={...scope,testSlug:'term-test-1',operationId:'60000000-0000-4000-8000-000000000004'};
+  const term1Payload={...payload,answers:{task1:'',task2:'  Task 2 Term 1\n nguyên văn  '}};
+  await f.db.query(`INSERT INTO assessment.term_k67_writing_submission_hold
+   (session_id,generation,operation_id,payload_hash,payload,held_at,expires_at)
+   VALUES($1,0,$2,$3,$4,now(),now()+interval '1 hour')`,[session,term1Scope.operationId,'c'.repeat(64),term1Payload]);
+  await send(term1Scope).expect(403);
+  const term1App=makeApp(new Set([email]));
+  await send({...term1Scope,testSlug:'term-test-2'},term1App).expect(404);
+  const term1=await send(term1Scope,term1App).expect(200);
+  assert.equal(term1.body.testSlug,'term-test-1');
+  assert.deepEqual(term1.body.answers,term1Payload.answers);
+  assert.equal(term1.body.examSessionToken,undefined);
+  assert.match(term1.headers['content-disposition'],/term1-writing-/);
+  const term1Event=audit.map(line=>JSON.parse(line)).find(event=>event.event==='submission_hold_exported'&&event.operationId===term1Scope.operationId);
+  assert.ok(term1Event);
+  assert.doesNotMatch(JSON.stringify(term1Event),/nguyên văn|examSessionToken|teacher@fixture/);
  }finally{await f.db.close();}
 });

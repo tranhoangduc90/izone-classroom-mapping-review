@@ -178,7 +178,7 @@ async function retainUncommittedSubmission(db, state, body, input, digest, key, 
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  const classScoped = !key.lr && state.session.test_slug === 'term-test-2';
+  const classScoped = !key.lr;
   const quotaScope = key.lr ? delivery : classScoped ? `writing.${state.session.erp_course_class_id}` : 'writing';
   const quotaFilter = key.lr ? ' AND held.delivery=$3' : classScoped ? ' AND owner.erp_course_class_id=$3' : '';
   const quotaArgs = [state.now, state.session.test_slug];
