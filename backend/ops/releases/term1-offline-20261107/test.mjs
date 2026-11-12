@@ -132,6 +132,36 @@ export function op(f,section,kind,{dependency=null,startedAt=new Date(f.clock).t
  ...(section==='writing'?{[taskId]:task1}:{answers:{'1':'A'}}),...(kind==='seal'?{reason}:{}),...(section==='listening'&&kind==='seal'?{audioEnded,heardSeconds}:{})}};
 }
 if(!process.env.TERM2_FIXTURE_IMPORT_ONLY){
+if(process.env.K56_LISTENING_PHASE2==='1')for(const mode of ['lis_first','read_first']){
+ test('Term '+PRODUCT+' chấm đúng Writing sau gián đoạn Listening · '+mode,async t=>{
+  const f=await fixture(mode,{listeningInterruption:true});
+  t.after(()=>f.close());
+  let dependency=null;
+  const essay='Synthetic Writing after an accepted Listening interruption.';
+  for(const section of mode==='read_first'?['reading','listening','writing']:['listening','reading','writing']){
+   const start=op(f,section,'start',{dependency});
+   assert.equal((await f.request('/offline/operation',start)).receipt?.status,'accepted');
+   const terminal=op(f,section,section==='listening'?'interrupt':'seal',{dependency,startedAt:start.payload.startedAt,task1:essay});
+   if(section==='listening'){
+    delete terminal.payload.answers;
+    terminal.payload.interruptionReason='page_interrupted';
+   }
+   const accepted=await f.request('/offline/operation',terminal);
+   assert.equal(accepted.receipt?.status,'accepted',JSON.stringify(accepted));
+   assert.deepEqual((await f.request('/offline/status',{...f.scope,operationId:terminal.operationId})).receipt,accepted.receipt);
+   dependency=terminal.operationId;
+  }
+  const {rows:[state]}=await f.db.query(`SELECT listening_interrupted_at,listening_submitted_at,completed_at
+    FROM assessment.term_test_attempt WHERE id=$1`,[f.a]);
+  assert.ok(state.listening_interrupted_at);
+  assert.equal(state.listening_submitted_at,null);
+  assert.equal(state.completed_at,null);
+  const {rows:jobs}=await f.db.query(`SELECT j.job_type,r.task_number,r.essay_text
+    FROM assessment.term_test_writing_grading_job j JOIN assessment.term_test_writing_grading_run r ON r.id=j.run_id`);
+  assert.deepEqual(jobs,[{job_type:'dispatch',task_number:PRODUCT===1?2:1,essay_text:essay}]);
+  assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch")).rows,[{field:'reading'}]);
+ });
+}
 for(const mode of ['lis_first','read_first'])test('HTTP/SQL: trọn '+mode+', receipt và điểm 0 không gọi AI',async()=>{
  const f=await fixture(mode);try{let dependency=null;
  for(const skill of mode==='read_first'?['reading','listening','writing']:['listening','reading','writing']){

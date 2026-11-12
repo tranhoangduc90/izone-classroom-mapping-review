@@ -14,6 +14,7 @@ const {PGlite}=require('@electric-sql/pglite');
 const express=require('express');
 const {schema,registerMiniOffline}=await import(pathToFileURL(runtime+'/src/mini-offline.mjs'));
 const {createTermTestWritingGradingService}=await import(pathToFileURL(runtime+'/src/term-test-writing-grading.js'));
+const {fetchTermTestResultSql}=await import(pathToFileURL(runtime+'/src/sql.js'));
 const slug='mini-test-k56';
 const timing={listeningDurationSeconds:446,listeningReviewSeconds:0,readingDurationMinutes:25,writingDurationMinutes:15};
 export async function fixture(mode,paper,{listeningInterruption=false,realtime=false,mountJournal,dropResponse,record=()=>{}}={}){
@@ -31,17 +32,27 @@ export async function fixture(mode,paper,{listeningInterruption=false,realtime=f
   listening_started_at timestamptz,listening_deadline_at timestamptz,listening_submitted_at timestamptz,listening_draft jsonb,
   listening_draft_revision bigint DEFAULT 0,listening_draft_updated_at timestamptz,updated_at timestamptz);
  CREATE TABLE assessment.k56_portal_field_dispatch(attempt_id uuid,field text,grade numeric,status text,PRIMARY KEY(attempt_id,field));
- CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),attempt_id uuid,task_number int,grading_version int,run_key text,prompt_text text,prompt_image_url text,essay_text text,word_count int,
+ `);
+ if(listeningInterruption){
+  const gradingMigration=new URL('../../../../docs/migrations/2026-08-19-term-test-writing-grading.sql',import.meta.url);
+  await db.exec(await readFile(gradingMigration,'utf8'));
+ }else await db.exec(`CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),attempt_id uuid,task_number int,grading_version int,run_key text,prompt_text text,prompt_image_url text,essay_text text,word_count int,
    status text,task_score numeric,result_json jsonb,completed_at timestamptz,UNIQUE(attempt_id,task_number,grading_version));
  CREATE TABLE assessment.term_test_writing_grading_final(attempt_id uuid PRIMARY KEY,grading_version int,task_1_run_id uuid,task_2_run_id uuid,task_1_score numeric,task_2_score numeric,writing_score numeric,status text,ready_at timestamptz);
  CREATE TABLE assessment.term_test_writing_grading_job(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),run_id uuid,job_type text,idempotency_key text UNIQUE,status text,max_attempts int,next_attempt_at timestamptz);
  `);
  await db.exec(schema);
  if(listeningInterruption){
-  await db.exec(`ALTER TABLE assessment.term_test_attempt ADD CONSTRAINT term_test_attempt_writing_order_check CHECK (
+  await db.exec(`ALTER TABLE assessment.term_test_attempt
+   ADD COLUMN definition_version int NOT NULL DEFAULT 1,
+   ADD COLUMN class_name_snapshot text NOT NULL DEFAULT 'IC5601',
+   ADD COLUMN student_name_snapshot text NOT NULL DEFAULT 'Fixture Mini learner',
+   ADD COLUMN mini_definition_snapshot jsonb NOT NULL DEFAULT '{"version":1,"title":"Fixture Mini"}',
+   ADD CONSTRAINT term_test_attempt_writing_order_check CHECK (
    (writing_started_at IS NULL AND writing_updated_at IS NULL AND writing_submitted_at IS NULL) OR
    (completed_at IS NOT NULL AND writing_started_at IS NOT NULL AND writing_updated_at IS NOT NULL
-    AND (writing_submitted_at IS NULL OR writing_submitted_at>=writing_started_at))); `);
+    AND (writing_submitted_at IS NULL OR writing_submitted_at>=writing_started_at)));
+   CREATE TABLE assessment.test_definition (slug text, version int, title text);`);
   for(const name of ['listening-interruption.sql','listening-interruption-k56-phase2.sql']){
    await db.exec(await readFile(new URL('../term1-offline-20261107/'+name,import.meta.url),'utf8'));
   }
@@ -103,7 +114,11 @@ export async function fixture(mode,paper,{listeningInterruption=false,realtime=f
   if(result.offline)permit=result.offline.permit;
   return result;
  };
- return {base,db,a,s,student,scope,request,prepare,ensure,load,pool,content,advance:ms=>{now+=ms;},clock,
+ const readResult=async()=>{
+  const {rows:[row]}=await db.query(fetchTermTestResultSql,[a]);
+  return row;
+ };
+ return {base,db,a,s,student,scope,request,prepare,ensure,load,pool,content,readResult,grader,advance:ms=>{now+=ms;},clock,
   writingCalls:()=>writingCalls,close:async()=>{stop();await new Promise(resolve=>server.close(resolve));await db.close();}};
 }
 
@@ -133,8 +148,12 @@ test('Mini rollout separates modes and class scope; disabling keeps issued permi
 
 process.env.MINI_K56_CBT_OFFLINE_NEW='true';
 process.env.MINI_K56_PAPER_OFFLINE_NEW='true';
-if(process.env.K56_LISTENING_PHASE2==='1')for(const [mode,paper] of [['lis_first',false],['read_first',false],['lis_first',true]]){
- test(`Mini gián đoạn Listening ${mode} ${paper?'phiếu':'thi máy'}`,async()=>{
+if(process.env.K56_LISTENING_PHASE2==='1')for(const [mode,paper,task2] of [
+ ['lis_first',false,''],['read_first',false,''],['lis_first',true,''],
+ ['lis_first',false,'A synthetic paragraph after Listening interruption.'],
+ ['read_first',false,'A synthetic paragraph after Listening interruption.']
+]){
+ test(`Mini gián đoạn Listening ${mode} ${paper?'phiếu':task2?'Writing có nội dung':'Writing trắng'}`,async()=>{
   const f=await fixture(mode,paper,{listeningInterruption:true});
   try{
    assert.equal((await f.prepare()).status,200);
@@ -143,7 +162,7 @@ if(process.env.K56_LISTENING_PHASE2==='1')for(const [mode,paper] of [['lis_first
     const minutes=section==='reading'?25:15;
     const deadlineAt=paper||section==='listening'?null:new Date(Date.parse(startedAt)+minutes*60000).toISOString();
     const data=kind==='interrupt'?{interruptionReason:'learner_cannot_hear'}:
-     section==='writing'?{task2:''}:{answers:{'1':'A'}};
+     section==='writing'?{task2}:{answers:{'1':'A'}};
     const body={...f.scope,operationId:randomUUID(),section,kind,revision:0,occurredAt:f.clock(),dependency,
      payload:{startedAt,deadlineAt,timeValid:true,...data,...kind==='seal'?{reason:'manual'}:{}}};
     return {body,result:await f.request('operation',body)};
@@ -163,9 +182,38 @@ if(process.env.K56_LISTENING_PHASE2==='1')for(const [mode,paper] of [['lis_first
     const sealed=await operation(section,'seal',opened.body.payload.startedAt);
     assert.equal(sealed.result.receipt?.status,'accepted',JSON.stringify(sealed.result));dependency=sealed.body.operationId;
    }
-   const {rows:[row]}=await f.db.query('SELECT listening_interrupted_at,listening_submitted_at,listening_result FROM assessment.term_test_attempt');
+   const {rows:[row]}=await f.db.query('SELECT listening_interrupted_at,listening_submitted_at,listening_result,completed_at FROM assessment.term_test_attempt');
    assert.ok(row.listening_interrupted_at);assert.equal(row.listening_submitted_at,null);assert.equal(row.listening_result,null);
+   assert.equal(row.completed_at,null);
    assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch WHERE field='listening'")).rows,[]);
+   const {rows:jobs}=await f.db.query(`SELECT j.job_type,r.task_number,r.essay_text
+     FROM assessment.term_test_writing_grading_job j JOIN assessment.term_test_writing_grading_run r ON r.id=j.run_id`);
+   assert.deepEqual(jobs,task2?[{job_type:'dispatch',task_number:2,essay_text:task2}]:[]);
+   const result=await f.readResult();
+   assert.ok(result?.listening_interrupted_at);
+   assert.equal(result.combined_result.listening,null);
+   assert.equal(result.combined_result.reading.correct,1);
+   assert.equal(result.writing_task_2,task2);
+   if(task2){
+    await f.ensure(task2);
+    assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n,1);
+    const workerId='fixture-mini-worker';
+    const dispatch=await f.grader.claimJobs({workerId,testSlug:slug});
+    assert.equal(dispatch.length,1);
+    assert.equal(dispatch[0].essay,task2);
+    const dispatched=await f.grader.completeDispatch({jobId:dispatch[0].jobId,workerId});
+    assert.equal(dispatched.status,'accepted');
+    await f.db.exec("UPDATE assessment.term_test_writing_grading_job SET next_attempt_at=now() WHERE job_type='collect'");
+    const collect=await f.grader.claimJobs({workerId,testSlug:slug});
+    assert.equal(collect.length,1);
+    const lmsUrl='https://ducizone.ddns.net/writing/shared/writing-essays/'+'a'.repeat(48)+'/view?v=1';
+    const completed=await f.grader.completeResult({jobId:collect[0].jobId,workerId,runKey:collect[0].runKey,
+     result:{mode:'homework',lmsUrl}});
+    assert.equal(completed.grading.lmsUrl,lmsUrl);
+    assert.equal(completed.portalSyncStatus,'not_applicable');
+    assert.equal((await f.ensure(task2)).lmsUrl,lmsUrl);
+    assert.deepEqual((await f.db.query("SELECT field FROM assessment.k56_portal_field_dispatch ORDER BY field")).rows,[{field:'reading'}]);
+   }
   }finally{await f.close();}
  });
 }

@@ -67,10 +67,11 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true, wri
       ADD COLUMN writing_draft_revision bigint NOT NULL DEFAULT 0,
       ADD COLUMN writing_updated_at timestamptz;
     ALTER TABLE assessment.term1_offline_run ADD COLUMN policy text, ADD COLUMN session_id uuid;
-    ALTER TABLE assessment.term2_offline_run ADD COLUMN policy text;
+    ALTER TABLE assessment.term2_offline_run ADD COLUMN policy text, ADD COLUMN session_id uuid;
     CREATE TABLE assessment.term1_offline_operation (
       attempt_id uuid, operation_id uuid, section text, kind text, receipt jsonb
     );
+    CREATE TABLE assessment.term2_offline_operation (LIKE assessment.term1_offline_operation);
     CREATE TABLE assessment.term_test_writing_grading_run (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(), attempt_id uuid, task_number int, grading_version int, run_key text,
       prompt_text text, prompt_image_url text, essay_text text, word_count int, status text, task_score numeric,
