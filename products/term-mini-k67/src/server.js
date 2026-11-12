@@ -61,14 +61,22 @@ server.requestTimeout = 15000;
 server.headersTimeout = 16000;
 server.keepAliveTimeout = 5000;
 let stopping = false;
-function shutdown(signal) {
+async function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   clearInterval(holdCleanup);
   notifier.close();
   console.log(`Nhận ${signal}; đang đóng backend K67 an toàn.`);
-  server.close(async () => { await pool.end(); process.exit(0); });
   setTimeout(() => process.exit(1), 10000).unref();
+  const stopped = new Promise(resolve => server.close(resolve));
+  const cleanup = await Promise.allSettled([
+    app.locals.termTestResultStream?.close(),
+    app.locals.termTeacherObservation?.close()
+  ]);
+  if (cleanup.some(result => result.status === 'rejected')) console.error('K67_STREAM_SHUTDOWN_FAILED');
+  await stopped;
+  await pool.end();
+  process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));

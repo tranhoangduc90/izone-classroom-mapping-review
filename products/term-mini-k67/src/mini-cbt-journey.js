@@ -268,7 +268,7 @@ async function commit(db, state, body, timing, profile, observation) {
     if(!profile.twoTasks&&body.answers.task1!=='')throw problem('OFFLINE_INVALID','Term 1 chỉ nhận Task 2.',400);
     if(!attempt?.completed_at||attempt.writing_scope!=='exam'||attempt.writing_started_at||attempt.writing_submitted_at
         || Number(attempt.writing_draft_revision)>0)throw problem('OFFLINE_CONFLICT','Phiên Writing đã thay đổi. Giữ bài để đối soát.');
-    const reviewMessage = 'Mốc chốt Writing chưa khớp giờ thi. Bài vẫn được giữ.';
+    const reviewMessage = 'Mốc chốt Writing chưa khớp giờ thi. Hãy giữ bài trên thiết bị để đối soát.';
     if (!Number.isSafeInteger(deadline) || body.capturedAt > deadline) {
       throw problem('OFFLINE_REVIEW_REQUIRED', reviewMessage, 409, 'CAPTURE_AFTER_DEADLINE');
     }
