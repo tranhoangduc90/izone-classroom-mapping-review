@@ -73,6 +73,8 @@ test('Mini K67 paper offline ' + mode + (recovery ? ' with submission recovery' 
         WHERE session_id=$1 AND operation_id=$2`,[token,rejected.operationId]);
       assert.deepEqual(retained.payload.payload.answers,rejected.payload.answers);
       assert.equal(retained.payload.ownerId,undefined);
+      assert.equal(retained.payload.attemptToken,undefined);
+      assert.equal(retained.payload.examSessionToken,undefined);
       assert.equal(retained.delivery,'paper');
       const count = await fixture.db.query(`SELECT count(*)::int AS n FROM assessment.mini_k67_paper_offline_operation
         WHERE operation_id=$1`,[rejected.operationId]);

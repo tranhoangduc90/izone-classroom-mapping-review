@@ -373,7 +373,7 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
             if (await readPrevious(db, session)) return undefined;
             const test = await definitionFor(db, session);
             validateAnswerKeys(op, test);
-            const { ownerId, ...retained } = op;
+            const { ownerId, attemptToken, ...retained } = op;
             return retainMiniPaperSubmission(db, { session, now }, op, retained, payloadHash, { hours, limit });
           });
         } catch (error) {
