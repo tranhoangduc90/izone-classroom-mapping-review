@@ -23,6 +23,15 @@ const ASSETS = Object.freeze({
     readingDurationMinutes: 60,
     writingDurationMinutes: 60
   }),
+  'pretest-lesson-16': Object.freeze({
+    content: 'pretest-lesson-16/content.json',
+    audio: 'pretest-lesson-16/listening-audio.mp3',
+    preview: 'pretest-lesson-16/listening-preview-30s.mp3',
+    listeningDurationSeconds: 852.25,
+    listeningReviewSeconds: 120,
+    readingDurationMinutes: 20,
+    writingDurationMinutes: 0
+  }),
   'mini-test-lesson-5': Object.freeze({
     content: 'mini-test-lesson-5/content.json',
     audio: 'mini-test-lesson-5/listening-audio.mp3',
@@ -208,7 +217,16 @@ export function createTermTestAssetService({ assetDir, sessionSecret }) {
     });
   }
 
-  return { supports, getContent, getPreview, getTiming, getAudioManifest, getSessionAudioKey, streamEncryptedAudio, streamDemoAudio };
+  async function getJourneyManifest(testSlug) {
+    if (testSlug !== 'pretest-lesson-16') return null;
+    const { sha256, byteLength } = await getAudioManifest(testSlug);
+    return { sha256, byteLength, url: '/api/term-tests/pretest-lesson-16/cbt-journey/audio',
+      durationSeconds: getTiming(testSlug).listeningDurationSeconds,
+      envelopeVersion: 'MP3', private: true };
+  }
+
+  return { supports, getContent, getPreview, getTiming, getAudioManifest, getJourneyManifest,
+    getSessionAudioKey, streamEncryptedAudio, streamDemoAudio };
 }
 
 export const termTestAudioEnvelope = Object.freeze({

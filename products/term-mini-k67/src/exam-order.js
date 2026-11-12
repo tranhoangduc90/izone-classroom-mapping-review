@@ -8,7 +8,7 @@ import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
 
-const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5'];
+const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
   examMode:z.enum(['lis_first','read_first']).default('lis_first'),
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
@@ -160,7 +160,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         (client_submission_id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,
          student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,writing_scope,writing_source_attempt_id)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'read_first',$10,
-          CASE WHEN $10='answer_sheet' THEN 'lr_only' ELSE 'exam' END,
+          CASE WHEN $10='answer_sheet' OR $2='pretest-lesson-16' THEN 'lr_only' ELSE 'exam' END,
           (SELECT previous.id FROM assessment.term_test_attempt previous WHERE previous.test_slug=$2
             AND previous.definition_version=$3 AND previous.erp_course_class_id=$4 AND previous.erp_student_contact_id=$6
             AND previous.writing_scope='exam' AND previous.superseded_at IS NULL

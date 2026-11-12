@@ -17,7 +17,7 @@ import {createPendingReads,createRequestReads} from './pending-reads.js';
 import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
-import { mountMiniCbtJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
+import { mountMiniCbtJourney, mountPretestCbtJourney, mountPretestPaperJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
 import { mountExamOrder } from './exam-order.js';
 import { mountTerm1ListeningRetake } from './term1-listening-retake.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
@@ -32,7 +32,7 @@ import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
 import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
-import { findTermTestClientEventAttemptSql } from './sql.js';
+import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
 import { buildErpGradePayload } from "./erp-sync.js";
@@ -47,7 +47,7 @@ const mountTermJournal = process.env.EXAM_JOURNAL_ENABLED === '1'
 
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
 
-const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+)$/);
+const testSlugSchema = z.string().trim().regex(/^(?:term-test-[1-9][0-9]*|mini-test-[a-z0-9-]+|pretest-lesson-16)$/);
 
 const normalizeTemporaryStudentName = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ');
 
@@ -90,7 +90,7 @@ const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
 
 const demoResetSchema = z.object({
   classCode: z.literal('CODEXDEMO806'),
-  testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5']),
+  testSlug: z.enum(['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16']),
   studentRef: z.string().uuid(),
   confirmation: z.literal('RESET_DEMO_STUDENT')
 });
@@ -334,7 +334,10 @@ function addCors(config) {
     }
     res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-term2-permit, x-exam-journal-request-id');
+    const headers = 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-term2-permit, x-exam-journal-request-id';
+    const privatePretestAudio = req.path === '/api/term-tests/pretest-lesson-16/cbt-journey/audio';
+    res.set('Access-Control-Allow-Headers', privatePretestAudio ? headers + ', Range' : headers);
+    if (privatePretestAudio) res.set('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
     return next();
@@ -532,6 +535,8 @@ export function createApp({
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, observeSubmission:(...args)=>termJournal?.business(...args) });
+  mountPretestCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, logEvent: logTermTestEvent });
   const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     observeSubmission:(...args)=>termJournal?.business(...args),
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
@@ -541,6 +546,8 @@ export function createApp({
         }
       }).catch(()=>logger.error('Term offline paper grade sync will retry on result read'));
     }};
+  mountPretestPaperJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
   mountTerm1PaperJourney(app,paperJourneyServices);
   mountTerm2PaperJourney(app,paperJourneyServices);
   const termCbtServices=slug=>({pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
@@ -1453,7 +1460,8 @@ export function createApp({
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});
   app.get('/api/term-tests/teacher/options', testReadLimiter, authenticate, requireContext, asyncRoute(async (req, res) => {
-    const result = await pool.query(listTermTestTeacherOptionsSql, [
+    const sql = req.query.view === 'pretest' ? termTestTeacherOptionsSql(true) : listTermTestTeacherOptionsSql;
+    const result = await pool.query(sql, [
       req.reviewer.email,
       auth.readAuthorization(req)
     ]);

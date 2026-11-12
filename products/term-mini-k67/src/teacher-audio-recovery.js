@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 
 const scopeSchema=z.object({class:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/),
-  test:z.enum(['term-test-1','term-test-2','mini-test-lesson-5','term-test-1-k56','term-test-2-k56','mini-test-k56']),student:z.uuid()}).strict();
+  test:z.enum(['term-test-1','term-test-2','mini-test-lesson-5','pretest-lesson-16','term-test-1-k56','term-test-2-k56','mini-test-k56']),student:z.uuid()}).strict();
 const actionSchema=scopeSchema.extend({requestId:z.uuid(),expectedVersion:z.string().regex(/^[a-f0-9]{64}$/),
   action:z.enum(['release-preparation','transfer-active']),oldDeviceStopped:z.boolean(),reason:z.string().trim().min(5).max(500)}).strict();
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');

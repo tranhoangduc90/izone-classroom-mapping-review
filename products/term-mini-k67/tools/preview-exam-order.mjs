@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
+import {createTermTestAssetService} from '../src/term-test-assets.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {AsyncLocalStorage} from 'node:async_hooks';
@@ -19,6 +20,13 @@ const timing={
   'term-test-2':{listeningDurationSeconds:1844,listeningTotalSeconds:1964,readingDurationMinutes:60,writingDurationMinutes:60},
   'mini-test-lesson-5':{listeningDurationSeconds:972,listeningTotalSeconds:1092,readingDurationMinutes:20,writingDurationMinutes:0}
 };
+const pretestMode=process.env.K67_PREVIEW_PRETEST_CBT_JOURNEY;
+const pretestSlug='pretest-lesson-16';
+const pretestAssetDir=process.env.K67_PREVIEW_PRETEST_ASSETS;
+const pretestR2ConfigFile=process.env.K67_PREVIEW_PRETEST_R2_CONFIG;
+const nativePretest=pretestAssetDir ? createTermTestAssetService({ assetDir:pretestAssetDir,
+  sessionSecret:'fixture-pretest-audio-key-at-least-32-bytes' }) : null;
+if(pretestMode==='on')timing[pretestSlug]={listeningDurationSeconds:6,listeningTotalSeconds:8,readingDurationMinutes:0.75,writingDurationMinutes:0};
 const key=randomBytes(32);
 // Âm thanh thử ngắn được tạo tại máy; không lấy audio đề thi thật.
 // Test audio gián đoạn cần đoạn giả dài hơn; mặc định vẫn là 2 giây của bản thử cũ.
@@ -50,7 +58,7 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
   audio:{label:`Âm thanh mô phỏng ${toneSeconds} giây`,durationLabel:`${Math.floor(toneSeconds/60)}:${String(toneSeconds%60).padStart(2,'0')}`,src:'/preview-tone.wav'},
   listening:{instructions:['Đây là câu hỏi giả để thử hành trình. Nhập một đáp án và nộp để chuyển phần.'],sections:[{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}]},
   reading:{instructions:['Đề giả; thời gian và thứ tự dùng chính sách K67.'],sections:[{label:'Reading thử',title:'Bài đọc mô phỏng',range:'Questions',passageHtml:'<p>Đây là bài đọc thử. Không phải nội dung đề thi đang chạy.</p>',questionsHtml:questions(slug,'reading')}]},
-  writing:slug==='mini-test-lesson-5'?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
+  writing:['mini-test-lesson-5',pretestSlug].includes(slug)?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
@@ -61,9 +69,14 @@ const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
 const term1R2ConfigFile=process.env.K67_PREVIEW_TERM1_R2_CONFIG;
 const term2Review=term2JourneyMode==='on'&&!term2Audio?3:120;
 const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
-const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[slug],
-    listeningReviewSeconds:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
+const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>slug===pretestSlug&&nativePretest ? nativePretest.getTiming(slug) : ({...timing[slug],
+    listeningReviewSeconds:slug===pretestSlug?2:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
   getJourneyManifest:slug=>{
+    if(slug===pretestSlug&&nativePretest)return nativePretest.getJourneyManifest(slug);
+    if(slug===pretestSlug&&pretestMode==='on')return {
+      url:`http://127.0.0.1:${port}/preview-tone.wav`,envelopeVersion:'MP3',byteLength:wav.length,
+      sha256:createHash('sha256').update(wav).digest('hex'),durationSeconds:toneSeconds
+    };
     if(!((slug==='term-test-1'&&(term1JourneyMode==='on'||retakeMode==='on'))||(slug==='term-test-2'&&term2JourneyMode==='on')))return null;
     const bytes=audioBytes(slug);
     return {url:slug==='term-test-1'&&term1Audio&&term1R2ConfigFile
@@ -76,11 +89,14 @@ const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>({...timing[s
   getMiniJourneyManifest:()=>{const bytes=audioBytes('mini-test-lesson-5');return {url:`http://127.0.0.1:${port}/preview-mini-audio`,
     envelopeVersion:'MP3',byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};},
   getAudioManifest:async slug=>{const bytes=audioBytes(slug);const sha256=createHash('sha256').update(bytes).digest('hex');return{assetVersion:`sha256-${sha256}`,sha256,byteLength:bytes.length,encryptedByteLength:bytes.length+33,envelopeVersion:'IZTT1'};},
-  getContent:async slug=>content(slug),getSessionAudioKey:()=>key,getPreview:async()=>wav,
+  getContent:async slug=>slug===pretestSlug&&nativePretest ? nativePretest.getContent(slug) : content(slug),
+  getSessionAudioKey:()=>key,getPreview:async slug=>slug===pretestSlug&&nativePretest ? nativePretest.getPreview(slug) : wav,
+  streamDemoAudio:(slug,request,response)=>nativePretest.streamDemoAudio(slug,request,response),
   streamEncryptedAudio:async(slug,_token,res)=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
     res.type('application/octet-stream').send(Buffer.concat([Buffer.from('IZTT1'),iv,cipher.update(audioBytes(slug)),cipher.final(),cipher.getAuthTag()]));}};
 const protection=process.env.K67_PREVIEW_AUDIO_PROTECTION==='true';
 if(protection)for(const value of Object.values(timing)){value.listeningDurationSeconds=toneSeconds;value.listeningTotalSeconds=toneSeconds+120;}
+if(pretestMode==='on')Object.assign(timing[pretestSlug],{listeningDurationSeconds:toneSeconds,listeningTotalSeconds:toneSeconds+2});
 if (miniAudio) {
   if (createHash('sha256').update(miniAudio).digest('hex') !== '182526cd0c3357a4b963ea1cf84a9b72a9a6f6d968324c8905895bcce74088cd') throw new Error('Sai bản audio Mini K67.');
   Object.assign(timing['mini-test-lesson-5'], { listeningDurationSeconds: 972, listeningTotalSeconds: 1092 });
@@ -124,7 +140,7 @@ const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbt
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
 let writingGrading;
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:20,term1WritingHoldClasses:holdClass}
@@ -138,7 +154,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
     getStatus:input=>writingGrading.getStatus(input)
   } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
-  miniCbtJourneyMode:journeyMode,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
+  miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool});
@@ -153,12 +169,22 @@ if (holdSlug) {
       ? Promise.resolve({rows:[{now:new Date(now)}]}) : client.query(sql,args)};
   };
 }
-if(listeningContinuityEnabled){
+if(listeningContinuityEnabled&&!pretestMode){
   await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
 }
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
+if(pretestMode){
+  await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
+    INSERT INTO mapping.student_mapping_review VALUES
+      ('66666666-6666-4666-8666-666666666666',1992806,990806,'Học viên Pretest demo','approved');
+    CREATE TABLE IF NOT EXISTS mapping.reviewer_account
+      (email text,status text,google_subject text,role text,can_access_all_classes boolean);
+    CREATE TABLE IF NOT EXISTS mapping.reviewer_session
+      (token_hash bytea,reviewer_email text,google_subject text,revoked_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz);
+    CREATE TABLE IF NOT EXISTS mapping.reviewer_class_access (reviewer_email text,erp_course_class_id bigint)`);
+}
 const rescueClass=process.env.K67_PREVIEW_RESCUE_CLASS;
 if(rescueClass){
   if(!['IC2213','IC2207'].includes(rescueClass))throw new Error('Mã lớp thử cứu hộ không hợp lệ.');
@@ -168,8 +194,16 @@ if(rescueClass){
 await fixture.db.exec('DELETE FROM assessment.test_definition');
 for(const slug of Object.keys(timing)){
   const c=configs.get(slug),section=skill=>JSON.stringify({questions:c[skill].controls.map(control=>({number:control.number,type:'Câu mô phỏng',accepted:[control.kind==='select'?control.options[0]:'A']}))});
+  const nativeDefinition=slug===pretestSlug&&nativePretest
+    ? JSON.parse(await readFile(path.join(pretestAssetDir,slug,'definition.private.json'),'utf8')) : null;
   await fixture.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
-    VALUES($1,$2,1,$3,$4,true)`,[slug,c.title+' · Bản thử',section('listening'),section('reading')]);
+    VALUES($1,$2,1,$3,$4,true)`,[slug,c.title+' · Bản thử',
+      nativeDefinition ? JSON.stringify(nativeDefinition.listening_definition) : section('listening'),
+      nativeDefinition ? JSON.stringify(nativeDefinition.reading_definition) : section('reading')]);
+  if(slug===pretestSlug)await fixture.db.query(
+    'UPDATE assessment.test_definition SET open_class_ids=$2 WHERE slug=$1',
+    [slug, JSON.stringify(['1293','1992200','1992806'])]
+  );
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
@@ -273,12 +307,14 @@ const offlineEntries=[];
 if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEntries.push('mini-test-lesson-5-computer-based');
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');
 if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
+if(pretestMode==='on')offlineEntries.push('pretest-lesson-16-computer-based','pretest-lesson-16');
 if(term2JourneyMode==='on'&&rescueClass)offlineEntries.push('term-test-2-rescue');
 if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
-  const fixtureManifests=['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'];
+  const fixtureManifests=entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
+    :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
     try {
       const source = await readFile(path.join(pages,'term-tests',entry,path.posix.basename(req.path)),'utf8');

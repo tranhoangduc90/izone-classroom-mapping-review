@@ -1,4 +1,4 @@
-import { loadAnswerExplanations, explanationSlugs } from './answer-explanations.js';
+import { loadAnswerExplanations, explanationSlugs, streamPretestReviewAudio } from './answer-explanations.js';
 import { listTermTestTeacherResultsSql } from './sql.js';
 import { z } from 'zod';
 
@@ -39,6 +39,7 @@ export function mountTeacherAnswerExplanations(app, {
         listening_answers: answers.listening, reading_answers: answers.reading
       });
       if (!review) return res.status(404).json({ ok: false, error: 'EXPLANATIONS_UNAVAILABLE', message: 'Lời giải chưa sẵn sàng.' });
+      if (req.query.audio === '1') return await streamPretestReviewAudio(config.termTestAssetDir, review, res);
       review.identity = { className: row.class_name, testSlug: row.test_slug, studentRef: student.ref, completedAt: student.completedAt };
       return res.json({ ok: true, review });
     } catch (error) {

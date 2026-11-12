@@ -2,8 +2,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { publicAudioCatalog } from './public-audio-catalog.js';
+import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 
-export const explanationSlugs = new Set(['term-test-1', 'term-test-2', 'mini-test-lesson-5']);
+export const explanationSlugs = new Set(['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16']);
 export const explanationAttemptSql = `SELECT
   attempt.test_slug, attempt.definition_version, attempt.combined_result,
   attempt.listening_answers, attempt.reading_answers,
@@ -58,15 +60,30 @@ export async function loadAnswerExplanations(assetDir, row) {
     const audio = bundle.reviewAudio, catalog = publicAudioCatalog[row.test_slug];
     const validClip = c => c && typeof c.id === 'string' && Number.isInteger(c.startMs) && Number.isInteger(c.endMs)
       && c.startMs >= 0 && c.endMs > c.startMs && c.endMs <= audio.durationMs;
-    if (!audio || !catalog || audio.sha256 !== catalog.sha256
-      || audio.asset !== path.basename(new URL(catalog.url).pathname)
-      || !Number.isInteger(audio.durationMs) || audio.durationMs <= 0 || audio.durationMs > 7200000
+    const privatePretest = row.test_slug === 'pretest-lesson-16';
+    const identity = privatePretest ? JSON.parse(await fs.readFile(path.join(root, 'audio.private.json'), 'utf8')) : null;
+    const matchingAudio = privatePretest
+      ? audio?.private === true && audio.asset === 'listening-audio.mp3'
+        && /^[0-9a-f]{64}$/.test(audio.sha256) && audio.sha256 === identity.sha256 && audio.durationMs === identity.durationMs
+      : audio && catalog && audio.sha256 === catalog.sha256
+        && audio.asset === path.basename(new URL(catalog.url).pathname);
+    if (!matchingAudio || !Number.isInteger(audio.durationMs) || audio.durationMs <= 0 || audio.durationMs > 7200000
       || listening.some(e => !e.replay?.length || [...e.replay, ...e.blocks.flatMap(b => b.replay || [])].some(c => !validClip(c)))) {
       throw new Error('EXPLANATION_AUDIO_MISMATCH');
     }
   }
   return { bundle, content: parsedContent, result: row.combined_result,
     answers: { listening: row.listening_answers, reading: row.reading_answers } };
+}
+
+export async function streamPretestReviewAudio(assetDir, review, res) {
+  if (review.bundle.testSlug !== 'pretest-lesson-16' || review.bundle.reviewAudio?.private !== true) {
+    return res.status(404).json({ ok: false, error: 'EXPLANATIONS_UNAVAILABLE', message: 'Chưa có audio của lời giải.' });
+  }
+  const file = path.join(assetDir, 'pretest-lesson-16', 'listening-audio.mp3');
+  const { size } = await fs.stat(file);
+  res.set({ 'Content-Type': 'audio/mpeg', 'Content-Length': String(size), 'Cache-Control': 'no-store, private' });
+  await pipeline(createReadStream(file), res);
 }
 
 export function mountAnswerExplanations(app, { pool, config, limiter }) {
@@ -83,6 +100,7 @@ export function mountAnswerExplanations(app, { pool, config, limiter }) {
       const review = await loadAnswerExplanations(config.termTestAssetDir, rows[0]);
       if (!review) return res.status(404).json({ ok: false, error: 'EXPLANATIONS_UNAVAILABLE',
         message: 'Lời giải của đề này chưa sẵn sàng. Bạn có thể thử lại sau.' });
+      if (req.body?.audio === true) return await streamPretestReviewAudio(config.termTestAssetDir, review, res);
       return res.json({ ok: true, review });
     } catch (error) {
       if (/^EXPLANATION_/.test(error.message)) return res.status(409).json({ ok: false, error: error.message,
