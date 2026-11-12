@@ -90,7 +90,45 @@ test('Term 1 retake verifies scope and seals only its own Listening attempt',asy
   const sealed=await post('/seal',operation);
   assert.ok(sealed.ok,sealed.text);
   assert.equal(sealed.body.receipt.payloadHash,createHash('sha256').update(JSON.stringify(operation)).digest('hex'));
-  assert.deepEqual((await post('/status',{section:'listening',operationId:operation.operationId},apiFor('drain'))).body.receipt,sealed.body.receipt);
+  const beforeRead=(await f.db.query('SELECT to_jsonb(row) AS state FROM assessment.term_k67_listening_retake row ORDER BY id')).rows;
+  const drain=apiFor('drain');
+  const lookup={section:'listening',operationId:operation.operationId};
+  const saved=await post('/status',lookup,drain);
+  assert.equal(saved.status,200);
+  assert.equal(saved.body.persisted,true);
+  assert.deepEqual(saved.body.receipt,sealed.body.receipt);
+  for(const wrongScope of [
+    {generation:1},
+    {deviceProof:'c'.repeat(64)},
+    {examSessionToken:randomUUID()},
+  ]){
+    const rejected=await post('/status',{...lookup,...wrongScope},drain);
+    assert.equal(rejected.status,403,rejected.text);
+    assert.equal(rejected.body.error,'RETAKE_SCOPE');
+    assert.equal(rejected.body.receipt,undefined);
+  }
+  const wrongPermit=await drain.post(retake+'/status').set('x-term2-permit','d'.repeat(64))
+    .send({...scope,deviceProof,...lookup});
+  assert.equal(wrongPermit.status,403);
+  assert.equal(wrongPermit.body.receipt,undefined);
+  const wrongOperation=await post('/status',{...lookup,operationId:randomUUID()},drain);
+  assert.equal(wrongOperation.status,409);
+  assert.equal(wrongOperation.body.error,'RETAKE_CONFLICT');
+  assert.equal(wrongOperation.body.receipt,undefined);
+  assert.equal((await post('/status',lookup,apiFor('off'))).status,404);
+  const drainResult=await post('/result',{},drain);
+  assert.equal(drainResult.status,200);
+  assert.equal(drainResult.body.attemptToken,id);
+  assert.equal(drainResult.body.result.listening.correct,1);
+  assert.equal(drainResult.body.result.reading,null);
+  assert.deepEqual((await f.db.query('SELECT to_jsonb(row) AS state FROM assessment.term_k67_listening_retake row ORDER BY id')).rows,beforeRead);
+
+  await f.db.query("UPDATE assessment.term_k67_listening_retake SET started_at=clock_timestamp()-interval '73 hours' WHERE id=$1",[id]);
+  const expired=await post('/status',lookup,drain);
+  assert.equal(expired.status,409);
+  assert.equal(expired.body.error,'RETAKE_REVIEW_REQUIRED');
+  assert.equal(expired.body.receipt,undefined);
+  await f.db.query('UPDATE assessment.term_k67_listening_retake SET started_at=$2 WHERE id=$1',[id,new Date(startedAt).toISOString()]);
   assert.deepEqual((await post('/seal',operation)).body.receipt,sealed.body.receipt);
   assert.equal((await post('/seal',{...operation,answers:{11:'B'}})).status,409);
   const result=await post('/result');
