@@ -45,6 +45,13 @@ test('Pretest goes Reading → Listening → result and recovers the committed r
       ('88888888-8888-4888-8888-888888888888',1300,900003,'Học viên ngoài phạm vi','approved')`);
 
   const api = request(fixture.app);
+  const audioCors = await api.options(prefix + '/cbt-journey/audio')
+    .set('Origin', 'https://tranhoangduc90.github.io')
+    .set('Access-Control-Request-Method', 'POST')
+    .set('Access-Control-Request-Headers', 'content-type,range,x-term2-permit');
+  assert.equal(audioCors.status,204);
+  assert.match(audioCors.headers['access-control-allow-headers'],/\bRange\b/i);
+  assert.match(audioCors.headers['access-control-expose-headers'],/\bContent-Range\b/i);
   assert.equal((await api.get('/api/term-tests/roster').query({class:'NONK67',test:slug})).status, 404);
   const outside = {classCode:'NONK67',studentRef:'88888888-8888-4888-8888-888888888888'};
   assert.equal((await api.post(prefix + '/student-identity').send(outside)).body.status, 'missing');

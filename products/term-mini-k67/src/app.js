@@ -334,7 +334,10 @@ function addCors(config) {
     }
     res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-term2-permit, x-exam-journal-request-id');
+    const headers = 'Authorization, Content-Type, x-izone-csrf, x-review-token, x-mini-test-sync, x-writing-test-sync, x-term2-permit, x-exam-journal-request-id';
+    const privatePretestAudio = req.path === '/api/term-tests/pretest-lesson-16/cbt-journey/audio';
+    res.set('Access-Control-Allow-Headers', privatePretestAudio ? headers + ', Range' : headers);
+    if (privatePretestAudio) res.set('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range');
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') return res.status(204).end();
     return next();
