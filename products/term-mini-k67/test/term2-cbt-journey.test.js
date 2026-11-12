@@ -193,7 +193,16 @@ for(const mode of ['lis_first','read_first'])test(`Term 2 offline L/R/W in order
     assert.deepEqual((await post('status',{section:'writing',operationId:writing.operationId})).body.receipt,sealed.body.receipt);
     assert.equal(journal.find(row=>row.submission.operationId===wrongPrevious.operationId).reason,'PREVIOUS_OPERATION_MISMATCH');
     assert.equal(journal.find(row=>row.submission.operationId===wrongCapture.operationId).reason,'AUTO_CAPTURE_NOT_AT_DEADLINE');
-    const observations=journal.filter(row=>row.submission.operationId===writing.operationId);
+    const writingEvents=journal.filter(row=>row.submission.operationId===writing.operationId);
+    const receiptReads=writingEvents.filter(row=>row.event==='offline_submission_receipt_read');
+    assert.equal(receiptReads.length,holdEnabled?2:1);
+    for(const read of receiptReads){
+      assert.equal(read.reason,'RECEIPT_READ');
+      assert.equal(read.submission.generation,scope.generation);
+      assert.equal(read.submission.capturedAtMs,writing.capturedAt);
+      assert.equal(read.submission.delivery,'cbt');
+    }
+    const observations=writingEvents.filter(row=>row.event!=='offline_submission_receipt_read');
     assert.deepEqual(observations.map(row=>row.reason).sort(),(holdEnabled?[
       'SERVER_BEFORE_DEADLINE','OFFLINE_CONFLICT','SUBMISSION_TRANSACTION_UNCONFIRMED',
       'SUBMISSION_TRANSACTION_UNCONFIRMED','RECEIPT_REPLAYED','RECEIPT_REPLAYED','OFFLINE_CONFLICT'

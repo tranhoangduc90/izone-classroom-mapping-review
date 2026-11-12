@@ -490,7 +490,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   })));
   if(profile.writing||profile.paper||profile.receiptStatus||lrHoldOptions)app.post(prefix+'/status',readLimiter,
     route(profile===mini?termStatus.extend({section:z.enum(['listening','reading'])}):termStatus,async(body,req)=>{
-    const {receipt,held,conflict}=await audioTransaction(pool,async db=>{
+    const {receipt,held,conflict,serverAtMs}=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
       const holdAllowed=body.section==='writing'?writingHoldAllowed:lrHoldAllowed;
@@ -500,8 +500,19 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const receipt=conflict?null:checkReceipt(existing,body.operationId,null,'Phần này đã nhận mã nộp khác.')||null;
       const held=!receipt&&canHold
         ? heldMetadata(await readSubmissionHold(db,submissionHoldKey(body)),state.now) : undefined;
-      return {receipt,held,conflict};
+      return {receipt,held,conflict,serverAtMs:clock(state.now)};
     });
+    if(receipt){
+      try {
+        observeSubmission?.('offline_submission_receipt_read',slug,body.examSessionToken,{
+          section:body.section,accepted:true,reason:'RECEIPT_READ',submission:{
+            operationId:receipt.operationId,generation:receipt.generation,capturedAtMs:receipt.capturedAt,
+            serverAtMs,policyVersion:receipt.version,delivery:profile.paper?'paper':'cbt',
+            interrupted:receipt.outcome==='interrupted'
+          }
+        });
+      } catch {}
+    }
     if(profile.writing&&body.section==='writing'&&receipt)writingAccepted?.(receipt.attemptToken);
     return {ok:true,persisted:Boolean(receipt),receipt,...held&&{held},...conflict&&{conflict:true}};
   }));
