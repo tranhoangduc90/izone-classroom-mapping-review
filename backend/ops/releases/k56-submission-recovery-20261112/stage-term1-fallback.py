@@ -14,14 +14,28 @@ def replace(source, before, after):
 
 
 def hold_store(source):
+    source = replace(source, "import { readFileSync } from 'node:fs';",
+                     "import { createHash } from 'node:crypto';\nimport { readFileSync } from 'node:fs';\n\n"
+                     "const attemptScopeHash = token => createHash('sha256').update('k56-hold:' + token).digest('hex');")
     source = replace(source, 'SELECT section, payload_hash, held_at, expires_at, payload IS NOT NULL AS has_payload,',
-                     "SELECT section, payload_hash, held_at, expires_at, payload IS NOT NULL AS has_payload,\n      payload->>'attemptToken' AS client_attempt_token,")
-    return replace(source, '''async function read(db, attemptId, operation) {
+                     "SELECT section, payload_hash, held_at, expires_at, payload IS NOT NULL AS has_payload,\n"
+                     "      payload->>'attemptScopeHash' AS client_scope_hash, payload->>'attemptToken' AS client_attempt_token,")
+    source = replace(source, '''async function read(db, attemptId, operation) {
     const row = await findHold(db, attemptId, operation);
     const held''', '''async function read(db, attemptId, operation, { clientAttemptToken } = {}) {
     const row = await findHold(db, attemptId, operation);
-    if (clientAttemptToken && row?.client_attempt_token !== clientAttemptToken) return;
+    if (clientAttemptToken) {
+      const matches = row?.client_scope_hash ? row.client_scope_hash === attemptScopeHash(clientAttemptToken)
+        : row?.client_attempt_token === clientAttemptToken;
+      if (!matches) return;
+    }
     const held''')
+    source = replace(source, '    const { ownerId, ...body } = operation;',
+                     '    const { ownerId, attemptToken, examSessionToken, ...body } = operation;\n'
+                     "    if (product === 'term1') body.attemptScopeHash = attemptScopeHash(attemptToken);")
+    return replace(source, '''      delete body.attemptToken;
+      delete body.examSessionToken;
+''', '')
 
 
 def fallback_routes(source):

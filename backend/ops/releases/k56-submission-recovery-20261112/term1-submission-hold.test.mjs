@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -39,6 +39,11 @@ async function setup(t, mode, options) {
 
 async function post(f, body) {
   return f.request('/offline/operation', body);
+}
+
+function storedSeal(seal) {
+  const { ownerId, attemptToken, examSessionToken, ...body } = seal;
+  return { ...body, attemptScopeHash: createHash('sha256').update('k56-hold:' + attemptToken).digest('hex') };
 }
 
 for (const mode of ['lis_first', 'read_first']) {
@@ -85,8 +90,7 @@ for (const mode of ['lis_first', 'read_first']) {
 
     const held = (await f.db.query(`SELECT payload FROM assessment.term1_submission_hold
       WHERE attempt_id=$1 AND payload IS NOT NULL`, [f.scope.attemptToken])).rows;
-    const { ownerId, ...expected } = stale;
-    assert.deepEqual(held, [{ payload: expected }]);
+    assert.deepEqual(held, [{ payload: storedSeal(stale) }]);
     assert.equal((await f.db.query(`SELECT count(*)::int AS n FROM assessment.term1_offline_operation
       WHERE operation_id=$1`, [stale.operationId])).rows[0].n, 0);
     assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n, 0);
@@ -265,9 +269,15 @@ async function verifyFallbackSeal(t, section) {
   assert.deepEqual(retained.held, rejected.held);
   const main = await f.request('/offline/status', { ...f.scope, operationId: seal.operationId });
   assert.equal(main.held, undefined);
-  const { ownerId: ignored, ...expected } = seal;
   assert.deepEqual((await f.db.query(`SELECT payload FROM assessment.term1_submission_hold
-    WHERE operation_id=$1`, [seal.operationId])).rows, [{ payload: expected }]);
+    WHERE operation_id=$1`, [seal.operationId])).rows, [{ payload: storedSeal(seal) }]);
+  if (section === 'reading') {
+    const { ownerId: ignored, ...legacy } = seal;
+    await f.db.query('UPDATE assessment.term1_submission_hold SET payload=$2::jsonb WHERE operation_id=$1',
+      [seal.operationId, JSON.stringify(legacy)]);
+    assert.deepEqual((await send('/offline/status', lookup)).held, retained.held);
+    assert.equal((await f.request('/offline/status', { ...f.scope, operationId: seal.operationId })).held, undefined);
+  }
   assert.deepEqual((await f.db.query('SELECT field FROM assessment.k56_portal_field_dispatch')).rows, []);
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job')).rows[0].n, 0);
   assert.equal((await send('/offline/operation', start)).receipt.status, 'accepted');
