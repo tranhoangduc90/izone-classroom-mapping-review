@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomBytes,createCipheriv,createHash} from 'node:crypto';
 import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
+import {createErpGradeSync} from '../src/erp-sync.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
@@ -139,6 +140,9 @@ const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbt
   ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
+const gradingRoundTrip=termHoldSlug==='term-test-2'&&Boolean(journalFixture)
+  &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
+const fixtureGradeRequests=[];
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
@@ -151,13 +155,18 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
     ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
     claimJobs:input=>writingGrading.claimJobs(input),
+    completeDispatch:input=>writingGrading.completeDispatch(input),
+    completeResult:input=>writingGrading.completeResult(input),
     getStatus:input=>writingGrading.getStatus(input)
   } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
-if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool});
+if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool,
+  syncErpGrades:gradingRoundTrip ? createErpGradeSync({config:{
+    erpSyncUrl:`http://127.0.0.1:${port}/preview/writing-portal`,erpSyncSecret:fakeWorkerKey,erpSyncTimeoutMs:5000
+  }}) : null});
 const sealClock=new AsyncLocalStorage();
 if (holdSlug) {
   const connect=fixture.pool.connect.bind(fixture.pool);
@@ -207,6 +216,24 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (gradingRoundTrip) {
+  outer.post('/preview/writing-portal',express.json(),(req,res)=>{
+    if(req.get('x-term-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
+    fixtureGradeRequests.push(req.body);
+    return res.json({ok:true,status:'synced',attemptToken:req.body.attemptToken});
+  });
+  outer.get('/preview/writing-portal',(_req,res)=>res.json(fixtureGradeRequests));
+  outer.post('/preview/writing-collect-due/:attempt',async(req,res)=>{
+    if(req.get('x-writing-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
+    const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    if(!uuid.test(req.params.attempt))return res.sendStatus(400);
+    // Advance only the synthetic collector delay. Keep leases and result writes on the real HTTP routes.
+    const updated=await fixture.db.query(`UPDATE assessment.term_test_writing_grading_job job
+      SET next_attempt_at=now() FROM assessment.term_test_writing_grading_run run
+      WHERE run.id=job.run_id AND run.attempt_id=$1 AND job.job_type='collect' AND job.status='retry_wait'`,[req.params.attempt]);
+    return res.json({jobs:updated.affectedRows});
+  });
+}
 if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
   const attempt=String(req.query.attempt||'');
   if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
