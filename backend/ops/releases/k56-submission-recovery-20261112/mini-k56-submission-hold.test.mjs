@@ -141,6 +141,15 @@ test('Mini quota is isolated per ERP class and a full hold quota still accepts v
   const start = {...seal, operationId: randomUUID(), kind:'start', revision:0,
     payload:{startedAt,deadlineAt:null,timeValid:true,answers:{}}};
   assert.equal((await f.request('operation', start)).receipt?.status, 'accepted');
+  const invalid = { ...seal, operationId: randomUUID(), payload: { ...seal.payload, timeValid: false } };
+  const review = await f.request('operation', invalid);
+  assert.equal(review.receipt?.status, 'review_required');
+  assert.equal(review.receipt?.reason, 'TIME_REVIEW_REQUIRED');
+  assert.equal(review.held, undefined);
+  const { rows: [recorded] } = await f.db.query(`SELECT payload,
+    (SELECT count(*)::int FROM assessment.k56_portal_field_dispatch) AS grades
+    FROM assessment.mini_k56_offline_operation WHERE operation_id=$1`, [invalid.operationId]);
+  assert.deepEqual(recorded, { payload: {}, grades: 0 });
   const accepted = await f.request('operation', {...seal, operationId:randomUUID()});
   assert.equal(accepted.receipt?.status, 'accepted');
 });

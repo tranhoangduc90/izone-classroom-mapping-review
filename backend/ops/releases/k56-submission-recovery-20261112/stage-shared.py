@@ -94,13 +94,14 @@ import {createSubmissionRecovery} from './k56-submission-recovery.mjs';""")
    let {a,run}=await admitted(client,b,req.get('x-term2-permit'));
    const previous=await previousReceipt(client,a,b,hash);
    if(previous)return {receipt:previous,a,replayed:true};
-   if(recovery.enabled(run))await recovery.assertIdentity(client,a.attempt_token,b,hash);""")
+   const recoveryEnabled=recovery.enabled(run);
+   if(recoveryEnabled)await recovery.assertIdentity(client,a.attempt_token,b,hash);""")
     replace("""   await client.query(tables('INSERT INTO assessment.term2_offline_operation(operation_id,attempt_id,payload_hash,section,kind,payload,receipt) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)'),[b.operationId,b.attemptToken,hash,b.section,b.kind,JSON.stringify(b),JSON.stringify(receipt)]);
    return {receipt,a:await load(client,SLUG,a.attempt_token)};
   });
   record('offline_operation_committed',SLUG,b.attemptToken,{section:b.section,operationId:b.operationId,receiptId:out.receipt.receiptId,phase:'after_commit',revision:b.revision,accepted:out.receipt.status==='accepted',reason:out.receipt.reason});""",
-            """   // For opted-in reviews the expiring hold is the only new copy of the sealed content.
-   await client.query(tables('INSERT INTO assessment.term2_offline_operation(operation_id,attempt_id,payload_hash,section,kind,payload,receipt) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)'),[b.operationId,a.attempt_token,hash,b.section,b.kind,JSON.stringify(review&&hold?{}:b),JSON.stringify(receipt)]);
+            """   // An opted-in review keeps content only in the expiring store, even if that store is full.
+   await client.query(tables('INSERT INTO assessment.term2_offline_operation(operation_id,attempt_id,payload_hash,section,kind,payload,receipt) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)'),[b.operationId,a.attempt_token,hash,b.section,b.kind,JSON.stringify(review&&recoveryEnabled?{}:b),JSON.stringify(receipt)]);
    if(!review&&hold)await recovery.clear(client,a.attempt_token,b);
    return {receipt,a:await load(client,SLUG,a.attempt_token)};
   });
