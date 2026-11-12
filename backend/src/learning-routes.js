@@ -898,7 +898,16 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
 
   router.use((error, _req, res, next) => {
     if (!(error instanceof LearningError) && !(error instanceof FormAuthoringError)) return next(error);
-    if(res.locals.sharedDraft)res.locals.sharedDraft.errorCode=error.code;
+    if(res.locals.sharedDraft){
+      res.locals.sharedDraft.errorCode=error.code;
+      if(error instanceof FormAuthoringError&&['DRAFT_ANSWER_REQUIRED','DRAFT_IMPORT_REVIEW_REQUIRED'].includes(error.code)){
+        const issues=error.issues.filter(issue=>['answer','importReview'].includes(issue.field)&&uuidSchema.safeParse(issue.itemVersionId).success);
+        if(issues.length){
+          res.locals.sharedDraft.answerIssueCount=issues.length;
+          res.locals.sharedDraft.answerIssues=issues.slice(0,20).map(({itemVersionId,field})=>({itemVersionId,field}));
+        }
+      }
+    }
     return res.status(error.httpStatus).json({ ok: false, error: error.code, message: error.message,
       ...(error instanceof FormAuthoringError?{issues:error.issues}:{}) });
   });

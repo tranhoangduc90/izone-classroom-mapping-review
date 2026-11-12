@@ -104,7 +104,11 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     async approve({id,expectedRevision,expectedHash,reviewer,libraryOnly=false}) {
       return withTransaction(pool,async client=>{
         const row=await reviewable(client,id,reviewer,{lock:true});
-        if(row.draft_scope==='izone'&&row.status!=='pending_review')throw fail('DRAFT_REVIEW_REQUIRED','Hãy gửi bản này duyệt trước.');
+        if(row.draft_scope==='izone'&&row.status!=='pending_review'){
+          const canApproveOwnDraft=row.status==='draft'&&row.owner_email.toLowerCase()===reviewer.email.toLowerCase()
+            &&(await sharedCourseCapabilities(client,reviewer.email)).selfApproveCourses.includes(row.public_definition.courseCode);
+          if(!canApproveOwnDraft)throw fail('DRAFT_REVIEW_REQUIRED','Hãy gửi bản này duyệt trước.');
+        }
         if(Number(row.revision)!==expectedRevision||row.content_hash!==expectedHash) throw fail('DRAFT_STALE','Nháp đã đổi sau khi mở bản duyệt.');
         if(row.status==='published') throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
         validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition,requireAnswers:true});

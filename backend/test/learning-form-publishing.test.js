@@ -10,12 +10,76 @@ import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {createLearningService} from '../src/learning-service.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningRouter} from '../src/learning-routes.js';
+import {importReviewContent} from '../src/learning-form-authoring.js';
 
 const owner={email:'owner@example.test',canAccessAllClasses:false},lead={email:'lead@example.test',canAccessAllClasses:false};
 function content() {
   const result=previewFormImport('type,prompt,options,answer\nmcq,"Chọn phương án đúng","[{""id"":""A"",""label"":""Đúng""},{""id"":""B"",""label"":""Sai""}]",A');
   assert.deepEqual(result.errors,[]);result.payload.definition.courseCode='ic23';return result.payload;
 }
+test('Kho chung: lead duyệt trực tiếp đúng bản của mình, chỉ rõ hai loại lỗi đáp án, xuất bản riêng',async()=>{
+  const db=new PGlite();
+  try {
+    await initializeLearningDemoDatabase(db);
+    for(const file of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql',
+      '202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql','202610280001_form_publications.sql',
+      '202610300001_worksheet_revisions.sql','202611090002_shared_course_drafts.sql'])
+      await db.exec(await readFile(new URL('../ops/learning-migrations/'+file,import.meta.url),'utf8'));
+    await db.exec(`INSERT INTO mapping.reviewer_account VALUES('owner@example.test','active'),('lead@example.test','active');
+      INSERT INTO learning.course_content_authority(reviewer_email,course_code,can_self_approve_scored_forms,grant_reference)
+        VALUES('owner@example.test','56',false,'Test fixture only'),('lead@example.test','56',true,'Test fixture only'),
+        ('lead@example.test','67',false,'Test fixture only');`);
+    const app=express(),events=[],pool=createPGlitePool(db);
+    app.use(express.json());
+    app.use('/api/learning',createLearningRouter({pool,logger:{info:line=>events.push(JSON.parse(line))},
+      authenticate(req,_res,next){req.reviewer=req.get('x-actor')==='owner'?owner:lead;next();}}));
+    const api=(method,path,actor='lead')=>request(app)[method]('/api/learning/teacher/form-drafts'+path).set('x-actor',actor);
+    const create=(payload,actor)=>api('post','',actor).send({...payload,scope:'izone',operationId:crypto.randomUUID()}).expect(201);
+    const approve=(draft,actor,overrides)=>api('post','/'+draft.id+'/approve',actor)
+      .send({expectedRevision:draft.revision,expectedHash:draft.contentHash,...overrides});
+    const valid=content();valid.definition.courseCode='56';
+    const {body:{draft:ready}}=await create(valid);
+    await approve(ready,'lead',{expectedHash:'0'.repeat(64)}).expect(409);
+    await approve(ready).expect(200);
+    const otherCourse=structuredClone(valid);otherCourse.definition.courseCode='67';
+    const {body:{draft:outOfScope}}=await create(otherCourse);
+    await approve(outOfScope).expect(409);
+    const {body:{draft:otherOwner}}=await create(valid,'owner');
+    await approve(otherOwner).expect(403);
+    await approve(otherOwner,'owner').expect(409);
+    await api('post','/'+otherOwner.id+'/request-review','owner').send({expectedRevision:1}).expect(200);
+    await approve(otherOwner).expect(200);
+
+    const payload=structuredClone(valid),block=payload.definition.blocks[0],confirmedItem=block.items[0];
+    block.title='Bài tập';confirmedItem.displayNumber='12';
+    const missing={...structuredClone(confirmedItem),itemVersionId:crypto.randomUUID(),itemFamilyId:crypto.randomUUID(),position:2,displayNumber:'14'};
+    block.items.push(missing);
+    payload.gradingKey.importReviews={[confirmedItem.itemVersionId]:{sourceLabel:'AI nhập câu nguồn 1',sourceQuote:'',
+      sourceKey:'',sourceHash:'0'.repeat(64),keyStatus:'missing',candidates:[],messages:[]}};
+    const {body:{draft}}=await create(payload);
+    const failure=await approve(draft).expect(400);
+    assert.equal(failure.body.error,'DRAFT_IMPORT_REVIEW_REQUIRED');
+    assert.deepEqual(failure.body.issues.map(({itemVersionId,field})=>[itemVersionId,field]),
+      [[confirmedItem.itemVersionId,'importReview'],[missing.itemVersionId,'answer']]);
+    assert.match(failure.body.issues[0].message,/Bài tập.*câu 12.*xác nhận/u);
+    assert.match(failure.body.issues[1].message,/Bài tập.*câu 14.*thiếu đáp án/u);
+    assert.deepEqual(events.find(event=>event.draftId===draft.id&&event.status===400).answerIssues,
+      [{itemVersionId:confirmedItem.itemVersionId,field:'importReview'},{itemVersionId:missing.itemVersionId,field:'answer'}]);
+    const {body:{draft:afterError}}=await api('get','/'+draft.id).expect(200);
+    assert.equal(afterError.status,'draft');assert.equal(afterError.revision,draft.revision);
+    const key=afterError.gradingKey,item=afterError.definition.blocks[0].items[0];
+    key.items[missing.itemVersionId]=structuredClone(key.items[item.itemVersionId]);
+    key.importReviews[item.itemVersionId].reviewedContent=importReviewContent(item,key);
+    const {body:{draft:saved}}=await api('put','/'+draft.id)
+      .send({expectedRevision:draft.revision,definition:afterError.definition,gradingKey:key}).expect(200);
+    await approve(draft).expect(409);
+    await approve(saved).expect(200);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM learning.form_publication')).rows[0].n,0);
+    const publish=await api('post','/'+saved.id+'/publish-library').send({expectedRevision:saved.revision,operationId:crypto.randomUUID()}).expect(201);
+    assert.ok(publish.body.publication.libraryEntryId);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM learning.form_assignment')).rows[0].n,0);
+  } finally {await db.close();}
+});
 test('P01–P04: quyền duyệt, khóa phiên bản, publish đồng thời/retry, trùng buổi và rollback nguyên tử',async()=>{
   const database=new PGlite();
   try {
