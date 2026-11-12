@@ -31,7 +31,7 @@ import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
 import {mountTeacherAudioRecovery} from './teacher-audio-recovery.js';
-import {mountTeacherSubmissionHoldExport} from './teacher-submission-hold.js';
+import {mountTeacherLrSubmissionHoldExport, mountTeacherSubmissionHoldExport} from './teacher-submission-hold.js';
 import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
@@ -1459,6 +1459,8 @@ export function createApp({
   mountTeacherSubmissionHoldExport(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth,
     reviewersByTest:{'term-test-1':config.term1HoldExportReviewers,'term-test-2':config.term2HoldExportReviewers},
     logEvent:logTermTestEvent});
+  mountTeacherLrSubmissionHoldExport(app,{pool,authenticate,requireContext,limiter:testReadLimiter,auth,
+    reviewers:config.lrHoldExportReviewers,logEvent:logTermTestEvent});
   mountTeacherAudioRecovery(app,{pool,authenticate,requireContext,limiter:testReadLimiter,
     readScope:(db,input,req)=>readTeacherSavedProgress(db,input,req.reviewer.email,auth.readAuthorization(req))});
   mountReadinessTeacher(readinessTeacherRoutes,{pool,config,authenticate,requireContext,limiter:testReadLimiter,auth});

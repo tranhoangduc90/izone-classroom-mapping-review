@@ -178,17 +178,15 @@ async function retainUncommittedSubmission(db, state, body, input, digest, key, 
     return held;
   }
   // A short separate transaction serializes quota allocation. It ends before business validation.
-  const classScoped = !key.lr;
-  const quotaScope = key.lr ? delivery : classScoped ? `writing.${state.session.erp_course_class_id}` : 'writing';
-  const quotaFilter = key.lr ? ' AND held.delivery=$3' : classScoped ? ' AND owner.erp_course_class_id=$3' : '';
-  const quotaArgs = [state.now, state.session.test_slug];
-  if (key.lr) quotaArgs.push(delivery);
-  else if (classScoped) quotaArgs.push(state.session.erp_course_class_id);
+  const classId = state.session.erp_course_class_id;
+  const quotaScope = `${key.lr ? delivery : 'writing'}.${classId}`;
+  const quotaArgs = [state.now, state.session.test_slug, classId, ...(key.lr ? [delivery] : [])];
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
     [`k67.${state.session.test_slug}.${quotaScope}.hold-quota`]);
   const count = (await db.query(`SELECT count(*)::int AS n FROM ${key.table} held
     JOIN assessment.term_test_exam_session owner ON owner.id=held.session_id
-    WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2${quotaFilter}`,
+    WHERE held.payload IS NOT NULL AND held.expires_at>$1 AND owner.test_slug=$2
+      AND owner.erp_course_class_id=$3${key.lr ? ' AND held.delivery=$4' : ''}`,
     quotaArgs)).rows[0].n;
   if (count >= limit) throw problem('OFFLINE_HOLD_FULL', 'Kho đối soát đang đầy. Hãy giữ bản trên thiết bị.',503);
   const expiresAt = new Date(clock(state.now) + hours * 3_600_000);

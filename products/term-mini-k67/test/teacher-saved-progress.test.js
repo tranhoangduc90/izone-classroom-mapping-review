@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import request from 'supertest';
 import {createApp} from '../src/app.js';
@@ -35,6 +36,91 @@ test('K67: giảng viên thấy Listening đã lưu trước khi có attempt, kh
   assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_attempt')).rows[0].n,0);
   const empty=await readTeacherSavedProgress(f.pool,{...input,student:emptyRef},email,authorization);assert.deepEqual(empty.attempts,[]);
  }finally{await f.db.close();}
+});
+
+test('K67: chỉ admin có cấu hình Nghe/Đọc xuất đúng bản giữ của sáu tuyến',async()=>{
+ const f=await fixture({term2CbtJourneyMode:'on',miniCbtJourneyMode:'on',miniPaperOffline:'on',
+   writingHold:{termCbtLrHoldHours:24,miniCbtLrHoldHours:24,miniPaperLrHoldHours:24}});
+ try{
+  const routes=['term-test-1','term-test-2','mini-test-lesson-5'];
+  await f.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+    SELECT tests.slug,'Đề giả',1,source.listening_definition,source.reading_definition,true
+    FROM assessment.test_definition source CROSS JOIN (VALUES ('term-test-1'),('term-test-2')) AS tests(slug)
+    WHERE source.slug='mini-test-lesson-5'`);
+  const held=[];
+  for (const [index,testSlug] of routes.entries()) for (const delivery of ['cbt','paper']) {
+   const miniPaper=testSlug==='mini-test-lesson-5'&&delivery==='paper';
+   const runId=randomUUID(),operationId=randomUUID(),deviceProof='a'.repeat(64);
+   const section=delivery==='paper'?'reading':'listening';
+   const scope={testSlug,classCode:'IC2304',studentRef:ref,generation:0,section,delivery,operationId};
+   const answers={14:'  Dòng giả giữ nguyên —  '};
+   await f.db.query(`INSERT INTO assessment.term_test_exam_session
+      (id,test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,student_name_snapshot,attempt_mode)
+      VALUES($1,$2,1,1293,'IC2304',$3,'Fixture',$4)`,[runId,testSlug,900100+index*2+(delivery==='paper'?1:0),
+       delivery==='paper'?'answer_sheet':'cbt']);
+   if (miniPaper) {
+    await f.db.query(`INSERT INTO assessment.mini_k67_paper_offline_run(session_id,student_ref,owner_id,generation)
+      VALUES($1,$2,$3,0)`,[runId,ref,randomUUID()]);
+   } else {
+    const table=testSlug==='mini-test-lesson-5'?'mini_k67_cbt_journey':'term_k67_cbt_journey';
+    await f.db.query(`INSERT INTO assessment.${table}(session_id,student_ref,generation,device_hash,audio_hash)
+      VALUES($1,$2,0,$3,$4)`,[runId,ref,deviceProof,delivery==='paper'?'paper':deviceProof]);
+   }
+   const date='2026-11-12T13:00:00.000Z';
+   const payload=miniPaper
+    ? {section,generation:0,operationId,kind:'seal',revision:2,dependency:null,occurredAt:date,
+       payload:{startedAt:date,deadlineAt:null,timeValid:true,answers,reason:'manual'}}
+    : {section,generation:0,operationId,revision:2,previousOperationId:null,startedAt:1000,capturedAt:2000,
+       automatic:false,eofAt:null,heardSeconds:0,answers};
+   await f.db.query(`INSERT INTO assessment.term_k67_lr_submission_hold
+      (session_id,generation,section,delivery,operation_id,payload_hash,payload,held_at,expires_at)
+      VALUES($1,0,$2,$3,$4,$5,$6,now(),now()+interval '24 hours')`,
+    [runId,section,delivery,operationId,'b'.repeat(64),{...payload,deviceProof,examSessionToken:runId,ownerId:runId}]);
+   held.push({scope,answers});
+  }
+  const audit=[];
+  const makeApp=lrHoldExportReviewers=>createApp({pool:f.pool,
+   config:{authMode:'google',lrHoldExportReviewers,term2HoldExportReviewers:new Set([email]),allowedOrigins:new Set()},
+   logger:{info:line=>audit.push(line),error:()=>{}},
+   verifyGoogleToken:()=>({email,sub:authorization.googleSubject,email_verified:true})});
+  const app=makeApp(new Set([email]));
+  const url='/api/term-tests/teacher/lr-submission-hold/export';
+  const send=(body,target=app)=>request(target).post(url).set('Authorization','Bearer synthetic-reviewer-token').send(body);
+  const {scope}=held[0];
+  await request(app).post(url).send(scope).expect(401);
+  await send(scope,makeApp(new Set())).expect(404);
+  await send({...scope,testSlug:'pretest-lesson-16'}).expect(400);
+  await send(scope).expect(404);
+  await f.db.query("UPDATE mapping.reviewer_account SET role='admin' WHERE email=$1",[email]);
+  for (const change of [{classCode:'IC2305'},{studentRef:emptyRef},{generation:1},
+    {operationId:randomUUID()},{delivery:'paper'},{section:'reading'},{testSlug:'term-test-2'}]) {
+   await send({...scope,...change}).expect(404);
+  }
+  for (const {scope,answers} of held) {
+   const response=await send(scope).expect(200);
+   assert.equal(response.body.delivery,scope.delivery);
+   assert.equal(response.body.section,scope.section);
+   assert.equal(response.body.operationId,scope.operationId);
+   assert.deepEqual(response.body.answers,answers);
+   assert.equal(response.body.payloadHash,'b'.repeat(64));
+   assert.match(response.headers['cache-control'],/no-store/);
+   assert.doesNotMatch(JSON.stringify(response.body),/deviceProof|examSessionToken|ownerId/);
+  }
+  await send(scope,makeApp(new Set(['other@fixture.test']))).expect(403);
+  await f.db.query("UPDATE mapping.reviewer_account SET status='inactive' WHERE email=$1",[email]);
+  const revoked=await send(scope);
+  assert.ok([401,403,404].includes(revoked.status));
+  assert.equal(revoked.body.answers,undefined);
+  await f.db.query("UPDATE mapping.reviewer_account SET status='active' WHERE email=$1",[email]);
+  await f.db.query(`UPDATE assessment.term_k67_lr_submission_hold
+    SET held_at=now()-interval '2 hours',expires_at=now()-interval '1 hour' WHERE operation_id=$1`,[scope.operationId]);
+  await send(scope).expect(404);
+  assert.equal((await f.db.query('SELECT count(*)::int AS n FROM assessment.term_test_attempt')).rows[0].n,0);
+  const exports=audit.map(line=>JSON.parse(line)).filter(event=>event.event==='submission_hold_exported');
+  assert.equal(exports.length,6);
+  assert.deepEqual(new Set(exports.map(event=>event.operationId)),new Set(held.map(row=>row.scope.operationId)));
+  assert.doesNotMatch(JSON.stringify(exports),/Dòng giả|examSessionToken|deviceProof|teacher@fixture/);
+ } finally { await f.db.close(); }
 });
 
 test('K67: Reading trước và Writing chưa nộp đọc đúng snapshot; quyền bị rút có hiệu lực ngay',async()=>{

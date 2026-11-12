@@ -12,6 +12,13 @@ Dùng Node 24.15.0 và dependency trong package-lock. `npm ci --ignore-scripts` 
 
 Tất cả cấu hình ứng dụng dùng tiền tố `K67_`. Database phải tên `term_mini_k67`, role ứng dụng `k67_app`, đường API `/term-mini-k67-api`. Cấu hình thiếu/sai làm khởi động dừng và nêu tên trường lỗi. Không đưa giá trị khóa hoặc URL chứa mật khẩu vào Git.
 
+## Đối soát bài Nghe và Đọc đã chốt
+
+Hạn mức bản giữ tính theo lớp ERP, bài và hình thức thi. Nghe và Đọc dùng chung hạn mức của cùng hình thức. Cấu hình thời hạn, hạn mức, danh sách lớp của mỗi đường thi và danh sách tài khoản xuất trước khi cấp quyền lưu bài thật.
+Khi cần dừng cấp mới, để danh sách lớp rỗng và giữ thời hạn, hạn mức, quyền xuất cho các lượt đã được cấp.
+
+`K67_LR_HOLD_EXPORT_REVIEWERS` là danh sách email riêng cho Nghe và Đọc, mặc định rỗng. `POST /api/term-tests/teacher/lr-submission-hold/export` nhận JSON gồm `testSlug`, `classCode`, `studentRef`, `generation`, `operationId`, `section` và `delivery`. Máy chủ kiểm phiên giáo viên, quyền admin hiện hành và đúng lớp, bài, lượt, phần thi, hình thức. Phản hồi chỉ chứa bản còn hạn, giữ nguyên đáp án đã lưu, kèm giờ chốt và dấu vân tay. Nhật ký xuất chỉ ghi thông tin đối soát. Đường xuất Writing tiếp tục dùng cấu hình riêng.
+
 ## Phạm vi nghiệm thu
 
 K67 đã chuyển sang runtime, PostgreSQL, Redis, cấu hình và bộ workflow riêng. Chín trang đã phát hành cấu hình mới; đường bài thi cũ vẫn dẫn tới K67 để giữ tương thích. K56 tiếp tục chạy trên runtime/tuyến hiện có. Dữ liệu lớp/quyền được đồng bộ qua API đọc giới hạn; ứng dụng K67 không đọc DB chung.
