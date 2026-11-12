@@ -43,3 +43,26 @@ lúc cấp. Dừng cấp mới bằng cách để trống danh sách lớp. Gi�
 và cấu hình chạy dọn cho đến khi hết lượt được cấp và cửa sổ giữ đã đóng.
 Kho giữ chỉ bao phủ seal được cấp qua bài chính ở lát này. Link dự phòng,
 các bài khác và đối soát lớp thí điểm có ca riêng trong kế hoạch.
+
+## Term 2 và Mini K56
+
+- Dựng ứng viên Term 1 mới với nguồn Exam Journal hiện tại trước, rồi đưa
+  thư mục đó cho stage-shared.py làm đầu vào. Script kiểm SHA-256 của
+  k56-offline-core.mjs trước khi ghép phần giữ bản cho Term 2 và Mini.
+  Giữ permit, operation, quy tắc giờ, điểm và luồng Listening hiện có.
+- Hai migration riêng thêm kho giữ và giới hạn gắn với lượt. Term 2 dùng
+  nhóm K56_TERM2_HOLD_CLASSES/HOURS/LIMIT. Mini dùng nhóm K56_MINI_HOLD_CLASSES/HOURS/LIMIT
+  và cần K56_MINI_HOLD_PAPER=true để cấp mới cho phiếu. CBT và phiếu Mini
+  dùng chung quota kho Mini. Có thể dừng cấp mới bằng cách bỏ lớp và giữ
+  thời hạn, quota, quyền tra cùng tiến trình dọn bản hết hạn.
+- Với lượt được cấp, seal cần đối soát vì giờ hoặc quy tắc phiếu có biên
+  nhận review_required cũ để trình đọc hiểu trạng thái. Nội dung chỉ nằm
+  trong kho có thời hạn. Gửi hợp lệ vẫn ghi dữ liệu native và biên nhận
+  chính thức. Term 2 bài trắng 0, Mini bài trắng không có điểm Writing.
+- Đặt TERM2_RUNTIME_ROOT và MINI_RUNTIME_ROOT trỏ ứng viên, TERM2_DEPS_PACKAGE
+  trỏ package cách ly, TERM2_TEST_PG_URL rỗng. Chạy term2-submission-hold.test.mjs
+  và mini-k56-submission-hold.test.mjs. Pages chạy bộ K56 term với
+  K56_RECOVERY_BROWSER_TERM=2 và K56_RECOVERY_MIGRATION trỏ migration Term 2.
+  Bộ Mini cần K56_MINI_FIXTURE_FILE trỏ test.mjs của gói Mini 20261107 và
+  K56_MINI_RECOVERY_MIGRATION trỏ migration Mini. Cả hai dùng Collector
+  localhost và dữ liệu giả.

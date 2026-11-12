@@ -196,11 +196,11 @@ def stage_journal(source):
     if source.count(owner) != 1 or source.count(state) != 1:
         raise ValueError('Unexpected mounted K56 Writing job adapter')
     source = source.replace(owner, owner + chr(10)
-                            + "        Object.assign(owner, await term1WritingReceipt(query, productId, schema, owner));")
+                            + "        Object.assign(owner, await k56WritingReceipt(query, productId, schema, owner));")
     source = source.replace(state, state + chr(10)
                             + "  if (row.submission_receipt_id) Object.assign(state,{submissionOperationId:row.submission_operation_id,"
                             + "submissionReceiptId:row.submission_receipt_id});")
-    return "import { k56OfflineObservation, term1WritingReceipt } from './term-k56-offline.mjs';" + chr(10) + source.replace(
+    return "import { k56OfflineObservation, k56WritingReceipt } from './term-k56-offline.mjs';" + chr(10) + source.replace(
         old, "    const k56Offline = k56OfflineObservation(event, testSlug, details);" + chr(10)
         + "    if (k56Offline) data.checkpointState = k56Offline;")
 

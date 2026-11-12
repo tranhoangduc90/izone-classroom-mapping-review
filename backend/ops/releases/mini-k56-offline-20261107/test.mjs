@@ -16,9 +16,8 @@ const {schema,registerMiniOffline}=await import(pathToFileURL(runtime+'/src/mini
 const {createTermTestWritingGradingService}=await import(pathToFileURL(runtime+'/src/term-test-writing-grading.js'));
 const slug='mini-test-k56';
 const timing={listeningDurationSeconds:446,listeningReviewSeconds:0,readingDurationMinutes:25,writingDurationMinutes:15};
-const content={writing:{tasks:[{id:'task2',prompt:'Fixture prompt'}]}};
-
-async function fixture(mode,paper,{listeningInterruption=false}={}){
+export async function fixture(mode,paper,{listeningInterruption=false,realtime=false,mountJournal,dropResponse,record=()=>{}}={}){
+ const content={writing:{tasks:[{id:'task2',prompt:'Fixture prompt'}]}};
  const db=new PGlite(),pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})};
  await db.exec(`CREATE SCHEMA assessment;
  CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY,test_slug text,exam_session_id uuid,generation int DEFAULT 0,
@@ -56,7 +55,7 @@ async function fixture(mode,paper,{listeningInterruption=false}={}){
   const result=await client.query(`SELECT a.*,a.id::text AS attempt_token,a.exam_session_id::text AS exam_session_token,
   a.erp_course_class_id::text AS class_id,a.erp_student_contact_id::text AS student_id,s.generation AS session_generation,
   s.listening_started_at FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id WHERE a.id=$1`,[id]);
-  return {...result.rows[0],server_now:new Date(now).toISOString(),definition_version:1,test_title:'Fixture Mini',score_mode:'raw',
+  return {...result.rows[0],server_now:clock(),definition_version:1,test_title:'Fixture Mini',score_mode:'raw',
    listening_definition:definition(10),reading_definition:definition(13),listening_band_adjustment:0,mini_definition_snapshot:{content,timing}};
  };
  const transaction=async work=>{
@@ -65,9 +64,20 @@ async function fixture(mode,paper,{listeningInterruption=false}={}){
   catch(error){await db.query('ROLLBACK');throw error;}
  };
  const app=express(),router=express.Router(),grader=createTermTestWritingGradingService({pool});
- app.use(express.json());app.use('/api/term-tests',router);
+ app.use(express.json());
+ const journal=mountJournal?.(app,{pool,config:{allowedOrigins:[]}});
+ if(dropResponse)app.use((req,res,next)=>{
+  const json=res.json;
+  res.json=function(body){
+   if(dropResponse(req.body,body)){this.destroy();return this;}
+   return json.call(this,body);
+  };
+  next();
+ });
+ app.use('/api/term-tests',router);
  app.use((error,_req,res,_next)=>res.status(500).json({ok:false,error:error.code||error.message}));
  let now=Date.now(),writingCalls=0;
+ const clock=()=>new Date(realtime?Date.now():now).toISOString();
  const ensure=(task2)=>grader.ensureSubmission({attemptToken:a,testSlug:slug,task2,taskDefinitions:content.writing.tasks});
  const stop=registerMiniOffline(router,{pool,secret:'fixture-secret-do-not-use-in-production'.repeat(2),
   assets:{getSessionAudioKey:()=>Buffer.alloc(32)},load,transaction,
@@ -76,13 +86,15 @@ async function fixture(mode,paper,{listeningInterruption=false}={}){
    return load(pool,testSlug,body.attemptToken);
   },
   serialize:row=>({ok:true,attemptToken:row.attempt_token,examSessionToken:row.exam_session_token,generation:0,examMode:mode,attemptMode:delivery}),
-  resultFor:row=>({listening:row.listening_result,reading:row.reading_result}),limiter:(_req,_res,next)=>next(),record(){},
+  resultFor:row=>({listening:row.listening_result,reading:row.reading_result}),limiter:(_req,_res,next)=>next(),
+  record(...args){journal?.business(...args);record(...args);},
   onWriting:async row=>{writingCalls++;await ensure(row.writing_task_2);}});
  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+ const base='http://127.0.0.1:'+server.address().port+'/api/term-tests/'+slug;
  const scope={attemptToken:a,examSessionToken:s,generation:0,ownerId:owner};
  let permit='';
  const request=async(path,body)=>{
-  const response=await fetch(`http://127.0.0.1:${server.address().port}/api/term-tests/${slug}/offline/${path}`,
+  const response=await fetch(`${base}/offline/${path}`,
    {method:'POST',headers:{'content-type':'application/json','x-term2-permit':permit},body:JSON.stringify(body)});
   return {status:response.status,...await response.json()};
  };
@@ -91,10 +103,11 @@ async function fixture(mode,paper,{listeningInterruption=false}={}){
   if(result.offline)permit=result.offline.permit;
   return result;
  };
- return {db,a,scope,request,prepare,ensure,advance:ms=>{now+=ms;},clock:()=>new Date(now).toISOString(),
+ return {base,db,a,s,student,scope,request,prepare,ensure,load,pool,content,advance:ms=>{now+=ms;},clock,
   writingCalls:()=>writingCalls,close:async()=>{stop();await new Promise(resolve=>server.close(resolve));await db.close();}};
 }
 
+if(!process.env.K56_MINI_FIXTURE_IMPORT_ONLY){
 test('Mini rollout separates modes and class scope; disabling keeps issued permits readable',async()=>{
  const folder=await mkdtemp(join(tmpdir(),'mini-k56-flags-'));
  const file=join(folder,'config.json');
@@ -217,4 +230,5 @@ for(const paper of [true,false])for(const mode of ['lis_first','read_first']){
    assert.deepEqual((await f.db.query('SELECT field FROM assessment.k56_portal_field_dispatch ORDER BY field')).rows,[{field:'listening'},{field:'reading'}]);
   }finally{await f.close();}
  });
+}
 }
