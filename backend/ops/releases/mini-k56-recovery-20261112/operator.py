@@ -8,6 +8,7 @@ import runpy
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path('/opt/izone-mini-k56-recovery-20261112')
@@ -225,7 +226,13 @@ def scope(mode):
         check_idle(sql)
         must(json.loads(SCOPE.read_text())=={'classes':[]},'K56_SCOPE_ALREADY_OPEN')
     target={'classes':None if mode=='enable' else []}
-    atomic(SCOPE,json.dumps(target).encode(),0o644)
+    with tempfile.NamedTemporaryFile(prefix='.scope-',dir=SCOPE.parent,delete=False) as staged:
+        staged.write(json.dumps(target).encode())
+        staged.flush()
+        os.fsync(staged.fileno())
+        # The operator's 077 umask is for backups. The container runs as a separate user.
+        os.fchmod(staged.fileno(),0o644)
+    os.replace(staged.name,SCOPE)
     shown=cmd('docker','exec',API,'node','-e',
       "process.stdout.write(require('fs').readFileSync(process.env.K56_MINI_HOLD_CLASSES_FILE,'utf8'))")
     must(json.loads(shown)==target,'K56_SCOPE_READBACK_MISMATCH')
