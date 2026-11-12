@@ -86,3 +86,22 @@ các bài khác và đối soát lớp thí điểm có ca riêng trong kế ho�
   đã dựng và TERM2_DEPS_PACKAGE trỏ package cách ly. Kiểm browser
   k56-term-online-recovery-browser.mjs dùng K56_ONLINE_FIXTURE trỏ file
   test native trên cùng ứng viên và các biến Collector thử đã nêu trên.
+
+### Writing trên đường thi máy tương thích
+
+- stage-online-writing.py nhận ứng viên của stage-online.py, file app.js
+  đọc từ đúng runtime VPS1 và một thư mục đích mới. Dấu vân tay app.js,
+  router và các module chấm được kiểm trước khi dựng. Áp dụng
+  term-online-writing.sql sau migration kho Nghe/Đọc. Gói adapter Exam
+  Journal cần đồng bộ term.mjs và term-k56-offline.mjs. Nếu trình đọc
+  dùng role riêng, kiểm khả năng đọc liên kết biên nhận và lượt bằng role đó.
+- Bootstrap chỉ xin capability sau khi xác định đang đi đường tương
+  thích. Term 1 nhận Task 2, Term 2 nhận Task 1. API kiểm định danh và giữ
+  bản đã chốt trước khi kiểm CAS và đồng hồ. Giữ bản chính thức, biên nhận
+  và đúng một việc chấm hoặc điểm 0 bài trắng trong cùng giao dịch. Hết
+  hạn theo SQL cũ vẫn chốt bản nháp có sẵn. Khi bản đó khác bản gửi,
+  API trả mã đối soát và trình tra chỉ gắn biên nhận với bản được nhận.
+- Chạy term-online-writing.test.mjs với cùng package cách ly. Bộ Edge
+  k56-term-online-writing-browser.mjs dùng K56_WRITING_FIXTURE trỏ file
+  test đó và Collector localhost. Test cắt kết nối sau commit để xác
+  minh lần đọc lại và kiểm số việc chấm trực tiếp trong kho.

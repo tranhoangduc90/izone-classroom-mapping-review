@@ -15,7 +15,7 @@ const { findStudentForTermTestSql } = await import(pathToFileURL(runtime + '/src
 const { mountSubmissionStatus } = await import(pathToFileURL(runtime + '/src/submission-status.mjs'));
 const migration = await readFile(new URL('./term-online-submission-hold.sql', import.meta.url), 'utf8');
 
-export async function fixture(t, term, mode, { mountJournal, enabled = true } = {}) {
+export async function fixture(t, term, mode, { mountJournal, enabled = true, writing = false } = {}) {
   const db = new PGlite();
   t.after(() => db.close());
   await db.exec(`CREATE SCHEMA assessment;
@@ -59,13 +59,40 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true } = 
       attempt_id uuid, field text, grade numeric, status text, PRIMARY KEY(attempt_id,field)
     );`);
   await db.exec(migration);
+  if (writing) {
+    await db.exec(`ALTER TABLE assessment.term_test_attempt
+      ADD COLUMN writing_outline text NOT NULL DEFAULT '',
+      ADD COLUMN writing_task_1 text NOT NULL DEFAULT '',
+      ADD COLUMN writing_task_2 text NOT NULL DEFAULT '',
+      ADD COLUMN writing_draft_revision bigint NOT NULL DEFAULT 0,
+      ADD COLUMN writing_updated_at timestamptz;
+    ALTER TABLE assessment.term1_offline_run ADD COLUMN policy text, ADD COLUMN session_id uuid;
+    ALTER TABLE assessment.term2_offline_run ADD COLUMN policy text;
+    CREATE TABLE assessment.term1_offline_operation (
+      attempt_id uuid, operation_id uuid, section text, kind text, receipt jsonb
+    );
+    CREATE TABLE assessment.term_test_writing_grading_run (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(), attempt_id uuid, task_number int, grading_version int, run_key text,
+      prompt_text text, prompt_image_url text, essay_text text, word_count int, status text, task_score numeric,
+      result_json jsonb, completed_at timestamptz, UNIQUE (attempt_id, task_number, grading_version)
+    );
+    CREATE TABLE assessment.term_test_writing_grading_final (
+      attempt_id uuid PRIMARY KEY, grading_version int, task_1_run_id uuid, task_2_run_id uuid,
+      task_1_score numeric, task_2_score numeric, writing_score numeric, status text, ready_at timestamptz
+    );
+    CREATE TABLE assessment.term_test_writing_grading_job (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(), run_id uuid, job_type text, idempotency_key text UNIQUE,
+      status text, max_attempts int, next_attempt_at timestamptz
+    );`);
+    await db.exec(await readFile(new URL('./term-online-writing.sql', import.meta.url), 'utf8'));
+  }
   const slug = 'term-test-' + term + '-k56';
   const scope = { attemptToken: randomUUID(), examSessionToken: randomUUID(), studentRef: randomUUID(),
     classCode: 'FIXTURE56', generation: 0 };
   const questions = total => ({ questions: Array.from({ length: total }, (_, i) => ({ number: i + 1,
     type: 'completion', accepted: ['A'] })) });
   const snapshot = { version: 1, title: 'Synthetic Term', listening: questions(40), reading: questions(term === 1 ? 26 : 40),
-    listeningBandAdjustment: 0 };
+    listeningBandAdjustment: 0, ...(writing ? { timing: { writingDurationMinutes: 45 } } : {}) };
   if (term === 1) snapshot.listening.questions[31] = {
     number: 32, type: 'completion', compound: { keys: ['32a', '32b'], accepted: { '32a': ['A'], '32b': ['B'] } }
   };
@@ -79,7 +106,7 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true } = 
     VALUES($1,$2,$3,now(),now()+interval '1 hour')`, [scope.examSessionToken, scope.attemptToken, slug]);
   await db.query('INSERT INTO assessment.term_test_roster VALUES($1,5601,5602,$2,$3)', [slug, scope.studentRef, scope.classCode]);
 
-  const fault = { receipt: false, drop: null, logger: false };
+  const fault = { receipt: false, drop: null, logger: false, grade: false };
   const portal = [];
   const observations = [];
   const query = async (sql, params) => {
@@ -90,10 +117,28 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true } = 
     }
     if (fault.receipt && sql.startsWith('UPDATE assessment.term_online_submission_hold SET receipt='))
       throw Error('Synthetic failure before receipt commit');
+    if (fault.grade && sql.includes('INSERT INTO assessment.term_test_writing_grading_job'))
+      throw Error('Synthetic failure before job commit');
     const result = await db.query(sql, params);
     return { ...result, rowCount: result.rows.length || result.affectedRows || 0 };
   };
   const pool = { query, async connect() { return { query, release() {} }; } };
+  let writingOptions = {};
+  const content = {};
+  if (writing) {
+    const { createTermTestWritingGradingService } = await import(pathToFileURL(runtime + '/src/term-test-writing-grading.js'));
+    const service = createTermTestWritingGradingService({ pool });
+    const serialize = (row, grading) => ({ task1: row.writing_task_1, task2: row.writing_task_2, outline: row.writing_outline,
+      revision: Number(row.writing_draft_revision), submitted: Boolean(row.writing_submitted_at), grading });
+    writingOptions = {
+      assets: { getContent: async () => content, getTiming: () => snapshot.timing },
+      serializeOnlineWriting: serialize,
+      readOnlineWriting: async (client, row) => ({ ok: true, writing: serialize(row, await service.getStatus(row.attempt_token, client)) }),
+      onWriting: (row, executor, options) => service.ensureSubmission({ attemptToken: row.attempt_token,
+        testSlug: row.test_slug, task1: row.writing_task_1, task2: row.writing_task_2,
+        taskDefinitions: [{ id: term === 1 ? 'task2' : 'task1', prompt: 'Synthetic prompt' }] }, executor, options)
+    };
+  }
   const app = express();
   app.use(express.json());
   const adapter = mountJournal?.(app, { pool, config: { allowedOrigins: [] } });
@@ -114,7 +159,7 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true } = 
   Object.assign(process.env, { K56_TERM_ONLINE_HOLD_CLASSES: enabled ? scope.classCode : '',
     K56_TERM_ONLINE_HOLD_HOURS: '2', K56_TERM_ONLINE_HOLD_LIMIT: '8' });
   try {
-    registerK56ExamOrder(app, { pool, profile: { family: 'k56' }, limiter,
+    registerK56ExamOrder(app, { pool, profile: { family: 'k56' }, limiter, ...writingOptions,
       requestPortalSync: async (_attempt, result) => { portal.push(result); return 'pending'; },
       onJournalEvent: (...event) => {
         if (fault.logger) throw Error('Synthetic logger outage');
@@ -148,7 +193,8 @@ export async function fixture(t, term, mode, { mountJournal, enabled = true } = 
   const status = (section, body, options = {}) => request('submission-recovery/status', {
     ...scope, section, operationId: body.recovery.operationId, ...options
   });
-  return { db, pool, base, scope, slug, fault, observations, portal, request, prepare, op, status,
+  return { db, pool, base, scope, slug, fault, observations, portal, request, prepare, op, status, content,
+    rerunGrading: row => writingOptions.onWriting?.(row),
     a: scope.attemptToken, s: scope.examSessionToken, student: scope.studentRef };
 }
 
