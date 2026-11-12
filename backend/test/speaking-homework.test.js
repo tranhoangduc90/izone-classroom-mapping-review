@@ -400,12 +400,13 @@ test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học v
       VALUES ('67', 's-v', 'Hòa hợp Chủ ngữ - Vị ngữ (S-V)', 'https://example.test/s-v') RETURNING id`);
     const messagesByUrl = new Map();
     const lessonParts = ['clarify_1', 'clarify_2', 'clarify_3', 'freestyle'];
+    const feedback='Chủ ngữ **I** đi với\t**go**, không dùng goes.';
     for (let index = 0; index < lessonParts.length; index++) {
       const letter = 'cdef'[index];
       const messages = [
         { role: 'assistant', text: `Hỏi câu ${index + 1}` },
         { role: 'user', text: `I goes to school ${index + 1}` },
-        { role: 'assistant', text: 'Chủ ngữ I đi với go, không dùng goes.' },
+        { role: 'assistant', text: feedback },
       ];
       const fp = crypto.createHash('sha256').update(messages.map(message =>
         `${message.role}\u0000${message.text.trim()}`).join('\u0001')).digest('hex');
@@ -418,10 +419,15 @@ test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học v
     assert.equal(job.receipt_id, receipt.id);
     const result = await runSpeakingDoctorJob(service, job, {
       readShare: async url => ({ messages: messagesByUrl.get(url) }),
-      analyze: async (part, _conversation, catalog) => part === 'clarify_1' || part === 'freestyle'
-        ? [{ part, exerciseId: catalog.exercises[0].id, evidenceMessage: 3,
-          evidenceQuote: 'Chủ ngữ I đi với go', reason: 'Lỗi hòa hợp chủ ngữ và động từ.' }]
-        : [],
+      analyze: async (part, conversation, catalog) => analyzeDoctorConversation(part,conversation,catalog,
+        'https://example.test/doctor',async(_url,options)=>{
+          const prompt=JSON.parse(options.body).prompt;
+          const [,evidenceRef]=prompt.match(/\[(E[a-f0-9]{16}\.\d+)\] Chủ ngữ/);
+          const matches=part==='clarify_1'||part==='freestyle'
+            ? [{exerciseNumber:1,evidenceRef,reason:'Lỗi hòa hợp chủ ngữ và động từ.'}]
+            : [];
+          return Response.json({text:JSON.stringify({confidence:0.9,matches})});
+        }),
     });
     assert.equal(result.exerciseCount, 1);
     const rows = await pool.query(`SELECT r.recommendation_count, r.waiting, r.student_ref,
@@ -434,6 +440,7 @@ test('Lesson 3 phân tích bốn link, ghi danh sách Bác sĩ AI đúng học v
     assert.equal(rows.rows[0].waiting, true);
     assert.equal(rows.rows[0].student_ref, secondStudentRef);
     assert.equal(rows.rows[0].matches.length, 2);
+    assert.ok(rows.rows[0].matches.every(match=>match.evidenceMessage===3&&match.evidenceQuote===feedback));
     assert.equal(rows.rows[0].status, 'done');
     assert.equal((await service.listDoctor({ accessToken: secondToken,
       studentRef: secondStudentRef })).neededCount, 1);
@@ -551,9 +558,11 @@ test('AI Bác sĩ chỉ nhận ID trong danh mục và trích dẫn đúng lời
     { role: 'user', text: 'I goes to school' },
     { role: 'assistant', text: 'Chủ ngữ I đi với go, không dùng goes.' },
   ] };
-  const call = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
-    matches: [{ exerciseNumber: 1, evidenceMessage: 2,
-      evidenceQuote: 'Chủ ngữ I đi với go', reason: 'S-V' }] }) }; } });
+  const call = async (_url,options) => {
+    const prompt=JSON.parse(options.body).prompt;
+    const [,evidenceRef]=prompt.match(/\[(E[a-f0-9]{16}\.1)\] Chủ ngữ/);
+    return Response.json({text:JSON.stringify({confidence:0.9,matches:[{exerciseNumber:1,evidenceRef,reason:'S-V'}]})});
+  };
   assert.equal((await analyzeDoctorConversation('freestyle', conversation, catalog,
     'https://example.test/ai', call)).length, 1);
   const forged = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
@@ -561,13 +570,10 @@ test('AI Bác sĩ chỉ nhận ID trong danh mục và trích dẫn đúng lời
       evidenceQuote: 'Chủ ngữ I đi với go', reason: 'S-V' }] }) }; } });
   await assert.rejects(analyzeDoctorConversation('freestyle', conversation, catalog,
     'https://example.test/ai', forged), /DOCTOR_AI_EVIDENCE_INVALID/);
-  const markdownCall = async () => ({ ok: true, async json() { return { text: JSON.stringify({ confidence: 0.9,
-    matches: [{ exerciseNumber: 1, evidenceMessage: 2,
-      evidenceQuote: 'Chủ ngữ I đi với go, không dùng goes', reason: 'S-V' }] }) }; } });
   const markdownConversation = { messages: [conversation.messages[0],
     { role: 'assistant', text: 'Chủ ngữ **I** đi với **go**, không dùng goes.' }] };
   const adapted = await analyzeDoctorConversation('freestyle', markdownConversation, catalog,
-    'https://example.test/ai', markdownCall);
+    'https://example.test/ai', call);
   assert.ok(markdownConversation.messages[1].text.includes(adapted[0].evidenceQuote));
 });
 

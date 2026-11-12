@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {bindFixtureReferences} from '../test-support/speaking-reference-fixture.js';
 import {checkSubmission} from '../src/speaking-checker.js';
 import {speakingCopyUrl} from '../src/speaking-classroom-copies.js';
 import {progressPayload} from '../src/speaking-progress-docs.js';
@@ -79,7 +80,8 @@ test('object_function: resolves source references, repairs a mismatched referenc
       const candidate=prompts.length===1
         ? [{...evidence[0],questionText:'@m2.s1'},...evidence.slice(1)]
         : evidence;
-      return Response.json({text:JSON.stringify({confidence:0.95,rounds:[{evidence:candidate}]})});
+      const analysis={confidence:0.95,rounds:[{evidence:candidate}]};
+      return Response.json({text:JSON.stringify(bindFixtureReferences(analysis,prompts.at(-1)))});
     });
     try {
       const r=await checkSubmission({section:'object_function',url,minimum:1},{

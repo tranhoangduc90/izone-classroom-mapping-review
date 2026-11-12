@@ -21,10 +21,10 @@ async function analyzeStoryOutcome(messages) {
       'guided: chatbot cho Kết Quả và Bài Học; học viên tự nêu Cầu Nối Suy Ngẫm, sau đó tự ghép đoạn kết Kết Quả → Cầu Nối → Bài Học và nhận góp ý. semi_free: chatbot chỉ cho Kết Quả; học viên tự chọn Bài Học theo Realization/Skill/Value, rồi tự ghép cầu nối và đoạn kết, nhận góp ý. Với mỗi tình huống ghi reasonMessage/reasonQuote cho ý cầu nối (guided) hoặc bài học tự chọn (semi_free), answerMessage/answerQuote cho đoạn kết. Có thể cùng tin khi chatbot giao kết hợp; trích dẫn phải khác nhau.',
       'free_story: chatbot giao Part 2, học viên tự kể tóm tắt câu chuyện có Kết Quả Thực Tế và nhận phản hồi. free_ending: học viên tự tạo đoạn kết với bài học và cầu nối giải thích vì sao kết quả dẫn đến bài học, rồi nhận xét cuối. Không bắt đề phải giống ví dụ tin bất ngờ, đếm số câu cứng hoặc đủ cả ba hướng suy ngẫm trong một đoạn kết.',
       'Mỗi bước cần yêu cầu chatbot → câu thực hành học viên → phản hồi chatbot. Phản hồi có thể đồng thời giao bước tiếp theo. Không đếm prompt, mẫu chatbot, lời sẵn sàng hoặc câu hỏi chưa làm. Chấp nhận nỗ lực còn lỗi và tiếng Việt khi chatbot cho phép; chỉ xác minh đã luyện đúng kỹ năng.',
-      'Chỉ trả JSON {"confidence":0.9,"completed":[{"stage":"guided_1","questionMessage":3,"questionText":"trích nguyên văn yêu cầu","reasonMessage":4,"reasonQuote":"ý cầu nối học viên tự nêu","answerMessage":6,"answerQuote":"đoạn kết học viên tự ghép","feedbackMessage":7}]}. free_story/free_ending bỏ hai trường reason. Chỉ số tin từ 1; tối đa tám bước; thiếu bằng chứng thì bỏ bước; không bịa trích dẫn.',
+      'Chỉ trả JSON {"confidence":0.9,"completed":[{"stage":"guided_1","questionMessage":3,"questionText":"@m3.s1","reasonMessage":4,"reasonQuote":"@m4.s1","answerMessage":6,"answerQuote":"@m6.s1","feedbackMessage":7}]}. free_story/free_ending bỏ hai trường reason. Chỉ số tin từ 1; tối đa tám bước; thiếu bằng chứng thì bỏ bước; không bịa dẫn chứng.',
       transcript
     ].join('\n\n'), anh_minh_hoa: '' }), signal: AbortSignal.timeout(45_000)
-  }, {messages,validate:analysis=>{
+  }, {messages,requireReferences:true,validate:analysis=>{
     if(!Array.isArray(analysis?.completed)||!Number.isFinite(analysis.confidence)||analysis.confidence<0.65||analysis.confidence>1)throw new Error('STORY_OUTCOME_UNCERTAIN');
     validateEvidence(messages,analysis.completed);
   }});
