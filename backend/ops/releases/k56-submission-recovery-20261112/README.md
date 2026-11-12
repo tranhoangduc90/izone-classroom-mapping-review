@@ -125,3 +125,21 @@ các bài khác và đối soát lớp thí điểm có ca riêng trong kế ho�
   dùng mã lượt chính thức, nối bằng operation ID và receipt ID, không
   chứa bài làm hoặc khóa link. Kiểm trình duyệt, xác thực log trình duyệt
   và cache ba đường dự phòng là phần bàn giao tiếp theo.
+
+### Chính sách đối soát Term 1 và Term 2
+
+- `stage-term-policy.py` nhận thư mục `src` của bản tương thích `2092fa3`
+  và ghi ba tệp overlay vào thư mục mới. Áp sau khi cả ba bảng giữ bài
+  đã có. Hạn mức dùng chung đường trực tuyến và ngoại tuyến của cùng lớp,
+  cùng bài. Khóa giao dịch PostgreSQL ngăn hai đường nhận đồng thời vượt
+  hạn mức. Mini tiếp tục dùng hạn mức riêng.
+- Cấu hình thời hạn và hạn mức qua các nhóm `K56_TERM1_HOLD`,
+  `K56_TERM2_HOLD` và `K56_TERM_ONLINE_HOLD`. `K56_TERM_HOLD_SCOPE_FILE`
+  đọc một đối tượng JSON với ba khóa đó, mỗi khóa chứa danh sách mã lớp.
+  Mount thư mục cấu hình chỉ đọc để cập nhật file bằng thay thế nguyên tử.
+  Danh sách rỗng dừng cấp cho lượt mới. Lượt cũ giữ thời hạn đã cấp.
+- `POST /api/term-tests/teacher/submission-hold/export` nhận đúng mã bài,
+  ID lớp, lượt, thế hệ, operation và đường gửi trong body JSON. Người xuất
+  phải có phiên Google hợp lệ và vai trò quản trị đang hoạt động, đồng thời
+  trùng tài khoản cấu hình `K56_TERM_HOLD_EXPORT_ADMIN`. Chỉ trả bản chưa
+  hết hạn. Bản tải bỏ trường chứng thực phiên, nhật ký chỉ ghi metadata.
