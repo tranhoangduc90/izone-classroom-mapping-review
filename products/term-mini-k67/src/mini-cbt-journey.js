@@ -401,7 +401,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   const hours=config[`${profile.writingHold}WritingHoldHours`],limit=config[`${profile.writingHold}WritingHoldLimit`];
   const holdOptions=profile.writing && hours>0 && limit>0 ? {hours,limit} : null;
   const holdClasses=config[`${profile.writingHold}WritingHoldClasses`];
-  const holdClassesFile=profile===term2?config.term2WritingHoldClassesFile:undefined;
+  const holdClassesFile=config[`${profile.writingHold}WritingHoldClassesFile`];
   const writingHoldAllowed = journey => holdOptions && journey.writing_hold_cohort===true;
   const lrHoldProfile=profile===mini?'miniCbt':profile.paper?'termPaper':'termCbt';
   const lrHours=config[`${lrHoldProfile}LrHoldHours`],lrLimit=config[`${lrHoldProfile}LrHoldLimit`];

@@ -141,7 +141,7 @@ const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbt
   ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
-const gradingRoundTrip=termHoldSlug==='term-test-2'&&Boolean(journalFixture)
+const gradingRoundTrip=Boolean(termHoldSlug&&journalFixture)
   &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
 const fixtureGradeRequests=[];
 let writingGrading;

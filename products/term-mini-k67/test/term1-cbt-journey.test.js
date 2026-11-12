@@ -21,11 +21,18 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
   const gradingCalls=[];
   const directory=await mkdtemp(join(tmpdir(),'term1-r2-test-'));
   const term1R2ConfigFile=join(directory,'config.json');
+  const holdScopeFile=mode==='lis_first'?join(directory,'hold-scope.json'):undefined;
   await writeFile(term1R2ConfigFile,JSON.stringify({enabled:true,accountId:'0'.repeat(32),bucket:'synthetic',
     accessKeyId:'synthetic',secretAccessKey:'synthetic',assets:[publicAudioCatalog['term-test-1'].sha256]}));
-  t.after(async()=>{await unlink(term1R2ConfigFile);await rmdir(directory);});
+  if(holdScopeFile)await writeFile(holdScopeFile,JSON.stringify({classes:[identity.classCode]}));
+  t.after(async()=>{
+    if(holdScopeFile)await unlink(holdScopeFile);
+    await unlink(term1R2ConfigFile);
+    await rmdir(directory);
+  });
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1CbtJourneyMode:'on',term1R2ConfigFile,
-    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:mode==='lis_first'?2:20,term1WritingHoldClasses:new Set([identity.classCode]),
+    writingHold:{term1WritingHoldHours:2,term1WritingHoldLimit:mode==='lis_first'?2:20,
+      term1WritingHoldClasses:new Set(holdScopeFile?[]:[identity.classCode]),term1WritingHoldClassesFile:holdScopeFile,
       termCbtLrHoldHours:2,termCbtLrHoldLimit:20,term1CbtLrHoldClasses:new Set([identity.classCode])},
     termTestWritingGradingService:{ensureSubmission:input=>{
       const job=grading.ensureSubmission(input);gradingCalls.push(job);return job;
@@ -53,6 +60,22 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.equal(offer.body.readingDeadlineReviewVersion,1);
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-1'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
+    if(holdScopeFile){
+      const cohort=async token=>(await f.db.query('SELECT writing_hold_cohort FROM assessment.term_k67_cbt_journey WHERE session_id=$1',
+        [token])).rows[0].writing_hold_cohort;
+      assert.equal(await cohort(scope.examSessionToken),true,'file admitted the first session');
+      await writeFile(holdScopeFile,'{"classes":[]}');
+      const resumed=await api.post(slug+'/cbt-journey/prepare').send({...identity,...scope});
+      assert.ok(resumed.ok,resumed.text);
+      assert.equal(await cohort(scope.examSessionToken),true,'the enrolled session still drains');
+      const nextIdentity={...identity,studentRef:'44444444-4444-4444-8444-444444444444'};
+      const preparedNext=await api.post(slug+'/session/prepare').send({...nextIdentity,examMode:mode,examDelivery:'cbt',orderClientVersion:1});
+      assert.ok(preparedNext.ok,preparedNext.text);
+      const next=await api.post(slug+'/cbt-journey/prepare').send({...nextIdentity,examSessionToken:preparedNext.body.examSessionToken,
+        generation:0,deviceProof:'c'.repeat(64)});
+      assert.ok(next.ok,next.text);
+      assert.equal(await cohort(preparedNext.body.examSessionToken),false,'the closed scope excludes new sessions');
+    }
     const post=(route,body)=>api.post(slug+'/cbt-journey/'+route).set('x-term2-permit',offer.body.permit).send({...scope,...body});
     const withFixtureClock=async (now,run)=>{
       const connect=f.pool.connect;
