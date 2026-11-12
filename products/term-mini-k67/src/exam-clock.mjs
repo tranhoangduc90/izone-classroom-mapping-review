@@ -1,7 +1,7 @@
 // Public server time only; no roster, session, draft, grade or side effect.
 // Independent of the student's clock and safe to query after browser sleep.
 export function mountExamClock(app,{pool,limiter}) {
-  const slugs=new Set(['term-test-1','term-test-2','mini-test-lesson-5','term-test-1-k56','term-test-2-k56','mini-test-k56']);
+  const slugs=new Set(['term-test-1','term-test-2','mini-test-lesson-5','pretest-lesson-16','term-test-1-k56','term-test-2-k56','mini-test-k56']);
   app.get('/api/term-tests/:testSlug/clock',limiter,async(req,res,next)=>{
     res.set('Cache-Control','no-store, private');
     if(!slugs.has(req.params.testSlug))return res.status(404).json({ok:false,error:'TEST_NOT_FOUND'});

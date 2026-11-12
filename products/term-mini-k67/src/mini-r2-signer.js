@@ -41,5 +41,5 @@ export function issueR2Download(manifest, { requested, configFile, now = new Dat
   const signing = mac(mac(mac(mac('AWS4' + secretAccessKey, day), 'auto'), 's3'), 'aws4_request');
   const signature = mac(signing, toSign).toString('hex');
   return { version: 1, policy: R2_POLICY, method: 'GET', url: `https://${host}${pathname}?${query}&X-Amz-Signature=${signature}`,
-    sha256: asset.sha256, byteLength: asset.byteLength, validForSeconds: 600, fallback: 'public-pages', chunkSize: 524288, chunks: asset.chunks };
+    sha256: asset.sha256, byteLength: asset.byteLength, validForSeconds: 600, fallback: asset.fallback || 'public-pages', chunkSize: 524288, chunks: asset.chunks };
 }
