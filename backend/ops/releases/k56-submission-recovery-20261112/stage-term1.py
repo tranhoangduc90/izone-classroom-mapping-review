@@ -173,7 +173,16 @@ def stage_journal(source):
     }"""
     if source.count(old) != 1:
         raise ValueError('Unexpected mounted K56 Journal adapter')
-    return "import { k56OfflineObservation } from './term-k56-offline.mjs';" + chr(10) + source.replace(
+    owner = "        const owner = resolved.rows[0];if (!owner) return;"
+    state = "  const state={};"
+    if source.count(owner) != 1 or source.count(state) != 1:
+        raise ValueError('Unexpected mounted K56 Writing job adapter')
+    source = source.replace(owner, owner + chr(10)
+                            + "        Object.assign(owner, await term1WritingReceipt(query, productId, schema, owner));")
+    source = source.replace(state, state + chr(10)
+                            + "  if (row.submission_receipt_id) Object.assign(state,{submissionOperationId:row.submission_operation_id,"
+                            + "submissionReceiptId:row.submission_receipt_id});")
+    return "import { k56OfflineObservation, term1WritingReceipt } from './term-k56-offline.mjs';" + chr(10) + source.replace(
         old, "    const k56Offline = k56OfflineObservation(event, testSlug, details);" + chr(10)
         + "    if (k56Offline) data.checkpointState = k56Offline;")
 
@@ -181,7 +190,15 @@ def stage_journal(source):
 
 def stage_fixture(source):
     anchors = [
-        ("dropResponse,record=()=>{}}={}){", "dropResponse,record=()=>{},mountJournal}={}){"),
+        ("dropResponse,record=()=>{}}={}){",
+         "dropResponse,record=()=>{},mountJournal,writingMigration,syncErpGrades}={}){"),
+        ("CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY, test_slug text,",
+         "CREATE TABLE assessment.term_test_attempt(id uuid PRIMARY KEY, class_name_snapshot text DEFAULT 'IC5601', test_slug text,"),
+        (" CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY",
+         " `);" + chr(10) + " if(writingMigration)await db.exec(writingMigration);" + chr(10)
+         + " else await db.exec(`CREATE TABLE assessment.term_test_writing_grading_run(id uuid PRIMARY KEY"),
+        (" const grading=createTermTestWritingGradingService({pool});",
+         " const grading=createTermTestWritingGradingService({pool,syncErpGrades});"),
         (" app.use(express.json({limit:'1mb'}));",
          " app.use(express.json({limit:'1mb'}));" + chr(10)
          + " const adapter=mountJournal?.(app,{pool,config:{allowedOrigins:[]}});"),

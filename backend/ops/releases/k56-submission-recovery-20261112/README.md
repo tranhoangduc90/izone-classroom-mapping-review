@@ -23,6 +23,11 @@ bỏ bản nội dung trùng khỏi kho giữ. Chỉ giữ bộ đếm và mã t
   dự phòng và hàng chấm/điểm trong test đều là fixture.
 - Bộ kiểm cần đọc bản Writing trước/sau, xác nhận biên nhận sau khi ngắt ACK,
   điểm hay việc chấm không trùng, log không chặn nộp và bản hết hạn được dọn.
+- Bộ kiểm Edge trong Pages nhận thêm K56_RECOVERY_WRITING_MIGRATION trỏ
+  migration hàng chấm Writing 2026-08-19 của repo backend. Hàng chấm thật
+  trong PGlite nhận callback rubric giả và gọi đích điểm giả. Kho EJAR1
+  ghi mã biên nhận và job sau khi PostgreSQL đối chiếu đúng lượt, thế hệ
+  và bản Writing. Báo cáo tách trạng thái sync native khỏi đọc lại Portal.
 
 ## Chuẩn bị phát hành
 
