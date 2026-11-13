@@ -38,6 +38,7 @@ test('Legacy MCQ CTA without mapped owner publishes self confirmation, preservin
   context:{classes:async()=>[{id:'1124',classCode:event.class_name}]},service:{},docs:{read:async()=>document()},
   contentVersion:'fixture-v1',pageBase:'https://tranhoangduc90.github.io/izone-ai-team-pages/listening-practice/',
   resolveOwner:async()=>{throw Object.assign(Error('unmatched'),{code:'OWNER_NOT_MAPPED'});},
+  verifyClassroomCopy:async input=>{assert.equal(input.doc_id,event.doc_id);},
   publishPending:async input=>{published=input;return{status:'verified',entryMode:'self-confirmation'};}
  });
  const result=await registrar(event);assert.equal(result.entryMode,'self-confirmation');
@@ -91,7 +92,7 @@ test('Đăng ký và chạy lại: một binding/job/link, giữ Reading/Speakin
   for(const change of plan.requests){const u=change.updateTextStyle;assert.equal(u.range.tabId,'t.0');const target=body(state).find(p=>p.paragraph.elements[0].startIndex===u.range.startIndex);assert.ok(target);target.paragraph.elements[0].textRun.textStyle=u.textStyle;}
  }};
  const worker=createDocsWorker({pool:f.pool,docs});
- const make=(entryKey=secret(),waitMs=5000,sleep=async()=>{await worker.once();})=>createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs,resolveOwner:async()=>({classId:'1124',studentRef:f.studentRef}),entryKey,contentVersion:f.content.version,waitMs,sleep});
+ const make=(entryKey=secret(),waitMs=5000,sleep=async()=>{await worker.once();})=>createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs,verifyClassroomCopy:async()=>{},resolveOwner:async()=>({classId:'1124',studentRef:f.studentRef}),entryKey,contentVersion:f.content.version,waitMs,sleep});
  await assert.rejects(make(secret(),0)(event),e=>e.code==='CTA_PENDING');
  const first=await make()(event);assert.equal(first.status,'verified');assert.equal(writes,1);
  assert.equal(first.studentRef,f.studentRef);
@@ -106,7 +107,7 @@ test('Đăng ký và chạy lại: một binding/job/link, giữ Reading/Speakin
 });
 test('Sai lớp hoặc sai Doc: không đăng ký, không ghi và không phát sinh bài làm',async t=>{
  const f=await fixture();t.after(f.close);f.context.snapshot=async()=>({classes:[{erp_course_class_id:'1124',erp_class_name_snapshot:'OTHER'}]});
- const make=docs=>createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs,resolveOwner:async()=>({classId:'1124',studentRef:f.studentRef}),entryKey:secret(),contentVersion:f.content.version});
+ const make=docs=>createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs,verifyClassroomCopy:async()=>{},resolveOwner:async()=>({classId:'1124',studentRef:f.studentRef}),entryKey:secret(),contentVersion:f.content.version});
  await assert.rejects(make({read:async()=>document()})(event),e=>e.code==='CTA_CLASS_MISMATCH');
  await assert.rejects(make({read:async()=>document('wrong')})(event),e=>e.code==='DOC_IDENTITY_MISMATCH');
  assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM listening_practice.binding WHERE document_id=$1',[event.doc_id])).rows[0].n,0);
