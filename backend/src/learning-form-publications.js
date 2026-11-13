@@ -100,7 +100,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
   }
   async function publication(database,id,reviewer){
     const row=(await database.query(`SELECT publication.*,version.public_definition,grading.private_definition,
-      (draft.id IS NOT NULL AND draft.erp_course_class_id IS NULL) AS shared_course_draft,
+      (to_jsonb(draft)->>'draft_scope'='izone') AS shared_course_draft,
       COALESCE(draft.approved_by_email,version.approved_by_email) AS approved_by_email,
       COALESCE(draft.owner_email,version.created_by_email) AS draft_owner_email,
       draft.content_hash AS draft_hash,draft.public_definition AS draft_definition,draft.private_definition AS draft_key,

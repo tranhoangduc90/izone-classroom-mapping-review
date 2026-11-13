@@ -33,8 +33,9 @@ export function createWorksheetEditing({pool,owned,dto}){
     if(review?.reviewedContent===importReviewContent(old,current.private_definition)&&payload.gradingKey.importReviews?.[item.itemVersionId])payload.gradingKey.importReviews[item.itemVersionId].reviewedContent=importReviewContent(item,payload.gradingKey);
    }
    const hash=validateAuthoringPayload({...payload,allowIncomplete:true}).contentHash;
-   const row=(await db.query(`INSERT INTO learning.form_draft(id,create_operation_id,owner_email,erp_course_class_id,session_number,public_definition,private_definition,content_hash)
-    VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::jsonb,$7::jsonb,$8) RETURNING *`,[next,op,reviewer.email,current.erp_course_class_id,current.session_number,JSON.stringify(payload.definition),JSON.stringify(payload.gradingKey),hash])).rows[0];
+   const scope=current.draft_scope==='personal'?',draft_scope':'';
+   const row=(await db.query(`INSERT INTO learning.form_draft(id,create_operation_id,owner_email,erp_course_class_id,session_number,public_definition,private_definition,content_hash${scope})
+    VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::jsonb,$7::jsonb,$8${scope?",'personal'":''}) RETURNING *`,[next,op,reviewer.email,current.erp_course_class_id,current.session_number,JSON.stringify(payload.definition),JSON.stringify(payload.gradingKey),hash])).rows[0];
    await db.query('INSERT INTO learning.form_worksheet_revision(draft_id,worksheet_id,parent_draft_id) VALUES($1::uuid,$2::uuid,$3::uuid)',[next,root,current.id]);
    await db.query('UPDATE learning.form_worksheet SET current_draft_id=$2::uuid,updated_at=now() WHERE id=$1::uuid',[root,next]);
    return {...dto(row),worksheetId:root};
