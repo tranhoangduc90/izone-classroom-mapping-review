@@ -34,7 +34,9 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     const shared=row.draft_scope==='izone';
     if(shared&&row.owner_email.toLowerCase()===reviewer.email.toLowerCase())
       await assertSharedCourse(database,reviewer.email,row.public_definition.courseCode);
-    if(!shared)await authorizeClass(database,row.erp_course_class_id,reviewer);
+    if(row.draft_scope==='personal'&&row.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
+      throw fail('DRAFT_NOT_FOUND','Không tìm thấy nháp.',404);
+    if(!shared&&row.draft_scope!=='personal')await authorizeClass(database,row.erp_course_class_id,reviewer);
     if(row.owner_email.toLowerCase()!==reviewer.email.toLowerCase()
       &&(!['pending_review','approved'].includes(row.status)||!await authority(database,reviewer.email,row.public_definition,row.owner_email,shared))) {
       throw fail('DRAFT_REVIEW_ACCESS_DENIED','Bạn chưa được cấp quyền duyệt nháp này.',403);
@@ -42,7 +44,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     return row;
   }
   async function assertCourse(database,row) {
-    if(row.draft_scope==='izone')return;
+    if(['izone','personal'].includes(row.draft_scope))return;
     const classes=await database.query(`SELECT DISTINCT course_code FROM learning.form_assignment
       WHERE erp_course_class_id=$1::bigint AND status IN ('published','closed') AND course_code IS NOT NULL AND course_code<>'';`,[row.erp_course_class_id]);
     if(classes.rows.some(existing=>existing.course_code!==row.public_definition.courseCode)) {
@@ -122,7 +124,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     async publish({id,expectedRevision,operationId,reviewer}) {
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
-        if(row.draft_scope==='izone')throw fail('DRAFT_SCOPE_MISMATCH','Bài Kho chung phải xuất bản trước khi giao.');
+        if(['izone','personal'].includes(row.draft_scope))throw fail('DRAFT_SCOPE_MISMATCH','Chọn lớp và buổi qua Giao bài.');
         if(Number(row.revision)!==expectedRevision) throw fail('DRAFT_STALE','Nháp đã đổi; cần duyệt lại trước khi phát hành.');
         if(row.status==='published') {
           if(row.publish_operation_id!==operationId) throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành. Mở phiếu đã có hoặc sao chép để sửa.');

@@ -12,12 +12,15 @@ import {createLearningLibraryDemoGrant,verifyLearningDemoGrant} from '../src/lea
 test('Kho phiếu: không tự coi phiếu đã dùng là chuẩn; bản chụp riêng và retry đúng nguồn',async()=>{
  const db=new PGlite();try{
   await initializeLearningDemoDatabase(db);
-  for(const f of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql','202610280001_form_publications.sql'])await db.exec(await readFile(new URL('../ops/learning-migrations/'+f,import.meta.url),'utf8'));
+  for(const f of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql','202610220002_form_library.sql','202610280001_form_publications.sql','202610300001_worksheet_revisions.sql','202611040001_form_assignment_portal_target.sql','202611090001_class_draft_delivery.sql','202611090002_shared_course_drafts.sql','202611140001_personal_library_drafts.sql'])await db.exec(await readFile(new URL('../ops/learning-migrations/'+f,import.meta.url),'utf8'));
   await db.exec(`ALTER TABLE mapping.reviewer_account ADD COLUMN role text DEFAULT 'teacher';
    INSERT INTO mapping.classroom_course_mapping VALUES(1294,'Lớp giả','approved',NULL,NULL);
    INSERT INTO mapping.reviewer_account(email,status) VALUES('owner@example.test','active'),('other@example.test','active');
    INSERT INTO mapping.reviewer_class_access VALUES('owner@example.test',1294),('other@example.test',1294);`);
-  const reviewer={email:'owner@example.test',canAccessAllClasses:false},other={email:'other@example.test',canAccessAllClasses:false},pool=createPGlitePool(db),drafts=createLearningFormDraftService({pool}),library=createLearningFormLibrary({pool,drafts});
+  const reviewer={email:'owner@example.test',canAccessAllClasses:false},other={email:'other@example.test',canAccessAllClasses:false},pool=createPGlitePool(db);
+  const startsAt='2026-11-14 18:30:00',portalId='123456';
+  const portalAssignmentReader=async classId=>({classId,sessions:[{erpSessionId:portalId,startsAt,endsAt:'2026-11-14 21:00:00',date:'2026-11-14',statusCode:1}]});
+  const drafts=createLearningFormDraftService({pool,portalAssignmentReader}),library=createLearningFormLibrary({pool,drafts});
   const payload=previewFormImport('type,prompt,skill\nreflection,Câu nguồn A,speaking').payload;payload.definition.courseCode='56';
   const draft=await drafts.create({classId:'1294',sessionNumber:11,operationId:randomUUID(),...payload,reviewer});
   const input={draftId:draft.id,expectedRevision:1,expectedHash:draft.contentHash,scope:'personal',operationId:randomUUID(),reviewer};
@@ -43,6 +46,36 @@ test('Kho phiếu: không tự coi phiếu đã dùng là chuẩn; bản chụp 
   const copy=await library.copy(request),retry=await library.copy(request);assert.equal(copy.id,retry.id);
   assert.notEqual(copy.definition.formVersionId,draft.definition.formVersionId);
   assert.equal((await library.get({id:shared.id,reviewer:other})).definition.blocks[0].items[0].prompt,'Câu nguồn A');
+  const personalRequest={id:shared.id,expectedRevision:preview.revision,expectedHash:preview.contentHash,title:'Bản sao riêng',operationId:randomUUID(),reviewer:other};
+  const personal=await library.copyToPersonal(personalRequest);
+  assert.equal(personal.scope,'personal');
+  assert.equal(personal.classId,null);
+  assert.equal(personal.sessionNumber,null);
+  assert.notEqual(personal.definition.formVersionId,draft.definition.formVersionId);
+  assert.equal((await library.copyToPersonal(personalRequest)).id,personal.id);
+  await assert.rejects(()=>library.copyToPersonal({...personalRequest,title:'Yêu cầu khác'}),e=>e.code==='LIBRARY_OPERATION_CONFLICT');
+  await assert.rejects(()=>library.copyToPersonal({...personalRequest,operationId:randomUUID(),expectedHash:'0'.repeat(64)}),e=>e.code==='LIBRARY_SOURCE_STALE');
+  await assert.rejects(()=>drafts.get({id:personal.id,reviewer}),e=>e.code==='DRAFT_NOT_FOUND');
+  const editable=await drafts.editWorksheet({id:personal.id,operationId:randomUUID(),reviewer:other});
+  editable.definition.title='Bản cá nhân đã sửa';
+  editable.definition.blocks[0].items[0].prompt='Câu đã sửa';
+  const saved=await drafts.save({id:editable.id,expectedRevision:editable.revision,definition:editable.definition,gradingKey:editable.gradingKey,reviewer:other});
+  const stored=await library.list({scope:'personal',reviewer:other,worksheetHeads:true});
+  assert.equal(stored.length,1);
+  assert.equal(stored[0].editableDraftId,personal.id);
+  assert.equal(stored[0].title,'Bản cá nhân đã sửa');
+  assert.equal((await drafts.get({id:personal.id,reviewer:other})).definition.blocks[0].items[0].prompt,'Câu đã sửa');
+  assert.equal((await library.get({id:shared.id,reviewer:other})).definition.blocks[0].items[0].prompt,'Câu nguồn A');
   assert.equal((await pool.query('SELECT count(*)::int n FROM learning.form_assignment')).rows[0].n,0);
+  await db.exec(`INSERT INTO mapping.student_mapping_review(erp_course_class_id,erp_student_contact_id,erp_student_name_snapshot) VALUES(1294,123,'Học viên giả');
+   INSERT INTO mapping.erp_class_membership_snapshot VALUES(1294,123);`);
+  const delivered=await drafts.assignOwnedDraft({id:saved.id,expectedRevision:saved.revision,expectedHash:saved.contentHash,confirmedAnswers:true,
+   targets:[{classId:'1294',sessionNumber:1,portalTarget:{id:portalId,startsAt}}],operationId:randomUUID(),reviewer:other});
+  assert.equal(delivered.status,'success',JSON.stringify(delivered.results));
+  const assigned=(await db.query(`SELECT a.erp_course_class_id::text AS class_id,a.session_number,v.public_definition FROM learning.form_assignment a
+    JOIN learning.form_version v ON v.id=a.form_version_id WHERE a.id=$1`,[delivered.results[0].delivery.assignmentId])).rows[0];
+  assert.equal(assigned.class_id,'1294');assert.equal(assigned.session_number,1);
+  assert.equal(assigned.public_definition.blocks[0].items[0].prompt,'Câu đã sửa');
+  assert.equal((await drafts.get({id:personal.id,reviewer:other})).classId,null);
  }finally{await db.close();}
 });

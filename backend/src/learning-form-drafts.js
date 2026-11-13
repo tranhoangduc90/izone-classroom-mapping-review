@@ -15,7 +15,7 @@ import {createWorksheetEditing} from './learning-worksheet-editing.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
-  return {id:row.id,...(row.draft_scope==='izone'?{scope:'izone'}:{}),
+  return {id:row.id,...(['izone','personal'].includes(row.draft_scope)?{scope:row.draft_scope}:{}),
     classId:row.erp_course_class_id==null?null:String(row.erp_course_class_id),sessionNumber:row.session_number==null?null:Number(row.session_number),
     revision:Number(row.revision),status:row.status,contentHash:row.content_hash,definition:row.public_definition,
     ...(includeKey?{gradingKey:row.private_definition}:{}),approvedRevision:row.approved_revision||null,
@@ -53,7 +53,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
     const row=result.rows[0];
     await assertCatalogSource(database,id,reviewer.email,row.draft_scope==='izone'?'izone':'personal');
     if(row.draft_scope==='izone')await assertSharedCourse(database,reviewer.email,row.public_definition.courseCode);
-    else await authorizeClass(database,row.erp_course_class_id,reviewer);
+    else if(row.draft_scope!=='personal')await authorizeClass(database,row.erp_course_class_id,reviewer);
     return row;
   }
   async function create({scope='class',classId=null,sessionNumber=null,definition,gradingKey,operationId,sourceAssignmentId=null,reviewer}) {
@@ -122,10 +122,10 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       if(Number(row.revision)!==grant.revision||row.content_hash!==grant.contentHash) throw error('DRAFT_PREVIEW_STALE','Nháp đã đổi; hãy mở lại bản xem thử.');
       const checked=validateDraftPreview(row.public_definition,row.private_definition);
       const shared=row.draft_scope==='izone';
-      const target=shared?null:await authorizeClass(pool,row.erp_course_class_id,reviewer);
+      const target=shared||row.draft_scope==='personal'?null:await authorizeClass(pool,row.erp_course_class_id,reviewer);
       return {sourceDraftId:row.id,sourceRevision:Number(row.revision),contentHash:row.content_hash,
-        sourceAssignmentId:null,className:shared?'Kho chung':target.class_name,courseCode:checked.definition.courseCode||null,
-        sessionNumber:shared?1:Number(row.session_number),title:checked.definition.title,definitionHash:sha256(stableStringify(checked.definition)),
+        sourceAssignmentId:null,className:target?.class_name||(shared?'Kho chung':'Kho cá nhân'),courseCode:checked.definition.courseCode||null,
+        sessionNumber:Number(row.session_number||1),title:checked.definition.title,definitionHash:sha256(stableStringify(checked.definition)),
         definition:checked.definition,gradingKey:checked.gradingKey,blockReleases:[],answerReleaseOverride:null};
     },
     async list({classId,scope,reviewer,worksheetHeads=false}) {
@@ -161,7 +161,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       return withTransaction(pool,async client=>{
         const row=await owned(client,id,reviewer,{lock:true});
         const shared=row.draft_scope==='izone';
-        if(shared!==(sessionNumber===null))throw error('DRAFT_SCOPE_MISMATCH','Đích lưu nháp không khớp.',400);
+        if((shared||row.draft_scope==='personal')!==(sessionNumber===null))throw error('DRAFT_SCOPE_MISMATCH','Đích lưu nháp không khớp.',400);
         if(shared)await assertSharedCourse(client,reviewer.email,checked.definition.courseCode);
         if(shared&&(await client.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[id])).rowCount)
           throw error('DRAFT_ALREADY_PUBLISHED','Bài đã xuất bản.',409);

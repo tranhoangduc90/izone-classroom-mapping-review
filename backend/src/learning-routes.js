@@ -637,6 +637,15 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       scope:z.enum(['personal','izone']),operationId:uuidSchema}).strict(),req.body,res,'INVALID_LIBRARY_ENTRY');if(!input)return;
     res.set('Cache-Control','no-store');return res.status(201).json({ok:true,entry:await formLibrary.store({...input,reviewer:req.reviewer})});
   }));
+  router.post('/teacher/form-library/:id/copy-to-personal',authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!path)return;
+    const input=parseOrReply(z.object({expectedRevision:z.number().int().positive(),expectedHash:z.string().regex(/^[0-9a-f]{64}$/u),
+      title:z.string().trim().min(1).max(120),operationId:uuidSchema}).strict(),req.body,res,'INVALID_PERSONAL_COPY');if(!input)return;
+    res.locals.sharedDraft={scope:'personal',operationId:input.operationId};
+    const draft=await formLibrary.copyToPersonal({...path,...input,reviewer:req.reviewer});
+    Object.assign(res.locals.sharedDraft,{draftId:draft.id,revision:draft.revision});
+    res.set('Cache-Control','no-store');return res.status(201).json({ok:true,draft});
+  }));
   router.post('/teacher/form-library/:id/copy',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!path)return;
     const input=parseOrReply(z.object({classId:z.string().regex(/^\d{1,18}$/u),sessionNumber:z.number().int().min(1).max(100),operationId:uuidSchema}).strict(),req.body,res,'INVALID_LIBRARY_COPY');if(!input)return;

@@ -9,14 +9,14 @@ import {catalogVisible,isCatalogAdmin,assertCatalogSource,lockCatalog} from './l
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.sharing_scope,createdAt:row.created_at,
   sourceDraftId:row.source_draft_id,
-  sourceRevision:Number(row.source_revision),skills:[...new Set(row.public_definition.blocks.flatMap(b=>b.items.flatMap(i=>i.skillCodes||[])))],
+  sourceRevision:Number(row.source_revision),contentHash:row.content_hash,skills:[...new Set(row.public_definition.blocks.flatMap(b=>b.items.flatMap(i=>i.skillCodes||[])))],
   itemCount:row.public_definition.blocks.reduce((n,b)=>n+b.items.length,0),
   ...(row.worksheet_id?{worksheetId:row.worksheet_id}:{}),
   ...(row.current_draft_id?{editableDraftId:row.current_draft_id,editableDraftRevision:Number(row.current_revision),editableDraftStatus:row.current_status}:{}),
   ...(row.current_title?{title:row.current_title}:{})});
 export function createLearningFormLibrary({pool,drafts}){
- async function get(id,reviewer){
-  const row=(await pool.query(`SELECT e.* FROM learning.form_library_entry e WHERE e.id=$1::uuid
+ async function get(id,reviewer,database=pool){
+  const row=(await database.query(`SELECT e.* FROM learning.form_library_entry e WHERE e.id=$1::uuid
     AND (e.sharing_scope='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')}`, [id,reviewer.email])).rows[0];
   if(!row)throw fail('LIBRARY_ENTRY_NOT_FOUND','Không tìm thấy phiếu trong kho bạn được mở.',404);
   return row;
@@ -79,6 +79,39 @@ export function createLearningFormLibrary({pool,drafts}){
      throw fail('LIBRARY_OPERATION_CONFLICT','Mã lưu đã dùng cho phiếu hoặc nguồn khác.');
    return dto(row);
    });
+  },
+  async copyToPersonal({id,expectedRevision,expectedHash,title,operationId,reviewer}){
+   const draftId=await withTransaction(pool,async database=>{
+    await lockCatalog(database);
+    const prior=(await database.query('SELECT * FROM learning.form_draft WHERE create_operation_id=$1::uuid',[operationId])).rows[0];
+    if(prior){
+     if(prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase()||prior.draft_scope!=='personal'||
+        prior.copied_library_entry_id!==id||prior.copied_library_revision!==expectedRevision||
+        prior.copied_library_hash!==expectedHash||prior.copied_library_title!==title)
+       throw fail('LIBRARY_OPERATION_CONFLICT','Mã sao chép đã dùng cho yêu cầu khác.');
+     return prior.id;
+    }
+    const source=await get(id,reviewer,database);
+    if(source.sharing_scope!=='izone')throw fail('LIBRARY_SCOPE_INVALID','Chọn một bài đã xuất bản trong Kho chung.',400);
+    if(Number(source.source_revision)!==expectedRevision||source.content_hash!==expectedHash)
+      throw fail('LIBRARY_SOURCE_STALE','Bài nguồn đã đổi. Hãy đọc lại Kho chung trước khi nhân bản.');
+    const payload=copyAuthoringPayload(checkedSnapshot(source));payload.definition.title=title;
+    const checked=validateAuthoringPayload({...payload,allowIncomplete:true});
+    const definition=JSON.stringify(checked.definition),key=JSON.stringify(checked.gradingKey);
+    const draft=(await database.query(`INSERT INTO learning.form_draft
+      (create_operation_id,owner_email,draft_scope,public_definition,private_definition,content_hash,
+       copied_library_entry_id,copied_library_revision,copied_library_hash,copied_library_title)
+      VALUES($1,$2,'personal',$3,$4,$5,$6,$7,$8,$9) RETURNING id,revision`,
+      [operationId,reviewer.email,definition,key,checked.contentHash,id,expectedRevision,expectedHash,title])).rows[0];
+    await database.query(`INSERT INTO learning.form_library_entry
+      (operation_id,owner_email,sharing_scope,source_draft_id,source_revision,course_code,title,public_definition,private_definition,content_hash)
+      VALUES($1,$2,'personal',$3,$4,$5,$6,$7,$8,$9)`,
+      [operationId,reviewer.email,draft.id,draft.revision,checked.definition.courseCode||null,title,definition,key,checked.contentHash]);
+    await database.query('INSERT INTO learning.form_worksheet(id,owner_email,current_draft_id) VALUES($1,$2,$1)',[draft.id,reviewer.email]);
+    await database.query('INSERT INTO learning.form_worksheet_revision(draft_id,worksheet_id) VALUES($1,$1)',[draft.id]);
+    return draft.id;
+   });
+   return drafts.get({id:draftId,reviewer});
   },
   async copy({id,classId,sessionNumber,operationId,reviewer}){
    const token=createHash('sha256').update(id+':'+operationId).digest('hex');
