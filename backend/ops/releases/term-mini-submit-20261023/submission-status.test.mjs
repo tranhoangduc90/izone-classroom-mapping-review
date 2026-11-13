@@ -66,6 +66,31 @@ for(const mode of ['lis_first','read_first'])test(`${slug}/${mode}: biên nhận
  }
 });
 
+test('Pretest phục hồi đúng hai kỹ năng qua hai thứ tự, giữ guard và không gửi Portal', async () => {
+ const slug = 'pretest-lesson-16';
+ await db.query('UPDATE assessment.term_test_exam_session SET test_slug=$1', [slug]);
+ for (const mode of ['lis_first','read_first']) {
+  const listeningFirst = mode === 'lis_first';
+  await db.query(`UPDATE assessment.term_test_attempt SET test_slug=$1, exam_mode=$2, completed_at=NULL,
+    listening_submitted_at=CASE WHEN $2='lis_first' THEN now() END,
+    reading_submitted_at=CASE WHEN $2='read_first' THEN now() END`, [slug,mode]);
+  const first = listeningFirst ? 'listening' : 'reading';
+  const second = listeningFirst ? 'reading' : 'listening';
+  const receipt = await readSubmissionStatus(pool,slug,{...input(),section:first});
+  assert.equal(receipt.response.nextSection,second);
+  assert.equal(receipt.response.portalSyncStatus,'not_applicable');
+  assert.equal(receipt.response.completed,false);
+  assert.equal((await readSubmissionStatus(pool,slug,{...input(),section:second})).persisted,false);
+  await db.query('UPDATE assessment.term_test_attempt SET listening_submitted_at=now(),reading_submitted_at=now(),completed_at=now()');
+  const finished = await readSubmissionStatus(pool,slug,{...input(),section:second});
+  assert.equal(finished.response.nextSection,'result');
+  assert.equal(finished.response.completed,true);
+  await assert.rejects(readSubmissionStatus(pool,slug,input(),()=>{throw Error('wrong owner');}),/wrong owner/);
+  await assert.rejects(readSubmissionStatus(pool,slug,{...input(),generation:1}),{code:'STALE_GENERATION'});
+  await assert.rejects(readSubmissionStatus(pool,'term-test-1',input()),{code:'SUBMISSION_NOT_FOUND'});
+ }
+});
+
 if(process.env.SUBMIT_PG_URL)test('PostgreSQL nhiều connection: chưa commit không báo đã lưu; sau commit đọc đồng thời không mutation',async()=>{
  const a=await db.connect();
  try{

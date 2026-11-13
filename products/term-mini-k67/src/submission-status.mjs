@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 
-const slugs=new Set(['term-test-1','term-test-2','mini-test-lesson-5','term-test-1-k56','term-test-2-k56','mini-test-k56']);
+const slugs=new Set(['term-test-1','term-test-2','mini-test-lesson-5','pretest-lesson-16','term-test-1-k56','term-test-2-k56','mini-test-k56']);
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const fail=(code,status=409)=>Object.assign(new Error('Chưa xác nhận được bài đã lưu của đúng lượt. Bài trên máy vẫn được giữ.'),{code,status});
 export const canonical=value=>JSON.stringify(Object.fromEntries(Object.entries(value||{}).sort(([a],[b])=>a.localeCompare(b))));
@@ -41,17 +41,20 @@ export async function readSubmissionStatus(pool,slug,input,assertOwner=()=>{}){
   const answers=a[input.section+'_answers']||{};
   const listeningSubmitted=Boolean(a.listening_submitted_at),readingSubmitted=Boolean(a.reading_submitted_at||a.completed_at);
   const completed=Boolean(a.completed_at),examMode=a.exam_mode||s?.exam_mode||'lis_first';
+  const pretest = slug === 'pretest-lesson-16';
+  const nextSection = !readingSubmitted ? 'reading' : !listeningSubmitted ? 'listening'
+    : pretest || a.writing_submitted_at ? 'result' : 'writing';
   return{ok:true,persisted:true,receipt:{version:1,testSlug:slug,section:input.section,generation,
       attemptToken:a.id,examSessionToken:s?.id||null,clientSubmissionId:a.client_submission_id,
       submittedAt:new Date(submittedAt).toISOString(),answers,
       snapshotHash:createHash('sha256').update(canonical(answers)).digest('hex')},
     response:{ok:true,attemptToken:a.id,examSessionToken:s?.id||null,studentName:a.student_name_snapshot,
       generation,examMode,examDelivery:a.attempt_mode||s?.attempt_mode||'legacy',completed,listeningSubmitted,readingSubmitted,
-      nextSection:!readingSubmitted?'reading':!listeningSubmitted?'listening':a.writing_submitted_at?'result':'writing',
+      nextSection,
       readingStartedAt:a.reading_started_at||null,readingDeadlineAt:a.reading_deadline_at||null,
       listeningStartedAt:s?.listening_started_at||null,listeningDeadlineAt:s?.listening_deadline_at||null,
       readingDraft:a.reading_draft||{},readingDraftRevision:Number(a.reading_draft_revision)||0,
-      portalSyncStatus:'unknown',result:a.combined_result||{listening:a.listening_result||null,reading:null}}};
+      portalSyncStatus:pretest?'not_applicable':'unknown',result:a.combined_result||{listening:a.listening_result||null,reading:null}}};
 }
 
 // Rate limit dùng lại bộ đọc hiện hành; lỗi trả trạng thái rõ, không biến chưa biết thành đã lưu.
