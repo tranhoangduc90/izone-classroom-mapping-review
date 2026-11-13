@@ -88,7 +88,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     return row;
   }
 
-  async function openAssignment({ documentId, assignmentCode, classCode = '' }) {
+  async function openAssignment({ documentId, assignmentCode, classCode = '' }, { requireDocumentOwner = false } = {}) {
     const assignment = await resolveAssignmentDocument(documentId, assignmentCode, classCode);
     const roster = await pool.query(`
       SELECT m.public_id AS student_ref, m.erp_student_name_snapshot AS name
@@ -103,8 +103,17 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     const parts = await pool.query(`SELECT part_key, display_title, practice_url, min_questions
       FROM speaking_homework.assignment_part WHERE assignment_id = $1 ORDER BY position`,
     [assignment.assignment_id]);
+    const owner = assignment.bound_student_ref;
     let students = roster.rows;
-    if (assignment.delivery_mode === 'direct') {
+    if (requireDocumentOwner) {
+      if (!owner) {
+        throw new SpeakingHomeworkError('STUDENT_DOCUMENT_REQUIRED', 'Hãy mở bản Homework được Classroom tạo riêng cho bạn.', 403);
+      }
+      students = students.filter(student => student.student_ref === owner);
+      if (students.length !== 1) {
+        throw new SpeakingHomeworkError('STUDENT_NOT_ACTIVE', 'Chủ file Homework không còn đủ điều kiện mở bài của lớp.', 403);
+      }
+    } else if (assignment.delivery_mode === 'direct') {
       const bound = await pool.query(`SELECT student_ref
         FROM speaking_homework.assignment_document
         WHERE assignment_id = $1 AND student_ref IS NOT NULL
@@ -114,6 +123,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     }
     return { title: assignment.title, classCode: assignment.class_code,
       assignmentCode: assignment.assignment_code, students, parts: parts.rows,
+      ...(requireDocumentOwner ? { selectedStudentRef: owner } : {}),
       requiredPracticeCount: assignment.required_practice_count,
       assignmentStatus: assignment.assignment_status,
       doctorEnabled: Boolean(assignment.doctor_course_key) };
@@ -152,14 +162,14 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
   }
 
   // Tên được nhớ ở browser chỉ giúp bỏ bước chọn lại; server vẫn kiểm Doc ID và roster.
-  async function startSession({ documentId, assignmentCode, studentRef }) {
+  async function startSession({ documentId, assignmentCode, studentRef, classCode }, { requireDocumentOwner = false } = {}) {
     if (accessSecret.length < 32) throw new Error('Chưa cấu hình secret cho phiên Speaking Homework.');
-    const assignment = await resolveAssignmentDocument(documentId, assignmentCode);
+    const assignment = await resolveAssignmentDocument(documentId, assignmentCode, requireDocumentOwner ? classCode : '');
     if (!assignment.bound_student_ref) {
       throw new SpeakingHomeworkError('STUDENT_DOCUMENT_REQUIRED',
         'Hãy mở bản Homework được Classroom tạo riêng cho bạn.', 403);
     }
-    if (assignment.delivery_mode === 'direct' && assignment.bound_student_ref !== studentRef) {
+    if ((requireDocumentOwner || assignment.delivery_mode === 'direct') && assignment.bound_student_ref !== studentRef) {
       throw new SpeakingHomeworkError('STUDENT_DOCUMENT_MISMATCH',
         'File Homework không thuộc học viên đã chọn.', 403);
     }
