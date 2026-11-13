@@ -41,7 +41,7 @@ async function setup(t){
  const adapter={read:id=>docs.get(id).docs.read(id),write:(id,plan)=>docs.get(id).docs.write(id,plan)};
  const resolver=async b=>({...b.owner_proof.homework});
  const worker=createDocsWorker({pool:f.pool,docs:adapter,resolveSharedHomework:resolver});
- const register=createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs:adapter,resolveOwner:async({googleUserId})=>({classId:'1124',studentRef:records.find(r=>r.event.student_id===googleUserId).member.studentRef}),entryKey:secret(),contentVersion:f.content.version,sleep:async()=>worker.once()});
+ const register=createCtaRegistrar({pool:f.pool,service:f.service,context:f.context,docs:adapter,verifyClassroomCopy:async event=>{const row=records.find(r=>r.event.student_id===event.student_id);if(row?.id!==event.doc_id){const err=Error('Wrong Classroom copy');err.code='DOC_IDENTITY_MISMATCH';throw err;}},resolveOwner:async({googleUserId})=>({classId:'1124',studentRef:records.find(r=>r.event.student_id===googleUserId).member.studentRef}),entryKey:secret(),contentVersion:f.content.version,sleep:async()=>worker.once()});
  return{...f,records,documents:docs,register,worker};
 }
 test('Buổi 10 qua cùng API giao Homework: link chung, đúng hai Docs và retry đồng thời không nhân bản',async t=>{

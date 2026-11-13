@@ -3,9 +3,12 @@ import {lessonFor} from './lessons.js';
 import {createOwnerVerifier,readOwnerSource} from './owner.js';
 
 const allTabs=list=>(list||[]).flatMap(t=>[t,...allTabs(t.childTabs)]);
-function tabText(content){
- return(content||[]).map(e=>(e.paragraph?.elements||[]).map(p=>p.textRun?.content||'').join('')+
-  (e.table?.tableRows||[]).map(r=>(r.tableCells||[]).map(c=>tabText(c.content)).join('')).join('')).join('');
+function hasMarker(content,code){
+ return(content||[]).some(e=>{
+  const text=(e.paragraph?.elements||[]).map(p=>p.textRun?.content||'').join('');
+  return text.split(/\r?\n/).some(line=>line.trim()===code)||
+   (e.table?.tableRows||[]).some(r=>(r.tableCells||[]).some(c=>hasMarker(c.content,code)));
+ });
 }
 
 // Tìm bản Homework bằng mapping UUID → Google user → submission → mã bài trong tab.
@@ -13,8 +16,7 @@ function tabText(content){
 export function createSharedHomeworkResolver({url,key,auth,docs,fetcher=fetch,clock=Date.now}){
  const verify=createOwnerVerifier({url,key,auth,docs,fetcher,clock});
  return async function resolve(binding){
-  let lesson;
-  try{lesson=lessonFor(binding.code);}catch{fail('DOC_CODE_MISMATCH','Mã Listening chưa được đăng ký.');}
+  try{lessonFor(binding.code);}catch{fail('DOC_CODE_MISMATCH','Mã Listening chưa được đăng ký.');}
   if(binding.owner_proof?.mode!=='shared')fail('DOC_CODE_MISMATCH','Hồ sơ không dùng link Listening chung.');
   const identity={classId:binding.class_id,studentRef:binding.student_ref,code:binding.code};
   const cached=binding.owner_proof.homework;
@@ -42,24 +44,35 @@ export function createSharedHomeworkResolver({url,key,auth,docs,fetcher=fetch,cl
    return items;
   }
   const course=encodeURIComponent(source.courseId);
-  const works=await list(`courses/${course}/courseWork`,'courseWork',{});
-  const lessonTitle=new RegExp('\\b(?:lesson|buổi)\\s*0?'+lesson.lesson+'\\b','i');
-  const candidates=works.filter(w=>/\b(?:homework|btvn)\b/i.test(w.title||'')&&lessonTitle.test(w.title||''));
-  const targets=[];
-  for(const work of candidates){
+  const works=await list(`courses/${course}/courseWork`,'courseWork',{courseWorkStates:'PUBLISHED'});
+  const candidates=new Map();
+  for(const work of works){
+   if(work.state!=='PUBLISHED')continue;
    if(work.courseId!==source.courseId||!work.id)fail('DOC_IDENTITY_MISMATCH','Bài Homework không khớp lớp Classroom.');
    if(work.assigneeMode==='INDIVIDUAL_STUDENTS'&&!work.individualStudentsOptions?.studentIds?.includes(source.googleUserId))continue;
-   const templates=(work.materials||[]).filter(m=>m.driveFile?.shareMode==='STUDENT_COPY').map(m=>m.driveFile.driveFile?.id);
-   if(!templates.length)continue;
-   const submissions=await list(`courses/${course}/courseWork/${encodeURIComponent(work.id)}/studentSubmissions`,'studentSubmissions',{userId:source.googleUserId});
+   const templates=(work.materials||[]).filter(m=>m.driveFile?.shareMode==='STUDENT_COPY').map(m=>m.driveFile.driveFile?.id).filter(Boolean);
+   if(templates.length)candidates.set(work.id,templates);
+  }
+  const targets=[];
+  if(candidates.size){
+   const submissions=await list(`courses/${course}/courseWork/-/studentSubmissions`,'studentSubmissions',{userId:source.googleUserId});
+   const seen=new Set();
    for(const submission of submissions){
-    if(submission.userId!==source.googleUserId||submission.courseId!==source.courseId||submission.courseWorkId!==work.id||!submission.id)fail('DOC_IDENTITY_MISMATCH','Classroom trả bài của người hoặc lớp khác.');
+    if(submission.userId!==source.googleUserId||submission.courseId!==source.courseId||!submission.courseWorkId||!submission.id)
+     fail('DOC_IDENTITY_MISMATCH','Classroom trả bài của người hoặc lớp khác.');
+    const templates=candidates.get(submission.courseWorkId);
+    if(!templates)continue;
     for(const attachment of submission.assignmentSubmission?.attachments||[]){
-     const documentId=attachment.driveFile?.id;if(!documentId||templates.includes(documentId))continue;
+     const documentId=attachment.driveFile?.id;
+     if(!documentId||templates.includes(documentId)||attachment.driveFile.mimeType&&attachment.driveFile.mimeType!=='application/vnd.google-apps.document')continue;
+     const sourceKey=JSON.stringify([submission.courseWorkId,submission.id,documentId]);
+     if(seen.has(sourceKey))continue;
+     seen.add(sourceKey);
+     if(clock()>=deadline)fail('HOMEWORK_LOOKUP_TIMEOUT','Tìm Homework vượt thời gian; sẽ thử lại.');
      const document=await docs.read(documentId);
      if(document.documentId!==documentId)fail('DOC_IDENTITY_MISMATCH','Tài liệu đọc lại khác bản sao Classroom.');
-     for(const tab of allTabs(document.tabs))if(tabText(tab.documentTab?.body?.content).includes(binding.code)){
-      targets.push({...identity,courseId:source.courseId,courseWorkId:work.id,submissionId:submission.id,documentId,tabId:tab.tabProperties.tabId});
+     for(const tab of allTabs(document.tabs))if(hasMarker(tab.documentTab?.body?.content,binding.code)){
+      targets.push({...identity,courseId:source.courseId,courseWorkId:submission.courseWorkId,submissionId:submission.id,documentId,tabId:tab.tabProperties?.tabId});
      }
     }
    }

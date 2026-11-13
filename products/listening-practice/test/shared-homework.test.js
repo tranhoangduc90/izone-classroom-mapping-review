@@ -12,7 +12,7 @@ function setup(){
  const now=Date.now(),binding={class_id:'1293',student_ref:uuid(),code:ROBOTS_CODE,owner_proof:{mode:'shared'}};
  const base={apiVersion:1,classId:'1293',studentRef:binding.student_ref,courseId:'course1',googleUserId:'user1'};
  const owner={...base,capturedAt:new Date(now).toISOString(),sourceRevision:hash(JSON.stringify(base))};
- const work={id:'work1',courseId:'course1',title:'Homework Lesson 9',materials:[{driveFile:{shareMode:'STUDENT_COPY',driveFile:{id:'template'}}}]};
+ const work={id:'work1',courseId:'course1',title:'Bài tập cuối tuần',state:'PUBLISHED',materials:[{driveFile:{shareMode:'STUDENT_COPY',driveFile:{id:'template'}}}]};
  const submission={id:'sub1',courseId:'course1',courseWorkId:'work1',userId:'user1',assignmentSubmission:{attachments:[{driveFile:{id:'doc1'}}]}};
  const code=ROBOTS_CODE+'\n'+CTA+'\n',document={documentId:'doc1',revisionId:'revision1',tabs:[{tabProperties:{tabId:'parent'},childTabs:[{tabProperties:{tabId:'child'},documentTab:{body:{content:[{paragraph:{elements:[{startIndex:1,endIndex:code.length+1,textRun:{content:code}}]}}]}}}]}]};
  const state={works:[work],submission,document,owner,requests:[],pages:false};
@@ -21,8 +21,13 @@ function setup(){
   if(u.origin==='https://owner.test')return Response.json(state.owner);
   if(u.pathname.includes('/work-for-other/'))return Response.json({error:{code:404}},{status:404});
   if(u.pathname.endsWith('/studentSubmissions/sub1'))return Response.json(state.submission);
-  if(u.pathname.endsWith('/studentSubmissions')){assert.equal(u.searchParams.get('userId'),'user1');return Response.json({studentSubmissions:[state.submission]});}
-  if(state.pages&&!u.searchParams.has('pageToken'))return Response.json({courseWork:[],nextPageToken:'next'});
+  if(u.pathname.endsWith('/studentSubmissions')){
+   assert.equal(u.pathname,'/v1/courses/course1/courseWork/-/studentSubmissions');
+   assert.equal(u.searchParams.get('userId'),'user1');
+   if(state.pages&&!u.searchParams.has('pageToken'))return Response.json({studentSubmissions:[],nextPageToken:'submissions-next'});
+   return Response.json({studentSubmissions:state.works.length?[state.submission]:[]});
+  }
+  if(state.pages&&u.pathname.endsWith('/courseWork')&&!u.searchParams.has('pageToken'))return Response.json({courseWork:[],nextPageToken:'next'});
   return Response.json({courseWork:state.works});
  }});
  return{binding,state,resolver};
@@ -35,12 +40,14 @@ test('Homework chung: phân trang, child tab, đúng UUID/user/bản sao; cache 
  f.state.submission.userId='user2';await assert.rejects(f.resolver(f.binding),e=>e.code==='DOCUMENT_OWNER_MISMATCH');
 });
 test('Homework chung: không ghi khi người/lớp sai, nhiều đích hoặc chỉ có bản mẫu',async()=>{
- for(const kind of ['wrong_user','wrong_class','ambiguous','template','shared_file']){
+ for(const kind of ['wrong_user','wrong_class','ambiguous','template','shared_file','draft','substring']){
   const f=setup();
   if(kind==='wrong_user')f.state.submission.userId='other';
   if(kind==='wrong_class')f.state.submission.courseId='other';
   if(kind==='ambiguous')f.state.document.tabs[0].childTabs.push(structuredClone(f.state.document.tabs[0].childTabs[0]));
   if(kind==='template')f.state.submission.assignmentSubmission.attachments[0].driveFile.id='template';
+  if(kind==='draft')f.state.works[0].state='DRAFT';
+  if(kind==='substring')f.state.document.tabs[0].childTabs[0].documentTab.body.content[0].paragraph.elements[0].textRun.content=ROBOTS_CODE+'-other\n'+CTA+'\n';
   if(kind==='shared_file')f.state.works[0].materials[0].driveFile.shareMode='VIEW';
   await assert.rejects(f.resolver(f.binding),e=>['DOC_IDENTITY_MISMATCH','DOC_STATUS_AMBIGUOUS','HOMEWORK_NOT_FOUND'].includes(e.code),kind);
  }
@@ -60,10 +67,10 @@ test('Homework chung: bỏ qua bài Lesson 9 chỉ giao riêng cho học viên k
  assert.equal(f.state.requests.some(u=>u.pathname.includes('/work-for-other/')),false);
 });
 
-test('Homework bài mới: lấy buổi và mã đã đăng ký, không tìm cứng Lesson 9',async()=>{
+test('Homework bài mới: nhận theo đúng mã dù Lesson trong tên khác',async()=>{
  const f=setup(),code='67-practice-listening_homework-new-fixture';
  registerAuthoredLesson({code,lesson:77,title:'Fixture mới',totalMs:1200000,paragraphs:['A'],groups:[{id:'notes',kind:'completion',label:'Notes',start:1,end:1}]});
- f.binding.code=code;f.state.works[0].title='Homework Lesson 77';
+ f.binding.code=code;f.state.works[0].title='Homework Lesson 5';
  f.state.document.tabs[0].childTabs[0].documentTab.body.content[0].paragraph.elements[0].textRun.content=code+'\n'+CTA+'\n';
  const target=await f.resolver(f.binding);assert.equal(target.code,code);assert.equal(target.documentId,'doc1');
 });

@@ -64,9 +64,9 @@ export function createCtaRegistrar({pool,service,context,docs,resolveOwner,publi
    const catalog=await service.lessonCatalog({code:selectedCode});
    if(!catalog.classes.some(c=>c.classCode===event.class_name))fail('CTA_CLASS_MISMATCH','Lớp chưa mở bài Listening.',403);
   };
+  if(event.check_only)await checkOpen();
+  await verifyClassroomCopy(event);
   if(event.check_only){
-   await checkOpen();
-   await verifyClassroomCopy(event);
    return {documentId:event.doc_id,status:'eligible',code:selectedCode};
   }
   let owner;
