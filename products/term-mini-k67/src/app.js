@@ -27,6 +27,7 @@ import {audioOwnerPool,audioOwnerContext,mountAudioOwner,claimAudioOwnerAtStart}
 import {examRateIdentity,examRateKey} from './exam-rate-limit.js';
 import { registerTermTestPlanning } from './term-test-planning.js';
 import { registerTermTestResultStream } from './term-test-result-stream.js';
+import { mountTerm2MobileResults } from './term2-mobile-results.js';
 import { mountAnswerExplanations } from './answer-explanations.js';
 import { mountTeacherAnswerExplanations } from './teacher-answer-explanations.js';
 import {mountTeacherSavedProgress,readTeacherSavedProgress} from './teacher-saved-progress.js';
@@ -1370,6 +1371,8 @@ export function createApp({
 
   app.locals.termTestResultStream = registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
   mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter });
+  mountTerm2MobileResults(app, {pool, config, limiter: testReadLimiter, logEvent: logTermTestEvent,
+    readGrading: termTestWritingGradingService?.getStatus?.bind(termTestWritingGradingService)});
 
   app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
     const parsed = resultRequestSchema.safeParse(req.body);
