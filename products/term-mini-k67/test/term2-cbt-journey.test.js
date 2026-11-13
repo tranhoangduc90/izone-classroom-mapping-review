@@ -40,7 +40,7 @@ test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}${holdFail
     await rmdir(directory);
   });
   if(fullQuota)await writeFile(holdScopeFile,'{"classes":null}');
-  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,
+  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term2CbtJourneyMode:'on',term2R2ConfigFile,term2MobileResultsEnabled:!holdEnabled,
     writingHold:{term2WritingHoldHours:24,term2WritingHoldLimit:3,
       term2WritingHoldClasses:holdClasses,term2WritingHoldClassesFile:fullQuota?holdScopeFile:undefined},
     mountJournal:()=>({business(event,testSlug,_token,details){
@@ -85,6 +85,12 @@ test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}${holdFail
     assert.equal(offer.body.audioDownload?.sha256,publicAudioCatalog['term-test-2'].sha256);
     assert.equal(offer.body.audioDownload?.validForSeconds,600);
     const post=(route,body)=>api.post(slug+'/cbt-journey/'+route).set('x-term2-permit',offer.body.permit).send({...scope,...body});
+    const mobile = '/api/term-tests/term-test-2/mobile-results';
+    const issue = (body = scope, permit = offer.body.permit) => api.post(mobile+'/issue').set('x-term2-permit',permit).send(body);
+    if(!holdEnabled) {
+      assert.equal((await issue()).body.error,'MOBILE_REVIEW_NOT_PUBLISHED');
+      assert.equal((await issue({...scope,deviceProof:'b'.repeat(64)})).status,403);
+    }
     assert.ok((await post('begin',{})).ok);
     assert.equal((await post('begin',{deviceProof:'b'.repeat(64)})).status,403);
     const wrongTest=await api.post('/api/term-tests/mini-test-lesson-5/cbt-journey/prepare').send({...identity,...scope});
@@ -123,6 +129,7 @@ test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}${holdFail
       nextAt=operation.capturedAt+1_000;
       attemptToken=accepted.body.receipt.attemptToken;
     }
+    if(!holdEnabled) assert.equal((await issue()).body.error,'MOBILE_REVIEW_NOT_PUBLISHED');
     const native=await api.post('/api/term-tests/writing').send({attemptToken,action:'start',task1:'',task2:''});
     assert.equal(native.body.error,'TERM_OFFLINE_JOURNEY_ACTIVE',native.text);
     const essay=mode==='lis_first'?'\u200b\u2060\u200d':'This is a synthetic Task 2 essay.';
@@ -290,6 +297,23 @@ test(`Term 2 offline L/R/W in order and one Writing receipt · ${mode}${holdFail
     assert.equal(results[0].writingScore,null);
     const jobs=await f.db.query("SELECT count(*)::int AS n FROM assessment.term_test_writing_grading_job WHERE job_type='dispatch'");
     assert.equal(jobs.rows[0].n,1);
+    if(!holdEnabled) {
+      const issued = await issue();
+      assert.ok(issued.ok, issued.text);
+      const input = {code:issued.body.code,classCode:identity.classCode,examMode:mode};
+      const read = (body = input) => api.post(mobile+'/result').send(body);
+      assert.equal((await read({...input,classCode:'OTHER'})).status,403);
+      assert.equal((await read({...input,examMode:'read_first'})).status,403);
+      assert.equal((await read({...input,code:input.code.slice(0,-2)+'zz'})).status,403);
+      const visible = await read();
+      assert.ok(visible.ok,visible.text);
+      assert.match(visible.headers['cache-control'], /no-store/);
+      assert.deepEqual(visible.body.result,row.combined_result);
+      assert.equal(visible.body.attemptToken,undefined);
+      assert.equal(visible.body.exam,undefined);
+      assert.equal(gradingCalls.length,gradingReads);
+      assert.deepEqual((await f.db.query('SELECT * FROM assessment.term_test_attempt WHERE id=$1',[attemptToken])).rows[0],row);
+    }
     if(holdEnabled){
       await f.db.query(`UPDATE assessment.term_k67_writing_submission_hold SET
         held_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour'

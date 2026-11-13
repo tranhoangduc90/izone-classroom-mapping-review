@@ -5,7 +5,9 @@ import {createMiniFixture} from '../test/helpers/mini-answer-sheet-fixture.js';
 import {createTermTestWritingGradingService} from '../src/term-test-writing-grading.js';
 import {createErpGradeSync} from '../src/erp-sync.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdtemp,mkdir} from 'node:fs/promises';
+import {rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {startPreviewExamJournal} from './preview-exam-journal.mjs';
@@ -52,6 +54,9 @@ const definition=async slug=>{
   // File cấu hình trong worktree do task quản lý, không phải code lấy từ API.
   let out;new Function('window',src)({set TERM_TEST_CONFIG(value){out=value;}});return out;
 };
+const mobileReviewEnabled = process.env.K67_PREVIEW_TERM2_MOBILE_RESULTS === 'true';
+const mobileReviewDir = mobileReviewEnabled ? await mkdtemp(path.join(tmpdir(),'term2-mobile-fixture-')) : null;
+if (mobileReviewDir) process.once('exit', () => rmSync(mobileReviewDir, {recursive:true,force:true}));
 const configs=new Map();for(const slug of Object.keys(timing))configs.set(slug,await definition(slug));
 const questions=(slug,skill)=>configs.get(slug)[skill].controls.map(c=>`<p data-question-number="${c.number}">Câu ${c.number} · Đáp án thử <span data-answer-slot="${c.number}"></span></p>`).join('');
 const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUntilComplete:true,
@@ -145,7 +150,7 @@ const gradingRoundTrip=Boolean(termHoldSlug&&journalFixture)
   &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
 const fixtureGradeRequests=[];
 let writingGrading;
-const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:mobileReviewDir || pretestAssetDir,term2MobileResultsEnabled:mobileReviewEnabled,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
@@ -214,6 +219,37 @@ for(const slug of Object.keys(timing)){
     'UPDATE assessment.test_definition SET open_class_ids=$2 WHERE slug=$1',
     [slug, JSON.stringify(['1293','1992200','1992806'])]
   );
+}
+if (mobileReviewDir) {
+  const slug = 'term-test-2';
+  const dir = path.join(mobileReviewDir,slug);
+  const definition = (await fixture.db.query('SELECT listening_definition,reading_definition FROM assessment.test_definition WHERE slug=$1',[slug])).rows[0];
+  const source = content(slug);
+  const skills = {};
+  for (const skill of ['listening','reading']) {
+    const questions = definition[skill+'_definition'].questions;
+    const section = source[skill].sections[0];
+    section.range = 'Questions '+questions[0].number+'–'+questions.at(-1).number;
+    if (skill === 'listening') section.transcript = [[{text:'Dẫn chứng mô phỏng Listening.'}]];
+    skills[skill] = {sections:[section],entries:Object.fromEntries(questions.map(q=>[q.number,{
+      number:q.number, section:0, type:'Câu mô phỏng', answers:q.accepted,
+      prompt:[[{text:'Câu hỏi mô phỏng.'}]],
+      evidence:[[{text:skill==='reading'?'Đây là bài đọc thử.':'Dẫn chứng mô phỏng Listening.'}]],
+      blocks:[{analysis:[[{text:'Phân tích mô phỏng cho câu '+q.number+'.'}]],evidence:[]}],
+      ...(skill==='listening'&&{replay:[{id:'preview-'+q.number,startMs:1000,endMs:2500}]})
+    }]))};
+  }
+  const digest = value => createHash('sha256').update(value).digest('hex');
+  const canonical = value => JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))) : item);
+  const contentJson=JSON.stringify(source);
+  await mkdir(dir);
+  await writeFile(path.join(dir,'content.json'),contentJson);
+  await writeFile(path.join(dir,'explanations.json'),JSON.stringify({
+    schemaVersion:1,testSlug:slug,definitionVersion:1,contentSha256:digest(contentJson),
+    definitionSha256:digest(canonical({listening:definition.listening_definition,reading:definition.reading_definition})),
+    skills,reviewAudio:{asset:'term-test-2-96kbps-656921dc9888dcfe.mp3',sha256:'656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e',durationMs:1843200}
+  }));
 }
 const outer=express();
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
