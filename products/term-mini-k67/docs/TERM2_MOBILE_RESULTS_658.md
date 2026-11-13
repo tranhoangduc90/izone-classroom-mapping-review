@@ -1,6 +1,6 @@
 # Term Test 2 K67 · Xem kết quả từ link thi
 
-Pilot của [#658](https://github.com/tranhoangduc90/izone-AI-team/issues/658). Phạm vi là trang Term 2 K67 thi máy dùng journey hiện hành. Học viên lấy mã xem từ kết quả trên máy tính đã thi. Mở lại cùng URL trên điện thoại, chọn **Xem kết quả** và dán mã. Mã hết hạn sau 24 giờ, cấp lại từ đúng thiết bị nếu cần. URL chỉ mang thông tin điều hướng có sẵn.
+Pilot của [#658](https://github.com/tranhoangduc90/izone-AI-team/issues/658). Phạm vi là trang Term 2 K67 thi máy dùng journey hiện hành. Học viên lấy link xem cá nhân từ kết quả trên máy tính đã thi. Mở link để xem ngay, không nhập mã. Link giữ địa chỉ và tham số của trang thi, thêm quyền chỉ xem trong phần fragment. Quyền hết hạn sau 24 giờ. Link lớp dùng chung vẫn hướng dẫn thi trên máy tính hoặc mở link cá nhân.
 
 API dùng quyền journey và proof của thiết bị để cấp mã. Mã chỉ dùng trên hai endpoint đọc mới, không chứa token thi có thể dùng lại. Hai endpoint kiểm bài, lớp nếu có trên link, thứ tự nếu có trên link, lượt, generation, mốc nộp, trạng thái thay thế và hạn mã. Điểm Listening/Reading dùng dữ liệu đã chốt sau nộp đủ. Writing đọc trạng thái chấm đã lưu. Lời giải qua bộ kiểm phiên bản đề/đáp án/audio sẵn có. Cấu hình `K67_TERM2_MOBILE_RESULTS_ENABLED` mặc định tắt. Khi tắt, endpoint trả 404. Giữ nguyên chính sách thi và các API cũ.
 

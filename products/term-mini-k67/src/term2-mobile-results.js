@@ -84,7 +84,7 @@ export function mountTerm2MobileResults(app, {config, pool, limiter, readGrading
     return res.status(status).json({ok: false, error, message});
   }
   const denied = (req, res) => fail(req, res, 403, 'MOBILE_REVIEW_DENIED',
-    'Mã xem hết hạn hoặc không khớp bài thi. Hãy lấy mã mới từ máy tính đã dùng để thi.');
+    'Link xem hết hạn hoặc không khớp bài thi. Hãy lấy link mới từ máy tính đã dùng để thi.');
   const wait = (req, res, session) => fail(req, res, 409, 'MOBILE_REVIEW_NOT_PUBLISHED',
     'Chưa thể xem kết quả. Hãy kiểm tra bài đã nộp đủ và kết quả đã được công bố.', session);
   const start = (req, res, next) => {
