@@ -280,6 +280,42 @@ test('registry giữ lịch sử đã đóng khi đối soát đúng bài hiện
     assert.equal((await f.pool.query("SELECT assignment_code FROM speaking_homework.assignment WHERE course_work_id='099'")).rows[0].assignment_code,code+'-deleted-20260928');
   } finally {await f.db.close();}
 });
+test('Cầu nối link Docs cũ chỉ trả chủ bài và chặn người khác cùng lớp trước khi cấp phiên', async () => {
+  const f = await fixture();
+  try {
+    await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_going' WHERE erp_student_contact_id=3");
+    const app = express();
+    app.use(express.json());
+    app.use(createSpeakingHomeworkRouter({ pool: f.pool, workerSecret: 'fixture-worker',
+      accessSecret: 'fixture-secret-only-32-characters-long', authenticate: (_q, _s, next) => next() }));
+    app.use((error, _req, res, _next) => res.status(error.status || error.httpStatus || 500).json({ error: error.code }));
+    const input = { classCode: 'IC2304', assignmentCode: code, documentId: 'document-a' };
+    const post = (route, body) => request(app).post('/internal/independent/' + route)
+      .set('x-speaking-worker-secret', 'fixture-worker').send(body);
+
+    const opened = await post('legacy-open', input);
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.assignment.selectedStudentRef, ref);
+    assert.deepEqual(opened.body.assignment.students, [{ student_ref: ref, name: 'Tên trùng' }]);
+
+    const wrongStudent = await post('legacy-session', { ...input, studentRef: dropped, identityConfirmed: true });
+    assert.equal(wrongStudent.status, 403);
+    assert.equal(wrongStudent.body.error, 'STUDENT_DOCUMENT_MISMATCH');
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_homework.access_grant')).rows[0].n, 0);
+
+    const correctStudent = await post('legacy-session', { ...input, studentRef: ref, identityConfirmed: true });
+    assert.equal(correctStudent.status, 200);
+    const work = await f.service.open(correctStudent.body.session);
+    assert.equal(work.assignment.documentId, input.documentId);
+    assert.equal(work.student.ref, ref);
+
+    await f.pool.query("UPDATE mapping.erp_class_membership_snapshot SET registration_status='on_hold' WHERE erp_student_contact_id=1");
+    const unavailable = await post('legacy-open', input);
+    assert.equal(unavailable.status, 403);
+    assert.equal(unavailable.body.error, 'STUDENT_NOT_ACTIVE');
+  } finally { await f.db.close(); }
+});
+
 test('Cầu nối bài cũ: SQL thật giữ tiến độ, đúng Docs và quyền người học',async()=>{
   const {createSpeakingLegacyBridge}=await import('../src/speaking-legacy-bridge.js');
   const {createIndependentSource}=await import('../src/speaking-independent-source.js');

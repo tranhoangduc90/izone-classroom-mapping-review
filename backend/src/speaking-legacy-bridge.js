@@ -14,7 +14,7 @@ export function createSpeakingLegacyBridge({pool,source,catalog,service}) {
     if(!rows.length)return null;
     if(rows.length!==1||rows[0].assignment_code!==input.assignmentCode)
       fail('DOCUMENT_ASSIGNMENT_MISMATCH','File Homework không khớp mã bài đang mở.');
-    return service.openAssignment(input);
+    return service.openAssignment(input,{requireDocumentOwner:true});
   }
   async function start(input) {
     const c=await source.context(input);
@@ -23,8 +23,8 @@ export function createSpeakingLegacyBridge({pool,source,catalog,service}) {
     if(input.documentId) {
       const assignment=await open(input);
       if(!assignment)return null;
-      const session=await catalog.startSelected(input);
-      return {...session,intakeMode:'legacy'};
+      const session=await service.startSession(input,{requireDocumentOwner:true});
+      return {...session,documentId:input.documentId,intakeMode:'legacy'};
     }
     // Giữ bài đã có tiến độ kể cả khi đích Docs chưa được xác minh lại.
     const {rows:progress}=await pool.query(`SELECT DISTINCT g.document_id FROM speaking_homework.access_grant g
