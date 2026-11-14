@@ -1,5 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import { mountSubmissionStatus } from './submission-status.mjs';
+import { closeExpiredTerm1TimerSessions, mountTerm1ListeningTimer, mountTerm1TimerTeacher, readTerm1TimerRoom, useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import { mountExamClock } from './exam-clock.mjs';
 import { assertAudioOwner as assertSubmissionOwner } from './audio-owner.js';
 import crypto from "node:crypto";
@@ -417,6 +418,7 @@ export function createApp({
   const readForRequest=createRequestReads();
   const readPreparedStudent=(req,classCode,slug,studentRef)=>
     readForRequest(req,JSON.stringify(['student',classCode,slug,studentRef]),()=>pool.query(findStudentForTermTestSql,[classCode,slug,studentRef]));
+  const timerMode = config.term1ListeningTimerMode;
   mountDesignTrial(app, { pool });
 
   async function ensureTermTestWritingGrading(row) {
@@ -572,6 +574,11 @@ export function createApp({
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
   mountSubmissionStatus(app, { pool, limiter: testReadLimiter, assertOwner: assertSubmissionOwner });
+  if (['on','drain'].includes(timerMode) && termTestAssetService) {
+    mountTerm1ListeningTimer(app, { pool, assets: termTestAssetService, readStudent: readPreparedStudent, requireContext,
+      writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter, readLimiter: testReadLimiter, logEvent: logTermTestEvent, mode: timerMode });
+    app.locals.closeExpiredTerm1TimerSessions = () => closeExpiredTerm1TimerSessions(pool, logTermTestEvent);
+  }
 
   app.get('/api/term-tests/roster', testReadLimiter, requireContext, asyncRoute(async (req, res) => {
     const parsed = z.object({ class: classCodeSchema, test: testSlugSchema }).safeParse(req.query);
@@ -826,6 +833,8 @@ export function createApp({
     }
     if (session.attempt_mode === 'answer_sheet') return res.status(409).json({
       ok:false,error:'MODE_CONFLICT',message:'Lượt này là nhập đáp án trên giấy. Hãy mở đúng trang nhập đáp án.' });
+    const room = slug.data === 'term-test-1' && ['on','drain'].includes(timerMode)
+      ? await readTerm1TimerRoom(pool, student.class_id) : null;
     return res.status(201).json({
       ok: true,
       examSessionToken: session.exam_session_token,
@@ -840,6 +849,7 @@ export function createApp({
       listeningSubmitted: Boolean(session.listening_submitted_at),
       attemptToken: session.attempt_token || null,
       serverNow: session.server_now || null,
+      ...(room ? { listeningSharedClock: true } : {}),
       encryptedAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/audio`,
       previewAudioUrl: `/api/term-tests/${slug.data}/session/${session.exam_session_token}/preview`
     });
@@ -942,7 +952,9 @@ export function createApp({
     }
     const timing = termTestAssetService.getTiming(slug.data);
     let startedOwner=null;
+    const useSharedClock = ['on','drain'].includes(timerMode) && slug.data === 'term-test-1';
     const beginSession=async db=>{
+      if (useSharedClock) await useSharedTerm1AudioClock(db, parsed.data.examSessionToken);
       if(config.audioCacheEnabled||config.audioOwnerEnabled){
         const deferred=parsed.data.ownerStartVersion===2;
         const auth=await authorizeAudioSession(db,parsed.data,slug.data,deferred);
@@ -959,7 +971,7 @@ export function createApp({
       if(result.rowCount===1&&before&&config.audioIncidentEnabled)await guardListeningStart(db,parsed.data,slug.data,timing.listeningDurationSeconds,before);
       return result;
     };
-    const started=parsed.data.audioProtocolVersion===1||config.audioCacheEnabled||config.audioOwnerEnabled
+    const started=useSharedClock||parsed.data.audioProtocolVersion===1||config.audioCacheEnabled||config.audioOwnerEnabled
       ?await audioTransaction(pool,beginSession):await beginSession(pool);
     if (started.rowCount !== 1) {
       return res.status(404).json({ ok: false, error: 'EXAM_SESSION_NOT_FOUND', message: 'Phiên chuẩn bị thi đã hết hạn hoặc không tồn tại.' });
@@ -1430,6 +1442,10 @@ export function createApp({
 
   const auth = createAuthService({ config, pool, verifyGoogleToken });
   const authenticate = auth.authenticate;
+  if (['on','drain'].includes(timerMode) && termTestAssetService) {
+    mountTerm1TimerTeacher(app, { pool, assets:termTestAssetService, authenticate, auth, requireContext,
+      readLimiter:testReadLimiter, writeLimiter:testWriteLimiter, mode:timerMode, logEvent:logTermTestEvent });
+  }
   mountTeacherAnswerExplanations(app, {
     pool, config, limiter: testReadLimiter, authenticate, requireContext,
     readAuthorization: auth.readAuthorization, querySchema: teacherAttemptReviewQuerySchema
@@ -1738,6 +1754,7 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if(error?.code==='P6740')return res.status(409).json({ok:false,error:'TIMER_SESSION_REQUIRED',message:'Lượt đang làm ở trang Listening không audio.'});
     if(error?.code==='P6730')return res.status(409).json({ok:false,error:'AUDIO_END_NOT_CONFIRMED',message:'Audio chưa được xác nhận phát hết. Bài làm vẫn được giữ.'});
     if(error?.code==='P6731')return res.status(409).json({ok:false,error:'LISTENING_REVIEW_ACTIVE',message:'Bạn vẫn còn thời gian rà bài Listening sau khi nghe hết audio.'});
     if(error?.code==='P6703')return res.status(409).json({ok:false,error:'AUDIO_OWNER_REQUIRED',message:'Tab hoặc thiết bị này không còn quyền sửa/nộp Listening. Quay lại nơi đang thi.'});

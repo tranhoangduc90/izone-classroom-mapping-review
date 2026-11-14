@@ -5,7 +5,7 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   const journal = mountJournal ? {mountJournal,journalEnv:{EXAM_JOURNAL_ENABLED:'1'}} : {};
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
   const term2Journeys=term2CbtJourneyMode||term2PaperJourneyMode||pretestCbtJourneyMode||pretestPaperJourneyMode;
@@ -13,6 +13,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   const termTestSessionSecret=miniPaperOffline||miniCbtOfflineMode||miniCbtJourneyMode||termJourneys||term1ListeningRetakeMode
     ?'synthetic-mini-offline-secret-at-least-32-bytes':undefined;
   const installTermJourney=async db=>{
+    if(term1ListeningTimerMode)await db.exec(await readFile(new URL('../../db/035-term1-listening-timer.sql',import.meta.url),'utf8'));
     if(termJourneys)await db.exec(await readFile(new URL('../../db/023-term1-cbt-journey.sql',import.meta.url),'utf8'));
     if(term2Journeys)await db.exec(await readFile(new URL('../../db/024-term2-cbt-journey.sql',import.meta.url),'utf8'));
     if(term1ListeningRetakeMode)await db.exec(await readFile(new URL('../../db/027-term1-listening-retake.sql',import.meta.url),'utf8'));
@@ -45,7 +46,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     await installTermJourney(db);
     await installMiniPaper(db);
     return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
-      config:{...miniR2,...writingHold,termTestAssetDir,miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
+      config:{...miniR2,...writingHold,term1ListeningTimerMode,termTestAssetDir,miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};
   }
   const db=new PGlite();await db.exec('CREATE SCHEMA assessment;CREATE SCHEMA mapping;');
@@ -95,7 +96,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   const query=async(sql,args)=>{const r=await db.query(typeof sql==='string'?sql:sql.text,args||sql.values);return{...r,rowCount:r.rows.length||r.affectedRows||0};};
   const pool={query,connect:async()=>{let release;const gate=new Promise(r=>release=r);const previous=queue;queue=queue.then(()=>gate);await previous;return{query,release};}};
   return {db,pool,app:createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
-    config:{...miniR2,...writingHold,termTestAssetDir,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
+    config:{...miniR2,...writingHold,term1ListeningTimerMode,termTestAssetDir,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
       miniPaperOfflineMode:miniPaperOffline,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
       term1ListeningRetakeMode,term1ListeningRetakeSecret,
       allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}})};

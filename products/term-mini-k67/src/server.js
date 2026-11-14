@@ -6,6 +6,7 @@ import { createTermTestAssetService } from './term-test-assets.js';
 import { createTermTestWritingGradingService } from './term-test-writing-grading.js';
 import { createTermTestWritingNotifier, withTermTestWritingNotifications } from './term-test-writing-notifier.js';
 import { pruneExpiredLrHolds, pruneExpiredWritingHolds } from './mini-cbt-journey.js';
+import { startTerm1TimerSweep } from './term1-listening-timer.js';
 
 // Đọc cấu hình riêng, xác nhận DB rồi chỉ khởi động thi/chấm K67.
 // Cấu hình lỗi dừng sớm; lỗi lúc chạy không in bài làm hoặc khóa bí mật.
@@ -29,6 +30,7 @@ const termTestWritingGradingService = withTermTestWritingNotifications(
 );
 const app = createApp({ config, pool, syncErpGrades, termTestAssetService, termTestWritingGradingService });
 let holdCleanup;
+let stopTimerSweep;
 let holdCleanupRunning=false;
 const holdPruners=[];
 if ((config.term1WritingHoldHours>0 && config.term1WritingHoldLimit>0)
@@ -52,6 +54,10 @@ async function expireSubmissionHolds() {
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Backend thi K67 đang lắng nghe tại cổng ${config.port}.`);
   notifier.kick();
+  if (app.locals.closeExpiredTerm1TimerSessions) {
+    stopTimerSweep = startTerm1TimerSweep(app.locals.closeExpiredTerm1TimerSessions,
+      () => console.error('K67_TERM1_TIMER_SWEEP_FAILED'));
+  }
   if (holdPruners.length) {
     void expireSubmissionHolds();
     holdCleanup=setInterval(expireSubmissionHolds,60_000).unref();
@@ -71,7 +77,8 @@ async function shutdown(signal) {
   const stopped = new Promise(resolve => server.close(resolve));
   const cleanup = await Promise.allSettled([
     app.locals.termTestResultStream?.close(),
-    app.locals.termTeacherObservation?.close()
+    app.locals.termTeacherObservation?.close(),
+    stopTimerSweep?.()
   ]);
   if (cleanup.some(result => result.status === 'rejected')) console.error('K67_STREAM_SHUTDOWN_FAILED');
   await stopped;
