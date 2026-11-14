@@ -69,6 +69,28 @@ test('Pilot cách ly 20 bài qua checkpoint, Portal giả và burst mở tối �
       assert.equal((await service.getPublicAssignment(publicToken,timing)).assignmentId,assignmentId);
       assert.ok(['hit','coalesced'].includes(timing.definitionCache));
     });
+    const classes=await Promise.all([2140,2141,2142,2143].map(async classId=>{
+      await fixture.pool.query('INSERT INTO mapping.classroom_course_mapping VALUES($1,$2)',[classId,'Lớp giả '+classId]);
+      await fixture.pool.query('INSERT INTO mapping.reviewer_class_access VALUES($1,$2)',[teacher.email,classId]);
+      await fixture.pool.query(`INSERT INTO mapping.student_mapping_review
+        (public_id,erp_course_class_id,erp_student_contact_id,erp_student_name_snapshot)
+        VALUES($1::uuid,$2,$3,$4)`,[randomUUID(),classId,10000+classId,'Học viên giả']);
+      const copy=await service.publishReflectionForm({reviewer:teacher,title:'Phiếu giả '+classId,
+        courseCode:'course-67',classId:String(classId),sessionNumber:3,opensAt:null,closesAt:null,
+        items:[{libraryItemId:'10000000-0000-4000-8000-000000000001',checkpoint:1,required:true}]});
+      return {publicToken:copy.publicToken,assignmentId:copy.assignmentId,classId:String(classId)};
+    }));
+    classes.push({publicToken,assignmentId,classId:'2139'});
+    const coldDistributed=createLearningService({pool:fixture.clockPool});
+    const misses=new Set();
+    await burst(100,'open100DistributedCold',async index=>{
+      const target=classes[index%classes.length],timing={};
+      const phiếu=await coldDistributed.getPublicAssignment(target.publicToken,timing);
+      assert.equal(phiếu.assignmentId,target.assignmentId);
+      assert.equal(phiếu.class.id,target.classId);
+      if(timing.definitionCache==='miss')misses.add(target.assignmentId);
+    });
+    assert.equal(misses.size,classes.length);
     const disabled=createLearningService({pool:fixture.clockPool,publicDefinitionCacheBytes:0});
     const timing={};
     assert.equal((await disabled.getPublicAssignment(publicToken,timing)).assignmentId,assignmentId);
