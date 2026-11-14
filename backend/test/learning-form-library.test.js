@@ -8,6 +8,7 @@ import pg from 'pg';
 import {createPGlitePool,initializeLearningDemoDatabase} from '../src/learning-demo.js';
 import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {createLearningFormLibrary} from '../src/learning-form-library.js';
+import {archiveCatalog} from '../src/learning-catalog-archive.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningLibraryDemoGrant,verifyLearningDemoGrant} from '../src/learning-demo-grant.js';
 async function openLibraryFixture(){
@@ -109,5 +110,26 @@ test('Kho phiếu: không tự coi phiếu đã dùng là chuẩn; bản chụp 
   assert.equal(assigned.class_id,'1294');assert.equal(assigned.session_number,1);
   assert.equal(assigned.public_definition.blocks[0].items[0].prompt,'Câu đã sửa');
   assert.equal((await drafts.get({id:personal.id,reviewer:other})).classId,null);
+  const counts=async()=> (await pool.query(`SELECT
+   (SELECT count(*)::int FROM learning.form_draft) drafts,
+   (SELECT count(*)::int FROM learning.form_library_entry) entries,
+   (SELECT count(*)::int FROM learning.form_worksheet) worksheets,
+   (SELECT count(*)::int FROM learning.form_worksheet_revision) revisions`)).rows[0];
+  const before=await counts();
+  await db.exec(`CREATE FUNCTION learning.test_stop_copy() RETURNS trigger LANGUAGE plpgsql AS
+   $$ BEGIN RAISE EXCEPTION 'fixture stop before worksheet'; END; $$;
+   CREATE TRIGGER test_stop_copy BEFORE INSERT ON learning.form_worksheet
+   FOR EACH ROW EXECUTE FUNCTION learning.test_stop_copy();`);
+  const interrupted={...personalRequest,operationId:randomUUID()};
+  await assert.rejects(()=>library.copyToPersonal(interrupted),/fixture stop before worksheet/);
+  assert.deepEqual(await counts(),before);
+  await db.exec('DROP TRIGGER test_stop_copy ON learning.form_worksheet;');
+  const recovered=await library.copyToPersonal(interrupted);
+  assert.notEqual(recovered.id,personal.id);
+  await archiveCatalog({pool,id:shared.id,source:'izone',operationId:randomUUID(),reviewer});
+  await assert.rejects(()=>library.copyToPersonal({...personalRequest,operationId:randomUUID()}),
+   e=>e.code==='LIBRARY_ENTRY_NOT_FOUND');
+  assert.equal((await library.copyToPersonal(interrupted)).id,recovered.id);
+  assert.equal((await drafts.get({id:personal.id,reviewer:other})).definition.title,'Bản cá nhân đã sửa');
  }finally{await close();}
 });
