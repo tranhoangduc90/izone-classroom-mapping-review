@@ -8,6 +8,44 @@ import {createLearningFormLibrary} from '../src/learning-form-library.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningService} from '../src/learning-service.js';
 
+test('Làm nóng định nghĩa theo giờ mở hoặc đúng giờ đã ghim của buổi',async()=>{
+  const clock={value:Date.parse('2026-11-14T11:21:00Z')};
+  const fixture=await postgresFixture({asApplication:true,clock,studentCount:1});
+  try{
+    await fixture.pool.query(await readFile(new URL('../ops/learning-migrations/202611040001_form_assignment_portal_target.sql',import.meta.url),'utf8'));
+    const publish=async(session,opensAt,pinnedStart)=>{
+      const assignment=await fixture.service.publishReflectionForm({
+        reviewer:{email:'teacher@example.test',canAccessAllClasses:false},
+        title:'Phiếu kiểm làm nóng '+session,courseCode:'course-67',classId:'2139',sessionNumber:session,
+        opensAt,closesAt:null,items:[{libraryItemId:'10000000-0000-4000-8000-000000000001',checkpoint:1,required:true}]
+      });
+      if(pinnedStart)await fixture.pool.query(`INSERT INTO learning.form_assignment_portal_target
+        (assignment_id,portal_session_id,starts_at,attendance_fingerprint) VALUES($1,$2,$3,'fixture')`,
+        [assignment.assignmentId,90000+session,pinnedStart]);
+      return assignment;
+    };
+    const explicit=await publish(1,'2026-11-14T11:30:00Z',null);
+    const pinned=await publish(2,null,'2026-11-14 18:30:00');
+    const explicitLater=await publish(3,'2026-11-14T12:15:00Z','2026-11-14 18:30:00');
+    const old=await publish(4,null,'2026-11-13 18:30:00');
+    const unlinked=await publish(5,null,null);
+    const pool={...fixture.clockPool,query:(sql,params)=>fixture.clockPool.query(sql.replaceAll('now()','clock_timestamp()'),params)};
+    const service=createLearningService({pool});
+    assert.deepEqual(await service.warmPublicDefinitions(['2139']),{candidates:2,failed:0});
+    await assert.rejects(()=>service.getPublicAssignment(explicit.publicToken),{code:'ASSIGNMENT_NOT_AVAILABLE'});
+    clock.value=Date.parse('2026-11-14T12:16:00Z');
+    for(const [assignment,expected] of [[pinned,'hit'],[explicit,'hit'],[explicitLater,'miss'],[old,'miss'],[unlinked,'miss']]){
+      const timing={};
+      const opened=await service.getPublicAssignment(assignment.publicToken,timing);
+      assert.equal(opened.assignmentId,assignment.assignmentId);
+      assert.equal(opened.formVersionId,assignment.formVersionId);
+      assert.equal(timing.definitionCache,expected,'Buổi '+opened.sessionNumber);
+    }
+    await fixture.pool.query("UPDATE learning.form_assignment SET status='closed' WHERE id=$1",[pinned.assignmentId]);
+    await assert.rejects(()=>service.getPublicAssignment(pinned.publicToken),{code:'ASSIGNMENT_NOT_AVAILABLE'});
+  }finally{await fixture.close();}
+});
+
 test('Kho chung PostgreSQL: quyền khóa, lưu cách ly và rollback xuất bản khi mục kho lỗi',{timeout:60000},async()=>{
   const fixture=await postgresFixture({asApplication:true});
   try{
