@@ -343,13 +343,14 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         :{sessionComment:byKey.get(student.studentRef+':'+view.sessionNumber)||null})}))};
   }
 
-  async function readErpSchedule(classId, fresh = false, { allowEmpty = false, displayOnly = false, observe } = {}) {
+  async function readErpSchedule(classId, fresh = false, { allowEmpty = false, displayOnly = false, observe, observeError } = {}) {
     if (!erpScheduleReader) {
       throw new LearningError('ERP_SCHEDULE_NOT_CONFIGURED',
         'Nguồn lịch ERP chưa được cấu hình. Hãy giữ bản chốt và thử đọc lại sau.', 503);
     }
     try { return await erpScheduleReader(classId, { fresh, allowEmpty, displayOnly, observe }); }
-    catch {
+    catch(error) {
+      observeError?.(error);
       throw new LearningError('ERP_SCHEDULE_UNAVAILABLE',
         'Chưa đọc được lịch ERP; bản chốt vẫn được giữ. Hãy thử đọc lại.', 503);
     }
@@ -428,7 +429,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     try {
       if(erpScheduleReader){
         const schedule = decorateSchedule(classId, await measureJourney(timing,'erpMs',()=>readErpSchedule(classId,false,{
-          displayOnly:true,observe:timing?(value=>{timing.erpCache=value;}):undefined
+          displayOnly:true,observe:timing?(value=>{timing.erpCache=value;}):undefined,
+          observeError:timing?(error=>{
+            const code=error?.message;
+            timing.erpError=/^ERP_SCHEDULE_[A-Z_]{1,44}$/.test(code||'')?code:
+              ['TimeoutError','AbortError'].includes(error?.name)?'ERP_SCHEDULE_TIMEOUT':'ERP_SCHEDULE_UNAVAILABLE';
+          }):undefined
         })));
         const plan = await pool.query(fetchLearningJourneyPlanSql, [classId]);
         const baseline = await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId]);

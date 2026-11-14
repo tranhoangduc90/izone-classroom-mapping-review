@@ -43,6 +43,7 @@ for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '
     app.use(express.json());
     const accept=(_req,res,next)=>{if(!authorized)return res.status(401).json({ok:false,message:'Phiên thử đã hết hạn.'});next();};
     let authorized=true,revisionPolls=0;
+    const readEvents=[];
     app.use((req,res,next)=>{
       if(req.path.endsWith('/live-updates'))revisionPolls++;
       if(req.path.endsWith('/attempts/submit'))return submitContext.run(true,next);
@@ -51,12 +52,34 @@ for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '
     app.get('/api/auth/session',accept,(_req,res)=>res.json({ok:true,reviewer}));
     router=createLearningRouter({pool,authenticate:(req,res,next)=>accept(req,res,()=>{
       req.reviewer=reviewer;next();
-    }),revalidate:async()=>authorized?reviewer:null,realtimeEnabled:true,realtimeStreamEnabled:stream});
+    }),revalidate:async()=>authorized?reviewer:null,realtimeEnabled:true,realtimeStreamEnabled:stream,
+    logger:{info:line=>readEvents.push(JSON.parse(line))}});
     app.use('/api/learning',router);
     app.get('/progress-log/config.js',(_req,res)=>res.type('js').send('window.PROGRESS_LOG_CONFIG={API_BASE_URL:location.origin};'));
     app.use(express.static(pages));
     server=await new Promise(done=>{const listener=app.listen(0,'127.0.0.1',()=>done(listener));});
     const origin='http://127.0.0.1:'+server.address().port;
+    if(stream){
+      const open=async source=>fetch(origin+'/api/learning/assignments/open',{
+        method:'POST',headers:{'content-type':'application/json',origin:source},
+        body:JSON.stringify({publicToken:published.publicToken})
+      });
+      const pagesOrigin='https://tranhoangduc90.github.io';
+      const first=await open(pagesOrigin);
+      assert.equal(first.status,200);
+      assert.equal(first.headers.get('timing-allow-origin'),pagesOrigin);
+      const id=first.headers.get('server-timing').match(/progress_request;desc="([a-f0-9-]+)"/)?.[1];
+      assert.ok(id);
+      const event=readEvents.find(event=>event.correlation===id);
+      assert.equal(event?.operation,'assignment_open');
+      assert.equal(event?.definitionCache,'miss');
+      assert.ok(!JSON.stringify(event).includes(published.publicToken));
+      const cached=await open('https://other.invalid');
+      assert.equal(cached.status,200);
+      assert.equal(cached.headers.get('timing-allow-origin'),null);
+      assert.equal(cached.headers.get('server-timing'),null);
+      assert.equal(readEvents.filter(event=>event.operation==='assignment_open').at(-1).definitionCache,'hit');
+    }
     browser=await chromium.launch({channel:'chrome',headless:true});
     const context=await browser.newContext();
     await context.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());
