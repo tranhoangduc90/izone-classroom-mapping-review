@@ -268,7 +268,11 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     const warm=async()=>{
       if(warming)return;
       warming=true;
-      try{await service.warmPublicDefinitions(warmClasses);}
+      try{
+        const result=await service.warmPublicDefinitions(warmClasses);
+        if(result?.candidates)logger?.info?.(JSON.stringify({type:'progress_log_read',operation:'definition_warmup',
+          status:result.failed?'partial':'ok',...result,serverOccurredAt:new Date().toISOString()}));
+      }
       catch{try{logger?.info?.(JSON.stringify({type:'progress_log_read',operation:'definition_warmup',status:'failed'}));}catch{}}
       finally{warming=false;}
     };

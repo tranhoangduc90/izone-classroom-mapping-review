@@ -472,14 +472,27 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     ...(comments||{}),
     async warmPublicDefinitions(classIds) {
       if(!publicDefinitionCacheBytes||!classIds.length)return;
-      const {rows}=await pool.query(`SELECT DISTINCT version.id::text AS form_version_id,version.definition_hash
+      // Giờ Portal chỉ dùng để chọn nội dung làm nóng khi phiếu không đặt giờ mở.
+      const {rows}=await pool.query(`WITH warmup AS (SELECT clock_timestamp() AS checked_at)
+        SELECT DISTINCT version.id::text AS form_version_id,version.definition_hash
         FROM learning.form_assignment assignment
         JOIN learning.form_version version ON version.id=assignment.form_version_id
+        LEFT JOIN learning.form_assignment_portal_target target ON target.assignment_id=assignment.id
+        CROSS JOIN warmup
         WHERE assignment.erp_course_class_id=ANY($1::bigint[]) AND assignment.status='published'
-          AND version.status='published' AND assignment.opens_at BETWEEN now() AND now()+interval '10 minutes'
+          AND version.status='published' AND (
+            assignment.opens_at BETWEEN warmup.checked_at AND warmup.checked_at+interval '10 minutes'
+            OR (assignment.opens_at IS NULL AND target.starts_at BETWEEN
+              to_char(warmup.checked_at AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM-DD HH24:MI:SS')
+              AND to_char((warmup.checked_at+interval '10 minutes') AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM-DD HH24:MI:SS'))
+          )
         LIMIT 20`,[classIds]);
-      for(let index=0;index<rows.length;index+=2)
-        await Promise.allSettled(rows.slice(index,index+2).map(row=>readPublishedDefinition(row)));
+      let failed=0;
+      for(let index=0;index<rows.length;index+=2){
+        const results=await Promise.allSettled(rows.slice(index,index+2).map(row=>readPublishedDefinition(row)));
+        failed+=results.filter(result=>result.status==='rejected').length;
+      }
+      return {candidates:rows.length,failed};
     },
     // Một snapshot đọc giữ cùng connection; không phải xếp hàng lại sau từng vùng dữ liệu.
     readUsing(database){
