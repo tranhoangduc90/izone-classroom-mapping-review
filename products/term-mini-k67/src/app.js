@@ -1,6 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import { mountSubmissionStatus } from './submission-status.mjs';
-import { closeExpiredTerm1TimerSessions, mountTerm1ListeningTimer, readTerm1TimerRoom, useSharedTerm1AudioClock } from './term1-listening-timer.js';
+import { closeExpiredTerm1TimerSessions, mountTerm1ListeningTimer, mountTerm1TimerTeacher, readTerm1TimerRoom, useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import { mountExamClock } from './exam-clock.mjs';
 import { assertAudioOwner as assertSubmissionOwner } from './audio-owner.js';
 import crypto from "node:crypto";
@@ -1442,6 +1442,10 @@ export function createApp({
 
   const auth = createAuthService({ config, pool, verifyGoogleToken });
   const authenticate = auth.authenticate;
+  if (['on','drain'].includes(timerMode) && termTestAssetService) {
+    mountTerm1TimerTeacher(app, { pool, assets:termTestAssetService, authenticate, auth, requireContext,
+      readLimiter:testReadLimiter, writeLimiter:testWriteLimiter, mode:timerMode, logEvent:logTermTestEvent });
+  }
   mountTeacherAnswerExplanations(app, {
     pool, config, limiter: testReadLimiter, authenticate, requireContext,
     readAuthorization: auth.readAuthorization, querySchema: teacherAttemptReviewQuerySchema

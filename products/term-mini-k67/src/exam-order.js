@@ -4,6 +4,7 @@ import { findStudentForTermTestSql } from './sql.js';
 import { parseStoredTest, gradeSection, buildCombinedResult } from './term-tests.js';
 import {recordListeningAudio} from './audio-recovery.js';
 import {activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
+import { useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
@@ -261,6 +262,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (paper) await guardMiniPaperOfflineWrite(db, config, r.exam_session_id, r.generation);
       if(action.endsWith('start')) {
         if(action==='listening/start'&&r.exam_delivery==='cbt'){
+          if (slug === 'term-test-1' && ['on','drain'].includes(config.term1ListeningTimerMode)) {
+            await useSharedTerm1AudioClock(db, r.exam_session_id);
+          }
           const deferred=data.ownerStartVersion===2;
           const auth=await authorizeAudioSession(db,{...data,examSessionToken:r.exam_session_id},slug,deferred,!config.audioCacheEnabled&&!config.audioOwnerEnabled);
           if(deferred&&(config.audioOwnerEnabled||Number(auth.row?.audio_owner_protocol)===1))startedOwner=await claimAudioOwnerAtStart(db,auth.row,req.body);

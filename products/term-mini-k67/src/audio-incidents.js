@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {AudioRecoveryError} from './audio-recovery.js';
 import {assertAudioOwner} from './audio-owner.js';
 import {randomUUID} from 'node:crypto';
+import { sharedTerm1AudioClockState } from './term1-listening-timer.js';
 
 // Nhận yêu cầu đúng phiên; giao dịch giữ mốc/nháp/bù giờ cùng một khóa session.
 // Kết quả luôn là snapshot đã ghi. Sự cố chưa rõ hoặc quá 900 giây giữ bài chờ giáo viên.
@@ -36,7 +37,8 @@ async function lockedSession(db,input,slug){
 export async function listeningAudioSnapshot(db,id){
   const row=(await db.query('SELECT *,clock_timestamp() AS server_now FROM assessment.term_test_exam_session WHERE id=$1',[id])).rows[0];
   const incident=row?.listening_audio_incident_id?(await db.query('SELECT * FROM assessment.term_test_audio_incident WHERE incident_id=$1',[row.listening_audio_incident_id])).rows[0]:null;
-  return snapshot(row,incident);
+  return {...snapshot(row,incident),...(row?.test_slug==='term-test-1' && process.env.K67_TERM1_LISTENING_TIMER_MODE && process.env.K67_TERM1_LISTENING_TIMER_MODE!=='off'
+    ? await sharedTerm1AudioClockState(db,id) : {})};
 }
 function snapshot(row,incident,granted=0){
   return{audioProtocolVersion:Number(row.listening_audio_protocol_version)||0,audioRevision:Number(row.listening_audio_revision)||0,

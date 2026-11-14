@@ -53,7 +53,12 @@ test('shared deadline closes a disconnected timer attempt and publishes the nati
     return response.body;
   };
   const audio = await post('/session/prepare', first);
+  const operator = api.get('/api/term-tests/teacher/term1-listening-room?classId=1293');
+  assert.equal((await operator).status,401);
+  const teacherRoom = await api.get('/api/term-tests/teacher/term1-listening-room?classId=1293').set('authorization','Bearer fixture-only-key');
+  assert.ok(teacherRoom.ok,teacherRoom.text);
   const startedAudio = await post('/session/start', { examSessionToken: audio.examSessionToken });
+  assert.equal(teacherRoom.body.room.deadlineAt,startedAudio.listeningDeadlineAt);
   if (browser) {
     const pages = resolve(process.env.TERM1_TIMER_PAGES);
     const server = createServer(async (req, res) => {
@@ -90,7 +95,7 @@ test('shared deadline closes a disconnected timer attempt and publishes the nati
   assert.equal(secondTab.body.error,'TIMER_SESSION_REQUIRED');
   if (browser) assert.deepEqual(startedTimer.listeningDraft,answers);
   else assert.equal((await post('/listening-timer/draft', { ...scope, answers, revision: 1 })).accepted,true);
-  const newDeadline = (await db.query(`UPDATE assessment.term1_listening_timer_room SET deadline_at=deadline_at+interval '1 second'
+  const newDeadline = (await db.query(`UPDATE assessment.term1_listening_timer_room SET deadline_at=deadline_at+interval '1 second',audio_confirmed_at=clock_timestamp()
     WHERE class_id=1293 RETURNING deadline_at`)).rows[0].deadline_at;
   const deadlines = (await db.query('SELECT DISTINCT listening_deadline_at FROM assessment.term_test_exam_session')).rows;
   assert.deepEqual(deadlines.map(row => +new Date(row.listening_deadline_at)),[+new Date(newDeadline)]);

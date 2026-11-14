@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { AudioRecoveryError } from './audio-recovery.js';
 import { findLatestTermTestAttemptForStudentSql, findTermTestListeningSubmissionSql,
-  insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, saveTermTestListeningDraftSql } from './sql.js';
+  insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, saveTermTestListeningDraftSql, teacherCanReadClass } from './sql.js';
 import { gradeSection, parseStoredTest } from './term-tests.js';
 
 const slug = 'term-test-1';
@@ -16,26 +16,88 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (code, message, status = 409) => Object.assign(new AudioRecoveryError(code, message), { status });
 const unavailable = () => fail('TIMER_ROOM_UNAVAILABLE', 'Lớp chưa có ca Listening dùng đồng hồ chung.', 404);
 
+export function mountTerm1TimerTeacher(app, { pool, assets, authenticate, auth, requireContext, readLimiter, writeLimiter, logEvent, mode }) {
+  const path = '/api/term-tests/teacher/term1-listening-room';
+  const classId = z.string().regex(/^[1-9]\d{0,17}$/);
+  const update = z.discriminatedUnion('action', [
+    z.object({ action: z.literal('schedule'), classId, startsAt: z.iso.datetime({ offset: true }) }),
+    z.object({ action: z.literal('hold-audio'), classId }),
+    z.object({ action: z.literal('finish-audio'), classId })
+  ]);
+  const handle = (writing) => async (req, res, next) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      const input = (writing ? update : z.object({ classId })).safeParse(writing ? req.body : req.query);
+      if (!input.success) throw fail('TIMER_INVALID', 'Thông tin ca thi chưa hợp lệ.', 400);
+      const data = input.data;
+      const result = await audioTransaction(pool, async db => {
+        const access = (await db.query(`SELECT c.erp_course_class_id FROM mapping.classroom_course_mapping c
+          WHERE c.erp_course_class_id=$1 AND ${teacherCanReadClass('$2','$3','c.erp_course_class_id')}`,
+        [data.classId, req.reviewer.email, auth.readAuthorization(req)])).rows[0];
+        if (!access) throw fail('ACCESS_DENIED', 'Tài khoản chưa có quyền điều hành lớp này.', 403);
+        if (!writing) return readTerm1TimerRoom(db, data.classId);
+        if (data.action === 'schedule') {
+          if (mode !== 'on') throw unavailable();
+          const start = new Date(data.startsAt);
+          const now = (await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
+          if (start < now || start - now > 30 * 86400_000) throw fail('TIMER_START_OUTSIDE_WINDOW', 'Hãy chọn giờ bắt đầu sắp tới trong 30 ngày.');
+          const duration = assets.getTiming(slug).listeningTotalSeconds;
+          const inserted = await db.query(`INSERT INTO assessment.term1_listening_timer_room(class_id,starts_at,deadline_at)
+            VALUES($1,$2,$2::timestamptz+make_interval(secs=>$3)) ON CONFLICT DO NOTHING RETURNING class_id`, [data.classId, start, duration]);
+          if (!inserted.rows.length) throw fail('TIMER_ROOM_EXISTS', 'Lớp đã có ca Listening Term Test 1.');
+        } else if (data.action === 'hold-audio') {
+          const held = await db.query(`UPDATE assessment.term1_listening_timer_room SET audio_held=true
+            WHERE class_id=$1 AND deadline_at>clock_timestamp() AND audio_confirmed_at IS NULL RETURNING class_id`, [data.classId]);
+          if (!held.rows.length) throw fail('TIMER_ROOM_NOT_RUNNING', 'Không thể giữ ca đã chốt hoặc đã xác nhận phát xong.');
+        } else {
+          const timing = assets.getTiming(slug);
+          const extended = await db.query(`UPDATE assessment.term1_listening_timer_room
+            SET deadline_at=greatest(deadline_at,clock_timestamp()+make_interval(secs=>$2)),audio_confirmed_at=clock_timestamp(), audio_held=false
+            WHERE class_id=$1 AND audio_confirmed_at IS NULL AND (audio_held OR deadline_at>clock_timestamp())
+              AND clock_timestamp()>=starts_at+make_interval(secs=>$3) RETURNING class_id`,
+          [data.classId, timing.listeningReviewSeconds, timing.listeningDurationSeconds]);
+          if (!extended.rows.length && !(await readTerm1TimerRoom(db,data.classId))?.audio_confirmed_at) {
+            throw fail('TIMER_ROOM_NOT_RUNNING', 'Chỉ xác nhận khi audio đã phát đủ thời lượng.');
+          }
+        }
+        return readTerm1TimerRoom(db, data.classId);
+      });
+      if (writing) logEvent('listening_timer_room_changed', slug, `class:${data.classId}`, { action:data.action, deadlineAt:result.deadline_at });
+      res.json({ ok:true, room:result ? { startsAt:result.starts_at, deadlineAt:result.deadline_at, serverNow:result.server_now,
+        audioConfirmedAt:result.audio_confirmed_at, audioHeld:result.audio_held } : null });
+    } catch (error) { next(error); }
+  };
+  app.get(path, readLimiter, authenticate, requireContext, handle(false));
+  app.post(path, writeLimiter, authenticate, requireContext, handle(true));
+}
+
 export async function readTerm1TimerRoom(db, classId) {
   return (await db.query(`SELECT *,clock_timestamp() AS server_now
     FROM assessment.term1_listening_timer_room WHERE class_id=$1`, [classId])).rows[0];
 }
 
 export async function useSharedTerm1AudioClock(db, token) {
-  const session = (await db.query(`SELECT s.*,r.starts_at,r.deadline_at,clock_timestamp() AS server_now
+  const session = (await db.query(`SELECT s.*,r.starts_at,r.deadline_at,r.audio_confirmed_at,clock_timestamp() AS server_now
     FROM assessment.term_test_exam_session s JOIN assessment.term1_listening_timer_room r ON r.class_id=s.erp_course_class_id
     WHERE s.id=$1 AND s.test_slug=$2 AND s.superseded_at IS NULL AND s.attempt_mode<>'answer_sheet' FOR UPDATE OF s`, [token, slug])).rows[0];
-  if (!session) return;
+  if (!session) return false;
   const enrollment = (await db.query(`SELECT device_hash FROM assessment.term1_listening_timer_session WHERE session_id=$1`, [token])).rows[0];
   if (enrollment?.device_hash) throw fail('TIMER_SESSION_REQUIRED', 'Lượt đang làm ở trang Listening không audio.');
   if (session.server_now < session.starts_at) throw fail('TIMER_ROOM_WAITING', 'Ca Listening chưa đến giờ bắt đầu.');
   if (session.server_now >= session.deadline_at && !session.listening_started_at) throw fail('TIMER_ROOM_CLOSED', 'Ca Listening đã hết giờ.');
   await db.query(`INSERT INTO assessment.term1_listening_timer_session(session_id,class_id,submit_id)
     VALUES($1,$2,$3) ON CONFLICT (session_id) DO NOTHING`, [token, session.erp_course_class_id, randomUUID()]);
+  return true;
+}
+
+export async function sharedTerm1AudioClockState(db, token) {
+  const { rows:[row] } = await db.query(`SELECT r.audio_held FROM assessment.term1_listening_timer_session s
+    JOIN assessment.term1_listening_timer_room r ON r.class_id=s.class_id WHERE s.session_id=$1 AND s.device_hash IS NULL`, [token]);
+  return row ? { listeningSharedClock:true, sharedAudioConfirmed:!row.audio_held } : {};
 }
 
 async function lockTimerSession(db, token) {
-  const row = (await db.query(`SELECT s.*,t.device_hash,t.submit_id,r.starts_at,r.deadline_at
+  const row = (await db.query(`SELECT s.*,t.device_hash,t.submit_id,r.starts_at,r.deadline_at,r.audio_held
     FROM assessment.term1_listening_timer_session t JOIN assessment.term_test_exam_session s ON s.id=t.session_id
     JOIN assessment.term1_listening_timer_room r ON r.class_id=t.class_id
     WHERE s.id=$1 AND s.superseded_at IS NULL AND t.device_hash IS NOT NULL FOR UPDATE OF s`, [token])).rows[0];
@@ -50,14 +112,16 @@ function snapshot(row) {
     studentName: row.student_name_snapshot, examMode: 'lis_first',
     listeningStartedAt: row.listening_started_at, listeningDeadlineAt: row.deadline_at,
     startsAt: row.starts_at, serverNow: row.server_now, listeningSubmitted: Boolean(row.listening_submitted_at),
+    waitingForAudio: row.audio_held && row.server_now >= row.deadline_at,
     attemptToken: row.attempt_id, listeningDraft: row.listening_draft, listeningDraftRevision: Number(row.listening_draft_revision) };
 }
 
 async function seal(db, row, incoming) {
   if (row.listening_submitted_at) return { ...snapshot(row), completed: false };
   if (!row.listening_started_at) throw fail('TIMER_NOT_STARTED', 'Chưa mở phần Listening.');
-  const timedOut = row.server_now >= row.deadline_at;
+  const timedOut = !row.audio_held && row.server_now >= row.deadline_at;
   if (!timedOut && !incoming) return null;
+  if (!timedOut && row.server_now >= row.deadline_at) throw fail('TIMER_AUDIO_FINISH_PENDING', 'Đang chờ giảng viên xác nhận audio đã phát xong.');
   const session = (await db.query(findTermTestListeningSubmissionSql, [row.id, slug])).rows[0];
   const test = parseStoredTest({ ...session, test_slug: slug, definition_version: session.version });
   const useIncoming = !timedOut && incoming.revision >= Number(row.listening_draft_revision);
@@ -130,7 +194,7 @@ export function mountTerm1ListeningTimer(app, { pool, assets, readStudent, requi
     return run(db, row);
   });
 
-  app.post(prefix + '/start', requireContext, writeLimiter, route(scope, async (input, student) => {
+  app.post(prefix + '/start', writeLimiter, route(scope, async (input, student) => {
     const result = await withSession(input, student, async (db, row) => {
       if (row.listening_submitted_at) return snapshot(row);
       if (row.server_now < row.starts_at) throw fail('TIMER_ROOM_WAITING', 'Ca Listening chưa đến giờ bắt đầu.');
@@ -147,8 +211,8 @@ export function mountTerm1ListeningTimer(app, { pool, assets, readStudent, requi
     return { ...result, content: { baseTestSlug: slug, title: content.title, variant: content.variant, listening: content.listening } };
   }));
 
-  app.post(prefix + '/status', requireContext, readLimiter, route(scope, (input, student) => withSession(input, student, (_db, row) => snapshot(row))));
-  app.post(prefix + '/draft', requireContext, draftLimiter, route(draft, (input, student) => withSession(input, student, async (db, row) => {
+  app.post(prefix + '/status', readLimiter, route(scope, (input, student) => withSession(input, student, (_db, row) => snapshot(row))));
+  app.post(prefix + '/draft', draftLimiter, route(draft, (input, student) => withSession(input, student, async (db, row) => {
     if (row.listening_submitted_at || !row.listening_started_at || row.server_now >= row.deadline_at) {
       throw fail('LISTENING_LOCKED', 'Listening đã hết giờ hoặc đã được thu bài.');
     }
@@ -157,7 +221,7 @@ export function mountTerm1ListeningTimer(app, { pool, assets, readStudent, requi
     return { ok: true, accepted: saved.accepted, revision: Number(saved.listening_draft_revision),
       draft: saved.listening_draft, deadlineAt: row.deadline_at, serverNow: row.server_now };
   })));
-  app.post(prefix + '/submit', requireContext, writeLimiter, route(draft, async (input, student) =>
+  app.post(prefix + '/submit', writeLimiter, route(draft, async (input, student) =>
     receipt(await withSession(input, student, (db, row) => seal(db, row, input)), logEvent)));
 }
 
@@ -165,7 +229,7 @@ export async function closeExpiredTerm1TimerSessions(pool, logEvent) {
   const { rows } = await pool.query(`SELECT s.id FROM assessment.term1_listening_timer_session t
     JOIN assessment.term_test_exam_session s ON s.id=t.session_id
     JOIN assessment.term1_listening_timer_room r ON r.class_id=t.class_id
-    WHERE t.device_hash IS NOT NULL AND s.listening_started_at IS NOT NULL AND s.listening_submitted_at IS NULL
+    WHERE t.device_hash IS NOT NULL AND NOT r.audio_held AND s.listening_started_at IS NOT NULL AND s.listening_submitted_at IS NULL
       AND s.superseded_at IS NULL AND r.deadline_at<=clock_timestamp() ORDER BY r.deadline_at,s.id LIMIT 40`);
   for (const { id } of rows) {
     try {

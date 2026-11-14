@@ -4,8 +4,11 @@ SET LOCAL lock_timeout='5s';
 CREATE TABLE IF NOT EXISTS assessment.term1_listening_timer_room (
   class_id bigint PRIMARY KEY,
   starts_at timestamptz NOT NULL,
-  deadline_at timestamptz NOT NULL CHECK (deadline_at > starts_at)
+  deadline_at timestamptz NOT NULL CHECK (deadline_at > starts_at),
+  audio_confirmed_at timestamptz
 );
+ALTER TABLE assessment.term1_listening_timer_room ADD COLUMN IF NOT EXISTS audio_confirmed_at timestamptz;
+ALTER TABLE assessment.term1_listening_timer_room ADD COLUMN IF NOT EXISTS audio_held boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS assessment.term1_listening_timer_session (
   session_id uuid PRIMARY KEY REFERENCES assessment.term_test_exam_session(id),
@@ -15,6 +18,7 @@ CREATE TABLE IF NOT EXISTS assessment.term1_listening_timer_session (
 );
 CREATE INDEX IF NOT EXISTS term1_timer_room_sessions ON assessment.term1_listening_timer_session(class_id);
 GRANT SELECT ON assessment.term1_listening_timer_room TO k67_app;
+GRANT INSERT, UPDATE(deadline_at,audio_confirmed_at,audio_held) ON assessment.term1_listening_timer_room TO k67_app;
 GRANT SELECT, INSERT ON assessment.term1_listening_timer_session TO k67_app;
 
 CREATE OR REPLACE FUNCTION assessment.guard_term1_timer_session() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -60,7 +64,7 @@ CREATE TRIGGER term1_timer_attempt_guard BEFORE INSERT OR UPDATE OF listening_su
 CREATE OR REPLACE FUNCTION assessment.apply_term1_timer_room_deadline() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE enrolled uuid;
 BEGIN
-  IF OLD.deadline_at <= clock_timestamp() OR NEW.deadline_at < OLD.deadline_at OR OLD.starts_at<>NEW.starts_at THEN
+  IF (OLD.deadline_at<=clock_timestamp() AND NOT OLD.audio_held) OR NEW.deadline_at < OLD.deadline_at OR OLD.starts_at<>NEW.starts_at THEN
     RAISE EXCEPTION 'TIMER_ROOM_DEADLINE_LOCKED';
   END IF;
   FOR enrolled IN SELECT session_id FROM assessment.term1_listening_timer_session WHERE class_id=NEW.class_id ORDER BY session_id LOOP
