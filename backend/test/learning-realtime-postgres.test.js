@@ -163,3 +163,95 @@ test('Checkpoint/final giữ điểm danh sớm và analytics chỉ final; đọ
     assert.deepEqual(count,{attendance:1,events:1,jobs:1});
   }finally{await hub.close();await f.close();}
 });
+
+test('Bài nộp commit đến revision SSE và đường đọc bù; tổng quan khớp danh sách câu đang mở',async()=>{
+  const f=await setup();
+  const {published,itemId,inputs}=f.source;
+  const assignmentId=published.assignmentId;
+  const hub=createLearningLiveUpdates({pool:f.pool,service:f.service,revalidate:async()=>teacher});
+  const app=express();
+  app.get('/events',(req,res,next)=>{
+    req.reviewer=teacher;
+    hub.subscribe(req,res,{assignmentId}).catch(next);
+  });
+  const server=app.listen(0,'127.0.0.1');
+  await new Promise(done=>server.once('listening',done));
+  const control=new AbortController();
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/events',{signal:control.signal});
+    const stream=response.body.getReader();
+    await nextEvent(stream,'change');
+    const before=await hub.read({assignmentId,reviewer:teacher,force:true,view:'overview'});
+    await f.service.saveDraft({...inputs[0],revision:1,responses:{[itemId]:'Nháp chưa nộp'}});
+    const draft=await hub.read({assignmentId,reviewer:teacher,after:before.revision,view:'overview'});
+    assert.equal(draft.analytics,undefined);
+    await f.service.submit({...inputs[0],draftRevision:1});
+    const acknowledgedAt=performance.now();
+    const event=await nextEvent(stream,'change');
+    assert.ok(BigInt(event.revision)>BigInt(before.revision));
+    const fromSse=await hub.read({assignmentId,reviewer:teacher,after:before.revision,view:'overview'});
+    const fromPoll=await hub.read({assignmentId,reviewer:teacher,after:draft.revision,view:'overview'});
+    const detail=await f.service.getQuestionAnalytics({assignmentId,reviewer:teacher,itemVersionId:itemId});
+    for(const snapshot of [fromSse,fromPoll]){
+      assert.equal(snapshot.analytics.submittedCount,1);
+      assert.equal(snapshot.analytics.items[0].responseVersion,detail.responseVersion);
+      assert.deepEqual(snapshot.analytics.items[0].counts,detail.counts);
+    }
+    assert.equal(detail.students.length,1);
+    assert.equal(detail.students[0].answer,inputs[0].responses[itemId]);
+    assert.ok(performance.now()-acknowledgedAt<3000,'Đọc qua SSE phải đủ nhanh trong fixture');
+  }finally{
+    control.abort();await hub.close();server.closeAllConnections();
+    await new Promise(done=>server.close(done));await f.close();
+  }
+});
+
+test('Journey đọc cùng dữ liệu ở hai loại link bằng plan JIT riêng, trả setting cũ cả khi lỗi',async()=>{
+  const f=await setup();
+  const pool=new pg.Pool({connectionString:f.admin.options.connectionString,max:1,options:'-c role=learning_api -c jit=on -c plan_cache_mode=force_generic_plan'});
+  reuseLearningQueryPlans(pool);
+  try{
+    const studentRef=f.source.assignment.roster[0].studentRef;
+    const token=crypto.randomBytes(32).toString('base64url');
+    const hash=crypto.createHash('sha256').update(token).digest('hex');
+    const id=crypto.randomUUID();
+    await f.admin.query(`INSERT INTO learning.student_progress_access
+      (id,erp_course_class_id,student_ref,token_hash,expires_at,created_by_email,operation_key,idempotency_key)
+      VALUES($1::uuid,2139,$2,$3,now()+interval '1 day',$4,$1::uuid::text,$1::uuid::text)`,[id,studentRef,hash,teacher.email]);
+    const before=createLearningService({pool,journeyJitOff:false});
+    const after=createLearningService({pool});
+    const viaClass={publicToken:f.source.published.publicToken,studentRef};
+    const stable=journey=>({...journey,sessions:journey.sessions.map(session=>session.submissionWindow
+      ?{...session,submissionWindow:{...session.submissionWindow,serverNow:'clock'}}
+      :session)});
+    for(const input of [viaClass,{accessToken:token}]){
+      const initial=await before.getStudentCourseJourney(input);
+      for(let i=0;i<7;i++){
+        const timing={};
+        const optimized=await after.getStudentCourseJourney(input,timing);
+        assert.deepEqual(stable(optimized),stable(initial));
+        assert.ok(Number.isFinite(timing.poolWaitMs)&&Number.isFinite(timing.sqlMs));
+      }
+    }
+    assert.equal((await pool.query('SHOW jit')).rows[0].jit,'on');
+    const plans=await pool.query("SELECT generic_plans FROM pg_prepared_statements WHERE name LIKE 'journey_no_jit_%'");
+    assert.equal(plans.rowCount,1);
+    assert.ok(Number(plans.rows[0].generic_plans)>0);
+    const realConnect=pool.connect.bind(pool);
+    let fail=true;
+    const unreliable={query:pool.query.bind(pool),async connect(){
+      const client=await realConnect();
+      return {release:error=>client.release(error),async query(sql,values){
+        if(fail&&sql.startsWith('/* student journey')){
+          fail=false;
+          return client.query('SELECT 1/0');
+        }
+        return client.query(sql,values);
+      }};
+    }};
+    const service=createLearningService({pool:unreliable});
+    await assert.rejects(service.getStudentCourseJourney(viaClass),error=>error.code==='22012');
+    assert.equal((await pool.query('SHOW jit')).rows[0].jit,'on');
+    assert.equal((await service.getStudentCourseJourney(viaClass)).student.studentRef,studentRef);
+  }finally{await pool.end();await f.close();}
+});

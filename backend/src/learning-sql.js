@@ -32,7 +32,6 @@ export const fetchPublicLearningAssignmentSql = `SELECT
   assignment.status,
   version.id::text AS form_version_id,
   version.definition_hash,
-  version.public_definition,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
       'blockId', release.block_id::text,
@@ -62,6 +61,10 @@ WHERE assignment.public_token = $1::uuid
   AND version.status = 'published'
   AND (assignment.opens_at IS NULL OR assignment.opens_at <= now())
   AND (assignment.closes_at IS NULL OR assignment.closes_at > now());`;
+
+export const fetchPublishedLearningDefinitionSql = `SELECT public_definition
+FROM learning.form_version
+WHERE id=$1::uuid AND definition_hash=$2 AND status='published';`;
 
 export const fetchLearningJourneyContextSql = `SELECT
   assignment.id::text AS assignment_id,

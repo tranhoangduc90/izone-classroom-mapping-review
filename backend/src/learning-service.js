@@ -10,6 +10,7 @@ import { buildQuestionAnalytics, fetchQuestionAnalyticsSql, fetchQuestionRespons
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
 import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets } from './learning-portal-assignment-schedule.js';
 import { withTransaction } from './db.js';
+import {studentJourneyJitOffSql} from './learning-query-plans.js';
 import {
   buildEvidenceEnvelope,
   buildStudentQuizResult,
@@ -38,6 +39,7 @@ import {
   fetchLearningTeacherLiveDraftsSql,
   fetchLearningTeacherLiveDraftDeltaSql,
   fetchPublicLearningAssignmentSql,
+  fetchPublishedLearningDefinitionSql,
   fetchLearningJourneyContextSql,
   fetchLearningJourneyPlanSql,
   fetchStudentCourseJourneySql,
@@ -146,7 +148,7 @@ function json(value) {
   return JSON.stringify(value ?? null);
 }
 
-function publicAssignment(row) {
+function publicAssignment(row, definition) {
   return {
     assignmentId: row.assignment_id,
     publicToken: row.public_token,
@@ -159,7 +161,7 @@ function publicAssignment(row) {
     closesAt: row.closes_at || null,
     formVersionId: row.form_version_id,
     definitionHash: row.definition_hash,
-    definition: parseFormDefinition(asObject(row.public_definition)),
+    definition,
     blockReleases: asArray(row.block_releases),
     roster: asArray(row.roster)
   };
@@ -251,10 +253,76 @@ function buildStudentCourseJourney(row) {
 }
 
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
-  testResultReader = null, portalTestReader = null, portalAssignmentReader = null, journeyCommentsEnabled = false, progressLinkCipher = null }) {
+  testResultReader = null, portalTestReader = null, portalAssignmentReader = null, journeyCommentsEnabled = false, progressLinkCipher = null,
+  journeyJitOff = true, publicDefinitionCacheBytes = 16 * 1024 * 1024 }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
   const pendingPublicAssignments=new Map();
+  const publicDefinitions=new Map();
+  const pendingDefinitions=new Map();
+  let publicDefinitionBytes=0;
+
+  async function readPublishedDefinition(row,timing) {
+    const key=row.form_version_id+':'+row.definition_hash;
+    const saved=publicDefinitions.get(key);
+    if(saved){
+      publicDefinitions.delete(key);
+      if(Date.now()<saved.expiresAt){
+        publicDefinitions.set(key,saved);
+        if(timing)timing.definitionCache='hit';
+        return saved.definition;
+      }
+      publicDefinitionBytes-=saved.bytes;
+    }
+    if(pendingDefinitions.has(key)){
+      if(timing)timing.definitionCache='coalesced';
+      return pendingDefinitions.get(key);
+    }
+    if(timing)timing.definitionCache=publicDefinitionCacheBytes>0?'miss':'disabled';
+    const pending=(async()=>{
+      const result=await pool.query(fetchPublishedLearningDefinitionSql,[row.form_version_id,row.definition_hash]);
+      const record=assertSingleRow(result,'ASSIGNMENT_NOT_AVAILABLE','Phiếu đã đổi hoặc không còn tồn tại.',404);
+      const definition=parseFormDefinition(asObject(record.public_definition));
+      const bytes=Buffer.byteLength(JSON.stringify(definition));
+      if(bytes<=publicDefinitionCacheBytes){
+        while(publicDefinitionBytes+bytes>publicDefinitionCacheBytes){
+          const [oldest,entry]=publicDefinitions.entries().next().value;
+          publicDefinitions.delete(oldest);
+          publicDefinitionBytes-=entry.bytes;
+        }
+        publicDefinitions.set(key,{definition,bytes,expiresAt:Date.now()+30*60*1000});
+        publicDefinitionBytes+=bytes;
+      }
+      return definition;
+    })();
+    pendingDefinitions.set(key,pending);
+    try{return await pending;}finally{pendingDefinitions.delete(key);}
+  }
+  async function measureJourney(timing, step, read) {
+    if (!timing) return read();
+    const start=performance.now();
+    try { return await read(); }
+    finally { timing[step]=Math.round(performance.now()-start); }
+  }
+
+  async function readJourneyRows(values, timing) {
+    if (!journeyJitOff) return measureJourney(timing,'sqlMs',()=>pool.query(fetchStudentCourseJourneySql,values));
+    const client=await measureJourney(timing,'poolWaitMs',()=>pool.connect());
+    let discard;
+    try {
+      await client.query('BEGIN READ ONLY');
+      await client.query('SET LOCAL jit = off');
+      // This SQL has its own prepared statement, separate from plans built with JIT enabled.
+      const result=await measureJourney(timing,'sqlMs',()=>client.query(studentJourneyJitOffSql,values));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (rollbackError) { discard=rollbackError; }
+      throw error;
+    } finally {
+      client.release(discard);
+    }
+  }
   async function attachPortalTests(view,classId,studentRef=null){
     if(!portalTestReader)return view;
     try{const response=await portalTestReader({classId,studentRefs:studentRef?[studentRef]:view.students.map(s=>s.studentRef)});
@@ -275,12 +343,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         :{sessionComment:byKey.get(student.studentRef+':'+view.sessionNumber)||null})}))};
   }
 
-  async function readErpSchedule(classId, fresh = false, { allowEmpty = false } = {}) {
+  async function readErpSchedule(classId, fresh = false, { allowEmpty = false, displayOnly = false, observe } = {}) {
     if (!erpScheduleReader) {
       throw new LearningError('ERP_SCHEDULE_NOT_CONFIGURED',
         'Nguồn lịch ERP chưa được cấu hình. Hãy giữ bản chốt và thử đọc lại sau.', 503);
     }
-    try { return await erpScheduleReader(classId, { fresh, allowEmpty }); }
+    try { return await erpScheduleReader(classId, { fresh, allowEmpty, displayOnly, observe }); }
     catch {
       throw new LearningError('ERP_SCHEDULE_UNAVAILABLE',
         'Chưa đọc được lịch ERP; bản chốt vẫn được giữ. Hãy thử đọc lại.', 503);
@@ -355,11 +423,13 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     }
   }
 
-  async function attachCurrentSchedule(view, classId) {
+  async function attachCurrentSchedule(view, classId, timing) {
     let result=view;
     try {
       if(erpScheduleReader){
-        const schedule = decorateSchedule(classId, await readErpSchedule(classId));
+        const schedule = decorateSchedule(classId, await measureJourney(timing,'erpMs',()=>readErpSchedule(classId,false,{
+          displayOnly:true,observe:timing?(value=>{timing.erpCache=value;}):undefined
+        })));
         const plan = await pool.query(fetchLearningJourneyPlanSql, [classId]);
         const baseline = await pool.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[classId]);
         const bindings = await pool.query(`SELECT binding.* FROM learning.portal_attendance_binding AS binding
@@ -374,7 +444,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       AND a.status IN ('published','closed')`,[classId]);
     if(!direct.rowCount)return result;
     let portalSchedule;
-    try{portalSchedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{allowEmpty:true}));}
+    try{portalSchedule=assignmentPortalSchedule(classId,await measureJourney(timing,'portalScheduleMs',()=>portalAssignmentReader(classId,{
+      allowEmpty:true,displayOnly:true,observe:timing?(value=>{timing.portalScheduleCache=value;}):undefined
+    })));}
     catch{return {...result,scheduleStatus:'temporarily_unavailable'};}
     const starts=new Map(direct.rows.map(row=>[row.id,row]));
     const today=vietnamDate.format(new Date());
@@ -392,22 +464,38 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
 
   return {
     ...(comments||{}),
+    async warmPublicDefinitions(classIds) {
+      if(!publicDefinitionCacheBytes||!classIds.length)return;
+      const {rows}=await pool.query(`SELECT DISTINCT version.id::text AS form_version_id,version.definition_hash
+        FROM learning.form_assignment assignment
+        JOIN learning.form_version version ON version.id=assignment.form_version_id
+        WHERE assignment.erp_course_class_id=ANY($1::bigint[]) AND assignment.status='published'
+          AND version.status='published' AND assignment.opens_at BETWEEN now() AND now()+interval '10 minutes'
+        LIMIT 20`,[classIds]);
+      for(let index=0;index<rows.length;index+=2)
+        await Promise.allSettled(rows.slice(index,index+2).map(row=>readPublishedDefinition(row)));
+    },
     // Một snapshot đọc giữ cùng connection; không phải xếp hàng lại sau từng vùng dữ liệu.
     readUsing(database){
       const reader=createLearningService({pool:database,erpScheduleReader,testSourceReader,testResultReader,portalTestReader,journeyCommentsEnabled,progressLinkCipher});
       return {getTeacherDashboard:reader.getTeacherDashboard,getTeacherLiveDrafts:reader.getTeacherLiveDrafts,getQuestionAnalytics:reader.getQuestionAnalytics};
     },
-    async getPublicAssignment(publicToken) {
+    async getPublicAssignment(publicToken,timing) {
       // Kế thừa cơ chế đang chạy: chỉ gộp lượt đọc cùng phiếu đang chờ, không lưu quyền lâu hơn.
-      if(pendingPublicAssignments.has(publicToken))return pendingPublicAssignments.get(publicToken);
+      if(pendingPublicAssignments.has(publicToken)){
+        if(timing)timing.definitionCache='coalesced';
+        return pendingPublicAssignments.get(publicToken);
+      }
       const pending=(async()=>{
-        const result = await pool.query(fetchPublicLearningAssignmentSql, [publicToken]);
-        const assignment = publicAssignment(assertSingleRow(
+        const result = await measureJourney(timing,'assignmentSqlMs',()=>pool.query(fetchPublicLearningAssignmentSql,[publicToken]));
+        const row=assertSingleRow(
           result,
           'ASSIGNMENT_NOT_AVAILABLE',
           'Phiếu chưa được mở, đã đóng hoặc không còn tồn tại.'
-        ));
-        return { ...assignment, submissionWindow: await readSubmissionWindow(pool, assignment.assignmentId) };
+        );
+        const definition=await measureJourney(timing,'definitionMs',()=>readPublishedDefinition(row,timing));
+        const assignment=publicAssignment(row,structuredClone(definition));
+        return { ...assignment, submissionWindow: await measureJourney(timing,'windowMs',()=>readSubmissionWindow(pool,assignment.assignmentId)) };
       })();
       pendingPublicAssignments.set(publicToken,pending);
       try{return await pending;}finally{pendingPublicAssignments.delete(publicToken);}
@@ -801,10 +889,10 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       };
     },
 
-    async getStudentCourseJourney({ accessToken, publicToken, studentRef, includeSkills=false }) {
-      const result = await pool.query(fetchStudentCourseJourneySql, [
+    async getStudentCourseJourney({ accessToken, publicToken, studentRef, includeSkills=false }, timing) {
+      const result = await readJourneyRows([
         accessToken ? sha256(accessToken) : null, publicToken || null, studentRef || null
-      ]);
+      ],timing);
       const row = assertSingleRow(
         result,
         'PROGRESS_LINK_INVALID',
@@ -829,8 +917,9 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           journey.coverage.testResults = 'temporarily_unavailable';
         } else {
           try {
-            const results = testResultReader.readStudent?await testResultReader.readStudent({classId:row.class_id,studentRef:row.student_ref})
-              :await testResultReader({ classId: row.class_id,studentRef: row.student_ref,testSlugs: mapped.map(item => item.testSlug) });
+            const results = await measureJourney(timing,'testsMs',()=>testResultReader.readStudent
+              ? testResultReader.readStudent({classId:row.class_id,studentRef:row.student_ref})
+              : testResultReader({classId:row.class_id,studentRef:row.student_ref,testSlugs:mapped.map(item=>item.testSlug)}));
             journey.externalTests=results;
             const bySlug = new Map(results.map(item => [item.testSlug, item]));
             const byNumber = new Map(mapped.map(item => [item.sessionNumber, bySlug.get(item.testSlug)]));
@@ -843,13 +932,20 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
           }
         }
       }
-      return attachComments(await attachPortalTests(await attachCurrentSchedule(journey,row.class_id),row.class_id,row.student_ref),row.class_id,row.student_ref);
+      const scheduled=await measureJourney(timing,'scheduleMs',()=>attachCurrentSchedule(journey,row.class_id,timing));
+      const withTests=await measureJourney(timing,'portalTestsMs',()=>attachPortalTests(scheduled,row.class_id,row.student_ref));
+      if(timing) {
+        timing.scheduleStatus=withTests.scheduleStatus||'not_reported';
+        timing.testStatus=withTests.coverage.testResults;
+        timing.portalTestStatus=withTests.coverage.portalTests||'not_connected';
+      }
+      return measureJourney(timing,'commentsMs',()=>attachComments(withTests,row.class_id,row.student_ref));
     },
 
     // Link/tên được kiểm bằng cùng nguồn Journey; chỉ trả bài nộp của đúng lớp/người/buổi.
     // Không tạo attempt, đọc khóa chấm, gửi Portal hoặc thay chính sách mở phần.
-    async getStudentCourseSessionDetail(input) {
-      const journey = await this.getStudentCourseJourney(input);
+    async getStudentCourseSessionDetail(input,timing) {
+      const journey = await this.getStudentCourseJourney(input,timing);
       const session = journey.sessions.find(item => item.sessionNumber === input.sessionNumber);
       if (!session) throw new LearningError('JOURNEY_SESSION_NOT_FOUND', 'Không tìm thấy buổi học trong hành trình.', 404);
       const hasSubmission = ['complete','incomplete'].includes(session.completeness);
@@ -860,8 +956,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         testResult:session.testResult||null};
       if (!hasSubmission) throw new LearningError('JOURNEY_SUBMISSION_NOT_READY',
         'Buổi này chưa có bài nộp cuối; hãy mở Progress Log theo lịch học.', 409);
-      const result = await pool.query(fetchCourseSessionDetailSql,
-        [journey.class.classId, input.sessionNumber, journey.student.studentRef]);
+      const result = await measureJourney(timing,'detailMs',()=>pool.query(fetchCourseSessionDetailSql,
+        [journey.class.classId, input.sessionNumber, journey.student.studentRef]));
       if (result.rowCount > 1) throw new LearningError('JOURNEY_SESSION_CONFLICT',
         'Buổi có nhiều phiếu; giảng viên cần đối chiếu trước khi mở bài.', 409);
       const row = assertSingleRow(result, 'JOURNEY_SUBMISSION_NOT_READY', 'Chưa đọc được bài đã nộp.', 404);
