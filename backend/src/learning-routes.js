@@ -353,11 +353,13 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       ON CONFLICT(id) DO UPDATE SET version=EXCLUDED.version,verified_at=now()`,[version])
   }});
   // Public, tiny release pointer; only promote after every immutable asset is available.
-  router.get('/frontend-release',asyncRoute(async(_req,res)=>{
+  router.get('/frontend-release',asyncRoute(async(req,res)=>{
+    const timing=learningReadTiming('frontend_release',req,res);
     res.set('Cache-Control','no-store');
     try{
       const release=frontendRelease();
       if(!/^[a-f0-9]{16}$/.test(release.version))throw Error('Invalid release');
+      if(timing)timing.releaseVersion=release.version;
       return res.json({ok:true,version:release.version});
     }catch{return res.status(503).json({ok:false,error:'FRONTEND_RELEASE_UNAVAILABLE'});}
   }));
@@ -399,7 +401,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.post('/assignments/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
-    const assignment = await service.getPublicAssignment(input.publicToken,learningReadTiming('assignment_open',res));
+    const assignment = await service.getPublicAssignment(input.publicToken,learningReadTiming('assignment_open',req,res));
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, assignment });
   }));
@@ -421,6 +423,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }));
   router.post('/attempts/resume',journeyLimiter,asyncRoute(async(req,res)=>{
     const input=parseOrReply(startAttemptSchema,req.body,res,'INVALID_ATTEMPT_START');if(!input)return;
+    learningReadTiming('attempt_resume',req,res);
     res.set('Cache-Control','no-store');return res.json({ok:true,attempt:await service.startAttempt({...input,resumeOnly:true})});
   }));
 
@@ -458,13 +461,23 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
 
   registerStudentPortalRoutes(router,{pool,service,testResultReader,limiter:journeyLimiter});
   registerTeacherWritingResultRoutes(router,{authenticate,service,testResultReader,classRead});
-  function learningReadTiming(operation,res) {
+  function learningReadTiming(operation,req,res) {
     if (!logger?.info) return undefined;
     const timing={};
+    const correlation=randomUUID();
     const started=performance.now();
+    if (req.get('origin')==='https://tranhoangduc90.github.io') {
+      const json=res.json.bind(res);
+      res.json=body=>{
+        res.vary('Origin');
+        res.set('Timing-Allow-Origin','https://tranhoangduc90.github.io');
+        res.set('Server-Timing',`progress_log;dur=${Math.round(performance.now()-started)}, progress_request;desc="${correlation}"`);
+        return json(body);
+      };
+    }
     res.once('finish',()=>{
       try {
-        logger.info(JSON.stringify({type:'progress_log_read',operation,status:res.statusCode,
+        logger.info(JSON.stringify({type:'progress_log_read',operation,correlation,status:res.statusCode,
           durationMs:Math.round(performance.now()-started),...timing,serverOccurredAt:new Date().toISOString()}));
       } catch { /* Telemetry is independent of the response. */ }
     });
@@ -473,7 +486,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
     if (!input) return;
-    const journey = await service.getStudentCourseJourney(input,learningReadTiming('course_journey',res));
+    const journey = await service.getStudentCourseJourney(input,learningReadTiming('course_journey',req,res));
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, journey });
   }));
@@ -481,7 +494,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.post('/student/course-session-detail', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentSessionDetailSchema, req.body, res, 'INVALID_SESSION_DETAIL');
     if (!input) return;
-    const detail = await service.getStudentCourseSessionDetail(input,learningReadTiming('course_session_detail',res));
+    const detail = await service.getStudentCourseSessionDetail(input,learningReadTiming('course_session_detail',req,res));
     res.set('Cache-Control', 'no-store');
     return res.json({ok:true, detail});
   }));
