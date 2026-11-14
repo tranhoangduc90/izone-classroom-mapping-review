@@ -46,31 +46,43 @@ export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bi
 // Chỉ đọc theo lớp, gộp yêu cầu đồng thời, giới hạn số lớp theo dõi.
 // Lỗi không biến thành lịch rỗng và không ghi DB; chu kỳ nền mặc định 5 phút.
 export function createScheduleMonitor(reader, { classIds = [], intervalMs = 300000,
-  cacheMs = 15000, now = Date.now, timers = globalThis } = {}) {
+  cacheMs = 15000, displayCacheMs = 45000, maxClasses = 80, now = Date.now, timers = globalThis } = {}) {
   if (!reader) return null;
   const cache = new Map(), pending = new Map();
   const watched = [...new Set(classIds.map(String).filter(id => /^[1-9]\d*$/.test(id)))].slice(0, 10);
-  async function read(id, { fresh = false, allowEmpty = false } = {}) {
+  function store(id, entry) {
+    cache.delete(id);
+    cache.set(id,entry);
+    if(cache.size>maxClasses)cache.delete(cache.keys().next().value);
+  }
+  async function read(id, { fresh = false, allowEmpty = false, displayOnly = false, observe } = {}) {
     id = String(id);
     const checked = value => {
       if (!allowEmpty && !value.sessions.length) throw Error('ERP_SCHEDULE_INCOMPLETE');
       return value;
     };
     const saved = cache.get(id);
-    if (!fresh && saved && now() - saved.at < cacheMs) {
+    const ttl=displayOnly&&!saved?.error?displayCacheMs:cacheMs;
+    if (!fresh && saved && now() - saved.at < ttl) {
+      observe?.(saved.error?'error_cache':'hit');
+      store(id,saved);
       if (saved.error) throw saved.error;
       return checked(saved.value);
     }
-    if (pending.has(id)) return checked(await pending.get(id));
+    if (pending.has(id)) {
+      observe?.('coalesced');
+      return checked(await pending.get(id));
+    }
+    observe?.(fresh?'fresh':'miss');
     const request = (async () => {
       try {
         const data = await Promise.resolve().then(()=>reader(id));
         if ((data.classId !== undefined && String(data.classId) !== id) || !Array.isArray(data.sessions))
           throw new Error('ERP_SCHEDULE_INCOMPLETE');
         const value = { ...data, scheduleCheckedAt: new Date(now()).toISOString() };
-        cache.set(id, { value, at: now() });
+        store(id,{ value, at: now() });
         return value;
-      } catch (error) { cache.set(id, { ...saved, error, at: now() }); throw error; }
+      } catch (error) { store(id,{ ...saved, error, at: now() }); throw error; }
       finally { pending.delete(id); }
     })();
     pending.set(id, request);

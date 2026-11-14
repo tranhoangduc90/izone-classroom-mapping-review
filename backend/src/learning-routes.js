@@ -253,14 +253,27 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     next();
   });
   // Thí điểm IC2305; một lần đọc/lớp/5 phút, tối đa 10 lớp, không gọi AI.
-  const monitoredReader = createScheduleMonitor(erpScheduleReader, {
-    classIds: String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ?? (process.env.NODE_ENV==='production'?'1294':'')).split(',')
-  });
+  const warmClasses=[...new Set(String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ??
+    (process.env.NODE_ENV==='production'?'1294':'')).split(',').filter(id=>/^[1-9]\d{0,17}$/.test(id)))].slice(0,10);
+  const monitoredReader = createScheduleMonitor(erpScheduleReader, {classIds:warmClasses});
   const portalAssignmentReader = createScheduleMonitor(portalAssignmentScheduleReader);
   const service = createLearningService({ pool, erpScheduleReader: monitoredReader, portalAssignmentReader, testSourceReader, testResultReader,
     portalTestReader:portalTestReader||createLearningPortalTestReader({pool}),
+    journeyJitOff:process.env.LEARNING_JOURNEY_JIT_OFF!=='false',
+    publicDefinitionCacheBytes:process.env.LEARNING_PUBLIC_DEFINITION_CACHE==='false'?0:undefined,
     journeyCommentsEnabled,progressLinkCipher:journeyCommentsEnabled?
       createProgressLinkCipher({keys:progressLinkKeys,activeVersion:progressLinkKeyVersion}):null });
+  if(warmClasses.length&&process.env.LEARNING_PUBLIC_DEFINITION_CACHE!=='false'){
+    let warming=false;
+    const warm=async()=>{
+      if(warming)return;
+      warming=true;
+      try{await service.warmPublicDefinitions(warmClasses);}
+      catch{try{logger?.info?.(JSON.stringify({type:'progress_log_read',operation:'definition_warmup',status:'failed'}));}catch{}}
+      finally{warming=false;}
+    };
+    setInterval(warm,60000+Math.floor(Math.random()*10000)).unref();
+  }
   const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader,portalAssignmentReader});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts});
@@ -386,7 +399,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.post('/assignments/open', asyncRoute(async (req, res) => {
     const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
-    const assignment = await service.getPublicAssignment(input.publicToken);
+    const assignment = await service.getPublicAssignment(input.publicToken,learningReadTiming('assignment_open',res));
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, assignment });
   }));
@@ -445,10 +458,22 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
 
   registerStudentPortalRoutes(router,{pool,service,testResultReader,limiter:journeyLimiter});
   registerTeacherWritingResultRoutes(router,{authenticate,service,testResultReader,classRead});
+  function learningReadTiming(operation,res) {
+    if (!logger?.info) return undefined;
+    const timing={};
+    const started=performance.now();
+    res.once('finish',()=>{
+      try {
+        logger.info(JSON.stringify({type:'progress_log_read',operation,status:res.statusCode,
+          durationMs:Math.round(performance.now()-started),...timing,serverOccurredAt:new Date().toISOString()}));
+      } catch { /* Telemetry is independent of the response. */ }
+    });
+    return timing;
+  }
   router.post('/student/course-journey', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentJourneySchema, req.body, res, 'INVALID_PROGRESS_LINK');
     if (!input) return;
-    const journey = await service.getStudentCourseJourney(input);
+    const journey = await service.getStudentCourseJourney(input,learningReadTiming('course_journey',res));
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, journey });
   }));
@@ -456,7 +481,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.post('/student/course-session-detail', journeyLimiter, asyncRoute(async (req, res) => {
     const input = parseOrReply(studentSessionDetailSchema, req.body, res, 'INVALID_SESSION_DETAIL');
     if (!input) return;
-    const detail = await service.getStudentCourseSessionDetail(input);
+    const detail = await service.getStudentCourseSessionDetail(input,learningReadTiming('course_session_detail',res));
     res.set('Cache-Control', 'no-store');
     return res.json({ok:true, detail});
   }));

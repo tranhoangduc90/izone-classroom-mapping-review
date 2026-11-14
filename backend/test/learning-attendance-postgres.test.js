@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { postgresFixture, publishedFixture } from './learning-postgres-fixture.js';
 import { claimLearningJobs, processLearningJob } from '../src/learning-outbox.js';
 import { createLearningAttendanceSync } from '../src/learning-attendance-sync.js';
@@ -9,6 +10,80 @@ import { createAttendanceBindingStore } from '../src/learning-attendance-binding
 
 const config = { learningAttendanceSyncUrl: 'https://fixture.test/portal',
   learningAttendanceSyncSecret: 'fixture-only-secret', learningAttendanceSyncTimeoutMs: 1000 };
+
+test('Pilot cách ly 20 bài qua checkpoint, Portal giả và burst mở tối đa 100 lượt', {timeout:60000}, async () => {
+  const fixture=await postgresFixture({asApplication:true,studentCount:20});
+  try{
+    const {published,assignment}=await publishedFixture(fixture);
+    const {publicToken,assignmentId}=published;
+    const block=assignment.definition.blocks[0],itemId=block.items[0].itemVersionId;
+    const teacher={email:'teacher@example.test',canAccessAllClasses:false};
+    const service=createLearningService({pool:fixture.clockPool});
+    const samples={};
+    async function burst(count,label,open){
+      const timings=await Promise.all(Array.from({length:count},async(_,index)=>{
+        const start=performance.now();
+        await open(index);
+        return performance.now()-start;
+      }));
+      timings.sort((a,b)=>a-b);
+      samples[label]=Object.fromEntries([50,95,99].map(p=>['p'+p,Math.round(timings[Math.ceil(count*p/100)-1])]));
+    }
+    const cold=[];
+    await burst(20,'open20Cold',async()=>{
+      const timing={};
+      const read=await service.getPublicAssignment(publicToken,timing);
+      assert.equal(read.assignmentId,assignmentId);
+      cold.push(timing.definitionCache);
+    });
+    assert.equal(cold.filter(value=>value==='miss').length,1);
+    assert.equal(cold.filter(value=>value==='coalesced').length,19);
+    assert.equal((await service.getPublicAssignment(publicToken,{})).formVersionId,assignment.formVersionId);
+    const startInputs=assignment.roster.map(student=>({publicToken,studentRef:student.studentRef,
+      identityConfirmed:true,clientIdempotencyKey:randomUUID()}));
+    const inputs=await Promise.all(startInputs.map(async input=>{
+      const attempt=await service.startAttempt(input);
+      return {attemptToken:attempt.attemptToken,definitionHash:published.definitionHash,draftRevision:1,
+        responses:{[itemId]:'Ca kiểm cách ly'},submissionId:randomUUID()};
+    }));
+    await burst(20,'autosave',index=>service.saveDraft({...inputs[index],revision:1}));
+    await burst(20,'checkpoint',async index=>{
+      const cut=await service.submitCheckpoint({...inputs[index],checkpointSubmissionId:randomUUID(),
+        blockId:block.blockId,checkpoint:block.checkpoint,idempotencyKey:randomUUID()});
+      assert.equal(cut.attendance.status,'self_confirmed');
+    });
+    const portal=portalFixture();
+    const handler=createLearningAttendanceSync({config,pool:fixture.pool,fetchImpl:portal.fetch});
+    const jobs=await claimLearningJobs({pool:fixture.pool,workerId:'pl-load',limit:20,leaseSeconds:90,jobTypes:['sync_portal_attendance']});
+    assert.equal(jobs.length,20);
+    for(const job of jobs)assert.equal((await processLearningJob({pool:fixture.pool,workerId:'pl-load',job,handler})).status,'complete');
+    const writes=burst(20,'final',index=>service.submit(inputs[index]));
+    const readers=Promise.all([service.getQuestionAnalytics({assignmentId,reviewer:teacher,summaryOnly:true}),
+      service.getQuestionAnalytics({assignmentId,reviewer:teacher,itemVersionId:itemId})]);
+    const mixed=burst(50,'open50Mixed',index=>index%2
+      ? service.getPublicAssignment(publicToken)
+      : service.getStudentCourseJourney({publicToken,studentRef:assignment.roster[index%20].studentRef}));
+    await Promise.all([writes,readers,mixed]);
+    await burst(100,'open100Warm',async()=>{
+      const timing={};
+      assert.equal((await service.getPublicAssignment(publicToken,timing)).assignmentId,assignmentId);
+      assert.ok(['hit','coalesced'].includes(timing.definitionCache));
+    });
+    const disabled=createLearningService({pool:fixture.clockPool,publicDefinitionCacheBytes:0});
+    const timing={};
+    assert.equal((await disabled.getPublicAssignment(publicToken,timing)).assignmentId,assignmentId);
+    assert.equal(timing.definitionCache,'disabled');
+    await fixture.pool.query("UPDATE learning.form_assignment SET status='closed' WHERE id=$1",[assignmentId]);
+    await assert.rejects(()=>service.getPublicAssignment(publicToken),error=>error.code==='ASSIGNMENT_NOT_AVAILABLE');
+    const counts=(await fixture.pool.query(`SELECT
+       (SELECT count(*)::int FROM learning.submission) AS submissions,
+       (SELECT count(*)::int FROM learning.attendance_record) AS attendance,
+       (SELECT count(*)::int FROM learning.outbox_job WHERE job_type='sync_portal_attendance') AS jobs`)).rows[0];
+    assert.deepEqual(counts,{submissions:20,attendance:20,jobs:20});
+    assert.equal(portal.state.puts,20);
+    console.log(JSON.stringify({test:'progress_log_local_load_ms',samples}));
+  }finally{await fixture.close();}
+});
 
 function portalFixture() {
   const state = { resolvedId: '35817', fingerprint: 'schedule-a', puts: 0, present: new Set(), timeoutOnce: false };

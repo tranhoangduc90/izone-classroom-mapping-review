@@ -5,6 +5,8 @@ import * as learningSql from './learning-sql.js';
 import {fetchQuestionAnalyticsSql} from './learning-question-analytics.js';
 const names=new Map([...Object.values(learningSql).filter(value=>typeof value==='string'),fetchQuestionAnalyticsSql].map(sql=>[
     sql,'learning_hot_'+createHash('sha256').update(sql).digest('hex').slice(0,20)]));
+export const studentJourneyJitOffSql='/* student journey with jit off */ '+learningSql.fetchStudentCourseJourneySql;
+names.set(studentJourneyJitOffSql,'journey_no_jit_'+createHash('sha256').update(studentJourneyJitOffSql).digest('hex').slice(0,20));
 const installed=new WeakSet();
 const sessionInstalled=new WeakSet(),sessionNames=new Map();
 // Chỉ tối ưu lập kế hoạch của đúng câu kiểm phiên đang dùng; vẫn chạy điều kiện thu hồi/hạn mỗi request.
