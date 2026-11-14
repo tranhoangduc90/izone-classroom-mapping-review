@@ -64,12 +64,16 @@ export function registerTerm1SkillRoutes(router, {
   allowNew = term1SkillIssueEnabled
 }) {
   const mutation = async (event, work) => {
-    const { response, attemptId, grantId } = await transaction(work);
-    if (attemptId) {
+    const { response, attemptId, grantId, replacedGrantId } = await transaction(work);
+    const recordCommitted = (action, operationId) => {
       try {
-        const pending = record?.(event, SLUG, attemptId, { section: response.section, operationId: grantId, phase: 'after_commit' });
+        const pending = record?.(action, SLUG, attemptId, { section: response.section, operationId, phase: 'after_commit' });
         if (pending?.catch) void pending.catch(() => {});
       } catch { /* Một sự kiện log lỗi không được làm hỏng thao tác đã commit. */ }
+    };
+    if (attemptId) {
+      if (replacedGrantId) recordCommitted('term1_skill_grant_revoked', replacedGrantId);
+      recordCommitted(event, grantId);
     }
     return response;
   };
@@ -155,8 +159,9 @@ export function registerTerm1SkillRoutes(router, {
       if (input.section === 'listening' && attempt.listening_started_at && !attempt.listening_submitted_at &&
           active?.state !== 'bound' && !(Number(attempt.listening_audio_checkpoint_seconds) > 0))
         fail(409, 'TERM1_SKILL_AUDIO_CHECKPOINT_REQUIRED', 'Chưa có mốc nghe để chuyển thiết bị. Hãy tiếp tục trên thiết bị đang làm.');
-      const grant = await bindRosterSkillGrant(client, scope, token, input.ownerId);
-      return { attemptId: active?.state === 'bound' ? null : attempt.attempt_token, grantId: grant.id,
+      let replacedGrantId;
+      const grant = await bindRosterSkillGrant(client, scope, token, input.ownerId, id => { replacedGrantId = id; });
+      return { attemptId: active?.state === 'bound' ? null : attempt.attempt_token, grantId: grant.id, replacedGrantId,
         response: { ok: true, grantId: grant.id, section: input.section, studentRef: input.studentRef,
           studentName: attempt.student_name, classCode: input.classCode } };
     })));

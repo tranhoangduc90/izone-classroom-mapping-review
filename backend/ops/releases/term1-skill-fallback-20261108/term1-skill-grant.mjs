@@ -75,7 +75,7 @@ export async function issueSkillGrant(client, scope, ttlMinutes = 120, rosterTok
   return { grant: rows[0], token, activationCode };
 }
 
-export async function bindRosterSkillGrant(client, scope, token, ownerId) {
+export async function bindRosterSkillGrant(client, scope, token, ownerId, onReplaced) {
   const active = (await client.query(`
     SELECT id, owner_id FROM assessment.term1_skill_grant WHERE ${scopeWhere} AND revoked_at IS NULL FOR UPDATE
   `, scopeArgs(scope))).rows[0];
@@ -89,7 +89,10 @@ export async function bindRosterSkillGrant(client, scope, token, ownerId) {
     }
   }
   // A teacher link that was never opened has no browser draft to protect.
-  if (active) await revokeSkillGrant(client, scope, active.id);
+  if (active) {
+    const replaced = await revokeSkillGrant(client, scope, active.id);
+    onReplaced?.(replaced.id);
+  }
   const { activationCode } = await issueSkillGrant(client, scope, 120, token);
   return bindSkillGrant(client, scope, token, ownerId, activationCode);
 }
