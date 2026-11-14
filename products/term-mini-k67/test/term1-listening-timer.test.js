@@ -55,7 +55,10 @@ test('shared deadline closes a disconnected timer attempt and publishes the nati
   const audio = await post('/session/prepare', first);
   const operator = api.get('/api/term-tests/teacher/term1-listening-room?classId=1293');
   assert.equal((await operator).status,401);
-  const teacherRoom = await api.get('/api/term-tests/teacher/term1-listening-room?classId=1293').set('authorization','Bearer fixture-only-key');
+  if (!process.env.K67_ORDER_NATIVE_URL) await db.exec(`CREATE TABLE mapping.reviewer_account(email text,status text,google_subject text,role text,can_access_all_classes boolean);
+    CREATE TABLE mapping.reviewer_session(token_hash bytea,reviewer_email text,google_subject text,revoked_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz);
+    CREATE TABLE mapping.reviewer_class_access(reviewer_email text,erp_course_class_id bigint);`);
+  const teacherRoom = await api.get('/api/term-tests/teacher/term1-listening-room?classId=1293').set('x-review-token','fixture-only-key');
   assert.ok(teacherRoom.ok,teacherRoom.text);
   const startedAudio = await post('/session/start', { examSessionToken: audio.examSessionToken });
   assert.equal(teacherRoom.body.room.deadlineAt,startedAudio.listeningDeadlineAt);
