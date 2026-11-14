@@ -31,6 +31,7 @@ const termTestWritingGradingService = withTermTestWritingNotifications(
 const app = createApp({ config, pool, syncErpGrades, termTestAssetService, termTestWritingGradingService });
 let holdCleanup;
 let stopTimerSweep;
+let stopMakeupSweep;
 let holdCleanupRunning=false;
 const holdPruners=[];
 if ((config.term1WritingHoldHours>0 && config.term1WritingHoldLimit>0)
@@ -58,6 +59,10 @@ const server = app.listen(config.port, '0.0.0.0', () => {
     stopTimerSweep = startTerm1TimerSweep(app.locals.closeExpiredTerm1TimerSessions,
       () => console.error('K67_TERM1_TIMER_SWEEP_FAILED'));
   }
+  if (app.locals.closeExpiredTerm2Makeups) {
+    stopMakeupSweep = startTerm1TimerSweep(app.locals.closeExpiredTerm2Makeups,
+      () => console.error('K67_TERM2_MAKEUP_SWEEP_FAILED'));
+  }
   if (holdPruners.length) {
     void expireSubmissionHolds();
     holdCleanup=setInterval(expireSubmissionHolds,60_000).unref();
@@ -78,7 +83,7 @@ async function shutdown(signal) {
   const cleanup = await Promise.allSettled([
     app.locals.termTestResultStream?.close(),
     app.locals.termTeacherObservation?.close(),
-    stopTimerSweep?.()
+    stopTimerSweep?.(), stopMakeupSweep?.()
   ]);
   if (cleanup.some(result => result.status === 'rejected')) console.error('K67_STREAM_SHUTDOWN_FAILED');
   await stopped;

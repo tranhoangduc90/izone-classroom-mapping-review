@@ -1,6 +1,6 @@
 // Ứng dụng K67 chỉ phục vụ thi, chấm Term/Mini và đăng nhập giảng viên.
 import { mountSubmissionStatus } from './submission-status.mjs';
-import { closeExpiredTerm1TimerSessions, mountTerm1ListeningTimer, mountTerm1TimerTeacher, readTerm1TimerRoom, useSharedTerm1AudioClock } from './term1-listening-timer.js';
+import { closeExpiredTerm1TimerSessions, closeExpiredTerm2Makeups, mountTerm1ListeningTimer, mountTerm1TimerTeacher, mountTerm2ListeningMakeup, readTerm1TimerRoom, useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import { mountExamClock } from './exam-clock.mjs';
 import { assertAudioOwner as assertSubmissionOwner } from './audio-owner.js';
 import crypto from "node:crypto";
@@ -574,6 +574,12 @@ export function createApp({
   mountTermStudentIdentity(app, { pool, middleware: [testReadLimiter, requireContext], readOnce: readRosterOnce });
 
   mountSubmissionStatus(app, { pool, limiter: testReadLimiter, assertOwner: assertSubmissionOwner });
+  if (config.term2ListeningMakeupAttempt && termTestAssetService) {
+    mountTerm2ListeningMakeup(app,{pool,assets:termTestAssetService,readStudent:readPreparedStudent,requireContext,
+      writeLimiter:testWriteLimiter,draftLimiter:testDraftLimiter,readLimiter:testReadLimiter,logEvent:logTermTestEvent,
+      allowedAttempt:config.term2ListeningMakeupAttempt});
+    app.locals.closeExpiredTerm2Makeups=()=>closeExpiredTerm2Makeups(pool,logTermTestEvent);
+  }
   if (['on','drain'].includes(timerMode) && termTestAssetService) {
     mountTerm1ListeningTimer(app, { pool, assets: termTestAssetService, readStudent: readPreparedStudent, requireContext,
       writeLimiter: testWriteLimiter, draftLimiter: testDraftLimiter, readLimiter: testReadLimiter, logEvent: logTermTestEvent, mode: timerMode });
