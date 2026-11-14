@@ -21,28 +21,41 @@ test('Roster entry binds a single canonical skill and retries without an activat
   const router = express.Router();
   app.use(express.json());
   const studentRef = randomUUID();
+  const audit = [];
   const noop = (_req, _res, next) => next();
   registerTerm1SkillRoutes(router, {
-    authenticate: noop, readTeacherScope: noop, transaction: f.transaction,
+    authenticate: noop, readTeacherScope: async () => {}, transaction: f.transaction,
     prepare: (slug, _input, _create, db) => f.load(db, slug, f.a), load: f.load,
     findStudent: async (_db, input) => input.classCode === 'IC5601' && input.studentRef === studentRef
       ? { class_id: '5601', student_id: '5602' } : null,
-    assets: {}, policy: 'term1-offline-v1', limiter: noop, readLimiter: noop, allowNew: () => true
+    assets: {}, policy: 'term1-offline-v1', limiter: noop, readLimiter: noop, allowNew: () => true,
+    record: (action, slug, attemptId, details) => audit.push({action, slug, attemptId, ...details})
   });
   app.use('/api/term-tests', router);
   const api = require('supertest')(app);
   const endpoint = '/api/term-tests/term-test-1-k56/skill-fallback/enroll';
   const request = (scope, key) => api.post(endpoint).set('x-term1-skill-grant', key).send(scope);
+  const issue = scope => api.post(endpoint.replace('/enroll','/issue')).send(scope);
   const scope = { classCode: 'IC5601', studentRef, ownerId: randomUUID() };
   for (const section of ['reading', 'listening', 'writing']) {
     const token = randomUUID() + '.' + randomBytes(32).toString('base64url');
     const input = { ...scope, section };
+    const {body: old} = await issue({classCode:input.classCode,studentRef,section,examMode:'lis_first'}).expect(200);
     await request({ ...input, classCode: 'OTHER' }, token).expect(403);
+    await request(input, old.token).expect(409);
+    assert.equal(audit.filter(row => row.operationId === old.grantId).length, 1);
     const first = await request(input, token).expect(200);
     const retry = await request(input, token).expect(200);
     assert.deepEqual(first.body, retry.body);
     assert.equal(first.body.section, section);
     await request({ ...input, ownerId: randomUUID() }, randomUUID() + '.' + 'x'.repeat(43)).expect(409);
+    assert.deepEqual(audit.filter(row => row.section === section).map(({action,operationId,phase,attemptId}) =>
+      [action,operationId,phase,attemptId]), [
+        ['term1_skill_grant_issued',old.grantId,'after_commit',f.a],
+        ['term1_skill_grant_revoked',old.grantId,'after_commit',f.a],
+        ['term1_skill_grant_bound',first.body.grantId,'after_commit',f.a]
+    ]);
+    assert.ok(!JSON.stringify(audit).includes(old.token) && !JSON.stringify(audit).includes(old.activationCode));
   }
   const count = await f.db.query('SELECT count(*)::int n FROM assessment.term1_skill_grant WHERE owner_id=$1', [scope.ownerId]);
   assert.equal(count.rows[0].n, 3);
