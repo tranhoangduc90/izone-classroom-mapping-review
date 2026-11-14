@@ -6,6 +6,7 @@ import { readMiniSectionDefinition, sealMiniCbtSection } from './mini-cbt-offlin
 import { buildCombinedResult } from './term-tests.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
+import { readTerm1TimerRoom } from './term1-listening-timer.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
@@ -437,6 +438,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     // Read protected asset metadata after identifying a permitted roster member and outside the DB transaction.
     if (!selected) throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
+    if (profile === term1 && ['on','drain'].includes(config.term1ListeningTimerMode)
+      && await readTerm1TimerRoom(pool, selected.class_id)) {
+      const reserved = await pool.query(`SELECT 1 FROM ${table} WHERE session_id=$1`, [body.examSessionToken]);
+      if (!reserved.rows.length) throw problem('OFFLINE_NEW_DISABLED','Ca này dùng đồng hồ máy chủ.');
+    }
     const manifest = await assets.getJourneyManifest?.(slug)
       || (profile===mini&&assets.getMiniJourneyManifest?.()) || publicAudioCatalog[slug];
     if (!manifest) throw problem('OFFLINE_UNAVAILABLE', 'Chưa chuẩn bị được audio đúng bài.',503);
