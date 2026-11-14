@@ -1,9 +1,11 @@
 // Nhận định danh phiếu, đếm học viên nộp đủ và dùng đồng hồ database để quyết định nhận bài.
 // Khóa phiếu trước phiên làm bài: các lần nộp đồng thời không vượt mốc người thứ ba.
+// Không đổi khóa của phiếu. Cho trigger ghi revision của draft kiểm khóa ngoại mà
+// không phải chờ transaction nộp bài đang giữ phiếu và chờ lại hàng revision.
 export async function lockSubmissionAssignment(database, { attemptToken, publicToken }) {
   const result = await database.query(`SELECT assignment.id FROM learning.form_assignment AS assignment
     WHERE ${attemptToken ? `assignment.id = (SELECT assignment_id FROM learning.attempt WHERE attempt_token = $1::uuid)`
-      : 'assignment.public_token = $1::uuid'} FOR UPDATE OF assignment;`, [attemptToken || publicToken]);
+      : 'assignment.public_token = $1::uuid'} FOR NO KEY UPDATE OF assignment;`, [attemptToken || publicToken]);
   return result.rows[0]?.id || null;
 }
 

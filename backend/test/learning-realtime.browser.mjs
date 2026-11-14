@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import {AsyncLocalStorage} from 'node:async_hooks';
+import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import test from 'node:test';
 import express from 'express';
 import pg from 'pg';
 import {createLearningRouter} from '../src/learning-routes.js';
+import {createLearningAttendanceSync} from '../src/learning-attendance-sync.js';
+import {claimLearningJobs,processLearningJob} from '../src/learning-outbox.js';
 import {reuseLearningQueryPlans} from '../src/learning-query-plans.js';
 import {postgresFixture,publishedFixture} from './learning-postgres-fixture.js';
 
@@ -16,8 +19,14 @@ const {chromium}=createRequire(process.env.PLAYWRIGHT_PACKAGE||
 const migration=await readFile(new URL('../ops/learning-migrations/202610230001_teacher_live_updates.sql',import.meta.url),'utf8');
 const reviewer={email:'teacher@example.test',displayName:'Giảng viên mẫu',canAccessAllClasses:false};
 
-for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '+(stream?'SSE':'đọc dự phòng'),{timeout:120000},async()=>{
-  const fixture=await postgresFixture({asApplication:true,studentCount:5});
+const cases=[
+  {title:'Bài nộp PostgreSQL đến Chrome qua SSE',stream:true,studentCount:5},
+  {title:'Bài nộp PostgreSQL đến Chrome qua đọc dự phòng',stream:false,studentCount:5},
+  {title:'20 bài và điểm danh Portal giả khi hai tab GV cùng xem qua SSE và đọc dự phòng',stream:true,studentCount:20}
+];
+for(const {title,stream,studentCount} of cases)test(title,{timeout:120000},async()=>{
+  const mixedPilot=studentCount===20;
+  const fixture=await postgresFixture({asApplication:true,studentCount});
   const pool=new pg.Pool({connectionString:fixture.pool.options.connectionString,max:6,
     options:'-c role=learning_api'});
   reuseLearningQueryPlans(pool);
@@ -33,7 +42,7 @@ for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '
   });
   let browser,server,router;
   try {
-    const {published,inputs,itemId}=await publishedFixture(fixture);
+    const {published,assignment,inputs,itemId}=await publishedFixture(fixture);
     for(const name of ['202610010001_progress_log_form_drafts','202610220002_form_library',
       '202610280001_form_publications','202610300001_worksheet_revisions']){
       await fixture.pool.query(await readFile(new URL('../ops/learning-migrations/'+name+'.sql',import.meta.url),'utf8'));
@@ -83,20 +92,32 @@ for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '
     browser=await chromium.launch({channel:'chrome',headless:true});
     const context=await browser.newContext();
     await context.route('**/*',route=>route.request().url().startsWith(origin+'/')?route.continue():route.abort());
-    const page=await context.newPage();
     const errors=[];
-    page.on('pageerror',error=>errors.push(error.message));
-    await page.goto(origin+'/progress-log/teacher-thuy.html#assignment='+published.publicToken);
-    await page.locator('.thuy-roster tbody tr').first().waitFor();
-    await page.locator('[data-thuy-mode="results"]').click();
-    await page.getByRole('button',{name:'Xem câu trả lời',exact:true}).click();
-    await page.getByText('Chưa có bài nộp cho câu này.',{exact:true}).waitFor();
-    const jsonPost=async (path,body,method='POST')=>{
+    async function openTeacherTab(pollOnly=false){
+      const tab=await context.newPage();
+      if(pollOnly)await tab.addInitScript(()=>{window.EventSource=undefined;});
+      tab.on('pageerror',error=>errors.push(error.message));
+      await tab.goto(origin+'/progress-log/teacher-thuy.html#assignment='+published.publicToken);
+      await tab.locator('.thuy-roster tbody tr').first().waitFor();
+      await tab.locator('[data-thuy-mode="results"]').click();
+      await tab.getByRole('button',{name:'Xem câu trả lời',exact:true}).click();
+      await tab.getByText('Chưa có bài nộp cho câu này.',{exact:true}).waitFor();
+      return tab;
+    }
+    const page=await openTeacherTab();
+    const jsonPost=async (path,body,method='POST',status=200)=>{
       const response=await fetch(origin+'/api/learning'+path,{method,headers:{'content-type':'application/json'},body:JSON.stringify(body)});
       const payload=await response.json();
-      assert.equal(response.status,200,JSON.stringify(payload));
+      assert.equal(response.status,status,JSON.stringify(payload));
       return payload;
     };
+    if(mixedPilot){
+      const pollingPage=await openTeacherTab(true);
+      await runMixedPilot({fixture,published,assignment,inputs,itemId,page,pollingPage,jsonPost,
+        getLastCommit:()=>submittedAt,getPolls:()=>revisionPolls});
+      assert.deepEqual(errors,[]);
+      return;
+    }
     const {attemptToken,definitionHash}=inputs[0];
     await jsonPost('/attempts/draft',{attemptToken,definitionHash,revision:1,
       responses:{[itemId]:'Nháp thử chưa nộp'}},'PATCH');
@@ -150,6 +171,74 @@ for(const stream of [true,false])test('Bài nộp PostgreSQL đến Chrome qua '
     await fixture.close();
   }
 });
+
+async function runMixedPilot({fixture,published,assignment,inputs,itemId,page,pollingPage,jsonPost,getLastCommit,getPolls}){
+  const results=tab=>tab.locator('.thuy-responses-table tbody tr');
+  const block=assignment.definition.blocks[0];
+  const count=inputs.length;
+  const writes=inputs.map((input,index)=>({...input,draftRevision:1,responses:{[itemId]:'Nộp kiểm tải '+(index+1)}}));
+  await Promise.all(writes.map(async input=>{
+    const opened=await jsonPost('/assignments/open',{publicToken:published.publicToken});
+    assert.equal(opened.assignment.assignmentId,published.assignmentId);
+    await jsonPost('/attempts/draft',{attemptToken:input.attemptToken,definitionHash:input.definitionHash,
+      revision:1,responses:input.responses},'PATCH');
+    const {checkpointSubmission}=await jsonPost('/attempts/checkpoints/submit',{
+      attemptToken:input.attemptToken,definitionHash:input.definitionHash,draftRevision:1,responses:input.responses,
+      blockId:block.blockId,checkpoint:block.checkpoint,checkpointSubmissionId:randomUUID(),idempotencyKey:randomUUID()
+    },'POST',201);
+    assert.equal(checkpointSubmission.attendance.status,'self_confirmed');
+  }));
+  await expectPolls(pollingPage,getPolls,getPolls()+2);
+  for(const tab of [page,pollingPage])assert.equal(await results(tab).count(),0);
+  assert.equal(await fixture.pool.query('SELECT count(*)::int n FROM learning.submission').then(r=>r.rows[0].n),0);
+
+  const jobTypes=['sync_portal_attendance'],workerId='pl-browser-pilot';
+  const jobs=await claimLearningJobs({pool:fixture.pool,workerId,limit:count,leaseSeconds:90,jobTypes});
+  assert.equal(jobs.length,count);
+  assert.ok(jobs.every(job=>job.payload.schemaVersion==='LearningPortalAttendanceCheckpointJobV1'));
+  const present=new Set();
+  const handler=createLearningAttendanceSync({pool:fixture.pool,
+    config:{learningAttendanceSyncUrl:'https://fixture.test/portal',learningAttendanceSyncSecret:'fixture-only',
+      learningAttendanceSyncTimeoutMs:1000},
+    fetchImpl:async(_url,options)=>{
+      const request=JSON.parse(options.body);
+      const {commit,expectedScheduleFingerprint,...identity}=request;
+      const {entityKey,unitKey,operationKey,idempotencyKey,classId,studentId,sessionNumber,bindingRevision}=identity;
+      assert.equal(classId,'2139');assert.equal(sessionNumber,assignment.sessionNumber);
+      const targetSessionId='35817',scheduleFingerprint='pilot-schedule';
+      if(commit){
+        assert.equal(request.targetSessionId,targetSessionId);
+        assert.equal(expectedScheduleFingerprint,scheduleFingerprint);
+        assert.equal(present.has(studentId),false);
+        present.add(studentId);
+      }
+      return {ok:true,status:200,async json(){return {ok:true,status:commit?'synced':present.has(studentId)?'already_present':'resolved',
+        entityKey,unitKey,operationKey,idempotencyKey,classId,studentId,sessionNumber,bindingRevision:bindingRevision??null,
+        targetSessionId,resolvedSessionId:targetSessionId,scheduleFingerprint,sessionDate:'2026-10-05'};}};
+    }});
+  for(const job of jobs)assert.equal((await processLearningJob({pool:fixture.pool,workerId,job,handler})).status,'complete');
+  assert.equal(present.size,count);
+
+  await Promise.all(writes.map(input=>jsonPost('/attempts/submit',input)));
+  const committedAt=getLastCommit();
+  assert.ok(committedAt);
+  const expected=writes.map(input=>input.responses[itemId]).sort();
+  const settled=await Promise.all([page,pollingPage].map(async tab=>{
+    await tab.waitForFunction(n=>document.querySelectorAll('.thuy-responses-table tbody tr').length===n,count);
+    const duration=Math.round(performance.now()-committedAt);
+    assert.deepEqual((await results(tab).locator('.thuy-response-value').allTextContents()).sort(),expected);
+    assert.match(await tab.locator('#questionAnalytics .thuy-analytics-heading').innerText(),new RegExp(count+'/'+count+' học viên có bài nộp'));
+    return duration;
+  }));
+  assert.ok(settled[0]<=3000&&settled[1]<=10000,JSON.stringify(settled));
+  assert.equal((await claimLearningJobs({pool:fixture.pool,workerId,limit:count,leaseSeconds:90,jobTypes})).length,0);
+  const totals=(await fixture.pool.query(`SELECT
+    (SELECT count(*)::int FROM learning.submission) AS submissions,
+    (SELECT count(*)::int FROM learning.attendance_record) AS attendance,
+    (SELECT count(*)::int FROM learning.outbox_job WHERE job_type='sync_portal_attendance') AS jobs`)).rows[0];
+  assert.deepEqual(totals,{submissions:count,attendance:count,jobs:count});
+  console.log(JSON.stringify({students:count,portalWrites:present.size,teacherTabs:2,lastCommitToAllRowsMs:{sse:settled[0],poll:settled[1]}}));
+}
 
 async function expectPolls(page,count,target){
   const expires=performance.now()+15000;
