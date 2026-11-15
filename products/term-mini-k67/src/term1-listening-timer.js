@@ -4,7 +4,7 @@ import { audioTransaction } from './audio-incidents.js';
 import { AudioRecoveryError } from './audio-recovery.js';
 import { findLatestTermTestAttemptForStudentSql, findTermTestListeningSubmissionSql,
   insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, saveTermTestListeningDraftSql, teacherCanReadClass } from './sql.js';
-import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
+import { gradeSection, parseStoredTest } from './term-tests.js';
 
 const slug = 'term-test-1';
 const identity = z.object({ classCode: z.string().regex(/^[A-Z0-9._-]{2,32}$/), studentRef: z.uuid(),
@@ -15,121 +15,6 @@ const draft = scope.extend({ answers: z.record(z.string().regex(/^(?:[1-9]|[1-3]
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (code, message, status = 409) => Object.assign(new AudioRecoveryError(code, message), { status });
 const unavailable = () => fail('TIMER_ROOM_UNAVAILABLE', 'Lớp chưa có ca Listening dùng đồng hồ chung.', 404);
-const makeupSlug = 'term-test-2';
-
-async function sealMakeup(db, row, input) {
-  if (row.listening_submitted_at) return makeupSnapshot(row);
-  if (!row.started_at) throw fail('TIMER_NOT_STARTED', 'Chưa bắt đầu Listening.');
-  const timedOut = row.server_now >= row.deadline_at;
-  if (!timedOut && !input) return null;
-  const source = await db.query(`SELECT slug AS test_slug,title AS test_title,version AS definition_version,
-    listening_band_adjustment,listening_definition,reading_definition FROM assessment.test_definition WHERE slug=$1 AND version=$2`,
-  [makeupSlug,row.definition_version]);
-  const test = parseStoredTest(source.rows[0]);
-  const answers = !timedOut && input.revision >= Number(row.revision) ? input.answers : row.draft;
-  const result = gradeSection(test.listening_definition,answers,test.listening_band_adjustment);
-  const combined = buildCombinedResult(test,result,row.reading_result);
-  // The interrupted CBT journey still owns the original attempt. Authorize this
-  // single transaction after confirming the exact target and locking its rows.
-  await db.query("SELECT set_config('k67.term_journey',$1,true)",[row.exam_session_id]);
-  const saved = (await db.query(`UPDATE assessment.term_test_attempt SET listening_interrupted_at=NULL,
-    listening_answers=$2::jsonb,listening_result=$3::jsonb,combined_result=$4::jsonb,
-    listening_submitted_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 RETURNING listening_submitted_at`,
-  [row.attempt_id,JSON.stringify(answers),JSON.stringify(result),JSON.stringify(combined)])).rows[0];
-  // Preserve the original session timeline and the sealed Reading/Writing receipts.
-  return { ...makeupSnapshot({ ...row,...saved }), event:{ section:'listening',source:'timer-makeup',timedOut,
-    deadlineAt:row.deadline_at,answeredCount:result.answered } };
-}
-
-function makeupSnapshot(row) {
-  return { ok:true,testSlug:makeupSlug,examSessionToken:row.attempt_id,attemptToken:row.listening_submitted_at ? row.attempt_id : null,generation:Number(row.generation),
-    studentName:row.student_name_snapshot,examMode:'lis_first',listeningStartedAt:row.started_at,
-    startsAt:row.started_at,listeningDeadlineAt:row.deadline_at,serverNow:row.server_now,
-    listeningSubmitted:Boolean(row.listening_submitted_at),listeningDraft:row.draft,listeningDraftRevision:Number(row.revision),
-    submittedAt:row.listening_submitted_at,completed:false };
-}
-
-async function lockMakeup(db, attemptId) {
-  const row = (await db.query(`SELECT a.*,m.attempt_id,m.device_hash,m.started_at,m.deadline_at,m.draft,m.revision
-    FROM assessment.term2_listening_makeup m JOIN assessment.term_test_attempt a ON a.id=m.attempt_id
-    JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
-    WHERE a.id=$1 AND a.test_slug=$2 AND a.class_name_snapshot='IC2262' AND a.superseded_at IS NULL AND s.superseded_at IS NULL
-      AND (a.listening_interrupted_at IS NOT NULL OR a.listening_submitted_at IS NOT NULL)
-    FOR UPDATE OF s,a,m`,[attemptId,makeupSlug])).rows[0];
-  if (!row) return null;
-  row.server_now=(await db.query('SELECT clock_timestamp() AS now')).rows[0].now;
-  return row;
-}
-
-export function mountTerm2ListeningMakeup(app,{ pool,assets,readStudent,requireContext,writeLimiter,draftLimiter,readLimiter,logEvent,allowedAttempt }) {
-  const prefix=`/api/term-tests/${makeupSlug}/listening-timer`;
-  const route=(schema,handler)=>async(req,res,next)=>{
-    try {
-      res.set('Cache-Control','no-store');
-      const parsed=schema.safeParse(req.body);
-      if (!parsed.success || parsed.data.classCode!=='IC2262') throw fail('MAKEUP_INVALID','Link Listening thi bù chỉ dùng cho lớp IC2262.',403);
-      const input=parsed.data;
-      const student=(await readStudent(req,input.classCode,makeupSlug,input.studentRef)).rows[0];
-      if (!student || Number(student.student_id)<=0) throw fail('MAKEUP_NOT_ALLOWED','Chưa xác nhận được học viên của lượt thi bù.',403);
-      const result=await audioTransaction(pool,db=>handler(db,input,student));
-      if (result.event) logEvent('submission_completed',makeupSlug,result.attemptToken,result.event);
-      const {event,...data}=result;
-      res.json(data);
-    } catch(error) { next(error); }
-  };
-  app.post(prefix+'/prepare',requireContext,writeLimiter,route(identity,async(db,input,student)=>{
-    const rows=(await db.query(`SELECT a.id,a.reading_submitted_at,a.writing_submitted_at,m.attempt_id
-      FROM assessment.term_test_attempt a LEFT JOIN assessment.term2_listening_makeup m ON m.attempt_id=a.id
-      WHERE a.test_slug=$1 AND a.erp_course_class_id=$2 AND a.erp_student_contact_id=$3 AND a.superseded_at IS NULL
-        AND a.id=$4::uuid AND (a.listening_interrupted_at IS NOT NULL OR m.attempt_id IS NOT NULL)`,[makeupSlug,student.class_id,student.student_id,allowedAttempt])).rows;
-    if (rows.length!==1) throw fail('MAKEUP_NOT_ALLOWED','Chưa có lượt Listening bị gián đoạn đủ điều kiện cho học viên này.',403);
-    const [attempt]=rows;
-    if (!attempt.reading_submitted_at || !attempt.writing_submitted_at) throw fail('MAKEUP_WAITING_WRITING','Hãy nộp xong Reading và Writing ở trang thi chính trước.');
-    await db.query(`INSERT INTO assessment.term2_listening_makeup(attempt_id,device_hash)
-      VALUES($1,$2) ON CONFLICT DO NOTHING`,[attempt.id,hash(input.deviceProof)]);
-    const row=await lockMakeup(db,attempt.id);
-    if (!row || row.device_hash!==hash(input.deviceProof)) throw fail('MAKEUP_DEVICE','Hãy dùng lại trình duyệt đã mở Listening thi bù.');
-    return makeupSnapshot(row);
-  }));
-  const use=(handler)=>async(db,input,student)=>{
-    const row=input.examSessionToken===allowedAttempt && await lockMakeup(db,input.examSessionToken);
-    if (!row || row.device_hash!==hash(input.deviceProof) || Number(row.generation)!==input.generation
-      || String(row.erp_course_class_id)!==String(student.class_id) || String(row.erp_student_contact_id)!==String(student.student_id)) {
-      throw fail('MAKEUP_NOT_ALLOWED','Lượt thi bù không khớp với học viên đã xác nhận.',403);
-    }
-    return handler(db,row,input);
-  };
-  app.post(prefix+'/start',writeLimiter,route(scope,use(async(db,row)=>{
-    if (row.listening_submitted_at) return makeupSnapshot(row);
-    if (row.started_at && row.server_now>=row.deadline_at) return sealMakeup(db,row);
-    if (!row.started_at) Object.assign(row,(await db.query(`UPDATE assessment.term2_listening_makeup
-      SET started_at=$2,deadline_at=$2::timestamptz+make_interval(secs=>$3) WHERE attempt_id=$1 RETURNING started_at,deadline_at`,
-    [row.attempt_id,row.server_now,assets.getTiming(makeupSlug).listeningTotalSeconds])).rows[0]);
-    const content=await assets.getContent(makeupSlug);
-    return { ...makeupSnapshot(row),content:{baseTestSlug:makeupSlug,title:content.title,variant:content.variant,listening:content.listening} };
-  })));
-  app.post(prefix+'/status',readLimiter,route(scope,use((_db,row)=>makeupSnapshot(row))));
-  app.post(prefix+'/draft',draftLimiter,route(draft,use(async(db,row,input)=>{
-    if (!row.started_at || row.listening_submitted_at || row.server_now>=row.deadline_at) throw fail('LISTENING_LOCKED','Listening đã hết giờ hoặc đã được thu bài.');
-    const accepted=input.revision>Number(row.revision);
-    if (accepted) await db.query(`UPDATE assessment.term2_listening_makeup SET draft=$2::jsonb,revision=$3 WHERE attempt_id=$1`,
-      [row.attempt_id,JSON.stringify(input.answers),input.revision]);
-    return {ok:true,accepted,revision:accepted?input.revision:Number(row.revision),draft:accepted?input.answers:row.draft,
-      deadlineAt:row.deadline_at,serverNow:row.server_now};
-  })));
-  app.post(prefix+'/submit',writeLimiter,route(draft,use(sealMakeup)));
-}
-
-export async function closeExpiredTerm2Makeups(pool,logEvent) {
-  const {rows}=await pool.query(`SELECT m.attempt_id FROM assessment.term2_listening_makeup m JOIN assessment.term_test_attempt a ON a.id=m.attempt_id
-    WHERE a.listening_interrupted_at IS NOT NULL AND a.superseded_at IS NULL AND m.deadline_at<=clock_timestamp() LIMIT 20`);
-  for(const {attempt_id:id} of rows) {
-    try {
-      const data=await audioTransaction(pool,async db=>{const row=await lockMakeup(db,id);return row&&await sealMakeup(db,row);});
-      if(data?.event) logEvent('submission_completed',makeupSlug,id,data.event);
-    } catch(error) { logEvent('timer_auto_submit_failed',makeupSlug,id,{code:error.code||'MAKEUP_AUTO_SUBMIT_FAILED'}); }
-  }
-}
 
 export function mountTerm1TimerTeacher(app, { pool, assets, authenticate, auth, requireContext, readLimiter, writeLimiter, logEvent, mode }) {
   const path = '/api/term-tests/teacher/term1-listening-room';
