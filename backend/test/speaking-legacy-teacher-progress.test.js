@@ -23,8 +23,10 @@ async function fixture(){
   CREATE TABLE speaking_homework.submission(id uuid,access_grant_id uuid,status text,submitted_at timestamptz,created_at timestamptz DEFAULT now());
   CREATE TABLE speaking_homework.receipt(id uuid,submission_id uuid);
   CREATE TABLE speaking_homework.assignment_part(assignment_id uuid,part_key text,display_title text,min_questions integer,position integer);
-  CREATE TABLE speaking_homework.submission_link(submission_id uuid,part text,share_url text,check_status text,check_code text,question_count integer,checked_at timestamptz,created_at timestamptz DEFAULT now(),revision integer,evidence jsonb);
-  CREATE TABLE speaking_homework.practice_link(access_grant_id uuid,slot integer,share_url text,status text,check_code text,question_count integer,checked_at timestamptz,submitted_at timestamptz DEFAULT now(),revision integer,exercise_id uuid);
+  CREATE TABLE speaking_homework.submission_link(id uuid DEFAULT gen_random_uuid(),submission_id uuid,part text,share_url text,check_status text,check_code text,question_count integer,checked_at timestamptz,created_at timestamptz DEFAULT now(),revision integer,evidence jsonb);
+  CREATE TABLE speaking_homework.practice_link(id uuid DEFAULT gen_random_uuid(),access_grant_id uuid,slot integer,share_url text,status text,check_code text,question_count integer,checked_at timestamptz,submitted_at timestamptz DEFAULT now(),revision integer,exercise_id uuid);
+  CREATE TABLE speaking_homework.check_job(link_id uuid,status text,attempts int);
+  CREATE TABLE speaking_homework.practice_check_job(practice_link_id uuid,status text,attempts int);
   CREATE TABLE speaking_homework.doctor_exercise(id uuid,title text);
   CREATE TABLE speaking_homework.outbox(id uuid,receipt_id uuid,kind text,status text,created_at timestamptz DEFAULT now());
   INSERT INTO mapping.classroom_course_mapping VALUES(1124,'IC2304'),(1125,'IC2305');`);
@@ -110,4 +112,16 @@ test('Bộ nối giữ phiên GV và khóa nội bộ trong header, không gọi
  assert.equal(calls[0].options.headers.cookie,'teacher=fixture');assert.equal(calls[0].options.headers['x-speaking-worker-secret'],'s'.repeat(32));
  assert.equal(calls[1].url.pathname,'/speaking/internal/independent/teacher-progress/units/'+id(1));
  assert.equal(calls.some(c=>c.url.href.includes('teacher=fixture')||c.options.body),false);
+});
+
+test('Speaking cũ: chỉ lần gửi hiện hành đã hết lượt mới hiện cần kiểm tra lại',async()=>{
+ const f=await fixture();try{
+  await f.db.query("INSERT INTO speaking_homework.check_job SELECT id,'failed',5 FROM speaking_homework.submission_link WHERE revision=1");
+  let result=await f.reader.detail({id:id(1)},f.reviewer);
+  assert.equal(result.links.find(l=>l.kind==='main').status,'pending');
+  await f.db.query("INSERT INTO speaking_homework.check_job SELECT id,'failed',5 FROM speaking_homework.submission_link WHERE revision=2");
+  result=await f.reader.detail({id:id(1)},f.reviewer);
+  assert.equal(result.links.find(l=>l.kind==='main').checkCode,'CHECK_REVIEW_REQUIRED');
+  assert.equal(result.links.find(l=>l.kind==='practice').status,'accepted');
+ }finally{await f.close();}
 });

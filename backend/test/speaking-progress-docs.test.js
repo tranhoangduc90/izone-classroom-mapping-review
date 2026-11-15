@@ -55,3 +55,13 @@ test('adopting a legacy share URL requires its exact link and excludes already s
   assert.throws(()=>planProgressWrite(document(text,'https://example.invalid'),approved),/DOC_MANUAL_CONFLICT/);
   assert.throws(()=>planProgressWrite(document(text,text),{...approved,payload:{...payload,receiptId:'10000000-0000-4000-8000-000000000002'}}),/DOC_MANUAL_CONFLICT/);
 });
+
+test('Docs distinguish an exhausted technical check, active retry, and a completed content check',()=>{
+  const review={kind:'practice',slot:1,status:'pending',check_job_status:'review',check_job_attempts:5};
+  const render=link=>progressPayload({parts:[{part_key:'freestyle'}],links:[link],requiredPracticeCount:1,assignmentCode:'67-speaking-fixture',documentId:docId});
+  assert.match(render(review).text,/Bổ trợ 1: cần kiểm tra lại/);
+  assert.match(render({...review,check_job_status:'failed',check_job_attempts:4}).text,/Bổ trợ 1: đang kiểm tra/);
+  assert.match(render({...review,status:'rejected',check_job_status:'done'}).text,/Bổ trợ 1: chưa được công nhận/);
+  assert.match(render({...review,status:'accepted'}).text,/Bổ trợ 1: đã xác nhận/);
+  assert.match(render({...review,status:'rejected',check_job_status:'done',check_code:'CHECK_SERVICE_UNAVAILABLE'}).text,/Bổ trợ 1: cần kiểm tra lại/);
+});

@@ -65,6 +65,10 @@ export async function fetchSpeakingEvidence(endpoint,options,{messages=[],valida
   if(anchored){
     const transcript=messages.map((m,i)=>`[${i+1}] ${m.role==='user'?'HỌC VIÊN':'CHATBOT'}: ${m.text}`).join('\n');
     if(transcript&&prompt.endsWith(transcript))prompt=prompt.slice(0,-transcript.length);
+    if(requireReferences){
+      // Schema examples must not teach the old unscoped format. Only the catalog supplies usable IDs.
+      prompt=prompt.replace(/"@m[0-9]+[.]s[0-9]+"/g,'"CHỌN MÃ ĐẦY ĐỦ TỪ DANH MỤC"');
+    }
     prompt += '\n\nQUY ƯỚC DẪN CHỨNG — giữ nguyên mọi tiêu chí và schema ở trên. '
       +(requireReferences
         ? 'Với questionText, answerQuote, repeatQuote, reasonQuote và quote, chọn MỘT mã @mN.sK.k... có thật bên dưới. Giữ đủ phần .k của mã. '

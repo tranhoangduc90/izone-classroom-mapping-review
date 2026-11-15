@@ -1,3 +1,4 @@
+import {speakingCheckNeedsReview} from './speaking-check-retry.js';
 import {SpeakingHomeworkError} from './speaking-homework.js';
 
 // Đọc kho Speaking cũ bằng quyền Google + lớp hiện hành. Không dùng open/start/finish.
@@ -70,15 +71,20 @@ export function createLegacySpeakingTeacherProgress({pool,source}) {
   if(String(context.scope.course_id)!==String(unit.course_id))fail('TEACHER_ACCESS_DENIED','Nguồn lớp đã thay đổi; hãy kiểm tra lại bài.');
   const {rows:parts}=await pool.query(`SELECT part_key,display_title,min_questions FROM speaking_homework.assignment_part
     WHERE assignment_id=(SELECT assignment_id FROM speaking_homework.access_grant WHERE id=$1) ORDER BY position`,[unit.grant_id]);
-  const {rows:main}=await pool.query(`SELECT DISTINCT ON(part) part,share_url,check_status,check_code,question_count,checked_at,created_at,revision
-    FROM speaking_homework.submission_link WHERE submission_id=$1 ORDER BY part,revision DESC`,[id]);
-  const {rows:practice}=await pool.query(`SELECT DISTINCT ON(p.slot) p.slot,p.share_url,p.status,p.check_code,p.question_count,p.checked_at,p.submitted_at AS created_at,p.revision,e.title
+  const {rows:main}=await pool.query(`SELECT DISTINCT ON(l.part) l.part,l.share_url,l.check_status,l.check_code,l.question_count,l.checked_at,l.created_at,l.revision,
+    j.status AS check_job_status,j.attempts AS check_job_attempts
+    FROM speaking_homework.submission_link l LEFT JOIN speaking_homework.check_job j ON j.link_id=l.id
+    WHERE l.submission_id=$1 ORDER BY l.part,l.revision DESC`,[id]);
+  const {rows:practice}=await pool.query(`SELECT DISTINCT ON(p.slot) p.slot,p.share_url,p.status,p.check_code,p.question_count,p.checked_at,p.submitted_at AS created_at,p.revision,e.title,
+    j.status AS check_job_status,j.attempts AS check_job_attempts
     FROM speaking_homework.practice_link p JOIN speaking_homework.doctor_exercise e ON e.id=p.exercise_id
+    LEFT JOIN speaking_homework.practice_check_job j ON j.practice_link_id=p.id
     WHERE p.access_grant_id=$1 ORDER BY p.slot,p.revision DESC`,[unit.grant_id]);
   const {rows:jobs}=await pool.query(`SELECT o.kind,o.status FROM speaking_homework.outbox o
     JOIN speaking_homework.receipt r ON r.id=o.receipt_id WHERE r.submission_id=$1 ORDER BY o.created_at,o.id`,[id]);
-  const links=[...main.map(l=>({kind:'main',part:l.part,url:l.share_url,status:l.check_status,checkCode:l.check_code,questionCount:l.question_count,checkedAt:l.checked_at,savedAt:l.created_at,revision:l.revision})),
-    ...practice.map(l=>({kind:'practice',part:'practice_'+l.slot,slot:l.slot,title:l.title,url:l.share_url,status:l.status,checkCode:l.check_code,questionCount:l.question_count,checkedAt:l.checked_at,savedAt:l.created_at,revision:l.revision}))];
+  const reviewRequired=l=>speakingCheckNeedsReview(l,{status:l.check_job_status,attempts:l.check_job_attempts});
+  const links=[...main.map(l=>({kind:'main',part:l.part,url:l.share_url,status:reviewRequired(l)?'rejected':l.check_status,checkCode:reviewRequired(l)?'CHECK_REVIEW_REQUIRED':l.check_code,questionCount:l.question_count,checkedAt:l.checked_at,savedAt:l.created_at,revision:l.revision})),
+    ...practice.map(l=>({kind:'practice',part:'practice_'+l.slot,slot:l.slot,title:l.title,url:l.share_url,status:reviewRequired(l)?'rejected':l.status,checkCode:reviewRequired(l)?'CHECK_REVIEW_REQUIRED':l.check_code,questionCount:l.question_count,checkedAt:l.checked_at,savedAt:l.created_at,revision:l.revision}))];
   return {id:'legacy_'+unit.id,intakeMode:'legacy',status:unit.status,submittedAt:unit.submitted_at,receiptId:unit.receipt_id,documentId:unit.document_id,
     savedAt:links.map(l=>l.savedAt).filter(Boolean).sort((a,b)=>new Date(b)-new Date(a))[0]||null,
     student:{studentRef:unit.student_ref,name:unit.student_name,classCode:unit.class_code},
