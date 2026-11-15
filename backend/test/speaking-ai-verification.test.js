@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {checkSubmission} from '../src/speaking-checker.js';
-import {analyzePracticeConversation} from '../src/speaking-practice-worker.js';
+import {analyzePracticeConversation,runPracticeCheckJob} from '../src/speaking-practice-worker.js';
 import {analyzeChatbotCompletion} from '../src/speaking-completion-policy.js';
 import {bindFixtureReferences} from '../test-support/speaking-reference-fixture.js';
 
@@ -91,4 +91,70 @@ test('strict supplemental prompts never use unscoped evidence references as JSON
     },prompt))});
   });
   assert.equal(result.completed,true);
+});
+
+test('an explicit incomplete supplemental result with unusable references is persisted without a retry', async () => {
+  const conversation = { source: 'fixture', messages: [
+    { role: 'assistant', text: 'What do you do to stay healthy?' },
+    { role: 'user', text: 'I walk in the park every morning.' },
+    { role: 'assistant', text: 'Add one benefit to your answer.' }
+  ] };
+  let providerCalls = 0;
+  const failCodes = [];
+  const completedChecks = [];
+  const service = {
+    async completePracticeCheck(result) {
+      completedChecks.push(result);
+      return { status: result.qualityPassed ? 'accepted' : 'rejected' };
+    },
+    async failPracticeCheckJob(result) { failCodes.push(result.errorCode); }
+  };
+  const outcome = await runPracticeCheckJob(service, {
+    job_id: 'practice-fixture', share_url: url, exercise_id: 'walking', exercise_title: 'Hobbies'
+  }, {
+    readShare: async () => conversation,
+    analyze: (messages, title) => analyzePracticeConversation(messages, title, async () => {
+      providerCalls++;
+      return Response.json({ text: JSON.stringify({
+        confidence: 0.95, matched: true, completed: false,
+        questionMessage: 1, questionText: '@m1.s1', answerQuote: 'I walk in the park.', repeatQuote: ''
+      }) });
+    }),
+    analyzeCompletion: async () => ({ completed: false, confidence: 0.95 })
+  });
+  assert.deepEqual(outcome, { status: 'rejected' });
+  assert.equal(providerCalls, 1);
+  assert.deepEqual(failCodes, []);
+  assert.equal(completedChecks.length, 1);
+  assert.equal(completedChecks[0].qualityPassed, false);
+  assert.equal(completedChecks[0].questionCount, 0);
+  assert.equal(completedChecks[0].matchedExerciseId, 'walking');
+  assert.deepEqual(completedChecks[0].evidence.completedTurns, []);
+});
+
+test('supplemental verdicts still require valid flags and evidence before accepting', async () => {
+  const messages = [
+    { role: 'assistant', text: 'What do you do to stay healthy?' },
+    { role: 'user', text: 'I walk in the park every morning.' },
+    { role: 'assistant', text: 'Add one benefit to your answer.' },
+    { role: 'user', text: 'I walk in the park every morning to get more exercise.' }
+  ];
+  const claimedCompletion = {
+    confidence: 0.95, matched: true, completed: true,
+    questionMessage: 1, questionText: '@m1.s1', answerMessage: 2, answerQuote: '@m2.s1',
+    feedbackMessage: 3, repeatMessage: 4, repeatQuote: '@m4.s1'
+  };
+  for (const [proposal, code] of [
+    [{ ...claimedCompletion, repeatQuote: '' }, 'AI_EVIDENCE_REFERENCE_INVALID'],
+    [{ ...claimedCompletion, repeatQuote: undefined }, 'PRACTICE_AI_EVIDENCE_INVALID'],
+    [{ ...claimedCompletion, repeatQuote: '@m4.s1.k0000000000000000' }, 'AI_EVIDENCE_SOURCE_MISMATCH'],
+    [{ completed: false, matched: 'true', confidence: 0.95 }, 'PRACTICE_AI_UNCERTAIN'],
+    [{ completed: 'false', matched: true, confidence: 0.95 }, 'PRACTICE_AI_UNCERTAIN'],
+    [{ completed: false, matched: true }, 'PRACTICE_AI_UNCERTAIN']
+  ]) {
+    await assert.rejects(analyzePracticeConversation(messages, 'Hobbies', async (_url, options) => {
+      const { prompt } = JSON.parse(options.body);
+      return Response.json({ text: JSON.stringify(bindFixtureReferences(proposal, prompt)) });
+    }), { code });
+  }
 });

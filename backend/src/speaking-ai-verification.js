@@ -59,7 +59,9 @@ export function speakingVerificationCode(error,fallback='CONTENT_CHECK_UNAVAILAB
   const code=String(error?.code||error?.message||'');
   return /^[A-Z][A-Z0-9_]{2,79}$/.test(code)?code:fallback;
 }
-export async function fetchSpeakingEvidence(endpoint,options,{messages=[],validate,call=fetch,anchored=true,requireReferences=false,totalMs=80_000}={}){
+export async function fetchSpeakingEvidence(endpoint,options,{
+  messages=[],validate,call=fetch,anchored=true,requireReferences=false,shouldBindReferences=()=>true,totalMs=80_000
+}={}){
   const input=JSON.parse(options.body);let prompt=input.prompt;
   const catalog=evidenceCatalog(messages,requireReferences);
   if(anchored){
@@ -95,7 +97,7 @@ export async function fetchSpeakingEvidence(endpoint,options,{messages=[],valida
       lastRaw=raw;
       let analysis;
       try{analysis=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch(cause){throw failure('AI_RESULT_JSON_INVALID',cause);}
-      if(anchored)analysis=bindReferences(analysis,catalog,requireReferences);
+      if(anchored&&shouldBindReferences(analysis))analysis=bindReferences(analysis,catalog,requireReferences);
       await validate?.(analysis);
       return Response.json({text:JSON.stringify(analysis)});
     }catch(error){
