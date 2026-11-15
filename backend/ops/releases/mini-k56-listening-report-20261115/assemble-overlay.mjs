@@ -31,7 +31,8 @@ export async function assembleMiniReportOverlay({sourceDir,transportDir,outputDi
   const files=[
     ...names.map((name,i)=>['src/'+name,updated[i]]),
     ...modules.map(([name,content])=>['src/mini-listening-report/'+name,content.replace(/\r\n/g,'\n')]),
-    ['mini-listening-report.sql',miniListeningReportSchema.replaceAll('assessment.','assessment_k56.')],
+    ['mini-listening-report.sql',miniListeningReportSchema.replaceAll('assessment.','assessment_k56.')
+      +'GRANT SELECT, INSERT, UPDATE ON TABLE assessment_k56.mini_k56_listening_report TO k56_shared_api;\n'],
   ];
   // A new output directory keeps a previous candidate and its manifest intact.
   await mkdir(outputDir);

@@ -17,8 +17,9 @@ from types import FunctionType
 ROOT = Path(__file__).resolve().parent
 PREVIOUS = Path("/opt/izone-mini-k56-recovery-20261112/operator.py")
 API = "izone-k56-ic2264-api"
-OLD = API + "-before-listening-report-20261115"
-NEW = API + "-listening-report-candidate-20261115"
+RELEASE_ID = ROOT.name.rsplit("-", 1)[-1]
+OLD = API + "-before-listening-report-" + RELEASE_ID
+NEW = API + "-listening-report-candidate-" + RELEASE_ID
 BOT_MOUNT = "/run/mini-k56-listening-report/telegram.json"
 POLICY_MOUNT = "/run/mini-k56-listening-report-policy"
 SOURCE_DIR = "/app/src/"
@@ -157,6 +158,12 @@ def apply(h, release):
     check(config_file.read_bytes() == original, "COMPOSE_CHANGED_AFTER_PREFLIGHT")
     before = h["mini"]["data_digest"](sql)
     sql("BEGIN; SET LOCAL lock_timeout = '4s';\n" + (ROOT / MIGRATION).read_text() + "\nCOMMIT;")
+    permissions = h["scalar"](sql, """
+        SELECT bool_and(has_table_privilege('k56_shared_api',
+          'assessment_k56.mini_k56_listening_report', privilege))
+        FROM unnest(ARRAY['SELECT','INSERT','UPDATE']) AS allowed(privilege)
+    """)
+    check(permissions == "t", "K56_REPORT_TABLE_PRIVILEGES_MISSING")
     check(h["mini"]["data_digest"](sql) == before, "NATIVE_DATA_CHANGED_DURING_PREP")
     candidate = switch.engine("POST", "/v1.48/containers/create?name=" + NEW, payload, (201,))["Id"]
     switch.compare_mounts(expected, switch.inspect(candidate), sources)
