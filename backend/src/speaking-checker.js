@@ -6,7 +6,7 @@ import { checkStoryDetailSubmission } from './speaking-story-detail-checker.js';
 import { checkStoryOutcomeSubmission } from './speaking-story-outcome-checker.js';
 import { checkPersonSubmission } from './speaking-person-checker.js';
 import { parseSpeakingShareUrl } from './speaking-homework.js';
-import { readSpeakingShare } from './speaking-share-reader.js';
+import { readSpeakingShare, SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 import { assertSpeakingConversationLength, speakingCheckErrorCode } from './speaking-conversation-snapshot.js';
 
 const GEMINI_ENDPOINT = process.env.SPEAKING_CHECK_AI_ENDPOINT || 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_31_flash_lite';
@@ -135,6 +135,21 @@ export function validCompleted(section, messages, proposed) {
 }
 
 export async function checkSubmission(input, dependencies = {}) {
+  const read = dependencies.readShare || readConversation;
+  let openingAttachment = false;
+  const result = await checkSpeakingSection(input, { ...dependencies, readShare: async url => {
+    try {
+      return await read(url);
+    } catch (error) {
+      if (error.code === SHARE_OPENING_ATTACHMENT) openingAttachment = true;
+      throw error;
+    }
+  } });
+  return openingAttachment && ['error', 'blocked'].includes(result.kind)
+    ? { ...result, errorCode: SHARE_OPENING_ATTACHMENT } : result;
+}
+
+async function checkSpeakingSection(input, dependencies) {
   if (['object_intro', 'object_description', 'object_function', 'object_what_if'].includes(input?.section)) return checkObjectSubmission(input, dependencies);
   if (input?.section === 'story_outcome') return checkStoryOutcomeSubmission(input, dependencies);
   const section = input?.section;

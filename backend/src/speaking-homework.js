@@ -7,6 +7,7 @@ import { buildTeacherClassAccessPredicate } from './teacher-class-access-sql.js'
 import { isDoctorText } from './speaking-doctor-text.js';
 import { hasChatbotCompletion } from './speaking-completion-policy.js';
 import { canRetrySpeakingCheck, speakingCheckView } from './speaking-check-retry.js';
+import { SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 
 export class SpeakingHomeworkError extends Error {
   constructor(code, message, httpStatus = 409) {
@@ -446,7 +447,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
   // Việc chính: chốt lỗi vĩnh viễn vào đúng link để học viên sửa và xác nhận lại.
   // Kết quả: job kết thúc, phần bài vẫn chưa đạt; lỗi dịch vụ tạm thời dùng failCheckJob.
   async function rejectCheckJob({ checkJobId, checkCode }) {
-    if (!['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID'].includes(checkCode)) {
+    if (!['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID', SHARE_OPENING_ATTACHMENT].includes(checkCode)) {
       throw new SpeakingHomeworkError('INVALID_CHECK_CODE', 'Mã lỗi kiểm link chưa hợp lệ.', 400);
     }
     return withTransaction(pool, async client => {
