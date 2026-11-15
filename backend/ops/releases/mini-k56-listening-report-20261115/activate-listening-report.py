@@ -1,6 +1,7 @@
 """Activate only Mini K56 Listening reporting on the pinned shared K56 runtime."""
 
 import fcntl
+import copy
 import hashlib
 import json
 import os
@@ -104,8 +105,25 @@ def plan(h):
     # directory for the generated Compose candidate.
     previous_persistent = h["persistent"]
     persistent = FunctionType(previous_persistent.__code__, {**previous_persistent.__globals__, "ROOT": ROOT})
-    compose = persistent(live, sources, delta)
-    payload, expected, addresses = h["container_spec"](live, sources, delta)
+    compose_live = copy.deepcopy(live)
+    # Several newer layers use the Engine Mounts array. The existing Compose
+    # editor identifies the same read-only paths in Binds notation.
+    declared_binds = compose_live["HostConfig"].get("Binds") or []
+    declared_targets = {entry.split(":", 2)[1] for entry in declared_binds}
+    for target in sources:
+        if target not in declared_targets:
+            mounts = [item for item in compose_live["Mounts"] if item["Destination"] == target]
+            if mounts:
+                check(len(mounts) == 1 and not mounts[0]["RW"] and mounts[0]["Type"] == "bind", "WRONG_EXISTING_MOUNT")
+                declared_binds.append(f'{mounts[0]["Source"]}:{target}:ro')
+    compose_live["HostConfig"]["Binds"] = declared_binds
+    compose = persistent(compose_live, sources, delta)
+    clone_live = copy.deepcopy(live)
+    # container_spec explicitly pins the current verified IPs when generating
+    # the new Engine payload. Avoid passing the old static hint to its clone.
+    for endpoint in clone_live["NetworkSettings"]["Networks"].values():
+        endpoint["IPAMConfig"] = None
+    payload, expected, addresses = h["container_spec"](clone_live, sources, delta)
     return manifest, build, live, sources, command, sql, compose, payload, expected, addresses
 
 
