@@ -574,3 +574,31 @@ test('Nguồn xác nhận cùng tên chuyển về một học viên và từ ch
     await assert.rejects(docs.start({...input,classCode:'OTHER'}),{code:'CLASS_MISMATCH'});
   }finally{await f.db.close();}
 });
+
+test('exhausting the current practice check refreshes Docs once and a late old check cannot replace the new state',async()=>{
+  const f=await fixture();try{
+    const id=f.session.workUnitId,documentId='review-fixture-doc';
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id=$2,tab_id='t.0' WHERE id=$1",[id,documentId]);
+    const input={...f.identity,slot:1,exerciseId:exercise(1),rawUrl:url(722)};
+    const first=await f.service.requestPracticeCheck(input);
+    const progress=async()=>(await f.pool.query("SELECT payload,sequence FROM speaking_independent.doc_progress WHERE unit_id=$1",[id])).rows[0];
+    assert.match((await progress()).payload.text,/Bổ trợ 1: đang kiểm tra/);
+    await f.pool.query("UPDATE speaking_independent.job SET attempts=4 WHERE link_id=$1",[first.id]);
+    const claimed=await f.service.claimJob();
+    await f.service.failJob(claimed,'AI_EVIDENCE_REFERENCE_INVALID');
+    const review=await progress();
+    assert.match(review.payload.text,/Bổ trợ 1: cần kiểm tra lại/);
+    assert.equal(Number(review.sequence),2);
+    assert.equal((await f.service.open(f.identity)).practiceLinks[0].check_code,'CHECK_REVIEW_REQUIRED');
+    const next=await f.service.requestPracticeCheck(input);
+    await assert.rejects(f.service.failJob(claimed,'AI_EVIDENCE_REFERENCE_INVALID'),{code:'STALE_JOB'});
+    const retry=await progress();
+    assert.match(retry.payload.text,/Bổ trợ 1: đang kiểm tra/);
+    assert.equal(Number(retry.sequence),3);
+    assert.notEqual(next.id,first.id);
+    await f.pool.query("UPDATE speaking_independent.job SET attempts=5,lease_until=now()-interval '1 second',status='processing' WHERE link_id=$1",[next.id]);
+    assert.equal(await f.service.claimJob(),null);
+    assert.match((await progress()).payload.text,/Bổ trợ 1: cần kiểm tra lại/);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_independent.receipt')).rows[0].n,0);
+  }finally{await f.db.close();}
+});

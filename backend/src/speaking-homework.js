@@ -257,10 +257,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
 
   async function latestLinks(submissionId, client = pool) {
     const result = await client.query(`
-      SELECT DISTINCT ON (part) id, part, revision, share_url, share_id, fingerprint,
-        check_status, check_code, question_count, evidence, typing_warning, voice_confirmed, checked_at
-      FROM speaking_homework.submission_link WHERE submission_id = $1
-      ORDER BY part, revision DESC`, [submissionId]);
+      SELECT DISTINCT ON (l.part) l.id, l.part, l.revision, l.share_url, l.share_id, l.fingerprint,
+        l.check_status, l.check_code, l.question_count, l.evidence, l.typing_warning, l.voice_confirmed, l.checked_at,
+        j.status AS check_job_status,j.attempts AS check_job_attempts
+      FROM speaking_homework.submission_link l LEFT JOIN speaking_homework.check_job j ON j.link_id=l.id
+      WHERE l.submission_id = $1 ORDER BY l.part,l.revision DESC`, [submissionId]);
     return result.rows;
   }
 
@@ -292,7 +293,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         doctorEnabled: Boolean(grant.doctor_course_key) },
       student: { ref: studentRef, name: grant.student_name },
       status: submission.status, parts: parts.rows,
-      links:links.map(l=>speakingCheckView(l,null,'check_status')),
+      links:links.map(({check_job_status,check_job_attempts,...link})=>speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts},'check_status')),
       practiceLinks:practice.rows.map(({check_job_status,check_job_attempts,...link})=>speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts})),
       receipt: receipt.rows[0] || null,
       docsProgress:await readSpeakingDocsProgress(pool,'speaking_homework',grant.grant_id)
@@ -396,8 +397,28 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     });
   }
 
+  // Expired final claims can no longer be processed. Publish the same review state
+  // as a reported failure while holding the job lock and using the latest link in Docs.
+  async function expireFinalCheck(client, practice) {
+    const table=practice?'practice_check_job':'check_job';
+    const link=practice?'practice_link':'submission_link';
+    const linkKey=practice?'practice_link_id':'link_id';
+    const grant=practice?'l.access_grant_id':'s.access_grant_id';
+    const submission=practice?'':'JOIN speaking_homework.submission s ON s.id=l.submission_id';
+    const {rows:[expired]}=await client.query(`SELECT j.id,${grant} AS grant_id
+      FROM speaking_homework.${table} j JOIN speaking_homework.${link} l ON l.id=j.${linkKey}
+      ${submission}
+      WHERE j.status='processing' AND j.attempts>=5 AND j.updated_at<now()-interval '5 minutes'
+      ORDER BY j.updated_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`);
+    if(!expired)return;
+    await client.query(`UPDATE speaking_homework.${table} SET status='failed',
+      last_error_code=coalesce(last_error_code,'RETRY_EXHAUSTED'),updated_at=now() WHERE id=$1`,[expired.id]);
+    await enqueueSpeakingProgress(client,'speaking_homework',expired.grant_id);
+  }
+
   async function claimCheckJob() {
     return withTransaction(pool, async client => {
+      await expireFinalCheck(client,false);
       const found = await client.query(`
         SELECT j.id AS job_id, l.id AS link_id, l.share_url, l.part,
           a.course_id, a.course_work_id, a.class_id, g.student_ref,
@@ -424,9 +445,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
 
   async function failCheckJob({ checkJobId, errorCode }) {
     return withTransaction(pool, async client => {
-      const found = await client.query(`SELECT j.id, j.link_id, j.attempts
+      const found = await client.query(`SELECT j.id, j.link_id, j.attempts, s.access_grant_id
         FROM speaking_homework.check_job j
-        WHERE j.id = $1 AND j.status = 'processing' FOR UPDATE`, [checkJobId]);
+        JOIN speaking_homework.submission_link l ON l.id=j.link_id
+        JOIN speaking_homework.submission s ON s.id=l.submission_id
+        WHERE j.id = $1 AND j.status = 'processing' FOR UPDATE OF j`, [checkJobId]);
       if (!found.rows.length) {
         throw new SpeakingHomeworkError('CHECK_NOT_FOUND', 'Lượt kiểm không ở trạng thái xử lý.', 404);
       }
@@ -438,6 +461,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         await client.query(`UPDATE speaking_homework.submission_link
           SET check_status = 'rejected', check_code = 'CHECK_SERVICE_UNAVAILABLE', checked_at = now()
           WHERE id = $1`, [found.rows[0].link_id]);
+        await enqueueSpeakingProgress(client,'speaking_homework',found.rows[0].access_grant_id);
       }
       return { exhausted };
     });
@@ -877,6 +901,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
 
   async function claimPracticeCheckJob() {
     return withTransaction(pool, async client => {
+      await expireFinalCheck(client,true);
       const found = await client.query(`SELECT j.id AS job_id, p.share_url, p.exercise_id, p.slot,
           e.title AS exercise_title
         FROM speaking_homework.practice_check_job j
@@ -1014,9 +1039,14 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
   }
 
   async function failPracticeCheckJob({ checkJobId, errorCode }) {
-    await pool.query(`UPDATE speaking_homework.practice_check_job
-      SET status = 'failed', last_error_code = $2, updated_at = now()
-      WHERE id = $1 AND status = 'processing'`, [checkJobId, errorCode]);
+    await withTransaction(pool,async client=>{
+      const {rows:[job]}=await client.query(`UPDATE speaking_homework.practice_check_job j
+        SET status='failed',last_error_code=$2,updated_at=now()
+        FROM speaking_homework.practice_link p
+        WHERE j.id=$1 AND j.status='processing' AND p.id=j.practice_link_id
+        RETURNING j.attempts,p.access_grant_id`,[checkJobId,errorCode]);
+      if(job?.attempts>=5) await enqueueSpeakingProgress(client,'speaking_homework',job.access_grant_id);
+    });
   }
 
   async function claimPracticeAnalysisJob() {

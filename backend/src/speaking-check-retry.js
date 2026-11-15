@@ -5,12 +5,17 @@ import { SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 const technicalCodes = new Set(['CHECK_REVIEW_REQUIRED', 'CHECK_SERVICE_UNAVAILABLE',
   'SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID', SHARE_OPENING_ATTACHMENT]);
 
-export function canRetrySpeakingCheck(link, job) {
+export function speakingCheckNeedsReview(link, job) {
   const status = link?.check_status ?? link?.status;
   if (!link || status === 'accepted') return false;
-  return technicalCodes.has(link.check_code)
-    || job?.status === 'review'
-    || (job?.status === 'failed' && Number(job.attempts) >= 5);
+  if (['CHECK_REVIEW_REQUIRED','CHECK_SERVICE_UNAVAILABLE'].includes(link.check_code)) return true;
+  return status === 'pending' && (job?.status === 'review'
+    || (job?.status === 'failed' && Number(job.attempts) >= 5));
+}
+
+export function canRetrySpeakingCheck(link, job) {
+  return !!link && (link.check_status ?? link.status) !== 'accepted'
+    && (technicalCodes.has(link.check_code) || speakingCheckNeedsReview(link,job));
 }
 
 export function speakingCheckView(link, job, statusKey = 'status') {

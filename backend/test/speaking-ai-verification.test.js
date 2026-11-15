@@ -74,3 +74,21 @@ test('completion output missing confidence is repaired, without inventing a conf
  const result=await analyzeChatbotCompletion(chat,'Luyện đọc',async()=>{calls++;return Response.json({text:JSON.stringify(replies.shift())});});
  assert.equal(calls,2);assert.equal(result.completed,false);assert.equal(result.confidence,.95);
 });
+
+test('strict supplemental prompts never use unscoped evidence references as JSON examples',async()=>{
+  const messages=[
+    {role:'assistant',text:'What do you do to stay healthy?'},
+    {role:'user',text:'I walk every morning because it gives me more energy.'},
+    {role:'assistant',text:'Good. Add a concrete example from your routine.'},
+    {role:'user',text:'I walk every morning. For example, I take a long walk before work.'}
+  ];
+  const result=await analyzePracticeConversation(messages,'Luyện nói',async(_url,options)=>{
+    const {prompt}=JSON.parse(options.body);
+    assert.doesNotMatch(prompt, /"@m[0-9]+[.]s[0-9]+"/);
+    return Response.json({text:JSON.stringify(bindFixtureReferences({
+      confidence:0.95,matched:true,completed:true,questionMessage:1,questionText:'@m1.s1',
+      answerMessage:2,answerQuote:'@m2.s1',feedbackMessage:3,repeatMessage:4,repeatQuote:'@m4.s1'
+    },prompt))});
+  });
+  assert.equal(result.completed,true);
+});

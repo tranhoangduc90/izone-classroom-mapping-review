@@ -1,5 +1,6 @@
 import { planSpeakingStatusWrite, verifySpeakingStatusWrite } from './speaking-independent-status.js';
 import {withTransaction} from './db.js';
+import {speakingCheckNeedsReview} from './speaking-check-retry.js';
 
 const schemas = new Set(['speaking_independent','speaking_homework']);
 function table(schema) { if(!schemas.has(schema))throw new Error('DOC_PROGRESS_SCOPE_INVALID');return schema+'.doc_progress'; }
@@ -19,7 +20,7 @@ export function progressPayload({parts,links,requiredPracticeCount,receiptId,ass
   if(receiptId){url.searchParams.set('receipt',receiptId);if(independent)url.searchParams.set('system','independent');}
   else {url.searchParams.set('code',assignmentCode);url.searchParams.set('documentId',documentId);}
   const heading=receiptId?'Đã nộp bài thành công.':accepted===required.length?'Đã xác nhận đủ các phần — đang hoàn tất nộp bài.':`Đã xác nhận ${accepted}/${required.length} phần bắt buộc.`;
-  const lines=required.map(({title,link})=>`${title}: ${link?.status==='accepted'?'đã xác nhận'+(link.kind==='main'&&Number(link.question_count)>0?` ${link.question_count} ${['object_intro','object_description','object_function','object_what_if'].includes(link.part)?'lượt':'câu'}`:''):link?.status==='pending'?'đang kiểm tra':link?.status==='rejected'?'chưa được công nhận':'chưa xác nhận'}.`);
+  const lines=required.map(({title,link})=>`${title}: ${link?.status==='accepted'?'đã xác nhận'+(link.kind==='main'&&Number(link.question_count)>0?` ${link.question_count} ${['object_intro','object_description','object_function','object_what_if'].includes(link.part)?'lượt':'câu'}`:''):speakingCheckNeedsReview(link,{status:link?.check_job_status,attempts:link?.check_job_attempts})?'cần kiểm tra lại':link?.status==='pending'?'đang kiểm tra':link?.status==='rejected'?'chưa được công nhận':'chưa xác nhận'}.`);
   return {text:[heading,...lines,'Giảng viên nhấn vào đây để xem '+(receiptId?'kết quả.':'tiến độ.')].join('\n'),link:url.href,receiptId:receiptId||null};
 }
 
@@ -31,7 +32,10 @@ export async function enqueueSpeakingProgress(db,schema,unitId) {
       LEFT JOIN speaking_independent.receipt r ON r.work_unit_id=u.id WHERE u.id=$1 AND u.revoked_at IS NULL`,[unitId])).rows[0];
     if(!row?.document_id)return;
     parts=row.template.parts;row.required_practice_count=row.template.requiredPracticeCount;
-    links=(await db.query(`SELECT DISTINCT ON(kind,part) * FROM speaking_independent.link WHERE work_unit_id=$1 ORDER BY kind,part,revision DESC`,[unitId])).rows;
+    links=(await db.query(`SELECT DISTINCT ON(l.kind,l.part) l.*,j.status AS check_job_status,j.attempts AS check_job_attempts
+      FROM speaking_independent.link l LEFT JOIN speaking_independent.job j
+        ON j.link_id=l.id AND j.kind=CASE WHEN l.kind='main' THEN 'check_main' ELSE 'check_practice' END
+      WHERE l.work_unit_id=$1 ORDER BY l.kind,l.part,l.revision DESC`,[unitId])).rows;
   }else{
     row=(await db.query(`SELECT g.document_id,a.assignment_code,a.required_practice_count,s.id AS submission_id,r.id AS receipt_id
       FROM speaking_homework.access_grant g JOIN speaking_homework.assignment a ON a.id=g.assignment_id
@@ -41,10 +45,14 @@ export async function enqueueSpeakingProgress(db,schema,unitId) {
     row.tab_id='t.0';
     parts=(await db.query(`SELECT p.part_key,p.display_title FROM speaking_homework.assignment_part p JOIN speaking_homework.submission s ON s.id=$1
       JOIN speaking_homework.access_grant g ON g.id=s.access_grant_id WHERE p.assignment_id=g.assignment_id ORDER BY p.position`,[row.submission_id])).rows;
-    links=(await db.query(`SELECT DISTINCT ON(part) part,check_status AS status,question_count,'main' AS kind,NULL::integer AS slot
-      FROM speaking_homework.submission_link WHERE submission_id=$1 ORDER BY part,revision DESC`,[row.submission_id])).rows;
-    links.push(...(await db.query(`SELECT DISTINCT ON(slot) slot,status,question_count,'practice' AS kind FROM speaking_homework.practice_link
-      WHERE access_grant_id=$1 AND slot IS NOT NULL ORDER BY slot,revision DESC`,[unitId])).rows);
+    links=(await db.query(`SELECT DISTINCT ON(l.part) l.part,l.check_status AS status,l.check_code,l.question_count,'main' AS kind,
+      j.status AS check_job_status,j.attempts AS check_job_attempts
+      FROM speaking_homework.submission_link l LEFT JOIN speaking_homework.check_job j ON j.link_id=l.id
+      WHERE l.submission_id=$1 ORDER BY l.part,l.revision DESC`,[row.submission_id])).rows;
+    links.push(...(await db.query(`SELECT DISTINCT ON(l.slot) l.slot,l.status,l.check_code,l.question_count,'practice' AS kind,
+      j.status AS check_job_status,j.attempts AS check_job_attempts
+      FROM speaking_homework.practice_link l LEFT JOIN speaking_homework.practice_check_job j ON j.practice_link_id=l.id
+      WHERE l.access_grant_id=$1 AND l.slot IS NOT NULL ORDER BY l.slot,l.revision DESC`,[unitId])).rows);
   }
   const payload=progressPayload({parts,links,requiredPracticeCount:Number(row.required_practice_count),receiptId:row.receipt_id,
     assignmentCode:row.assignment_code,documentId:row.document_id,independent:schema==='speaking_independent'});

@@ -231,8 +231,11 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
       const managed=progressDocsEnabled||(await db.query("SELECT to_regclass('speaking_independent.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true;
       // Giữ job bốn phút, dài hơn ngân sách đọc/AI tối đa 165 giây; quá năm lượt chuyển kiểm lại.
       const recoverableDocs="(kind='write_doc' AND coalesce(last_error,'') IN ('DOC_WRITE_UNAVAILABLE','DOC_TIMEOUT'))";
-      await db.query(`UPDATE speaking_independent.job SET status='review',last_error=coalesce(last_error,'RETRY_EXHAUSTED')
-        WHERE attempts>=5 AND NOT ${recoverableDocs} AND (status='failed' OR (status='processing' AND lease_until<now()))`);
+      const {rows:exhausted}=await db.query(`UPDATE speaking_independent.job SET status='review',last_error=coalesce(last_error,'RETRY_EXHAUSTED')
+        WHERE attempts>=5 AND NOT ${recoverableDocs} AND (status='failed' OR (status='processing' AND lease_until<now()))
+        RETURNING kind,work_unit_id`);
+      const checkUnits=new Set(exhausted.filter(j=>j.kind==='check_main'||j.kind==='check_practice').map(j=>j.work_unit_id));
+      for(const unitId of [...checkUnits].sort()) await enqueueSpeakingProgress(db,'speaking_independent',unitId);
       const {rows:[j]}=await db.query(`SELECT * FROM speaking_independent.job WHERE (attempts<5 OR ${recoverableDocs}) AND available_at<=now()
         AND (status IN ('pending','failed') OR (status='processing' AND lease_until<now()))
         ${managed?`AND (kind<>'write_doc' OR NOT EXISTS(SELECT 1 FROM speaking_independent.doc_progress d
@@ -271,6 +274,9 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
       }
       await db.query(`UPDATE speaking_independent.job SET status=CASE WHEN attempts>=5 THEN 'review' ELSE 'failed' END,
         last_error=$2,available_at=now()+interval '30 seconds',lease_until=NULL,updated_at=now() WHERE id=$1`,[job.job_id,code]);
+      if (current.attempts>=5 && (current.kind==='check_main'||current.kind==='check_practice')) {
+        await enqueueSpeakingProgress(db,'speaking_independent',current.work_unit_id);
+      }
     });
   }
   async function checkComplete(job,result) {
