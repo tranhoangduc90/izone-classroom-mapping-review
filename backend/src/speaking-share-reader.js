@@ -3,6 +3,7 @@ import { createGunzip, createBrotliDecompress, createInflate } from 'node:zlib';
 
 const DEFAULT_ENDPOINT = 'https://ducizone.ddns.net/dispatcher/webhook/phan_phoi_get_chatgpt';
 const MAX_HTML_BYTES = 12 * 1024 * 1024;
+export const SHARE_OPENING_ATTACHMENT = 'SHARE_OPENING_ATTACHMENT_ONLY';
 
 function validateShareUrl(value) {
   let url;
@@ -318,6 +319,12 @@ function parseConversationHtml(html, source) {
       const text = role === 'user' ? row.frame.text
         : row.source?.markdown?.trim() ? row.source.markdown : row.source?.dil?.fallbackMarkdown;
       const id = row.frame.id || row.source?.messageId;
+      if (messages.length === 0 && role === 'user' && typeof id === 'string' && id
+        && typeof text === 'string' && !text.trim()
+        && Array.isArray(row.frame.fileAttachments)
+        && row.frame.fileAttachments.some(attachment => attachment?.kind === 'file')) {
+        throw shareReadError(SHARE_OPENING_ATTACHMENT, 'OCTANE_MESSAGE_INVALID');
+      }
       if (typeof id !== 'string' || !id || typeof text !== 'string' || !text.trim()) throw new Error('OCTANE_MESSAGE_INVALID');
       messages.push({ id, node_id: row.key || id, role, create_time: null, update_time: null, text });
     }
@@ -361,18 +368,23 @@ export async function readSpeakingShare(shareUrl, n8nOnly = false) {
   const readDeadline=Date.now()+70_000;
   if (!n8nOnly) {
     let directError;
+    let openingAttachment = false;
     const deadline = Math.min(readDeadline,Date.now() + 25_000);
     for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt++) {
       try {
         const html = await fetchDirectHtml(shareUrl, Math.min(deadline, Date.now() + 12_500));
         return parseConversationHtml(html, 'direct');
-      } catch (error) { directError = error; }
+      } catch (error) {
+        directError = error;
+        if (error.code === SHARE_OPENING_ATTACHMENT) openingAttachment = true;
+      }
     }
     try {
       const html = await fetchViaN8n(shareUrl,readDeadline);
       return parseConversationHtml(html, 'n8n_fallback');
     } catch (n8nError) {
-      throw shareReadError(n8nError.code||'SHARE_READ_UNAVAILABLE',
+      const code = openingAttachment ? SHARE_OPENING_ATTACHMENT : n8nError.code || 'SHARE_READ_UNAVAILABLE';
+      throw shareReadError(code,
         `Đọc trực tiếp lỗi: ${directError?.message || 'SHARE_READ_LIMIT'} n8n fallback lỗi: ${n8nError.message}`,
         {directCode:directError?.code||null,fallback:n8nError.details||{}},n8nError);
     }

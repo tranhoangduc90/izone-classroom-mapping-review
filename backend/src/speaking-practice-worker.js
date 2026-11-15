@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { conversationSnapshot, assertSpeakingConversationLength } from './speaking-conversation-snapshot.js';
 import { createSpeakingHomeworkService } from './speaking-homework.js';
-import { readSpeakingShare } from './speaking-share-reader.js';
+import { readSpeakingShare, SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 import { analyzeDoctorConversation } from './speaking-doctor-worker.js';
 import { doctorDiagnostic } from './speaking-doctor-text.js';
 import { completionFallback, COMPLETION_POLICY } from './speaking-completion-policy.js';
@@ -107,6 +107,9 @@ export async function runPracticeCheckJob(service, job, {
       typingWarning: null, snapshot: conversationSnapshot(conversation)
     });
   } catch (error) {
+    if (error?.code === SHARE_OPENING_ATTACHMENT) {
+      return service.rejectPracticeCheckJob({ checkJobId: job.job_id, checkCode: SHARE_OPENING_ATTACHMENT });
+    }
     if (/HTTP 40[134]|HTTP 404|NOT_FOUND/i.test(String(error?.message || ''))) {
       return service.rejectPracticeCheckJob({ checkJobId: job.job_id, checkCode: 'SHARE_UNAVAILABLE' });
     }

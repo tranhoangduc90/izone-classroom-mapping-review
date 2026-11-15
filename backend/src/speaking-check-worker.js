@@ -1,6 +1,7 @@
 import { checkSubmission } from './speaking-checker.js';
 import { createSpeakingHomeworkService } from './speaking-homework.js';
 import { COMPLETION_POLICY, hasChatbotCompletion } from './speaking-completion-policy.js';
+import { SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -11,6 +12,10 @@ export async function runSpeakingCheckJob(service, job, check = checkSubmission)
   service=service.workerService?.(job)||service;
   try {
     const result = await check({ section: job.part, url: job.share_url, minimum: Number(job.min_questions) });
+    if (result.errorCode === SHARE_OPENING_ATTACHMENT) {
+      await service.rejectCheckJob({ checkJobId: job.job_id, checkCode: SHARE_OPENING_ATTACHMENT });
+      return 'rejected';
+    }
     if (result.kind === 'error') {
       await service.failCheckJob({ checkJobId: job.job_id, errorCode: result.errorCode || 'CONTENT_CHECK_UNAVAILABLE' });
       return 'retry';

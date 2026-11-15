@@ -3,6 +3,7 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { createSpeakingHomeworkService, SpeakingHomeworkError } from './speaking-homework.js';
+import { SHARE_OPENING_ATTACHMENT } from './speaking-share-reader.js';
 import { createSpeakingDocsJobs } from './speaking-docs-jobs.js';
 import { createSpeakingAlerts } from './speaking-alerts.js';
 import { createSpeakingClassroomCopies } from './speaking-classroom-copies.js';
@@ -70,7 +71,7 @@ const checkResult = z.object({
 const checkFailure = z.object({ checkJobId: z.string().uuid(),
   errorCode: z.string().regex(/^[A-Z0-9_]{3,80}$/) }).strict();
 const checkRejection = z.object({ checkJobId: z.string().uuid(),
-  checkCode: z.enum(['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID']) }).strict();
+  checkCode: z.enum(['SHARE_UNAVAILABLE', 'SHARE_CONTENT_INVALID', SHARE_OPENING_ATTACHMENT]) }).strict();
 const outboxComplete = z.object({ jobId: z.string().uuid(),
   externalReceipt: z.string().trim().min(1).max(500) }).strict();
 const outboxClaim = z.object({ kind: z.enum(['write_doc', 'grade_speaking', 'doctor_analyze']).optional() }).strict();
