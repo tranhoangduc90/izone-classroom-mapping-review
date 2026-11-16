@@ -25,6 +25,24 @@ MODULES = '/app/src/term1-journal-cloud'
 MIGRATION = 'enrollment.sql'
 SOURCE = {'src/app.js', 'src/term1-journal-cloud/mount.mjs', 'src/term1-journal-cloud/k67-pilot-ticket.mjs'}
 POLICY = ROOT / 'policy' / 'config.json'
+TERM1_POLICY = POLICY
+TERM = 1
+OPEN = '2026-11-16T18:00:00'
+PRODUCT = '/app/src/exam-journal-runtime/src/product.mjs'
+
+
+def configure_term2():
+    global ROOT, OLD, NEW, BASE, CONTAINER, DIR, SOURCE, POLICY, TERM, OPEN
+    ROOT = Path('/opt/izone-k56-term2-journal-261116')
+    OLD = API + '-before-term2-journal-261116'
+    NEW = API + '-term2-journal-candidate-261116'
+    BASE = '249ca17ddc2414f9e69413729d95978e0d1bb2a3'
+    CONTAINER = json.loads((ROOT/'manifest.json').read_text())['container']
+    DIR = '/run/k56-term2-journal-pilot'
+    SOURCE = SOURCE | {PRODUCT.removeprefix('/app/')}
+    POLICY = ROOT / 'policy' / 'config.json'
+    TERM = 2
+    OPEN = '2026-11-16T18:15:00'
 
 
 def digest(data):
@@ -35,10 +53,12 @@ def when(value):
     return int(datetime.fromisoformat(value+'+07:00').timestamp()*1000)
 
 
-def write_policy(enabled):
-    policy = dict(enabled=enabled, opensAt=when('2026-11-16T18:00:00'),
-                  closesAt=when('2026-11-17T00:00:00'), renewUntil=when('2026-11-24T00:00:00'))
-    pending = POLICY.with_name('.config.next')
+def write_policy(enabled, path=None):
+    path = path or POLICY
+    policy = json.loads(path.read_text()) if path.is_file() else dict(opensAt=when(OPEN),
+                 closesAt=when('2026-11-17T00:00:00'), renewUntil=when('2026-11-24T00:00:00'))
+    policy['enabled'] = enabled
+    pending = path.with_name('.config.next')
     with pending.open('x') as handle:
         json.dump(policy, handle)
         handle.write('\n')
@@ -46,31 +66,41 @@ def write_policy(enabled):
         os.fchmod(handle.fileno(), 0o640)
         handle.flush()
         os.fsync(handle.fileno())
-    pending.replace(POLICY)
+    pending.replace(path)
     return policy
 
 
-def route_check(enabled):
+def route_check(policy, term):
     source = """
-const target='http://127.0.0.1:'+(process.env.PORT||'8788')+'/api/term-tests/term-test-1-k56';
+const target='http://127.0.0.1:'+(process.env.PORT||'8788')+'/api/term-tests/term-test-__TERM__-k56';
 const options={method:'POST',headers:{Origin:'https://tranhoangduc90.github.io','Content-Type':'application/json'},
   body:'{}',signal:AbortSignal.timeout(3000)};
-const results=await Promise.all([target+'/journal-pilot-context',target+'/listening/report'].map(async url=>{
+const results=await Promise.all([target+'/journal-pilot-context',target+'/listening/report',
+  target+'/journal-collector-sealed'].map(async url=>{
   const response=await fetch(url,options);
   return {status:response.status,body:await response.json()};
 }));
-console.log(JSON.stringify(results));"""
+console.log(JSON.stringify(results));""".replace('__TERM__',str(term))
     row = json.loads(cmd('docker','exec','-i',API,'node','--input-type=module','-',data=source.encode(),timeout=10))
     decision = row[0]
-    if enabled:
-        before_open = time.time() < when('2026-11-16T18:00:00')/1000
-        must(decision['status'] == (200 if before_open else 401)
-             and (decision['body'].get('reason') == 'outside_pilot_window' if before_open else
-                  decision['body'].get('error') == 'JOURNAL_OWNER_DENIED'), 'K56_JOURNAL_SCOPE_REJECT_CHANGED')
-    else:
-        must(decision['status'] == 200 and decision['body'].get('reason') == 'pilot_disabled', 'K56_JOURNAL_DISABLED_ROUTE_CHANGED')
+    now = time.time() * 1000
+    expected = (200, {'ok':True, 'destination':'collector-v1', 'reason':'pilot_disabled'})
+    if policy['enabled']:
+        in_window = policy['opensAt'] <= now < policy['closesAt'] < policy['renewUntil']
+        expected = (401, {'ok':False, 'error':'JOURNAL_OWNER_DENIED'}) if in_window else (
+            200, {'ok':True, 'destination':'collector-v1', 'reason':'outside_pilot_window'})
+    must((decision['status'],decision['body'])==expected,'K56_JOURNAL_CONTEXT_CHANGED')
     must(row[1]['status'] == 400 and row[1]['body'].get('error') == 'LISTENING_REPORT_INVALID', 'K56_LISTENING_REPORT_CHANGED')
-    return {'journalStatus':decision['status'],'journal':decision['body'],'listeningReport':row[1]['status']}
+    must(row[2]['status'] == 409 and row[2]['body'].get('error') == 'PILOT_BATCH_HASH_MISMATCH', 'K56_SEALED_COLLECTOR_CHANGED')
+    return {'journalStatus':decision['status'],'journal':decision['body'],'listeningReport':row[1]['status'],
+            'sealedCollector':row[2]['status']}
+
+
+def both_routes():
+    routes = {f'term{TERM}':route_check(json.loads(POLICY.read_text()),TERM)}
+    if TERM == 2:
+        routes['term1'] = route_check(json.loads(TERM1_POLICY.read_text()),1)
+    return routes
 
 
 def preflight():
@@ -82,6 +112,9 @@ def preflight():
     must(all(digest((ROOT/name).read_bytes())==value for name,value in manifest['files'].items()), 'K56_JOURNAL_HASH_CHANGED')
     live_paths={('/app/'+name):value for name,value in manifest['live'].items()}
     must(ops['h']['fingerprints'](API,list(live_paths))==live_paths, 'K56_JOURNAL_SOURCE_DRIFT')
+    if TERM == 2:
+        must(manifest['base']==BASE and set(manifest['live'])==SOURCE,'K56_TERM2_BASE_FINGERPRINTS_CHANGED')
+        route_check(json.loads(TERM1_POLICY.read_text()),1)
     must(json.loads(POLICY.read_text())['enabled'] is False, 'K56_JOURNAL_POLICY_MUST_BE_OFF')
     key = ROOT/'policy'/'append.key'
     must(key.stat().st_mode & 0o777==0o440 and key.stat().st_gid==1000 and key.stat().st_uid==0, 'K56_JOURNAL_KEY_MODE')
@@ -91,13 +124,19 @@ def preflight():
     ops['check_idle'](sql)
     ops['rpc']()
     targets={APP:ROOT/'src/app.js',MODULES:ROOT/'src/term1-journal-cloud',DIR:ROOT/'policy'}
-    delta={'BUILD_SHA':manifest['release'],'K56_TERM1_JOURNAL_POLICY_FILE':DIR+'/config.json',
-           'K56_TERM1_JOURNAL_APPEND_KEY_FILE':DIR+'/append.key'}
+    if TERM == 2:
+        targets[PRODUCT] = ROOT/PRODUCT.removeprefix('/app/')
+    delta={'BUILD_SHA':manifest['release'],f'K56_TERM{TERM}_JOURNAL_POLICY_FILE':DIR+'/config.json',
+           f'K56_TERM{TERM}_JOURNAL_APPEND_KEY_FILE':DIR+'/append.key'}
     old_for_compose=copy.deepcopy(old)
     binds=old_for_compose['HostConfig'].get('Binds') or []
-    if not any(APP==bind.split(':',2)[1] for bind in binds):
-        mount,=[row for row in old['Mounts'] if row['Destination']==APP and not row['RW'] and row['Type']=='bind']
-        binds.append(f"{mount['Source']}:{APP}:ro")
+    for target in targets:
+        if not any(target==bind.split(':',2)[1] for bind in binds):
+            mounts = [row for row in old['Mounts'] if row['Destination']==target]
+            if mounts:
+                mount, = mounts
+                must(not mount['RW'] and mount['Type']=='bind','K56_JOURNAL_REPLACED_MOUNT_UNEXPECTED')
+                binds.append(f"{mount['Source']}:{target}:ro")
     old_for_compose['HostConfig']['Binds']=binds
     preserve=ops['persistent']
     persist=FunctionType(preserve.__code__,{**preserve.__globals__,'ROOT':ROOT})
@@ -120,7 +159,7 @@ def activate(manifest,old,command,sql,targets,compose,payload,expected,addresses
     atomic(ROOT/'compose-before.private.yml',before)
     sql((ROOT/MIGRATION).read_text())
     must(ops['scalar'](sql,"SELECT bool_and(has_table_privilege('k56_shared_api', "
-         "'assessment_k56.journal_term1_cloud_enrollment',needed)) FROM unnest(ARRAY['INSERT','SELECT']) need(needed)")=='t',
+         f"'assessment_k56.journal_term{TERM}_cloud_enrollment',needed)) FROM unnest(ARRAY['INSERT','SELECT']) need(needed)")=='t',
          'K56_JOURNAL_GRANT_MISSING')
     must(ops['mini']['data_digest'](sql)==stamp, 'K56_JOURNAL_BUSINESS_DATA_DRIFT')
     names=set(cmd('docker','ps','-a','--format','{{.Names}}').splitlines())
@@ -143,7 +182,7 @@ def activate(manifest,old,command,sql,targets,compose,payload,expected,addresses
         verified={'/app/'+key:manifest['files'][key] for key in SOURCE}
         must(ops['h']['fingerprints'](API,list(verified))==verified, 'K56_JOURNAL_LIVE_HASH_CHANGED')
         ops['rpc']()
-        routes=route_check(False)
+        routes=both_routes()
         must(config.read_bytes()==before, 'K56_JOURNAL_COMPOSE_CHANGED')
         atomic(config,after,stat.S_IMODE(config.stat().st_mode))
     except Exception:
@@ -167,6 +206,10 @@ def activate(manifest,old,command,sql,targets,compose,payload,expected,addresses
 
 if __name__=='__main__':
     os.umask(0o077)
+    if sys.argv[2:] == ['--term2']:
+        configure_term2()
+    elif len(sys.argv)!=2:
+        raise RuntimeError('K56_JOURNAL_MODE_REQUIRED')
     if os.geteuid()!=0 or Path.cwd()!=ROOT:
         raise RuntimeError('K56_JOURNAL_DIRECTORY_INVALID')
     mode=sys.argv[1]
@@ -177,22 +220,29 @@ if __name__=='__main__':
         if mode=='init-policy':
             must(not POLICY.exists(),'K56_JOURNAL_POLICY_EXISTS')
             write_policy(False)
-        elif mode in ('enable','disable'):
+        elif mode in ('enable','disable','check','disable-term1'):
             live=json.loads((ROOT/'receipt.json').read_text())['live']
             must(switch.inspect(API)['Id']==live,'K56_JOURNAL_LIVE_CHANGED')
-            enabled=mode=='enable'
-            config=write_policy(enabled)
-            try:
-                routes=route_check(enabled)
-            except Exception:
-                if enabled:
-                    write_policy(False)
-                raise
-            print(json.dumps({'scope':'all-verified-classes','policy':config,'routes':routes}),flush=True)
+            if mode=='check':
+                print(json.dumps(both_routes()),flush=True)
+            elif mode=='disable-term1':
+                must(TERM==2,'K56_TERM2_OPERATOR_REQUIRED')
+                write_policy(False,TERM1_POLICY)
+                print(json.dumps(both_routes()),flush=True)
+            else:
+                enabled=mode=='enable'
+                config=write_policy(enabled)
+                try:
+                    routes=both_routes()
+                except Exception:
+                    if enabled:
+                        write_policy(False)
+                    raise
+                print(json.dumps({'scope':'all-verified-classes','policy':config,'routes':routes}),flush=True)
         else:
             must(mode in ('preflight','apply'),'K56_JOURNAL_MODE_REQUIRED')
             state=preflight()
             if mode=='apply':
                 activate(*state)
             else:
-                print('K56_TERM1_JOURNAL_PREFLIGHT_PASSED',flush=True)
+                print(f'K56_TERM{TERM}_JOURNAL_PREFLIGHT_PASSED',flush=True)

@@ -5,18 +5,27 @@ import { canonical, JournalError } from '../exam-journal-runtime/src/contract.mj
 import { termOwnerResolver } from '../exam-journal-runtime/adapters/term.mjs';
 import { createK67PilotTicket } from './k67-pilot-ticket.mjs';
 
-const pilotId = 'k56-term1-261116';
-const testSlug = 'term-test-1-k56';
 const product = 'term-mini-k56';
-const root = '/api/term-tests/' + testSlug;
 const hex = /^[a-f0-9]{64}$/;
 const classCode = /^[A-Z0-9._-]{2,32}$/;
 const hash = value => createHash('sha256').update(canonical(value)).digest('hex');
 const legacy = reason => ({ ok: true, destination: 'collector-v1', reason });
 
-export function mountK56Term1Cloud(app, { pool, journal, allowedOrigins, env, clock = Date.now }) {
-  const path = env.K56_TERM1_JOURNAL_POLICY_FILE;
-  const key = readFileSync(env.K56_TERM1_JOURNAL_APPEND_KEY_FILE, 'utf8').trim();
+export function mountK56Term1Cloud(app, options) {
+  return mountK56TermCloud(app, options, 1);
+}
+
+export function mountK56Term2Cloud(app, options) {
+  return mountK56TermCloud(app, options, 2);
+}
+
+function mountK56TermCloud(app, { pool, journal, allowedOrigins, env, clock = Date.now }, term) {
+  const testSlug = `term-test-${term}-k56`;
+  const pilotId = `k56-term${term}-261116`;
+  const root = '/api/term-tests/' + testSlug;
+  const table = `assessment_k56.journal_term${term}_cloud_enrollment`;
+  const path = env[`K56_TERM${term}_JOURNAL_POLICY_FILE`];
+  const key = readFileSync(env[`K56_TERM${term}_JOURNAL_APPEND_KEY_FILE`], 'utf8').trim();
   const tickets = createK67PilotTicket({ keys: { pilot: Buffer.from(key, 'base64') },
     currentKeyId: 'pilot', pilotId, clock });
   const query = pool.query.bind(pool);
@@ -49,7 +58,7 @@ export function mountK56Term1Cloud(app, { pool, journal, allowedOrigins, env, cl
           || !hex.test(sealed.batchId ?? '') || !hex.test(sealed.eventPayloadSha256 ?? '')) {
           return res.status(403).json({ ok: false, error: 'PILOT_DRAIN_ORIGINAL_SCOPE_UNVERIFIED' });
         }
-        const { rows: [known] } = await query(`SELECT renew_until_ms FROM assessment_k56.journal_term1_cloud_enrollment
+        const { rows: [known] } = await query(`SELECT renew_until_ms FROM ${table}
           WHERE pilot_id=$1 AND scope_id=$2 AND renew_until_ms>$3`, [pilotId, scopeId, now]);
         if (!known) return res.status(403).json({ ok: false, error: 'PILOT_DRAIN_ORIGINAL_SCOPE_UNVERIFIED' });
         renewUntil = Number(known.renew_until_ms);
@@ -61,10 +70,10 @@ export function mountK56Term1Cloud(app, { pool, journal, allowedOrigins, env, cl
             AND s.prepared_at >= to_timestamp($9::double precision / 1000)
             AND s.prepared_at <= to_timestamp($10::double precision / 1000)
         ), inserted AS (
-          INSERT INTO assessment_k56.journal_term1_cloud_enrollment (pilot_id,scope_id,renew_until_ms)
+          INSERT INTO ${table} (pilot_id,scope_id,renew_until_ms)
           SELECT $1,$2,$3 FROM eligible ON CONFLICT (pilot_id,scope_id) DO NOTHING RETURNING renew_until_ms
         ) SELECT renew_until_ms FROM inserted
-        UNION ALL SELECT renew_until_ms FROM assessment_k56.journal_term1_cloud_enrollment
+        UNION ALL SELECT renew_until_ms FROM ${table}
           WHERE pilot_id=$1 AND scope_id=$2 AND EXISTS (SELECT 1 FROM eligible) LIMIT 1`,
         [pilotId, scopeId, policy.renewUntil, owner.sourceId, scope.generation, testSlug,
           scope.classCode, scope.studentRef, policy.opensAt, now]);
@@ -89,7 +98,7 @@ export function mountK56Term1Cloud(app, { pool, journal, allowedOrigins, env, cl
       return res.status(409).json({ error: 'PILOT_BATCH_HASH_MISMATCH' });
     }
     try {
-      const result = await journal.collect({ method: 'POST', headers: { origin: req.get('origin') }, body: req.body });
+      const result = await journal.collect({ method: 'POST', headers: { origin: req.get('origin') }, body: req.body }, { testSlug });
       return res.status(result.status).json(result.body?.persisted ? {
         ...result.body, storage: 'collector', scopeId: bindingId, batchId, eventPayloadSha256,
       } : result.body);
