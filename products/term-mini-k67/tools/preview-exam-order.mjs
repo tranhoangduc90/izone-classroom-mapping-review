@@ -7,6 +7,7 @@ import {createErpGradeSync} from '../src/erp-sync.js';
 import {createTermTestAssetService} from '../src/term-test-assets.js';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {startPreviewExamJournal} from './preview-exam-journal.mjs';
 
@@ -54,10 +55,22 @@ const definition=async slug=>{
 };
 const configs=new Map();for(const slug of Object.keys(timing))configs.set(slug,await definition(slug));
 const questions=(slug,skill)=>configs.get(slug)[skill].controls.map(c=>`<p data-question-number="${c.number}">Câu ${c.number} · Đáp án thử <span data-answer-slot="${c.number}"></span></p>`).join('');
+const {listeningProfiles}=await import(pathToFileURL(path.join(pages,'term-tests/k67-shared/listening-profiles-v1.mjs')));
+const listeningSections=slug=>{
+  const profile=listeningProfiles[slug];
+  if(!profile)return [{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}];
+  return profile.parts.map(part=>{
+    const first=10*(part-1)+1;
+    const keys=configs.get(slug).listening.controls.filter(control=>Number(control.number)>=first&&Number(control.number)<first+10)
+      .flatMap(control=>control.kind==='pair'?control.keys:[String(control.number)]);
+    return {label:`Part ${part}`,range:`Questions ${first}–${first+9}`,
+      html:keys.map(key=>`<p>Câu ${key} · Đề giả <span data-answer-slot="${key}"></span></p>`).join('')};
+  });
+};
 const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUntilComplete:true,
   timing:{readingMinutes:timing[slug].readingDurationMinutes,writingMinutes:timing[slug].writingDurationMinutes},
   audio:{label:`Âm thanh mô phỏng ${toneSeconds} giây`,durationLabel:`${Math.floor(toneSeconds/60)}:${String(toneSeconds%60).padStart(2,'0')}`,src:'/preview-tone.wav'},
-  listening:{instructions:['Đây là câu hỏi giả để thử hành trình. Nhập một đáp án và nộp để chuyển phần.'],sections:[{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}]},
+  listening:{instructions:['Đây là câu hỏi giả để thử hành trình. Nhập một đáp án và nộp để chuyển phần.'],sections:listeningSections(slug)},
   reading:{instructions:['Đề giả; thời gian và thứ tự dùng chính sách K67.'],sections:[{label:'Reading thử',title:'Bài đọc mô phỏng',range:'Questions',passageHtml:'<p>Đây là bài đọc thử. Không phải nội dung đề thi đang chạy.</p>',questionsHtml:questions(slug,'reading')}]},
   writing:['mini-test-lesson-5',pretestSlug].includes(slug)?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
@@ -341,8 +354,9 @@ if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
 for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
-  const fixtureManifests=entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
-    :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'];
+  const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
+    ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
+    :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
     try {
       const source = await readFile(path.join(pages,'term-tests',entry,path.posix.basename(req.path)),'utf8');

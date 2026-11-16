@@ -1,7 +1,7 @@
 const scopeHash = /^[a-f0-9]{64}$/;
 const classCode = /^[A-Z0-9._-]{2,32}$/;
 const legacy = reason => ({ destination: 'collector', reason });
-export const isK67TermPilot = slug => slug === 'term-test-1' || slug === 'term-test-2';
+export const isK67TermPilot = slug => ['term-test-1','term-test-2','mini-test-lesson-5'].includes(slug);
 
 // Inputs come from the native owner query and the server-owned pilot configuration.
 // preparedAt is the first preparation time of the session, not a client timestamp.
