@@ -114,9 +114,15 @@ test('the same main Share can be checked again after exhausted technical retries
   const f=await fixture();try{
     const input={...f.identity,part:'reason_action',rawUrl:url(41)};
     const first=await f.service.requestCheck(input);
-    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='CONTENT_CHECK_UNAVAILABLE' WHERE link_id=$1",[first.id]);
+    await f.pool.query("UPDATE speaking_independent.job SET status='failed',attempts=4,last_error='AI_EVIDENCE_REFERENCE_INVALID' WHERE link_id=$1",[first.id]);
+    const processing=(await f.service.open(f.identity)).links.find(l=>l.id===first.id);
+    assert.equal(processing.retryable,false);
+    assert.equal(processing.check_status,'pending');
+    assert.equal((await f.service.requestCheck(input)).id,first.id);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5 WHERE link_id=$1",[first.id]);
     const opened=await f.service.open(f.identity);
     assert.equal(opened.links.find(l=>l.id===first.id).retryable,true);
+    assert.match(opened.links.find(l=>l.id===first.id).evidence?.checkMessage||'',/dẫn chứng.*cùng link/i);
     const next=await f.service.requestCheck(input);
     assert.notEqual(next.id,first.id);
     assert.equal((await f.service.requestCheck(input)).id,next.id);
@@ -131,8 +137,10 @@ test('the same practice Share recovers exhausted checks while accepted and in-fl
     const input={...f.identity,slot:1,exerciseId:exercise(1),rawUrl:url(42)};
     const first=await f.service.requestPracticeCheck(input);
     assert.equal((await f.service.requestPracticeCheck(input)).id,first.id);
-    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='PRACTICE_CHECK_ERROR' WHERE link_id=$1",[first.id]);
-    assert.equal((await f.service.open(f.identity)).practiceLinks[0].retryable,true);
+    await f.pool.query("UPDATE speaking_independent.job SET status='review',attempts=5,last_error='PRACTICE_AI_EVIDENCE_INVALID' WHERE link_id=$1",[first.id]);
+    const failed=(await f.service.open(f.identity)).practiceLinks[0];
+    assert.equal(failed.retryable,true);
+    assert.match(failed.evidence?.checkMessage||'',/dẫn chứng.*cùng link/i);
     const next=await f.service.requestPracticeCheck(input);
     assert.notEqual(next.id,first.id);
     await f.pool.query("UPDATE speaking_independent.link SET status='accepted',check_code=NULL WHERE id=$1",[next.id]);

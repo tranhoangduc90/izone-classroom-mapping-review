@@ -137,7 +137,7 @@ export function createIndependentSpeaking({pool,accessSecret,source,documents,pr
   async function open(identity) {
     const u=await grant(identity);
     const all=await links(u.id);
-    const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
+    const {rows:jobs}=await pool.query('SELECT kind,status,link_id,attempts,last_error FROM speaking_independent.job WHERE work_unit_id=$1',[u.id]);
     const {rows:[receipt]}=await pool.query('SELECT id,created_at FROM speaking_independent.receipt WHERE work_unit_id=$1',[u.id]);
     return {status:u.status,receipt:receipt||null,workUnitId:u.id,documentId:u.document_id,
       docsProgress:await readSpeakingDocsProgress(pool,'speaking_independent',u.id),
