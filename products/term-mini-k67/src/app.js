@@ -46,6 +46,9 @@ import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, Term
 const mountTermJournal = process.env.EXAM_JOURNAL_ENABLED === '1'
   ? (await import('./exam-journal-runtime/adapters/term.mjs').catch(() => ({}))).mountTermJournal
   : undefined;
+const mountTerm1JournalCloud = process.env.K67_TERM1_JOURNAL_PILOT_FILE
+  ? (await import('./term1-journal-cloud/mount.mjs').catch(() => ({}))).mountTerm1JournalCloud
+  : undefined;
 
 const classCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/);
 
@@ -374,6 +377,14 @@ export function createApp({
       } catch {
         logger.warn?.(JSON.stringify({ type: 'exam_journal_startup', code: 'ADAPTER_MOUNT_FAILED' }));
       }
+    }
+  }
+  if (journalEnv.K67_TERM1_JOURNAL_PILOT_FILE) {
+    try {
+      if (!mountTerm1JournalCloud || !termJournal?.journal) throw Error('TERM1_JOURNAL_PILOT_UNAVAILABLE');
+      mountTerm1JournalCloud(app, { pool, journal: termJournal.journal, allowedOrigins: config.allowedOrigins, env: journalEnv });
+    } catch {
+      logger.warn?.(JSON.stringify({ type: 'exam_journal_startup', code: 'TERM1_JOURNAL_PILOT_UNAVAILABLE' }));
     }
   }
   // Đăng ký lối đọc GV trước catch-all của bài làm quen; thêm handler sau khi có auth.
