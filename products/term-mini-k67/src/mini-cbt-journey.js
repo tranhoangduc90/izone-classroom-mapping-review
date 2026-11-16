@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
 import { readMiniSectionDefinition, sealMiniCbtSection } from './mini-cbt-offline.js';
 import { buildCombinedResult } from './term-tests.js';
+import { term1SubmissionGuardError } from './term1-submission-guard.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 import { readTerm1TimerRoom } from './term1-listening-timer.js';
@@ -653,6 +654,11 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       result = await record();
     } catch (error) {
+      const protectedSubmission = term1SubmissionGuardError(error);
+      if (protectedSubmission) {
+        report('offline_submission_rejected',false,protectedSubmission.code);
+        throw protectedSubmission;
+      }
       if (error.code==='OFFLINE_HOLD_UNAVAILABLE') throw error;
       if (!error.status) {
         report('offline_submission_unconfirmed',undefined,'SUBMISSION_TRANSACTION_UNCONFIRMED');

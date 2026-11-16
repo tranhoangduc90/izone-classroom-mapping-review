@@ -37,6 +37,7 @@ import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
+import { term1SubmissionGuardError } from './term1-submission-guard.js';
 import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
@@ -1126,6 +1127,20 @@ export function createApp({
       ]);
       const attempt = inserted.rows[0];
       if (!attempt || attempt.exam_session_token !== parsed.data.examSessionToken) {
+        if (config.term1ParallelEntryEnabled && slug.data === 'term-test-1') {
+          // INSERT ... ON CONFLICT DO NOTHING can observe the unique index winner
+          // after a concurrent commit even if its starting snapshot saw no winner.
+          const official = await pool.query(`SELECT 1 FROM assessment.term_test_attempt
+            WHERE test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3
+              AND erp_student_contact_id=$4 AND superseded_at IS NULL
+              AND exam_session_id IS DISTINCT FROM $5::uuid
+              AND (listening_submitted_at IS NOT NULL OR reading_submitted_at IS NOT NULL) LIMIT 1`,
+          [slug.data,session.definition_version,session.class_id,session.student_id,parsed.data.examSessionToken]);
+          if (official.rowCount) {
+            const conflict = term1SubmissionGuardError({code:'P6741'});
+            return res.status(conflict.status).json({ok:false,error:conflict.code,message:conflict.message});
+          }
+        }
         return res.status(409).json({ ok: false, error: 'SUBMISSION_ID_CONFLICT', message: 'Mã gửi bài đã được dùng cho lượt làm khác.' });
       }
       const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
@@ -1773,6 +1788,8 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    const protectedSubmission = term1SubmissionGuardError(error);
+    if (protectedSubmission) return res.status(409).json({ok:false,error:protectedSubmission.code,message:protectedSubmission.message});
     if(error?.code==='P6740')return res.status(409).json({ok:false,error:'TIMER_SESSION_REQUIRED',message:'Lượt đang làm ở trang Listening không audio.'});
     if(error?.code==='P6730')return res.status(409).json({ok:false,error:'AUDIO_END_NOT_CONFIRMED',message:'Audio chưa được xác nhận phát hết. Bài làm vẫn được giữ.'});
     if(error?.code==='P6731')return res.status(409).json({ok:false,error:'LISTENING_REVIEW_ACTIVE',message:'Bạn vẫn còn thời gian rà bài Listening sau khi nghe hết audio.'});

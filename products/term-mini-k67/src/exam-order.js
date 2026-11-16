@@ -13,6 +13,7 @@ const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-less
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
   examMode:z.enum(['lis_first','read_first']).default('lis_first'),
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
+  examSessionToken:z.uuid().optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
   ownerStartVersion:z.literal(2).optional(),
@@ -35,7 +36,7 @@ export function orderState(row) {
     attemptToken:row.id,examSessionToken:row.exam_session_id,generation:Number(row.generation)||0,
     studentName:row.student_name_snapshot,className:row.class_name_snapshot,
     listeningSubmitted,readingSubmitted,completed:Boolean(row.completed_at),completedAt:row.completed_at,
-    nextSection:!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'||row.writing_scope==='lr_only'?'result':'writing',
+    nextSection:!listeningSubmitted&&row.exam_mode==='lis_first'?'listening':!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'||row.writing_scope==='lr_only'?'result':'writing',
     listeningStartedAt:row.session_started_at||null,listeningDeadlineAt:row.session_deadline_at||null,
     listeningResumeAtSeconds:Number(row.session_checkpoint_seconds)||0,listeningRecoverySeconds:Number(row.session_recovery_seconds)||0,
     readingStartedAt:row.reading_started_at,readingDeadlineAt:row.reading_deadline_at,
@@ -45,7 +46,7 @@ export function orderState(row) {
     policy:{timed:row.attempt_mode!=='answer_sheet',autoSubmit:row.attempt_mode!=='answer_sheet'},
     result:row.combined_result||null,resultAvailable:Boolean(row.completed_at),serverNow:new Date(row.server_now||Date.now()).toISOString()};
 }
-const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
+const attemptProjection = `SELECT a.*,s.listening_started_at AS session_started_at,s.listening_deadline_at AS session_deadline_at,
   s.listening_audio_checkpoint_seconds AS session_checkpoint_seconds,s.listening_recovery_seconds AS session_recovery_seconds,
   s.audio_owner_protocol AS session_owner_protocol,
   s.listening_draft AS session_draft,s.listening_draft_revision AS session_revision,
@@ -55,8 +56,11 @@ const select = `SELECT a.*,s.listening_started_at AS session_started_at,s.listen
   d.listening_band_adjustment,d.listening_definition,d.reading_definition,clock_timestamp() AS server_now,
   clock_timestamp()>a.reading_deadline_at AS reading_timed_out,clock_timestamp()<=a.reading_deadline_at+interval '5 minutes' AS reading_grace,
   clock_timestamp()>s.listening_deadline_at AS listening_timed_out,clock_timestamp()<=s.listening_deadline_at+interval '5 minutes' AS listening_grace
-  FROM assessment.term_test_attempt a JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
+  FROM assessment.term_test_attempt a`;
+const sessionTables = `assessment.term_test_exam_session s ON s.id=a.exam_session_id
   JOIN assessment.test_definition d ON d.slug=a.test_slug AND d.version=a.definition_version`;
+const select = `${attemptProjection} JOIN ${sessionTables}`;
+const officialSelect = `${attemptProjection} LEFT JOIN ${sessionTables}`;
 
 // Nhận yêu cầu Reading trước, khóa cùng học viên/lớp rồi lưu vào SQL thật.
 // Bài Listening trước đi tiếp qua tuyến hiện hành; cờ chỉ khóa việc tạo Reading trước mới.
@@ -97,6 +101,67 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
   }
+  async function readOfficialTerm1(db, key, examSessionToken) {
+    const {rows:official} = await db.query(`${officialSelect} WHERE a.test_slug=$1 AND a.definition_version=$2
+      AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4 AND a.superseded_at IS NULL
+      AND (a.listening_submitted_at IS NOT NULL OR a.reading_submitted_at IS NOT NULL) LIMIT 2`, key);
+    if (official.length > 1) throw error('EXAM_HISTORY_REVIEW','Có nhiều kết quả đã nhận cho bài này. Hãy nhờ người phụ trách đối soát.');
+    if (official.length === 1) {
+      const row = official[0];
+      if (row.exam_session_id && (row.session_superseded_at || Number(row.session_generation)!==Number(row.generation))) {
+        throw error('EXAM_HISTORY_REVIEW','Cần đối soát phiên gốc của bài đã nộp.');
+      }
+      if (!examSessionToken || row.exam_session_id!==examSessionToken) {
+        return {...row,id:null,exam_session_id:null,session_draft:{},session_revision:0,reading_draft:{},reading_draft_revision:0,
+          session_started_at:null,session_deadline_at:null,session_checkpoint_seconds:null,session_recovery_seconds:null,
+          reading_started_at:null,reading_deadline_at:null,writing_started_at:null,writing_deadline_at:null};
+      }
+      return row;
+    }
+    return null;
+  }
+  async function openParallelTerm1(db, data, student) {
+    const key = ['term-test-1',student.definition_version,student.class_id,student.student_id];
+    const official = await readOfficialTerm1(db,key,data.examSessionToken);
+    if (official) return official;
+
+    let session;
+    if (data.examSessionToken) {
+      session = (await db.query(`SELECT * FROM assessment.term_test_exam_session
+        WHERE id=$5 AND test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3
+          AND erp_student_contact_id=$4 AND superseded_at IS NULL AND attempt_mode<>'answer_sheet'
+          AND (exam_mode='read_first' OR prepared_at>=now()-interval '8 hours')`, [...key,data.examSessionToken])).rows[0];
+    }
+    if (!session) {
+      if (data.examMode==='read_first'&&!config.readFirstNewEnabled) {
+        throw error('READ_FIRST_NOT_ENABLED','Phiên bản Reading trước chưa được mở cho lượt mới.');
+      }
+      if (!assets) throw error('EXAM_ASSETS_UNAVAILABLE','Chưa cấp được đề thi. Hãy thử lại.',503);
+      session = (await db.query(`INSERT INTO assessment.term_test_exam_session
+        (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
+          student_name_snapshot,attempt_mode,exam_mode,term1_parallel_entry)
+        VALUES($1,$2,$3,$4,$5,$6,'cbt',$7,true) RETURNING *`,
+      [...key,student.class_name,student.student_name,data.examMode])).rows[0];
+      if (data.examMode==='read_first') {
+        const attempt = (await db.query(`INSERT INTO assessment.term_test_attempt
+          (client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,
+            class_name_snapshot,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,'cbt','read_first','cbt',$9) RETURNING id`,
+        [randomUUID(),...key,student.class_name,student.student_name,session.id,session.generation])).rows[0];
+        await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[session.id,attempt.id]);
+        session.attempt_id=attempt.id;
+      }
+    }
+    if (session.attempt_id) {
+      const attempt = await reload(db,session.attempt_id);
+      if (!attempt) throw error('STALE_ATTEMPT','Lượt bài đã được thay thế. Hãy xác nhận lại tên.');
+      return attempt;
+    }
+    return {...session,id:null,exam_session_id:session.id,exam_delivery:'cbt',
+      session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
+      session_checkpoint_seconds:session.listening_audio_checkpoint_seconds,session_recovery_seconds:session.listening_recovery_seconds,
+      session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,session_revision:session.listening_draft_revision};
+  }
   async function open(req,res,next,paper=false) {
     const slug=paper?'mini-test-lesson-5':req.params.testSlug;
     if(!slugs.includes(slug))return next();
@@ -111,6 +176,10 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const student=found.rows[0];
     const out=await tx(async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${slug}:${student.class_id}:${student.student_id}`]);
+      if (config.term1ParallelEntryEnabled && slug==='term-test-1' && !paper && data.examDelivery==='cbt' && data.orderClientVersion===1) {
+        if(!await admit(req,res,writeLimiter))return null;
+        return openParallelTerm1(db,data,student);
+      }
       const previous=(await db.query(`SELECT * FROM assessment.term_test_attempt WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
         ORDER BY (completed_at IS NULL) DESC,created_at DESC LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
@@ -177,8 +246,10 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
       ...(paper && offerMiniPaperOffline(config, data.classCode) ? { offlinePaper: true } : {}),
-      encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
-      previewAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/preview`});
+      ...(out.exam_session_id ? {
+        encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
+        previewAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/preview`,
+      } : {})});
   }
   app.post('/api/term-tests/:testSlug/session/prepare',requireContext,route((req,res,next)=>open(req,res,next)));
   app.post('/api/term-tests/:testSlug/order/open',requireContext,route((req,res,next)=>open(req,res,next)));
@@ -190,6 +261,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(!p.success||!slugs.includes(req.params.testSlug))return null;
     const student=(await pool.query(findStudentForTermTestSql,[p.data.classCode,req.params.testSlug,p.data.studentRef])).rows[0];
     if(!student)return null;
+    if(config.term1ParallelEntryEnabled&&req.params.testSlug==='term-test-1') {
+      return readOfficialTerm1(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id],p.data.examSessionToken);
+    }
     const row=(await pool.query(`${select} WHERE a.test_slug=$1 AND a.definition_version=$2
       AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4
       AND a.exam_mode='read_first' AND a.superseded_at IS NULL ORDER BY a.created_at DESC LIMIT 1`,
