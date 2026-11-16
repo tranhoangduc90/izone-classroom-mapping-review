@@ -597,7 +597,9 @@ test('exhausting the current practice check refreshes Docs once and a late old c
     const review=await progress();
     assert.match(review.payload.text,/Bổ trợ 1: cần kiểm tra lại/);
     assert.equal(Number(review.sequence),2);
-    assert.equal((await f.service.open(f.identity)).practiceLinks[0].check_code,'CHECK_REVIEW_REQUIRED');
+    const reviewLink=(await f.service.open(f.identity)).practiceLinks[0];
+    assert.equal(reviewLink.check_code,'CHECK_EVIDENCE_RETRY');
+    assert.equal(reviewLink.retryable,true);
     const next=await f.service.requestPracticeCheck(input);
     await assert.rejects(f.service.failJob(claimed,'AI_EVIDENCE_REFERENCE_INVALID'),{code:'STALE_JOB'});
     const retry=await progress();
