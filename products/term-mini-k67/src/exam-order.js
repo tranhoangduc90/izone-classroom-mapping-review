@@ -8,12 +8,14 @@ import { useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
+import { openTerm1ListeningContinuation } from './term1-listening-continuation.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
   examMode:z.enum(['lis_first','read_first']).default('lis_first'),
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
   examSessionToken:z.uuid().optional(),
+  term1ContinuationVersion:z.literal(1).optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
   ownerStartVersion:z.literal(2).optional(),
@@ -101,7 +103,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
   }
-  async function readOfficialTerm1(db, key, examSessionToken) {
+  async function readOfficialTerm1(db, key) {
     const {rows:official} = await db.query(`${officialSelect} WHERE a.test_slug=$1 AND a.definition_version=$2
       AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4 AND a.superseded_at IS NULL
       AND (a.listening_submitted_at IS NOT NULL OR a.reading_submitted_at IS NOT NULL) LIMIT 2`, key);
@@ -111,19 +113,30 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (row.exam_session_id && (row.session_superseded_at || Number(row.session_generation)!==Number(row.generation))) {
         throw error('EXAM_HISTORY_REVIEW','Cần đối soát phiên gốc của bài đã nộp.');
       }
-      if (!examSessionToken || row.exam_session_id!==examSessionToken) {
-        return {...row,id:null,exam_session_id:null,session_draft:{},session_revision:0,reading_draft:{},reading_draft_revision:0,
-          session_started_at:null,session_deadline_at:null,session_checkpoint_seconds:null,session_recovery_seconds:null,
-          reading_started_at:null,reading_deadline_at:null,writing_started_at:null,writing_deadline_at:null};
-      }
       return row;
     }
     return null;
   }
+  function officialTerm1View(row, token) {
+    if (!row || (token && row.exam_session_id===token)) return row;
+    return {...row,id:null,exam_session_id:null,session_draft:{},session_revision:0,reading_draft:{},reading_draft_revision:0,
+      session_started_at:null,session_deadline_at:null,session_checkpoint_seconds:null,session_recovery_seconds:null,
+      reading_started_at:null,reading_deadline_at:null,writing_started_at:null,writing_deadline_at:null};
+  }
   async function openParallelTerm1(db, data, student) {
     const key = ['term-test-1',student.definition_version,student.class_id,student.student_id];
-    const official = await readOfficialTerm1(db,key,data.examSessionToken);
-    if (official) return official;
+    const official = await readOfficialTerm1(db,key);
+    if (official) {
+      const view = officialTerm1View(official,data.examSessionToken);
+      if (view.id || !data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery!=='cbt'
+        || !official.reading_submitted_at || official.listening_submitted_at || official.listening_interrupted_at) return view;
+
+      const session = await openTerm1ListeningContinuation(db,official,data.examSessionToken);
+      return {...view,exam_session_id:session.id,generation:session.generation,continuation_section:'listening',
+        session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
+        session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,
+        session_revision:session.listening_draft_revision};
+    }
 
     let session;
     if (data.examSessionToken) {
@@ -245,6 +258,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       return next();
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
+      ...(out.continuation_section ? {continuationSection:out.continuation_section} : {}),
       ...(paper && offerMiniPaperOffline(config, data.classCode) ? { offlinePaper: true } : {}),
       ...(out.exam_session_id ? {
         encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
@@ -262,7 +276,8 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const student=(await pool.query(findStudentForTermTestSql,[p.data.classCode,req.params.testSlug,p.data.studentRef])).rows[0];
     if(!student)return null;
     if(config.term1ParallelEntryEnabled&&req.params.testSlug==='term-test-1') {
-      return readOfficialTerm1(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id],p.data.examSessionToken);
+      const official = await readOfficialTerm1(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id]);
+      return officialTerm1View(official,p.data.examSessionToken);
     }
     const row=(await pool.query(`${select} WHERE a.test_slug=$1 AND a.definition_version=$2
       AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4

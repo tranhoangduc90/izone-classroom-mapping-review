@@ -38,6 +38,7 @@ import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
 import { term1SubmissionGuardError } from './term1-submission-guard.js';
+import { commitTerm1ListeningContinuation, Term1ContinuationError } from './term1-listening-continuation.js';
 import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
@@ -1104,20 +1105,37 @@ export function createApp({
         test_slug: session.slug,
         definition_version: session.version
       });
-      const selectedSubmission = chooseTimedSubmissionAnswers({
-        timedOut: Boolean(session.listening_timed_out),
-        graceActive: Boolean(session.listening_submission_grace_active),
-        submittedAnswers: parsed.data.answers,
-        submittedRevision: parsed.data.draftRevision,
-        serverDraft: session.listening_draft,
-        serverRevision: session.listening_draft_revision
-      });
-      const effectiveAnswers = selectedSubmission.answers;
-      const listeningResult = gradeSection(
-        testDefinition.listening_definition,
-        effectiveAnswers,
-        testDefinition.listening_band_adjustment
-      );
+      const evaluateSubmission = state => {
+        const selected = chooseTimedSubmissionAnswers({
+          timedOut: Boolean(state.listening_timed_out),
+          graceActive: Boolean(state.listening_submission_grace_active),
+          submittedAnswers: parsed.data.answers,
+          submittedRevision: parsed.data.draftRevision,
+          serverDraft: state.listening_draft,
+          serverRevision: state.listening_draft_revision
+        });
+        return {...selected,listeningResult:gradeSection(testDefinition.listening_definition,
+          selected.answers,testDefinition.listening_band_adjustment)};
+      };
+      if (config.term1ParallelEntryEnabled && slug.data==='term-test-1') {
+        const resumed = await commitTerm1ListeningContinuation(pool,session,parsed.data,testDefinition,evaluateSubmission);
+        if (resumed) {
+          if (resumed.official) {
+            logTermTestEvent('submission_completed',slug.data,parsed.data.examSessionToken,{
+              section:'listening',revision:parsed.data.draftRevision,answeredCount:countAnswered(resumed.answers),
+              timedOut:resumed.timedOut,snapshotSource:resumed.source,receiptId:resumed.receipt.receiptId,
+              reason:'TERM1_LISTENING_CONTINUATION',
+            });
+            const official = resumed.official;
+            await trySyncErpGrades(syncErpGrades,{...official,attempt_token:official.id,
+              class_id:String(official.erp_course_class_id),student_id:String(official.erp_student_contact_id),
+              class_name:official.class_name_snapshot,student_name:official.student_name_snapshot},resumed.receipt.result);
+          }
+          return res.json({ok:true,receipt:resumed.receipt});
+        }
+      }
+      const selectedSubmission = evaluateSubmission(session);
+      const {answers:effectiveAnswers,listeningResult} = selectedSubmission;
       const inserted = await pool.query(insertProtectedListeningAttemptSql, [
         parsed.data.clientSubmissionId,
         parsed.data.examSessionToken,
@@ -1788,6 +1806,7 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if (error instanceof Term1ContinuationError) return res.status(error.status).json({ok:false,error:error.code,message:error.message});
     const protectedSubmission = term1SubmissionGuardError(error);
     if (protectedSubmission) return res.status(409).json({ok:false,error:protectedSubmission.code,message:protectedSubmission.message});
     if(error?.code==='P6740')return res.status(409).json({ok:false,error:'TIMER_SESSION_REQUIRED',message:'Lượt đang làm ở trang Listening không audio.'});
