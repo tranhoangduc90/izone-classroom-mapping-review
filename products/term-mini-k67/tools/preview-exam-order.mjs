@@ -125,7 +125,8 @@ if(term1JourneyMode==='on'||retakeMode==='on'){
     if(createHash('sha256').update(term1Audio).digest('hex')!=='9af027eaaf402acc230fdaeff11bcc1b792b62e55d75067f1a2bcf2392b485f8')throw new Error('Sai bản audio Term 1 K67.');
     Object.assign(timing['term-test-1'],{listeningDurationSeconds:1735,listeningTotalSeconds:1855});
   }else Object.assign(timing['term-test-1'],{listeningDurationSeconds:toneSeconds,
-    listeningTotalSeconds:toneSeconds+term1Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
+    listeningTotalSeconds:toneSeconds+term1Review,
+    readingDurationMinutes:Number(process.env.K67_PREVIEW_TERM1_READING_MINUTES||.12),writingDurationMinutes:.2});
 }
 if(term2JourneyMode==='on'){
   if(term2Audio){

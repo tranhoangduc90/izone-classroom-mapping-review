@@ -136,10 +136,12 @@ test('Term 1 keeps the first official submission while another profile completes
     assert.ok(continued.ok, continued.body.error);
     assert.equal(continued.body.continuationSection, 'listening');
     assert.equal(continued.body.readingSubmitted, true);
-    assert.notEqual(continued.body.examSessionToken, owner.examSessionToken);
+    assert.equal(continued.body.examSessionToken, owner.examSessionToken);
     assert.notEqual(continued.body.examSessionToken, reading.body.examSessionToken);
     assert.equal(continued.body.attemptToken, null);
-    assert.deepEqual(continued.body.listeningDraft, {});
+    assert.deepEqual(continued.body.listeningDraft, {11:'A'});
+    assert.equal(continued.body.listeningStartedAt,started.body.listeningStartedAt);
+    assert.equal(continued.body.listeningDeadlineAt,started.body.listeningDeadlineAt);
 
     const startContinuation = async (profile, scope) => {
       const session = {examSessionToken:scope.examSessionToken,generation:scope.generation,
@@ -153,10 +155,10 @@ test('Term 1 keeps the first official submission while another profile completes
     const later = request.agent(fixture.app);
     const competing = await prepare(later,'read_first',undefined,1);
     assert.notEqual(competing.body.examSessionToken,continued.body.examSessionToken);
-    const continuedOwner = await startContinuation(profileA,continued.body);
+    const continuedOwner = {...owner,ownerEpoch:started.body.audioOwner.ownerEpoch};
     const competingOwner = await startContinuation(later,competing.body);
     const saved = await profileA.post(`${endpoint}/listening/draft`).send({
-      ...continuedOwner,answers:{11:'C'},revision:1,
+      ...continuedOwner,answers:{11:'C'},revision:2,
     });
     assert.ok(saved.ok,saved.body.error);
     const reopened = await prepare(profileA,'read_first',continued.body.examSessionToken,1);
@@ -165,7 +167,7 @@ test('Term 1 keeps the first official submission while another profile completes
     const privateDraft = await prepare(later,'read_first',competing.body.examSessionToken,1);
     assert.deepEqual(privateDraft.body.listeningDraft,{});
 
-    const submission = {...identity,...continuedOwner,answers:{11:'C'},draftRevision:1,clientSubmissionId:randomUUID()};
+    const submission = {...identity,...continuedOwner,answers:{11:'C'},draftRevision:2,clientSubmissionId:randomUUID()};
     const acceptedListening = await profileA.post(`${endpoint}/listening`).send(submission);
     assert.ok(acceptedListening.ok,acceptedListening.body.error);
     assert.equal(acceptedListening.body.receipt.section,'listening');
@@ -299,8 +301,8 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       await seedTerm1(fixture.db);
       const a=request.agent(fixture.app);
       const b=request.agent(fixture.app);
-      const prepare=profile=>profile.post(`${endpoint}/session/prepare`).send({
-        ...identity,examMode,examDelivery:'cbt',orderClientVersion:1,term1ContinuationVersion:1,
+      const prepare=(profile, overrides={})=>profile.post(`${endpoint}/session/prepare`).send({
+        ...identity,examMode,examDelivery:'cbt',orderClientVersion:1,term1ContinuationVersion:1,...overrides
       });
       const offline = async (profile, lobby, proof) => {
         assert.ok(lobby.ok,lobby.body.error);
@@ -318,13 +320,21 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
         answers:section==='listening'?{11:answer}:{14:answer}});
 
       const original=await offline(a,await prepare(a),'a');
+      const competing=await offline(b,await prepare(b,{examMode:examMode==='lis_first'?'read_first':'lis_first'}),'b');
       const firstOperation=operation(first,original.startedAt,'B');
       const accepted=await original.post('seal',firstOperation);
       assert.ok(accepted.ok,accepted.body.error);
-      const resumed=await offline(b,await prepare(b),'b');
+      const attempted=operation(second,competing.startedAt,'E');
+      const early=await competing.post('seal',attempted);
+      assert.equal(early.status,409);
+      assert.equal(early.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+      assert.equal((await competing.post('status',{section:second,operationId:attempted.operationId})).body.persisted,false);
+      const resumed=await offline(b,await prepare(b,{examSessionToken:competing.bundle.examSessionToken}),'b');
       assert.equal(resumed.bundle.continuationSection,second);
       assert.equal(resumed.bundle.examMode,examMode);
       assert.notEqual(resumed.bundle.examSessionToken,original.bundle.examSessionToken);
+      assert.equal(resumed.bundle.examSessionToken,competing.bundle.examSessionToken);
+      assert.equal(resumed.startedAt,competing.startedAt);
       const wrongSection=await resumed.post('seal',operation(first,resumed.startedAt,'D'));
       assert.equal(wrongSection.status,403);
       const secondOperation=operation(second,resumed.startedAt,'C');
@@ -421,3 +431,52 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
     }
   });
 }
+
+test('Term 1 simultaneous Listening submissions keep one official receipt and open Reading for the other profile', async () => {
+  const fixture=await createMiniFixture({examOrder:true,completeSchema:true,term1CbtJourneyMode:'on',
+    term1ParallelEntryEnabled:true,assets:testAssets});
+  try {
+    await seedTerm1(fixture.db);
+    async function profile(answer, proof) {
+      const api=request.agent(fixture.app);
+      const prepare=examSessionToken=>api.post(`${endpoint}/session/prepare`).send({
+        ...identity,examMode:'lis_first',examDelivery:'cbt',orderClientVersion:1,term1ContinuationVersion:1,examSessionToken
+      });
+      const opened=await prepare();
+      assert.ok(opened.ok,opened.body.error);
+      const scope={examSessionToken:opened.body.examSessionToken,generation:opened.body.generation,deviceProof:proof.repeat(64)};
+      const path=`${endpoint}/cbt-journey`;
+      const bundle=await api.post(`${path}/prepare`).send({...identity,...scope});
+      assert.ok(bundle.ok,bundle.body.error);
+      const send=(route,payload={})=>api.post(`${path}/${route}`).set('x-term2-permit',bundle.body.permit).send({...scope,...payload});
+      const begin=await send('begin');
+      assert.ok(begin.ok,begin.body.error);
+      const op={operationId:randomUUID(),section:'listening',previousOperationId:null,
+        startedAt:begin.body.activatedAt,capturedAt:begin.body.activatedAt,revision:1,
+        automatic:false,eofAt:null,heardSeconds:0,answers:{11:answer}};
+      return { scope, op, send, prepare };
+    }
+    const profiles=[await profile('A','a'),await profile('B','b')];
+    const receipts=await Promise.all(profiles.map(({send,op})=>send('seal',op)));
+    assert.deepEqual(receipts.map(receipt=>receipt.status).sort(),[200,409]);
+    const index=receipts.findIndex(receipt=>receipt.ok);
+    const winner=profiles[index], other=profiles[1-index];
+    const confirmed=receipts[index].body.receipt;
+    assert.equal(confirmed.operationId,winner.op.operationId);
+    assert.deepEqual((await winner.send('seal',winner.op)).body.receipt,confirmed);
+    assert.equal(receipts[1-index].body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+    const otherStatus=await other.send('status',{section:'listening',operationId:other.op.operationId});
+    assert.equal(otherStatus.body.persisted,false);
+    const reopened=await other.prepare(other.scope.examSessionToken);
+    assert.ok(reopened.ok,reopened.body.error);
+    assert.equal(reopened.body.continuationSection,'reading');
+    assert.equal(reopened.body.listeningSubmitted,true);
+    assert.notEqual(reopened.body.examSessionToken,other.scope.examSessionToken);
+    assert.notEqual(reopened.body.attemptToken,confirmed.attemptToken);
+    assert.deepEqual((await fixture.db.query(`SELECT id,listening_answers FROM assessment.term_test_attempt
+      WHERE test_slug='term-test-1' AND listening_submitted_at IS NOT NULL`)).rows,
+    [{id:confirmed.attemptToken,listening_answers:winner.op.answers}]);
+  } finally {
+    await fixture.db.close();
+  }
+});

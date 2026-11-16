@@ -151,9 +151,11 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const session = await openTerm1SectionContinuation(db,official,data.examSessionToken,section);
       const draft = section==='reading' ? await reload(db,session.attempt_id) : null;
       return {...view,id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
+        term1_parallel_entry:true,
         continuation_section:section,reading_started_at:draft?.reading_started_at ?? null,reading_deadline_at:draft?.reading_deadline_at ?? null,
         reading_draft:draft?.reading_draft ?? {},reading_draft_revision:draft?.reading_draft_revision ?? 0,
         session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
+        session_checkpoint_seconds:session.listening_audio_checkpoint_seconds,session_recovery_seconds:session.listening_recovery_seconds,
         session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,
         session_revision:session.listening_draft_revision};
     }
@@ -272,6 +274,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       return next();
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
+      ...(out.term1_parallel_entry ? {term1ParallelEntry:true} : {}),
       ...(out.continuation_section ? {continuationSection:out.continuation_section} : {}),
       ...(out.official_next_section ? {nextSection:out.official_next_section} : {}),
       ...(out.official_result_ready ? {officialResultReady:true} : {}),

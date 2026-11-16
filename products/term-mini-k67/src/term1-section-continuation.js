@@ -30,13 +30,31 @@ export async function openTerm1SectionContinuation(db, official, token, section)
       AND c.section=$4 AND s.superseded_at IS NULL`,args)).rows[0];
   if (previous) return previous;
 
-  const session = (await db.query(`INSERT INTO assessment.term_test_exam_session
-    (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
-      student_name_snapshot,attempt_mode,exam_mode,term1_parallel_entry)
-    VALUES('term-test-1',$1,$2,$3,$4,$5,'cbt',$6,true) RETURNING *`,
-  [official.definition_version,official.erp_course_class_id,official.erp_student_contact_id,
-    official.class_name_snapshot,official.student_name_snapshot,section==='reading'?'read_first':'lis_first'])).rows[0];
-  if (section==='reading') session.attempt_id = await createTerm1ReadingDraft(db,session);
+  const examMode = section==='reading' ? 'read_first' : 'lis_first';
+  const key = [official.definition_version,official.erp_course_class_id,official.erp_student_contact_id];
+  // Reuse only the requesting profile's original session for this skill. Its draft,
+  // timers, audio owner and existing offline permit stay bound to the same scope.
+  let session = token && section!=='writing' && (await db.query(`SELECT s.*
+    FROM assessment.term_test_exam_session s
+    LEFT JOIN assessment.term_test_attempt a ON a.id=s.attempt_id
+    WHERE s.id=$4 AND s.test_slug='term-test-1' AND s.definition_version=$1
+      AND s.erp_course_class_id=$2 AND s.erp_student_contact_id=$3
+      AND s.exam_mode=$5 AND s.term1_parallel_entry AND s.superseded_at IS NULL
+      AND s.listening_submitted_at IS NULL AND s.listening_audio_incident_id IS NULL
+      AND s.prepared_at >= clock_timestamp()-interval '72 hours'
+      AND ($5='lis_first' AND s.attempt_id IS NULL OR $5='read_first'
+        AND a.id IS NOT NULL AND a.exam_session_id=s.id AND a.generation=s.generation
+        AND a.superseded_at IS NULL AND a.reading_submitted_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM assessment.term1_section_continuation c WHERE c.exam_session_id=s.id)
+    FOR UPDATE OF s`, [...key,token,examMode])).rows[0];
+  if (!session) {
+    session = (await db.query(`INSERT INTO assessment.term_test_exam_session
+      (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
+        student_name_snapshot,attempt_mode,exam_mode,term1_parallel_entry)
+      VALUES('term-test-1',$1,$2,$3,$4,$5,'cbt',$6,true) RETURNING *`,
+    [...key,official.class_name_snapshot,official.student_name_snapshot,examMode])).rows[0];
+    if (section==='reading') session.attempt_id = await createTerm1ReadingDraft(db,session);
+  }
   await db.query(`INSERT INTO assessment.term1_section_continuation
     (exam_session_id,official_attempt_id,official_generation,section) VALUES($1,$2,$3,$4)`,
   [session.id,official.id,official.generation,section]);

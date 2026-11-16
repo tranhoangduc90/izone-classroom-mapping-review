@@ -485,6 +485,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         profile===pretest?pretestJourneyR2Audio({config,row:session,manifest}):{};
       const continuation=await readContinuation(db,session.id);
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
+        ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
         ...(continuation?{continuationSection:continuation.section}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
         examMode:continuation?.official_exam_mode||session.exam_mode||'lis_first',
