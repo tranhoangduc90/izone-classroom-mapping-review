@@ -1,8 +1,9 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
-CREATE TABLE assessment.term1_listening_continuation (
+CREATE TABLE assessment.term1_section_continuation (
   exam_session_id uuid PRIMARY KEY REFERENCES assessment.term_test_exam_session(id) ON DELETE CASCADE,
+  section text NOT NULL CHECK (section IN ('listening','reading','writing')),
   official_attempt_id uuid NOT NULL,
   official_generation bigint NOT NULL,
   operation_id uuid,
@@ -11,7 +12,7 @@ CREATE TABLE assessment.term1_listening_continuation (
   CHECK ((operation_id IS NULL AND payload_hash IS NULL AND receipt IS NULL)
       OR (operation_id IS NOT NULL AND payload_hash IS NOT NULL AND receipt IS NOT NULL))
 );
-GRANT SELECT, INSERT, UPDATE ON assessment.term1_listening_continuation TO k67_app;
+GRANT SELECT, INSERT, UPDATE ON assessment.term1_section_continuation TO k67_app;
 
 -- The native commit may write the official row from a different, independently
 -- authorized Listening session. Only a current grant for this row and generation
@@ -22,10 +23,10 @@ DECLARE
   child assessment.term_test_exam_session;
 BEGIN
   IF continuation IS NOT NULL AND s.test_slug = 'term-test-1' THEN
-    SELECT profile.* INTO child FROM assessment.term1_listening_continuation grant_row
+    SELECT profile.* INTO child FROM assessment.term1_section_continuation grant_row
       JOIN assessment.term_test_exam_session profile ON profile.id=grant_row.exam_session_id
       JOIN assessment.term_test_attempt official ON official.id=grant_row.official_attempt_id
-    WHERE profile.id::text=continuation AND grant_row.receipt IS NULL
+    WHERE profile.id::text=continuation AND grant_row.section='listening' AND grant_row.receipt IS NULL
       AND official.id=s.attempt_id AND official.exam_session_id=s.id AND official.generation=s.generation
       AND grant_row.official_generation=s.generation AND official.superseded_at IS NULL
       AND profile.superseded_at IS NULL AND profile.listening_started_at IS NOT NULL

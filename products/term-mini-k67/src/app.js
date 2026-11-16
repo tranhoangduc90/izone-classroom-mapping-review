@@ -38,7 +38,7 @@ import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
 import { term1SubmissionGuardError } from './term1-submission-guard.js';
-import { commitTerm1ListeningContinuation, Term1ContinuationError } from './term1-listening-continuation.js';
+import { commitTerm1ListeningContinuation, Term1ContinuationError } from './term1-section-continuation.js';
 import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";

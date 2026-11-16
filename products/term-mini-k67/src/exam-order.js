@@ -8,7 +8,7 @@ import { useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
-import { openTerm1ListeningContinuation } from './term1-listening-continuation.js';
+import { commitTerm1ReadingContinuation, createTerm1ReadingDraft, openTerm1SectionContinuation, term1ContinuationGrant } from './term1-section-continuation.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -45,6 +45,7 @@ export function orderState(row) {
     listeningDraft:row.session_draft||{},listeningDraftRevision:Number(row.session_revision)||0,
     readingDraft:row.reading_draft||{},readingDraftRevision:Number(row.reading_draft_revision)||0,
     writingStartedAt:row.writing_started_at,writingDeadlineAt:row.writing_deadline_at,writingSubmittedAt:row.writing_submitted_at,
+    ...(row.writing_grading_status ? {writingGrading:{status:row.writing_grading_status,score:row.writing_grading_score}} : {}),
     policy:{timed:row.attempt_mode!=='answer_sheet',autoSubmit:row.attempt_mode!=='answer_sheet'},
     result:row.combined_result||null,resultAvailable:Boolean(row.completed_at),serverNow:new Date(row.server_now||Date.now()).toISOString()};
 }
@@ -54,6 +55,7 @@ const attemptProjection = `SELECT a.*,s.listening_started_at AS session_started_
   s.listening_draft AS session_draft,s.listening_draft_revision AS session_revision,
   s.listening_draft_updated_at,
   s.superseded_at AS session_superseded_at,s.generation AS session_generation,
+  s.attempt_mode AS session_attempt_mode,
   d.slug AS test_slug,d.title AS test_title,d.version AS definition_version,
   d.listening_band_adjustment,d.listening_definition,d.reading_definition,clock_timestamp() AS server_now,
   clock_timestamp()>a.reading_deadline_at AS reading_timed_out,clock_timestamp()<=a.reading_deadline_at+interval '5 minutes' AS reading_grace,
@@ -113,6 +115,12 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (row.exam_session_id && (row.session_superseded_at || Number(row.session_generation)!==Number(row.generation))) {
         throw error('EXAM_HISTORY_REVIEW','Cần đối soát phiên gốc của bài đã nộp.');
       }
+      if(row.writing_submitted_at) {
+        const grade=(await db.query(`SELECT status,writing_score FROM assessment.term_test_writing_grading_final
+          WHERE attempt_id=$1`,[row.id])).rows[0];
+        row.writing_grading_status=grade?.status==='ready'?'ready':'waiting';
+        row.writing_grading_score=grade?.writing_score == null ? null : Number(grade.writing_score);
+      }
       return row;
     }
     return null;
@@ -128,11 +136,17 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const official = await readOfficialTerm1(db,key);
     if (official) {
       const view = officialTerm1View(official,data.examSessionToken);
-      if (view.id || !data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery!=='cbt'
-        || !official.reading_submitted_at || official.listening_submitted_at || official.listening_interrupted_at) return view;
+      if (view.id || !data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
+        || (official.exam_delivery!=='cbt' && official.session_attempt_mode!=='cbt') || official.listening_interrupted_at) return view;
+      const section = official.writing_submitted_at ? 'result' : orderState(official).nextSection;
+      if (section==='result') return {...view,official_next_section:'result'};
+      if (section==='writing' && config.term1CbtJourneyMode!=='on') return view;
 
-      const session = await openTerm1ListeningContinuation(db,official,data.examSessionToken);
-      return {...view,exam_session_id:session.id,generation:session.generation,continuation_section:'listening',
+      const session = await openTerm1SectionContinuation(db,official,data.examSessionToken,section);
+      const draft = section==='reading' ? await reload(db,session.attempt_id) : null;
+      return {...view,id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
+        continuation_section:section,reading_started_at:draft?.reading_started_at ?? null,reading_deadline_at:draft?.reading_deadline_at ?? null,
+        reading_draft:draft?.reading_draft ?? {},reading_draft_revision:draft?.reading_draft_revision ?? 0,
         session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
         session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,
         session_revision:session.listening_draft_revision};
@@ -156,13 +170,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         VALUES($1,$2,$3,$4,$5,$6,'cbt',$7,true) RETURNING *`,
       [...key,student.class_name,student.student_name,data.examMode])).rows[0];
       if (data.examMode==='read_first') {
-        const attempt = (await db.query(`INSERT INTO assessment.term_test_attempt
-          (client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,
-            class_name_snapshot,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,'cbt','read_first','cbt',$9) RETURNING id`,
-        [randomUUID(),...key,student.class_name,student.student_name,session.id,session.generation])).rows[0];
-        await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[session.id,attempt.id]);
-        session.attempt_id=attempt.id;
+        session.attempt_id=await createTerm1ReadingDraft(db,session);
       }
     }
     if (session.attempt_id) {
@@ -259,6 +267,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
       ...(out.continuation_section ? {continuationSection:out.continuation_section} : {}),
+      ...(out.official_next_section ? {nextSection:out.official_next_section} : {}),
       ...(paper && offerMiniPaperOffline(config, data.classCode) ? { offlinePaper: true } : {}),
       ...(out.exam_session_id ? {
         encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
@@ -348,6 +357,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const r=await locked(db,row);clientCheck(data,r,paper);
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
+      const continuation=config.term1ParallelEntryEnabled&&slug==='term-test-1'&&section==='reading'
+        ? await term1ContinuationGrant(db,r.exam_session_id,'reading') : null;
+      if(continuation?.receipt&&action!=='reading')throw error('EXAM_FIRST_SUBMISSION_ACCEPTED','Reading đã có bài được ghi nhận.');
       if (paper) await guardMiniPaperOfflineWrite(db, config, r.exam_session_id, r.generation);
       if(action.endsWith('start')) {
         if(action==='listening/start'&&r.exam_delivery==='cbt'){
@@ -415,6 +427,11 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const current=Number.isSafeInteger(data.draftRevision)?data.draftRevision>=revision:revision===0;
       const effective=expired&&!(grace&&current)?draft:data.answers;
       const test=parseStoredTest(r),grade=gradeSection(test[`${section}_definition`],effective,section==='listening'?test.listening_band_adjustment:0);
+      if (continuation) {
+        if(!data.clientSubmissionId)throw error('INVALID_SUBMISSION','Thiếu mã gửi bài.',400);
+        const result=await commitTerm1ReadingContinuation(db,continuation,r,data,test,effective,grade);
+        return {continuation:result,answeredCount:Object.values(effective).filter(value=>String(value).trim()).length};
+      }
       const other=section==='reading'?r.listening_result:r.reading_result;
       const combined=other?buildCombinedResult(test,section==='listening'?grade:other,section==='reading'?grade:other):null;
       await db.query(`UPDATE assessment.term_test_attempt SET ${section}_answers=$2,${section}_result=$3,${section}_submitted_at=clock_timestamp(),
@@ -426,6 +443,17 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         details:{section,revision:data.draftRevision,answeredCount:Object.values(effective).filter(value=>String(value).trim()).length,timedOut:expired,
           snapshotSource:expired?(grace&&current?'grace_submission':'saved_draft'):'on_time_submission'}}};
     });
+    if(out.continuation) {
+      const {receipt,official}=out.continuation;
+      if(official) {
+        logEvent('submission_completed',slug,row.exam_session_id,{section:'reading',answeredCount:out.answeredCount,
+          revision:data.draftRevision,receiptId:receipt.receiptId,reason:'TERM1_READING_CONTINUATION'});
+        await syncComplete({...official,attempt_token:official.id,class_id:String(official.erp_course_class_id),
+          student_id:String(official.erp_student_contact_id),class_name:official.class_name_snapshot,
+          student_name:official.student_name_snapshot},receipt.result);
+      }
+      return res.json({ok:true,receipt});
+    }
     if(out.event)logEvent(out.event.name,slug,out.event.token,out.event.details);
     const state=orderState(out);
     const syncRow={...out,attempt_token:out.id,test_slug:slug,class_id:String(out.erp_course_class_id),student_id:String(out.erp_student_contact_id),class_name:out.class_name_snapshot,student_name:out.student_name_snapshot};
