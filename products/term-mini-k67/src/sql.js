@@ -877,6 +877,7 @@ export const fetchTermTestResultSql = `SELECT
   attempt.reading_draft_updated_at,
   attempt.reading_submitted_at,
   attempt.completed_at,
+  attempt.superseded_at,
   attempt.writing_task_1,
   attempt.writing_task_2,
   attempt.writing_draft_revision,
@@ -911,6 +912,7 @@ export const fetchTermTestAttemptReviewSql = `SELECT
   attempt.writing_task_1,
   attempt.writing_task_2,
   attempt.completed_at,
+  attempt.superseded_at,
   attempt.writing_submitted_at
 FROM assessment.term_test_attempt AS attempt
 WHERE attempt.id = $1::uuid

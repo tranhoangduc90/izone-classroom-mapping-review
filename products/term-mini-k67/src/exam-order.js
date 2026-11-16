@@ -66,6 +66,22 @@ const sessionTables = `assessment.term_test_exam_session s ON s.id=a.exam_sessio
 const select = `${attemptProjection} JOIN ${sessionTables}`;
 const officialSelect = `${attemptProjection} LEFT JOIN ${sessionTables}`;
 
+export async function readOfficialTerm1(db, key) {
+  const { rows } = await db.query(`${officialSelect} WHERE a.test_slug=$1 AND a.definition_version=$2
+    AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4 AND a.superseded_at IS NULL
+    AND (a.listening_submitted_at IS NOT NULL OR a.reading_submitted_at IS NOT NULL) LIMIT 2`, key);
+  if (rows.length > 1) throw error('EXAM_HISTORY_REVIEW','Có nhiều kết quả đã nhận cho bài này. Hãy nhờ người phụ trách đối soát.');
+  const row = rows[0];
+  if (row?.exam_session_id && (row.session_superseded_at || Number(row.session_generation)!==Number(row.generation))) {
+    throw error('EXAM_HISTORY_REVIEW','Cần đối soát phiên gốc của bài đã nộp.');
+  }
+  return row || null;
+}
+
+export function term1OfficialResultReady(row) {
+  return Boolean(row?.completed_at && row.writing_submitted_at && row.combined_result);
+}
+
 // Nhận yêu cầu Reading trước, khóa cùng học viên/lớp rồi lưu vào SQL thật.
 // Bài Listening trước đi tiếp qua tuyến hiện hành; cờ chỉ khóa việc tạo Reading trước mới.
 // Lỗi giữ nguyên snapshot đã ghi và trả mã rõ để trình duyệt thử lại hoặc tải bản mới.
@@ -105,29 +121,10 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
   }
-  async function readOfficialTerm1(db, key) {
-    const {rows:official} = await db.query(`${officialSelect} WHERE a.test_slug=$1 AND a.definition_version=$2
-      AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4 AND a.superseded_at IS NULL
-      AND (a.listening_submitted_at IS NOT NULL OR a.reading_submitted_at IS NOT NULL) LIMIT 2`, key);
-    if (official.length > 1) throw error('EXAM_HISTORY_REVIEW','Có nhiều kết quả đã nhận cho bài này. Hãy nhờ người phụ trách đối soát.');
-    if (official.length === 1) {
-      const row = official[0];
-      if (row.exam_session_id && (row.session_superseded_at || Number(row.session_generation)!==Number(row.generation))) {
-        throw error('EXAM_HISTORY_REVIEW','Cần đối soát phiên gốc của bài đã nộp.');
-      }
-      if(row.writing_submitted_at) {
-        const grade=(await db.query(`SELECT status,writing_score FROM assessment.term_test_writing_grading_final
-          WHERE attempt_id=$1`,[row.id])).rows[0];
-        row.writing_grading_status=grade?.status==='ready'?'ready':'waiting';
-        row.writing_grading_score=grade?.writing_score == null ? null : Number(grade.writing_score);
-      }
-      return row;
-    }
-    return null;
-  }
   function officialTerm1View(row, token) {
     if (!row || (token && row.exam_session_id===token)) return row;
     return {...row,id:null,exam_session_id:null,session_draft:{},session_revision:0,reading_draft:{},reading_draft_revision:0,
+      combined_result:null,
       session_started_at:null,session_deadline_at:null,session_checkpoint_seconds:null,session_recovery_seconds:null,
       reading_started_at:null,reading_deadline_at:null,writing_started_at:null,writing_deadline_at:null};
   }
@@ -135,7 +132,16 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const key = ['term-test-1',student.definition_version,student.class_id,student.student_id];
     const official = await readOfficialTerm1(db,key);
     if (official) {
+      if (official.writing_submitted_at) {
+        const grade = (await db.query(`SELECT status,writing_score FROM assessment.term_test_writing_grading_final
+          WHERE attempt_id=$1`, [official.id])).rows[0];
+        official.writing_grading_status = grade?.status==='ready' ? 'ready' : 'waiting';
+        official.writing_grading_score = grade?.writing_score == null ? null : Number(grade.writing_score);
+      }
       const view = officialTerm1View(official,data.examSessionToken);
+      if (data.term1ContinuationVersion && term1OfficialResultReady(official)) {
+        return {...view,official_next_section:'result',official_result_ready:true};
+      }
       if (view.id || !data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
         || (official.exam_delivery!=='cbt' && official.session_attempt_mode!=='cbt') || official.listening_interrupted_at) return view;
       const section = official.writing_submitted_at ? 'result' : orderState(official).nextSection;
@@ -268,6 +274,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
       ...(out.continuation_section ? {continuationSection:out.continuation_section} : {}),
       ...(out.official_next_section ? {nextSection:out.official_next_section} : {}),
+      ...(out.official_result_ready ? {officialResultReady:true} : {}),
       ...(paper && offerMiniPaperOffline(config, data.classCode) ? { offlinePaper: true } : {}),
       ...(out.exam_session_id ? {
         encryptedAudioUrl:`/api/term-tests/${slug}/session/${out.exam_session_id}/audio`,
@@ -472,6 +479,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   for(const action of ['reading/start','reading/draft','listening/draft','reading','listening','result'])
     app.post(`/api/term-tests/mini-test-lesson-5/answer-sheet/${action}`,route((req,res,next)=>handle(req,res,next,action,true)));
   app.post('/api/term-tests/result',route(async(req,res,next)=>{
+    if(Object.hasOwn(req.body||{},'officialTerm1'))return next();
     const p=z.uuid().safeParse(req.body?.attemptToken);if(!p.success)return next();
     const row=(await pool.query('SELECT test_slug,completed_at FROM assessment.term_test_attempt WHERE id=$1 AND exam_mode=\'read_first\'',[p.data])).rows[0];
     if(!row)return next();

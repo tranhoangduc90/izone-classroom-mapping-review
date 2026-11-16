@@ -154,7 +154,7 @@ const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbt
   ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
-const gradingRoundTrip=Boolean(termHoldSlug&&journalFixture)
+const gradingRoundTrip=Boolean(termHoldSlug)
   &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
 const fixtureGradeRequests=[];
 let writingGrading;
@@ -165,7 +165,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
-    ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
+    ...writingHoldEnabled&&(journalFixture||gradingRoundTrip)&&{writingTestSyncSecret:fakeWorkerKey}},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
     ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),

@@ -403,7 +403,10 @@ function writingHoldClassesFromFile(file) {
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
   const readContinuation = async (db, sessionId) => profile===term1&&config.term1ParallelEntryEnabled
-    ? (await db.query('SELECT * FROM assessment.term1_section_continuation WHERE exam_session_id=$1 FOR UPDATE',[sessionId])).rows[0] : null;
+    ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode
+        FROM assessment.term1_section_continuation AS continuation
+        JOIN assessment.term_test_attempt AS official ON official.id=continuation.official_attempt_id
+        WHERE continuation.exam_session_id=$1 FOR UPDATE OF continuation`, [sessionId])).rows[0] : null;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
   const mode=config[profile.mode];
   if (!['on','drain'].includes(mode)) return;
@@ -483,7 +486,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const continuation=await readContinuation(db,session.id);
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(continuation?{continuationSection:continuation.section}:{}),
-        studentRef:body.studentRef,studentName:session.student_name_snapshot,examMode:session.exam_mode||'lis_first',
+        studentRef:body.studentRef,studentName:session.student_name_snapshot,
+        examMode:continuation?.official_exam_mode||session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
         ...(config.listeningContinuityEnabled?{listeningContinuityVersion:1}:{}),
         ...(lrHoldAllowed(row)?{readingDeadlineReviewVersion:1}:{}),

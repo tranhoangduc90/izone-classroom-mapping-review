@@ -280,6 +280,7 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
   test(`Term 1 ${examMode}: independent offline profiles finish L/R/W and replay the original receipts`, async () => {
     let grading;
     let failQueue = true;
+    const deliveries = [];
     const fixture = await createMiniFixture({examOrder:true,completeSchema:true,term1CbtJourneyMode:'on',
       term1ParallelEntryEnabled:true,assets:testAssets,termTestWritingGradingService:{
         ensureSubmissionInTransaction(db,input) {
@@ -289,9 +290,12 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
           }
           return grading.ensureSubmissionInTransaction(db,input);
         },
+        getStatus: attemptToken => grading.getStatus(attemptToken)
       }});
     try {
-      grading=createTermTestWritingGradingService({pool:fixture.pool});
+      grading=createTermTestWritingGradingService({pool:fixture.pool,syncErpGrades:async payload=>{
+        deliveries.push(payload);return {status:'synced'};
+      }});
       await seedTerm1(fixture.db);
       const a=request.agent(fixture.app);
       const b=request.agent(fixture.app);
@@ -319,6 +323,7 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       assert.ok(accepted.ok,accepted.body.error);
       const resumed=await offline(b,await prepare(b),'b');
       assert.equal(resumed.bundle.continuationSection,second);
+      assert.equal(resumed.bundle.examMode,examMode);
       assert.notEqual(resumed.bundle.examSessionToken,original.bundle.examSessionToken);
       const wrongSection=await resumed.post('seal',operation(first,resumed.startedAt,'D'));
       assert.equal(wrongSection.status,403);
@@ -339,8 +344,13 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       assert.equal(stored.receipt.receiptId,sealed.body.receipt.receiptId);
 
       const c=request.agent(fixture.app);
-      const writing=await offline(c,await prepare(c),'c');
+      const readResult = (profile, options = {}) => profile.post('/api/term-tests/result').send({officialTerm1:identity, ...options});
+      assert.equal((await readResult(c)).status,404);
+      const writingLobby=await prepare(c);
+      assert.equal(writingLobby.body.result,null);
+      const writing=await offline(c,writingLobby,'c');
       assert.equal(writing.bundle.continuationSection,'writing');
+      assert.equal(writing.bundle.examMode,examMode);
       assert.notEqual(writing.bundle.examSessionToken,original.bundle.examSessionToken);
       const essay=examMode==='lis_first'?'':'Synthetic writing answer';
       const writingOperation={...operation('writing',writing.startedAt,''),answers:{task1:'',task2:essay}};
@@ -348,6 +358,7 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       assert.equal(queueUnavailable.status,503);
       assert.equal(queueUnavailable.body.error,'WRITING_QUEUE_UNAVAILABLE');
       assert.equal((await writing.post('status',{section:'writing',operationId:writingOperation.operationId})).body.persisted,false);
+      assert.equal((await readResult(c)).status,404);
       assert.equal((await fixture.db.query('SELECT writing_submitted_at FROM assessment.term_test_attempt WHERE id=$1',[rows[0].id])).rows[0].writing_submitted_at,null);
 
       const writingSealed=await writing.post('seal',writingOperation);
@@ -360,6 +371,7 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       assert.equal((await writing.post('seal',{...writingOperation,answers:{task1:'',task2:'Different writing answer'}})).status,409);
       const result=await prepare(request.agent(fixture.app));
       assert.equal(result.body.nextSection,'result');
+      assert.equal(result.body.officialResultReady,true);
       assert.deepEqual(result.body.writingGrading,essay?{status:'waiting',score:null}:{status:'ready',score:0});
       const saved=(await fixture.db.query('SELECT writing_task_2,writing_submitted_at FROM assessment.term_test_attempt WHERE id=$1',[rows[0].id])).rows[0];
       assert.equal(saved.writing_task_2,essay);
@@ -371,6 +383,39 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
         WHERE job.job_type='dispatch'
       `)).rows;
       assert.deepEqual(jobs,essay?[{attempt_id:rows[0].id}]:[]);
+      const official = await readResult(a, {includeContent:true});
+      assert.ok(official.ok,official.body.error);
+      assert.equal(official.body.studentRef,identity.studentRef);
+      assert.equal(official.body.examMode,examMode);
+      assert.equal(official.body.content.writing.tasks[0].id,'task2');
+      assert.equal(official.body.writing.task2,essay);
+      assert.equal(official.body.writing.submitted,true);
+      assert.equal(official.body.writing.grading.ready,!essay);
+      assert.equal(official.body.writing.grading.writingScore,essay?null:0);
+      assert.ok(!JSON.stringify(official.body).includes(rows[0].id));
+      assert.ok(!JSON.stringify(official.body).includes(original.bundle.examSessionToken));
+      assert.equal((await readResult(b,{officialTerm1:{...identity,classCode:'OUTSIDE'}})).status,404);
+      assert.equal((await readResult(b,{officialTerm1:{...identity,studentRef:randomUUID()}})).status,404);
+      assert.equal((await readResult(b,{attemptToken:rows[0].id})).status,400);
+      const review = await b.post('/api/term-tests/result/review').send({officialTerm1:identity});
+      assert.ok(review.ok,review.body.error);
+      assert.deepEqual(review.body.review.answers,{
+        listening:rows[0].listening_answers,reading:rows[0].reading_answers,writing:{task1:'',task2:essay}
+      });
+      assert.equal(deliveries.length,0);
+      if (essay) {
+        const workerId='term1-fixture-grader';
+        const [dispatch]=await grading.claimJobs({workerId});
+        assert.equal(dispatch.essay,essay);
+        await grading.completeDispatch({workerId,jobId:dispatch.jobId});
+        await fixture.db.query("UPDATE assessment.term_test_writing_grading_job SET next_attempt_at=now() WHERE job_type='collect'");
+        const [collect]=await grading.claimJobs({workerId});
+        const criteria=['TR','CC','LR','GRA'].map(code=>({code,bandScore:6,feedback:'Nhận xét giả'}));
+        await grading.completeResult({workerId,jobId:collect.jobId,runKey:collect.runKey,result:{taskScore:6,criteria}});
+        assert.equal((await readResult(c)).body.writing.grading.writingScore,6);
+        assert.equal((await readResult(a)).body.writing.grading.writingScore,6);
+        assert.deepEqual(deliveries.map(({attemptToken,grades})=>[attemptToken,grades.writing]),[[rows[0].id,6]]);
+      }
     } finally {
       await fixture.db.close();
     }
