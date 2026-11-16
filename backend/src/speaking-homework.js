@@ -259,7 +259,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     const result = await client.query(`
       SELECT DISTINCT ON (l.part) l.id, l.part, l.revision, l.share_url, l.share_id, l.fingerprint,
         l.check_status, l.check_code, l.question_count, l.evidence, l.typing_warning, l.voice_confirmed, l.checked_at,
-        j.status AS check_job_status,j.attempts AS check_job_attempts
+        j.status AS check_job_status,j.attempts AS check_job_attempts,j.last_error_code AS check_job_error
       FROM speaking_homework.submission_link l LEFT JOIN speaking_homework.check_job j ON j.link_id=l.id
       WHERE l.submission_id = $1 ORDER BY l.part,l.revision DESC`, [submissionId]);
     return result.rows;
@@ -276,7 +276,7 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     const practice = await pool.query(`SELECT DISTINCT ON (p.slot)
       p.id, p.slot, p.revision, p.share_url, p.exercise_id, p.status,
       p.check_code, p.question_count, p.evidence, p.typing_warning, p.voice_confirmed,
-      c.status AS check_job_status,c.attempts AS check_job_attempts,
+      c.status AS check_job_status,c.attempts AS check_job_attempts,c.last_error_code AS check_job_error,
       CASE WHEN a.status='failed' AND a.attempts>=5 THEN 'review' ELSE a.status END AS analysis_status
       FROM speaking_homework.practice_link p
       LEFT JOIN speaking_homework.practice_analysis_job a ON a.practice_link_id = p.id
@@ -293,8 +293,10 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         doctorEnabled: Boolean(grant.doctor_course_key) },
       student: { ref: studentRef, name: grant.student_name },
       status: submission.status, parts: parts.rows,
-      links:links.map(({check_job_status,check_job_attempts,...link})=>speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts},'check_status')),
-      practiceLinks:practice.rows.map(({check_job_status,check_job_attempts,...link})=>speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts})),
+      links:links.map(({check_job_status,check_job_attempts,check_job_error,...link})=>
+        speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts,last_error:check_job_error},'check_status')),
+      practiceLinks:practice.rows.map(({check_job_status,check_job_attempts,check_job_error,...link})=>
+        speakingCheckView(link,{status:check_job_status,attempts:check_job_attempts,last_error:check_job_error})),
       receipt: receipt.rows[0] || null,
       docsProgress:await readSpeakingDocsProgress(pool,'speaking_homework',grant.grant_id)
     };
@@ -315,7 +317,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
         throw new SpeakingHomeworkError('ALREADY_SUBMITTED', 'Bài đã có biên nhận nộp.');
       }
       const previous = (await latestLinks(submission.id, client)).find(link => link.part === part);
-      if (previous?.share_id === share.shareId && previous.check_status !== 'rejected') {
+      if (previous?.share_id === share.shareId && previous.check_status !== 'rejected' &&
+          !canRetrySpeakingCheck(previous,{status:previous.check_job_status,attempts:previous.check_job_attempts})) {
         return { linkId: previous.id, status: previous.check_status, revision: previous.revision };
       }
       const duplicate = await client.query(`
