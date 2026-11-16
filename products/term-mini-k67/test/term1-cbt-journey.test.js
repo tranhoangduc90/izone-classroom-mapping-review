@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp,writeFile,unlink,rmdir} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,unlink,rmdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import request from 'supertest';
@@ -50,6 +50,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     await f.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
       SELECT 'term-test-1','Đề giả Term 1',1,listening_definition,reading_definition,true
       FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
+    await f.db.exec(await readFile(new URL('../db/041-term1-first-submission.sql',import.meta.url),'utf8'));
     const api=request(f.app);
     const prepared=await api.post(slug+'/session/prepare').send({...identity,examMode:mode,examDelivery:'cbt',orderClientVersion:1});
     assert.ok(prepared.ok,prepared.text);
@@ -234,6 +235,7 @@ for(const mode of ['lis_first','read_first'])test(`Term 1 offline L/R/W in order
     assert.equal((await post('seal',{...writing,answers:{task1:'',task2:'Different'}})).body.error,'OFFLINE_CONFLICT');
     assert.deepEqual((await writingStatus()).body.receipt,sealed.body.receipt);
     const row=(await f.db.query('SELECT * FROM assessment.term_test_attempt WHERE id=$1',[attemptToken])).rows[0];
+    assert.equal(row.term1_first_submission_guard,true);
     assert.deepEqual(row.listening_answers,{11:'A'});
     assert.deepEqual(row.reading_answers,{14:'A'});
     assert.equal(row.writing_task_2,essay);
