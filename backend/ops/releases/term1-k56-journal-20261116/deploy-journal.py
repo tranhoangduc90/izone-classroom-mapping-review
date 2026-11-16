@@ -38,7 +38,15 @@ def when(value):
 def write_policy(enabled):
     policy = dict(enabled=enabled, opensAt=when('2026-11-16T18:00:00'),
                   closesAt=when('2026-11-17T00:00:00'), renewUntil=when('2026-11-24T00:00:00'))
-    atomic(POLICY, (json.dumps(policy)+'\n').encode(), 0o644)
+    pending = POLICY.with_name('.config.next')
+    with pending.open('x') as handle:
+        json.dump(policy, handle)
+        handle.write('\n')
+        os.fchown(handle.fileno(), 0, 1000)
+        os.fchmod(handle.fileno(), 0o640)
+        handle.flush()
+        os.fsync(handle.fileno())
+    pending.replace(POLICY)
     return policy
 
 
