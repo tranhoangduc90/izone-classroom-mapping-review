@@ -1,5 +1,5 @@
 import {CODE,TOTAL_MS,ReadingError,fail,hash,secret,uuid,emptyDraft,validateContent,grade,statusMessage,
- issueLease,checkpoint,publicAttempt,checkLease,canonical} from './domain.js';
+ issueLease,checkpoint,publicAttempt,checkLease,canonical,READING_ANNOTATION_LIMIT} from './domain.js';
 import {lessonFor} from './lessons.js';
 import {createTeacherProgress} from './teacher-progress.js';
 import {createEntryContext} from './entry-context.js';
@@ -46,7 +46,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   });
   return{identity:{studentRef:b.student_ref,name:b.member.name,classCode:b.class_code,assignmentId:b.assignment_id,
    bindingId:b.id,entryMode:b.document_id?'homework':'shared',documentId:b.document_id,documentUrl:b.document_id?`https://docs.google.com/document/d/${b.document_id}/edit?tab=${encodeURIComponent(b.tab_id)}`:null},
-   lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,
+   lesson:lessonFor(b.code),attempts:state.attempts.map(publicAttempt),events,firstCompleted:state.firstCompleted,annotationLimit:READING_ANNOTATION_LIMIT,
    ...(lease?{lease}:{}),...(definition?{definition:b.definition}:{})};
  }
  async function work(db,b){
@@ -87,6 +87,21 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   if(!a||a.id!==id)fail('ATTEMPT_CHANGED','Lần làm bài đã đổi. Hãy tải lại bài.');
   if(!['running','paused'].includes(a.status))fail('ATTEMPT_CLOSED','Lần này đã được nộp hoặc reset.');
   return a;
+ }
+ function checkDraft(b,a,input,action,recovery){
+  const payload=action==='resume'?input.recovery:input;
+  const snapshot=payload.snapshot;
+  try{return checkpoint(a,snapshot,payload.lease,clock(),{recovery,code:b.code});}
+  catch(error){
+   if(['INVALID_DRAFT','ANNOTATION_LIMIT','STALE_DRAFT'].includes(error.code)){
+    error.draftDiagnostic={action,lessonCode:b.code,classCode:b.class_code,attemptId:a.id,
+     operationId:input.operationId,revision:Number.isSafeInteger(snapshot?.sequence)?snapshot.sequence:undefined,
+     reason:error.code,field:error.code==='ANNOTATION_LIMIT'?'annotations':error.draftField,
+     annotationCount:Array.isArray(snapshot?.annotations)?snapshot.annotations.length:undefined,
+     annotationLimit:READING_ANNOTATION_LIMIT,snapshotBytes:Buffer.byteLength(JSON.stringify(snapshot??null)),recovery};
+   }
+   throw error;
+  }
  }
  function submitted(a,b,state,method){
   a.status='submitted';a.method=method;a.completedAt=new Date(clock()).toISOString();a.submissionId=uuid();
@@ -269,7 +284,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
  });
  const resume=input=>operation(input,'resume',async(db,b,state,record)=>{
   const a=active(state,input.attemptId);
-  if(input.recovery){checkpoint(a,input.recovery.snapshot,input.recovery.lease,clock(),{recovery:true,code:b.code});}
+  if(input.recovery)checkDraft(b,a,input,'resume',true);
   if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a,record);return view(db,b,state);}
   const lease=issueLease(a,input.owner,clock());return view(db,b,state,{lease,definition:true});
  });
@@ -287,7 +302,7 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
    checkLease(a,input.lease);
    if(a.status==='paused'&&!pause)fail('ATTEMPT_PAUSED','Lần làm bài đang tạm dừng.');
    const priorStatus=a.status,contentChanged=Boolean(journal)&&readingDraftChanged(a.draft,input.snapshot);
-   checkpoint(a,input.snapshot,input.lease,clock(),{recovery:pause,code:b.code});
+   checkDraft(b,a,input,pause?'pause':'checkpoint',pause);
    if(a.usedMs>=lessonFor(b.code).totalMs){submitted(a,b,state,'timeout');await enqueue(db,b,state,a,record);}
    else if(pause){a.status='paused';a.lease.activationCancelled=true;}
    await save(db,b,state);
@@ -300,13 +315,13 @@ export function createReadingService({pool,context,clock=Date.now,pageBase,resol
   const old=state.attempts.at(-1);if(!old||old.id!==input.attemptId)fail('ATTEMPT_CHANGED','Lần làm bài đã đổi.');
   if(old.status==='submitted'&&input.lease)fail('ATTEMPT_CLOSED','Lần này vừa được nộp. Xem kết quả trước khi reset.');
   if(['running','paused'].includes(old.status)){
-   checkLease(old,input.lease);if(input.snapshot)checkpoint(old,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
+   checkLease(old,input.lease);if(input.snapshot)checkDraft(b,old,input,'reset',true);
    old.status='reset';old.endedAt=new Date(clock()).toISOString();
   }
   const{a,lease}=createAttempt(state,input.owner,b.code);await enqueue(db,b,state,a,record);return view(db,b,state,{lease,definition:true});
  });
  const submit=input=>operation(input,'submit',async(db,b,state,record)=>{
-  const a=active(state,input.attemptId);checkpoint(a,input.snapshot,input.lease,clock(),{recovery:true,code:b.code});
+  const a=active(state,input.attemptId);checkDraft(b,a,input,'submit',true);
   if(input.method==='timeout'&&a.usedMs<lessonFor(b.code).totalMs)fail('TIME_NOT_EXHAUSTED','Máy chủ chưa xác nhận dùng hết giờ.');
   submitted(a,b,state,a.usedMs>=lessonFor(b.code).totalMs?'timeout':'manual');await enqueue(db,b,state,a,record);return view(db,b,state);
  });

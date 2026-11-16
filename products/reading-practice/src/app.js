@@ -125,6 +125,14 @@ export function createApp({service,pool,origins,googleClientId,verifyGoogle,admi
  if(staticRoot)app.use(express.static(staticRoot,{index:'index.html',dotfiles:'deny'}));
  app.use((error,req,res,next)=>{
   const requestId=uuid(),known=error instanceof ReadingError;
+  if(error.draftDiagnostic)console.warn(JSON.stringify({event:'reading_practice_draft_rejected',version:1,requestId,...error.draftDiagnostic}));
+  if(error.type==='entity.too.large'){
+   if(/^\/api\/(?:pulse|pause|resume|reset|submit)$/.test(req.path))console.warn(JSON.stringify({
+    event:'reading_practice_draft_rejected',version:1,requestId,action:req.path.slice(5),
+    reason:'DRAFT_TOO_LARGE',requestBytes:Number.isSafeInteger(error.length)?error.length:undefined
+   }));
+   return res.status(413).json({error:{code:'DRAFT_TOO_LARGE',message:'Bản nháp vượt dung lượng máy chủ.',requestId}});
+  }
   const invalid=error instanceof z.ZodError||error.type==='entity.parse.failed';
   if(!known&&!invalid)console.error(JSON.stringify({event:'reading_request_error',requestId,type:error.name}));
   res.status(known?error.status:invalid?400:500).json({error:{code:known?error.code:invalid?'INVALID_INPUT':'INTERNAL_ERROR',message:known?error.message:invalid?'Dữ liệu gửi lên chưa hợp lệ.':'Chưa xử lý được thao tác. Hãy thử lại.',requestId}});
