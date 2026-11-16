@@ -1,4 +1,5 @@
 const scopeHash = /^[a-f0-9]{64}$/;
+const classCode = /^[A-Z0-9._-]{2,32}$/;
 const legacy = reason => ({ destination: 'collector', reason });
 export const isK67TermPilot = slug => slug === 'term-test-1' || slug === 'term-test-2';
 
@@ -10,10 +11,11 @@ export function selectNewK67JournalRoute(owner, pilot, now, testSlug = 'term-tes
     || !Number.isSafeInteger(pilot.closesAt) || !Number.isSafeInteger(pilot.renewUntil)
     || pilot.opensAt >= pilot.closesAt || pilot.closesAt >= pilot.renewUntil
     || typeof pilot.pilotId !== 'string' || pilot.pilotId.length === 0
-    || typeof pilot.classCode !== 'string' || pilot.classCode.length === 0) return legacy('pilot_invalid');
+    || (pilot.classCode !== '*' && !classCode.test(pilot.classCode ?? ''))) return legacy('pilot_invalid');
   if (now < pilot.opensAt || now >= pilot.closesAt) return legacy('outside_pilot_window');
   if (!isK67TermPilot(testSlug) || owner?.verified !== true || owner.product !== 'term-mini-k67' || owner.testSlug !== testSlug
-    || owner.classCode !== pilot.classCode || owner.mode !== 'cbt' || owner.superseded !== false || !scopeHash.test(owner.scopeId)) {
+    || !classCode.test(owner.classCode ?? '') || (pilot.classCode !== '*' && owner.classCode !== pilot.classCode)
+    || owner.mode !== 'cbt' || owner.superseded !== false || !scopeHash.test(owner.scopeId)) {
     return legacy('owner_outside_pilot');
   }
   if (!Number.isSafeInteger(owner.preparedAt) || owner.preparedAt < pilot.opensAt || owner.preparedAt > now) {
