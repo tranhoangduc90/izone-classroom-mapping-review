@@ -6,8 +6,6 @@ const scopeHash = value => createHash('sha256').update(canonical(value)).digest(
 const legacy = reason => ({ ok: true, destination: 'collector-v1', reason });
 // Listening-first CBT can retain attempt_mode=legacy after preparation. The
 // native CBT journey at the same generation is the additional proof for it.
-const verifiedCbt = `(s.attempt_mode='cbt' OR (s.attempt_mode='legacy' AND EXISTS (
-  SELECT 1 FROM assessment.term_k67_cbt_journey j WHERE j.session_id=s.id AND j.generation=s.generation)))`;
 
 export const pilotEnrollmentSchema = `CREATE TABLE assessment.journal_k67_pilot_enrollment (
   pilot_id text NOT NULL,
@@ -21,6 +19,9 @@ export const pilotEnrollmentSchema = `CREATE TABLE assessment.journal_k67_pilot_
 export function mountK67PilotContext(app, { query, resolveOwner, scopeForOwner, getPilot, ticketFor, allowedOrigins,
   clock = Date.now, testSlug = 'term-test-2' }) {
   requireValue(isK67TermPilot(testSlug), 'PILOT_TEST_INVALID', 500);
+  const journey = testSlug === 'mini-test-lesson-5' ? 'assessment.mini_k67_cbt_journey' : 'assessment.term_k67_cbt_journey';
+  const verifiedCbt = `(s.attempt_mode='cbt' OR (s.attempt_mode='legacy' AND EXISTS (
+    SELECT 1 FROM ${journey} j WHERE j.session_id=s.id AND j.generation=s.generation)))`;
   app.post('/api/term-tests/' + testSlug + '/journal-pilot-context', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
