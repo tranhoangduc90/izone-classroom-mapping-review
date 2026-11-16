@@ -41,3 +41,33 @@ test('không nhận dẫn chứng ở passage khác hoặc cấu trúc passage t
  const missingRange=structuredClone(b);delete missingRange.definition.groups[0].start;assert.throws(()=>validateContent(missingRange),/Phạm vi nhóm/);
  const bad=structuredClone(b.definition.lesson);bad.code='full-reading-bad-range';bad.passages[0].end=12;assert.throws(()=>registerAuthoredLesson(bad),/Passage thiếu/);
 });
+
+test('40 câu: khôi phục bản nháp hơn 64 KiB với 200 Highlight/Note rồi nộp đúng lượt',async t=>{
+ const f=await fixture(content('full-reading-large-recovery-fixture'));t.after(f.close);
+ const start=await f.begin(),attempt=start.attempts.at(-1),draft=f.draft();
+ draft.answers=Object.fromEntries(Array.from({length:30},(_,i)=>[i+1,'river']));
+ draft.activeQuestion=36;draft.sequence=1;draft.activeMs=5000;
+ draft.annotations=Array.from({length:200},(_,i)=>({
+  id:uuid(),kind:i%11===0?'note':'highlight',rootKey:'reading-passage-p3',skill:'reading',
+  start:i,end:i+160,quote:'r'.repeat(160),questionRef:'36',note:i%11===0?'Fixture note':''
+ }));
+ f.advance(5000);
+ const recovery={snapshot:draft,lease:start.lease};
+ assert.ok(Buffer.byteLength(JSON.stringify(recovery))>65536);
+ assert.deepEqual((await f.service.read({token:f.token})).attempts.at(-1).answers,{});
+ const overflow={...draft,annotations:[...draft.annotations,{...draft.annotations.at(-1),id:uuid()}]};
+ await assert.rejects(f.service.resume({token:f.token,attemptId:attempt.id,owner:'device1-reload',operationId:uuid(),
+  recovery:{snapshot:overflow,lease:start.lease}}),{code:'ANNOTATION_LIMIT'});
+ assert.deepEqual((await f.service.read({token:f.token})).attempts.at(-1).answers,{});
+ f.advance(15*60*1000);
+ const resumed=await f.service.resume({token:f.token,attemptId:attempt.id,owner:'device1-reload',operationId:uuid(),recovery});
+ const restored=resumed.attempts.at(-1);
+ assert.equal(restored.id,attempt.id);assert.equal(restored.remainingMs,3595000);
+ assert.deepEqual(restored.answers,draft.answers);assert.deepEqual(restored.annotations,draft.annotations);
+ await f.service.activate({token:f.token,attemptId:attempt.id,lease:resumed.lease});
+ const submitted=await f.service.submit({token:f.token,attemptId:attempt.id,lease:resumed.lease,
+  snapshot:{...draft,sequence:2,activeMs:0},method:'manual',operationId:uuid()});
+ assert.equal(submitted.attempts.at(-1).status,'submitted');
+ const result=await f.service.result({token:f.token,attemptId:attempt.id});
+ assert.equal(result.attempt.finalScore,30);assert.deepEqual(result.attempt.annotations,draft.annotations);
+});

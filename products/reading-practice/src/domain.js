@@ -6,6 +6,7 @@ import {authoredLesson,validateAuthoredContent,gradeAuthored} from './authored-c
 export const CODE='67-practice-reading_matching_heading_mcq';
 export const PRODUCT='PRODUCT-READING-PRACTICE-K67';
 export const TOTAL_MS=1200000, HEARTBEAT_MS=5000, LEASE_MS=7000;
+export const READING_ANNOTATION_LIMIT=200;
 export const hash=value=>crypto.createHash('sha256').update(String(value)).digest('hex');
 export function canonical(value){return JSON.stringify(sort(value));}
 function sort(value){return Array.isArray(value)?value.map(sort):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().filter(k=>value[k]!==undefined).map(k=>[k,sort(value[k])])):value;}
@@ -24,7 +25,7 @@ function schemaFor(code=CODE){
  flags:z.array(z.number().int().refine(n=>ids.includes(String(n)))).max(ids.length),notes:z.string().max(10000),
  annotations:z.array(z.object({id:z.string().max(80),kind:z.enum(['highlight','note']),
  rootKey:z.string().max(80),skill:z.literal('reading'),start:z.number().int().nonnegative(),end:z.number().int().positive(),
- quote:z.string().max(10000),questionRef:z.string().max(100),note:z.string().max(10000).optional()}).strict()).max(100),
+ quote:z.string().max(10000),questionRef:z.string().max(100),note:z.string().max(10000).optional()}).strict()).max(READING_ANNOTATION_LIMIT),
  scroll:z.object({passage:z.number().nonnegative(),questions:z.record(z.string(),z.number().nonnegative())}),
  activeQuestion:z.number().int().refine(n=>ids.includes(String(n))),tab:z.enum(lesson.groups.map(g=>g.kind)),
  mobilePane:z.enum(['passage','questions']).optional(),notesOpen:z.boolean().optional(),
@@ -35,7 +36,18 @@ function schemaFor(code=CODE){
 export const snapshotSchema=schemaFor();
 export const emptyDraft=(code=CODE)=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
  activeQuestion:+lessonFor(code).questionIds[0],tab:lessonFor(code).groups[0].kind,mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
-export function validateSnapshot(input,code=CODE){const parsed=schemaFor(code).safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
+export function validateSnapshot(input,code=CODE){
+ if(Array.isArray(input?.annotations)&&input.annotations.length>READING_ANNOTATION_LIMIT)
+  fail('ANNOTATION_LIMIT','Bài này hỗ trợ tối đa 200 mục Highlight và Note.',400);
+ const parsed=schemaFor(code).safeParse(input);
+ if(!parsed.success){
+  const field=parsed.error.issues[0]?.path[0];
+  const error=new ReadingError('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);
+  error.draftField=['answers','flags','notes','annotations','scroll','activeQuestion','tab','mobilePane','notesOpen','highlighted','sequence','activeMs'].includes(field)?field:'snapshot';
+  throw error;
+ }
+ return parsed.data;
+}
 export function validateContent(bundle){
  if(!bundle||typeof bundle!=='object')fail('CONTENT_INVALID','Gói nội dung chưa đủ cấu hình.',400);
  if(bundle.definition?.authored){try{return validateAuthoredContent(bundle);}catch(e){fail('CONTENT_INVALID',e.message,400);}}
