@@ -26,9 +26,10 @@ candidate = replace(candidate,' const intakeMetrics=new IntakeMetrics(Object.key
    if(row.status>=400)speakingCloud.errors++;
   },
  });`);
-candidate = replace(candidate,"  if(closing || req.method!=='POST' || req.headers.origin || active>=8)return reply(503,{ok:false,error:'JOURNAL_UNAVAILABLE'});",
+const postGuard = "  if(closing || req.method!=='POST' || req.headers.origin";
+candidate = replace(candidate,postGuard,
   `  if(!closing&&req.url==='/producer/speaking-homework'&&await speakingGate(req,res))return;
-  if(closing || req.method!=='POST' || req.headers.origin || active>=8)return reply(503,{ok:false,error:'JOURNAL_UNAVAILABLE'});`);
+${postGuard}`);
 candidate = replace(candidate,'operations,intakeMetrics:intakeMetrics.snapshot(),requests:',
   'operations,intakeMetrics:intakeMetrics.snapshot(),speakingCloudProducer:{...speakingCloud},requests:');
 await copyFile(new URL('./speaking-journal-producer-gate.mjs',import.meta.url),resolve(target,'speaking-journal-producer-gate.mjs'));
