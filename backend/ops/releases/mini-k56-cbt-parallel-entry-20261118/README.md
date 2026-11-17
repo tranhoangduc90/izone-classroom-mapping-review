@@ -4,6 +4,8 @@
 
 `miniCbtContinuationVersion:1` chọn lượt CBT riêng của cùng người theo roster. API trả `miniCbtParallelEntry` và tiến độ đã chốt. Mỗi lượt giữ owner/permit riêng. `K56_MINI_CBT_PARALLEL_ENTRY_MODE=on|drain|off` chọn chính sách; `drain` dừng cấp mới nhưng giữ quyền đọc/gửi của lượt đã cấp. Phiếu giấy giữ chính sách riêng. Không bỏ owner guard để làm hồ sơ thứ hai qua được.
 
+Một lượt legacy có đủ token, lớp/người, mode và thế hệ được kiểm lại có thể nhận capability mới qua prepare có version. Chỉ thêm cờ ở cùng session/attempt, giữ run, owner/permit, nháp, mốc giờ và mọi operation/receipt. Không tự tạo lượt thay thế cho cache cũ hoặc nâng quyền khi scope trộn sai. Ca `native-warm-adoption.test.mjs` có RED trước thay đổi, GREEN cho chuyển capability tại chỗ và cho chính sách `drain`.
+
 Migration additive thêm hai cờ Mini CBT, trigger bất biến và unique index giữ bài chính thức từ lần nộp hợp lệ đầu. Start/draft hoặc báo gián đoạn riêng chưa giữ chỗ. Index phiên cũ tiếp tục loại trừ đúng ba nhóm parallel; Mini paper không được gắn cờ CBT. Không sửa payload, điểm, receipt, timestamp hoặc trạng thái chấm cũ.
 
 Kỹ năng còn mở có thể nhận từ hồ sơ B vào bài chính thức A cùng lớp/người/đề/thế hệ. Receipt giữ scope B và chỉ rõ bài nhận chính thức. Writing Task 2 đọc chính operation đã commit; kiểm phiên, lớp/người, đề, thế hệ, receipt và text trước khi cấp essay cho grading. Bài trắng giữ `blank`, không tạo run/job. Journal tìm receipt qua nguồn nộp B; Term 1/2 và đường Mini cũ còn được kiểm riêng.
@@ -21,5 +23,7 @@ Fixture native dùng roster/nội dung giả, PGlite và Listening nộp thủ c
 ## Trạng thái và bước phát hành
 
 Gói hiện là **ứng viên, chưa phát production**. Còn ghép giao diện Mini qua cả hai thứ tự, cache cũ, nháp và nộp; kiểm/đọc lại policy và dữ liệu cũ trước chuyển. Cần giữ riêng nguồn browser, API/content và lane cloud theo kế hoạch GOAL. Source recipe và migration không tự phát API, bật cờ, thêm lane hoặc gửi điểm.
+
+Giao diện Mini đang dùng `runtime-recovery-v1.mjs`, có sửa riêng cho lỗi ghi Listening, pending seal, initial play và telemetry audio. Ghép progress/export an toàn trên nền đó và kiểm đúng nhánh, giữ immutable package cũ; không thay toàn runtime bằng bản Term chỉ vì có sẵn khả năng parallel.
 
 Phát hẹp phải clone đúng runtime/env/mount đang phục vụ, đặt ứng viên loopback, kiểm idle và dấu vân tay trong giao dịch migration trước chuyển. Quay riêng mode về `drain` hoặc `off` theo ca đã kiểm; giữ schema/các receipt mới và đường xử lý lượt đã cấp. Không restore dump hoặc bật lại khóa máy cho lượt đang làm. Không drop cờ/index hoặc quay code cũ không hiểu bài Mini mới khi vẫn có lượt/operation cần xử lý.

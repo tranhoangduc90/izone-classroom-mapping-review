@@ -34,6 +34,14 @@ def order(source):
         '      const findOfficial = miniCbt ? findMiniCbtOfficial : term1Cbt ? findTerm1Official : findTerm2Official;')
     source=once(source,'      const wantsParallel = parallelCbt && (term1Cbt ? body.term1ContinuationVersion===1 : body.term2ContinuationVersion===1);',
         '      const wantsParallel = parallelCbt && (miniCbt ? body.miniCbtContinuationVersion===1 : term1Cbt ? body.term1ContinuationVersion===1 : body.term2ContinuationVersion===1);')
+    source=once(source,'        a = await pinK56TermDefinition(client, assets, a);',"""        // The authenticated, roster-matched existing scope keeps its run and
+        // owner/permit while opting into cross-profile official progress.
+        if(create && miniCbt && wantsParallel && !a.mini_cbt_parallel_entry){
+          await client.query('UPDATE assessment.term_test_exam_session SET mini_cbt_parallel_entry=true WHERE id=$1',[a.exam_session_token]);
+          await client.query('UPDATE assessment.term_test_attempt SET mini_cbt_parallel_entry=true WHERE id=$1',[a.attempt_token]);
+          a=await load(client,slug,a.attempt_token);
+        }
+        a = await pinK56TermDefinition(client, assets, a);""")
     source=once(source,"    const ownRun=ownTerm1 || (term2Mode!=='off' && owner.term2_parallel_entry);\n    const chosen=ownRun ? await (ownTerm1 ? findTerm1Official : findTerm2Official)(pool,owner) : null;",
         "    const ownMiniCbt=miniCbtMode!=='off' && owner.mini_cbt_parallel_entry;\n"
         "    const ownRun=ownMiniCbt || ownTerm1 || (term2Mode!=='off' && owner.term2_parallel_entry);\n"
