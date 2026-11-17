@@ -645,7 +645,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       const receipt={...publicApplied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         ...(state.continuation?{continuationSection:state.continuation.section}:{}),
-        examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt};
+        examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt,
+        ...(!profile.paper&&interruption?{startedAt:body.startedAt}:{})};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
         [state.session.id,JSON.stringify({...state.journey.sections,[body.section]:receipt})]);
       if (shouldHold) await removeSubmissionHold(db,holdKey);
