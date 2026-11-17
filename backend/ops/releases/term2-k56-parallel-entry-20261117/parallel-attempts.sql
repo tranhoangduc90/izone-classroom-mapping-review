@@ -15,7 +15,7 @@ ALTER TABLE assessment.term_test_attempt
   );
 
 CREATE UNIQUE INDEX uq_term2_k56_official_submission
-  ON assessment.term_test_attempt (definition_version, erp_course_class_id, erp_student_contact_id)
+  ON assessment.term_test_attempt (erp_course_class_id, erp_student_contact_id)
   WHERE term2_official_submission AND superseded_at IS NULL;
 
 CREATE FUNCTION assessment.guard_term2_k56_official_submission() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -60,7 +60,6 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM assessment.term_test_attempt AS accepted
     WHERE accepted.test_slug = NEW.test_slug AND accepted.attempt_mode = 'cbt'
-      AND accepted.definition_version = NEW.definition_version
       AND accepted.erp_course_class_id = NEW.erp_course_class_id
       AND accepted.erp_student_contact_id = NEW.erp_student_contact_id
       AND accepted.id <> NEW.id AND accepted.superseded_at IS NULL

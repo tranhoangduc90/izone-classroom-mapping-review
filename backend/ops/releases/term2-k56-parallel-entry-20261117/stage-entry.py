@@ -61,14 +61,26 @@ def stage_entry(source):
     source = replace_once(source, "AND superseded_at IS NULL ORDER BY prepared_at DESC LIMIT 1 FOR UPDATE`, [slug, student.definition_version, student.class_id, student.student_id]);",
         "AND superseded_at IS NULL ${term2Cbt ? 'AND NOT term2_parallel_entry' : ''} ORDER BY prepared_at DESC LIMIT 1 FOR UPDATE`, [slug, student.definition_version, student.class_id, student.student_id]);")
     source = replace_once(source, "      let s = sessions.rows[0];", "      let s = wantsParallel ? null : sessions.rows[0];")
+    source = replace_once(source, "      const mode = s?.listening_started_at ? 'lis_first' : body.mode;",
+        """      const mode = s?.listening_started_at ? 'lis_first' : body.mode;
+      const officialIdentity = wantsParallel ? await findTerm2Official(client,{
+        test_slug:slug,attempt_mode:'cbt',class_id:student.class_id,student_id:student.student_id
+      }) : null;
+      const pinnedOfficial = officialIdentity ? await load(client,slug,officialIdentity.attempt_token) : null;
+      const definitionVersion = pinnedOfficial?.definition_version ?? student.definition_version;""")
     source = replace_once(source,
         """      if (!s) s = (await client.query(`INSERT INTO assessment.term_test_exam_session(test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,student_name_snapshot,attempt_mode) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [slug, student.definition_version, student.class_id, student.class_name, student.student_id, student.student_name,body.attemptMode])).rows[0];""",
         """      if (!s) s = (await client.query(`INSERT INTO assessment.term_test_exam_session
         (test_slug,definition_version,erp_course_class_id,class_name_snapshot,erp_student_contact_id,
-         student_name_snapshot,attempt_mode${wantsParallel?',term2_parallel_entry':''})
-        VALUES($1,$2,$3,$4,$5,$6,$7${wantsParallel?',true':''}) RETURNING *`,
-        [slug,student.definition_version,student.class_id,student.class_name,student.student_id,
-          student.student_name,body.attemptMode])).rows[0];""")
+         student_name_snapshot,attempt_mode,generation${wantsParallel?',term2_parallel_entry':''})
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8${wantsParallel?',true':''}) RETURNING *`,
+        [slug,definitionVersion,student.class_id,student.class_name,student.student_id,
+          student.student_name,body.attemptMode,Number(pinnedOfficial?.generation)||0])).rows[0];""")
+    source = replace_once(source,
+        "crypto.randomUUID(),slug,student.definition_version,student.class_id",
+        "crypto.randomUUID(),slug,definitionVersion,student.class_id")
+    source = replace_once(source, "        const snapshot = {\n          version:",
+        "        const snapshot = pinnedOfficial?.mini_definition_snapshot || {\n          version:")
     source = replace_once(source,
         "      return load(client, slug, inserted.rows[0].id);",
         "      return withOfficialProgress(client,await load(client, slug, inserted.rows[0].id));")
@@ -120,6 +132,8 @@ def stage_offline(source):
    const crossDevice = current && current.attempt_token!==a.attempt_token;
    if(crossDevice && !a.term2_parallel_entry)
     throw fail('OFFLINE_NATIVE_CONFLICT','Máy chủ đã lưu bài chính thức từ lượt khác. Bản trên máy vẫn được giữ.',409);
+   if(crossDevice && Number(current.definition_version)!==Number(a.definition_version))
+    throw fail('DEFINITION_CHANGED','Lượt chính thức đang dùng đề đã ghim khác. Bản trên máy vẫn được giữ.',409);
    if(crossDevice && finishedSkill(current,b.section))
     return {a,officialProgress:officialProgress(current)};
    const index=order.indexOf(b.section),priorSkill=index?order[index-1]:null,prior=state[priorSkill];

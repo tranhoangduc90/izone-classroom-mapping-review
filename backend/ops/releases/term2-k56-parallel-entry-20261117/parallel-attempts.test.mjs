@@ -87,6 +87,14 @@ test('Term 2 K56 PostgreSQL keeps official answers and serializes two competing 
     const { rows } = await q(pool, `SELECT id, reading_answers FROM assessment.term_test_attempt
       WHERE term2_official_submission`);
     assert.deepEqual(rows, [{ id: a, reading_answers: { 1: 'A' } }]);
+    const newDefinition = randomUUID();
+    await q(pool, `INSERT INTO assessment.term_test_exam_session
+      (id,test_slug,erp_student_contact_id,definition_version,term2_parallel_entry) VALUES ($1,$2,5602,2,true)`,
+    [newDefinition, slug]);
+    await assert.rejects(q(pool, `INSERT INTO assessment.term_test_attempt
+      (id,test_slug,erp_student_contact_id,definition_version,exam_session_id,reading_submitted_at)
+      VALUES ($1,$2,5602,2,$3,now())`, [randomUUID(), slug, newDefinition]),
+    {code:'P5651'});
   } finally {
     if (first) { await first.query('ROLLBACK'); first.release(); }
     if (second) { await second.query('ROLLBACK'); second.release(); }

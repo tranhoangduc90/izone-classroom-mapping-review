@@ -32,16 +32,16 @@ export async function lockTerm2Candidate(client, attemptToken) {
 
 export async function findTerm2Official(client, attempt) {
   if (!attempt || attempt.test_slug !== slug || attempt.attempt_mode !== 'cbt') return null;
-  const result = await client.query(`SELECT id::text AS attempt_token, listening_submitted_at,
+  const result = await client.query(`SELECT id::text AS attempt_token, definition_version, generation, listening_submitted_at,
     listening_interrupted_at, reading_submitted_at, writing_submitted_at
     FROM assessment.term_test_attempt
-    WHERE test_slug=$1 AND attempt_mode='cbt' AND definition_version=$2
-      AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND generation=$5
+    WHERE test_slug=$1 AND attempt_mode='cbt'
+      AND erp_course_class_id=$2 AND erp_student_contact_id=$3 AND ($4::bigint IS NULL OR generation=$4)
       AND superseded_at IS NULL AND (listening_submitted_at IS NOT NULL OR listening_interrupted_at IS NOT NULL
         OR reading_submitted_at IS NOT NULL OR writing_submitted_at IS NOT NULL)
     ORDER BY term2_official_submission DESC,
       least(listening_submitted_at,listening_interrupted_at,reading_submitted_at,writing_submitted_at), id
-    LIMIT 1`, [slug, attempt.definition_version, attempt.class_id, attempt.student_id, attempt.generation]);
+    LIMIT 1`, [slug, attempt.class_id, attempt.student_id, attempt.generation ?? null]);
   return result.rows[0] || null;
 }
 
