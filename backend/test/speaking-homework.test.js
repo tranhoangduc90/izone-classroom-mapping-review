@@ -122,6 +122,31 @@ async function fixture({progressDocsEnabled=false}={}) {
   return { db, pool, service: createSpeakingHomeworkService({ pool,progressDocsEnabled }) };
 }
 
+test('legacy main retries the same link after the final check lease expires',async()=>{
+  const f=await fixture();try{
+    const input={accessToken,studentRef,part:'paraphrase',rawUrl:share('f')};
+    const first=await f.service.requestCheck(input);
+    await f.pool.query(`UPDATE speaking_homework.check_job
+      SET status='processing',attempts=5,last_error_code='AI_EVIDENCE_MESSAGE_MISMATCH',
+      updated_at=now()-interval '6 minutes' WHERE link_id=$1`,[first.linkId]);
+    assert.equal(await f.service.claimCheckJob(),null);
+    const link=(await f.service.open({accessToken,studentRef})).links[0];
+    assert.equal(link.retryable,true);
+    const next=await f.service.requestCheck(input);
+    assert.notEqual(next.linkId,first.linkId);
+    assert.equal(next.revision,first.revision+1);
+    assert.equal((await f.service.requestCheck(input)).linkId,next.linkId);
+    assert.match(link.evidence?.checkMessage||'',/dẫn chứng.*cùng link/i);
+    assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM speaking_homework.check_job')).rows[0].n,2);
+    const completed=await checkAccepted(f.service,accessToken,studentRef,input.part,'f',5);
+    assert.equal(completed.link_id,next.linkId);
+    const reopened=await f.service.open({accessToken,studentRef});
+    assert.equal(reopened.links[0].check_status,'accepted');
+    assert.equal(reopened.receipt,null);
+    assert.equal((await f.service.requestCheck(input)).linkId,next.linkId);
+  }finally{await f.db.close();}
+});
+
 test('legacy practice reports exhausted technical checks and allows one new revision of the same link',async()=>{
   const f=await fixture();try{
     const exercise=(await f.pool.query("INSERT INTO speaking_homework.doctor_exercise(course_key,source_record_id,title,exercise_url) VALUES('67','retry-fixture','Bài bổ trợ fixture','https://example.test/retry') RETURNING id")).rows[0].id;
@@ -129,8 +154,10 @@ test('legacy practice reports exhausted technical checks and allows one new revi
     await f.pool.query("UPDATE speaking_homework.assignment SET required_practice_count=2 WHERE assignment_code='67-speaking-lesson-2'");
     const input={accessToken,studentRef,slot:1,exerciseId:exercise,rawUrl:share('f')};
     const first=await f.service.requestPracticeCheck(input);
-    await f.pool.query("UPDATE speaking_homework.practice_check_job SET status='failed',attempts=5,last_error_code='PRACTICE_CHECK_ERROR' WHERE practice_link_id=$1",[first.linkId]);
-    assert.equal((await f.service.open({accessToken,studentRef})).practiceLinks[0].retryable,true);
+    await f.pool.query("UPDATE speaking_homework.practice_check_job SET status='failed',attempts=5,last_error_code='PRACTICE_AI_EVIDENCE_INVALID' WHERE practice_link_id=$1",[first.linkId]);
+    const link=(await f.service.open({accessToken,studentRef})).practiceLinks[0];
+    assert.equal(link.retryable,true);
+    assert.match(link.evidence?.checkMessage||'',/dẫn chứng.*cùng link/i);
     const next=await f.service.requestPracticeCheck(input);
     assert.notEqual(next.linkId,first.linkId);
     assert.equal((await f.service.requestPracticeCheck(input)).linkId,next.linkId);
