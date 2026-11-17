@@ -204,7 +204,7 @@ if(listeningContinuityEnabled&&!pretestMode){
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
 if(term1ReportCases){
-  for(let n=1;n<=4;n++){
+  for(let n=1;n<=5;n++){
     const ref='91000000-0000-4000-8000-'+String(n).padStart(12,'0');
     await fixture.db.query('INSERT INTO mapping.student_mapping_review VALUES($1,1992200,$2,$3,$4)',
       [ref,991000+n,'Học viên báo âm thanh '+n,'approved']);
@@ -267,9 +267,10 @@ if (gradingRoundTrip) {
   });
 }
 if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
-  const attempt=String(req.query.attempt||'');
+  const bySession=term1ReportCases&&typeof req.query.session==='string';
+  const attempt=String((bySession?req.query.session:req.query.attempt)||'');
   if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
-  const result=await journalFixture.read(attempt,req.query.archive==='1');
+  const result=await journalFixture.read(attempt,req.query.archive==='1',bySession);
   res.json(result);
 });
 if(term1ReportCases){

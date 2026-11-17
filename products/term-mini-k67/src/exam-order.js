@@ -34,11 +34,14 @@ const error = (code,message,status=409) => Object.assign(new Error(message),{cod
 // Không dùng sự tồn tại của token làm bằng chứng đã nộp Listening.
 export function orderState(row) {
   const listeningSubmitted=Boolean(row.listening_submitted_at),readingSubmitted=Boolean(row.reading_submitted_at);
+  const listeningInterrupted=row.test_slug==='term-test-1'&&Boolean(row.listening_interrupted_at);
+  const listeningFinished=listeningSubmitted||listeningInterrupted;
   return {ok:true,examMode:row.exam_mode,examDelivery:row.exam_delivery,attemptMode:row.attempt_mode,
     attemptToken:row.id,examSessionToken:row.exam_session_id,generation:Number(row.generation)||0,
     studentName:row.student_name_snapshot,className:row.class_name_snapshot,
     listeningSubmitted,readingSubmitted,completed:Boolean(row.completed_at),completedAt:row.completed_at,
-    nextSection:!listeningSubmitted&&row.exam_mode==='lis_first'?'listening':!readingSubmitted?'reading':!listeningSubmitted?'listening':row.test_slug==='mini-test-lesson-5'||row.writing_scope==='lr_only'?'result':'writing',
+    ...(listeningInterrupted?{listeningInterrupted:true}:{}),
+    nextSection:!listeningFinished&&row.exam_mode==='lis_first'?'listening':!readingSubmitted?'reading':!listeningFinished?'listening':row.test_slug==='mini-test-lesson-5'||row.writing_scope==='lr_only'?'result':'writing',
     listeningStartedAt:row.session_started_at||null,listeningDeadlineAt:row.session_deadline_at||null,
     listeningResumeAtSeconds:Number(row.session_checkpoint_seconds)||0,listeningRecoverySeconds:Number(row.session_recovery_seconds)||0,
     readingStartedAt:row.reading_started_at,readingDeadlineAt:row.reading_deadline_at,
@@ -142,15 +145,22 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (data.term1ContinuationVersion && term1OfficialResultReady(official)) {
         return {...view,official_next_section:'result',official_result_ready:true};
       }
-      if (view.id || !data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
-        || (official.exam_delivery!=='cbt' && official.session_attempt_mode!=='cbt') || official.listening_interrupted_at) return view;
+      if (!data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
+        || (official.exam_delivery!=='cbt' && official.session_attempt_mode!=='cbt')) return view;
+      if (view.id) {
+        if (!official.listening_interrupted_at || config.term1CbtJourneyMode!=='on') return view;
+        const originalHasInterruption=(await db.query(`SELECT 1 FROM assessment.term_k67_cbt_journey
+          WHERE session_id=$1 AND generation=$2 AND sections->'listening'->>'outcome'='interrupted'`,
+        [official.exam_session_id,official.generation])).rowCount===1;
+        if(originalHasInterruption)return view;
+      }
       const section = official.writing_submitted_at ? 'result' : orderState(official).nextSection;
       if (section==='result') return {...view,official_next_section:'result'};
       if (section==='writing' && config.term1CbtJourneyMode!=='on') return view;
 
       const session = await openTerm1SectionContinuation(db,official,data.examSessionToken,section);
       const draft = section==='reading' ? await reload(db,session.attempt_id) : null;
-      return {...view,id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
+      return {...officialTerm1View(official,null),id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
         term1_parallel_entry:true,
         continuation_section:section,reading_started_at:draft?.reading_started_at ?? null,reading_deadline_at:draft?.reading_deadline_at ?? null,
         reading_draft:draft?.reading_draft ?? {},reading_draft_revision:draft?.reading_draft_revision ?? 0,

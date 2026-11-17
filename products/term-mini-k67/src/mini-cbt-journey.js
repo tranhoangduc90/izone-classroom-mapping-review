@@ -8,7 +8,7 @@ import { term1SubmissionGuardError } from './term1-submission-guard.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 import { readTerm1TimerRoom } from './term1-listening-timer.js';
-import { commitTerm1OfflineContinuation, commitTerm1OfflineWriting, term1ParallelEntryInUse } from './term1-section-continuation.js';
+import { commitTerm1OfflineContinuation, commitTerm1OfflineListeningInterruption, commitTerm1OfflineWriting, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
@@ -239,13 +239,14 @@ function timeline(body, state, timing, paper) {
     : body.eofAt + timing.listeningReviewSeconds * 1_000;
 }
 
-async function commitInterruption(db, state, body, timing, profile) {
+async function commitInterruption(db, state, body, timing, profile, digest) {
   timeline(body, state, timing, false);
   const { session, attempt } = state;
   if (session.listening_submitted_at || session.listening_eof_at || session.listening_audio_incident_id
       || attempt?.listening_interrupted_at) {
     throw problem('OFFLINE_CONFLICT', 'Listening đã có kết quả hoặc lượt đang được xử lý.');
   }
+  if(state.continuation)return commitTerm1OfflineListeningInterruption(db,state,body,digest);
   await db.query('SELECT set_config($1,$2,true)', [profile.guard, session.id]);
   const at = new Date(body.capturedAt).toISOString();
   if (attempt) {
@@ -300,6 +301,9 @@ async function commit(db, state, body, timing, profile, observation, digest) {
       WHERE id=$1`,[attempt.id,body.answers.task1,body.answers.task2,new Date(body.startedAt).toISOString(),new Date(deadline).toISOString(),
       body.revision,new Date(body.capturedAt).toISOString()]);
     return {attemptToken:attempt.id,completed:true,nextSection:'result'};
+  }
+  if (profile===term1&&listening&&attempt?.listening_interrupted_at) {
+    throw problem('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Listening đã thay đổi. Hãy mở lại bài.');
   }
   if (session.listening_audio_incident_id || (listening ? session.listening_submitted_at : attempt?.reading_submitted_at)) {
     throw problem('OFFLINE_CONFLICT', 'Phiên trên máy chủ đã thay đổi. Giữ bài để đối soát.');
@@ -403,7 +407,8 @@ function writingHoldClassesFromFile(file) {
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
   const readContinuation = async (db, sessionId) => profile===term1&&term1ParallelEntryInUse(config)
-    ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode
+    ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode,
+          (to_jsonb(official)->>'listening_interrupted_at') IS NOT NULL AS listening_interrupted
         FROM assessment.term1_section_continuation AS continuation
         JOIN assessment.term_test_attempt AS official ON official.id=continuation.official_attempt_id
         WHERE continuation.exam_session_id=$1 FOR UPDATE OF continuation`, [sessionId])).rows[0] : null;
@@ -487,6 +492,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
         ...(continuation?{continuationSection:continuation.section}:{}),
+        ...(continuation?.section==='writing'&&continuation.listening_interrupted?{listeningInterrupted:true}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
         examMode:continuation?.official_exam_mode||session.exam_mode||'lis_first',
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
@@ -556,6 +562,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
           section:body.section,accepted:true,reason:'RECEIPT_READ',submission:{
             operationId:receipt.operationId,generation:receipt.generation,capturedAtMs:receipt.capturedAt,
             serverAtMs,policyVersion:receipt.version,delivery:profile.paper?'paper':'cbt',
+            ...(receipt.receiptId?{receiptId:receipt.receiptId}:{}),
             interrupted:receipt.outcome==='interrupted'
           }
         });
@@ -598,7 +605,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const state=await lock(db,body,profile);
       authorize(body,state,req.get('x-term2-permit'),secret,version);
       state.continuation=await readContinuation(db,state.session.id);
-      if(state.continuation&&(state.continuation.section!==body.section||interruption)){
+      if(state.continuation&&state.continuation.section!==body.section){
         throw problem('OFFLINE_SCOPE','Phiên chỉ có quyền nộp kỹ năng còn mở.',403);
       }
       observation = {
@@ -629,7 +636,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       if(body.section==='reading'&&state.journey.lr_hold_cohort===true
           &&(await readSubmissionHold(db,submissionHoldKey(body)))?.review_only)throw readingReviewRequired();
       const timing=timingForAudio(assets,slug,state.journey.audio_hash);
-      const applied=interruption?await commitInterruption(db,state,body,timing,profile):await commit(db,state,body,timing,profile,observation,digest);
+      const applied=interruption?await commitInterruption(db,state,body,timing,profile,digest):await commit(db,state,body,timing,profile,observation,digest);
       const {officialAttemptToken,...publicApplied}=applied;
       const queuedWriting=writing&&(shouldHold||Boolean(officialAttemptToken));
       if (queuedWriting) {
@@ -696,6 +703,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     }
     const event=result.replayed ? 'offline_submission_replayed'
       : interruption ? 'offline_interruption_committed' : 'submission_completed';
+    if(observation&&result.receipt.receiptId)observation.receiptId=result.receipt.receiptId;
     report(event, true,
       result.replayed ? 'RECEIPT_REPLAYED' : 'RECEIPT_COMMITTED');
     if(body.section==='writing' && !result.receipt.continuationSection && (!shouldHold || result.replayed)) writingAccepted?.(result.receipt.attemptToken);

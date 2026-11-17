@@ -179,10 +179,31 @@ export async function commitTerm1OfflineContinuation(db,state,body,record,hash,d
   return writeOfficialListening(db,continuation,official,record,body.operationId,hash,definition,body.answers,grade,true);
 }
 
+export async function commitTerm1OfflineListeningInterruption(db,state,body,hash) {
+  const {continuation,session}=state;
+  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id);
+  if (!official?.reading_submitted_at || !official.reading_result || official.listening_submitted_at
+      || official.listening_interrupted_at || continuation.receipt) {
+    throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Listening đã thay đổi. Hãy mở lại bài.');
+  }
+  const {rows:[definition]}=await db.query(`
+    SELECT slug AS test_slug,title AS test_title,version AS definition_version
+    FROM assessment.test_definition WHERE slug='term-test-1' AND version=$1`,[official.definition_version]);
+  if(!definition)throw new Term1ContinuationError('OFFLINE_DEFINITION','Chưa tìm thấy đúng phiên bản đề.');
+  const combined={...buildCombinedResult(definition,null,official.reading_result),listeningStatus:'interrupted'};
+  const interruptedAt=new Date(body.capturedAt);
+  await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
+  await db.query(`UPDATE assessment.term_test_attempt
+    SET listening_interrupted_at=$2,completed_at=clock_timestamp(),combined_result=$3,updated_at=clock_timestamp()
+    WHERE id=$1`,[official.id,interruptedAt,JSON.stringify(combined)]);
+  const receipt=await writeReceipt(db,continuation,official,body.operationId,hash,undefined,interruptedAt);
+  return {...receipt,attemptToken:session.id,startedAt:body.startedAt};
+}
+
 export async function commitTerm1OfflineWriting(db,state,body,deadline,hash) {
   const {continuation,session}=state;
   const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id);
-  if (!official?.completed_at || !official.listening_submitted_at || !official.reading_submitted_at
+  if (!official?.completed_at || (!official.listening_submitted_at&&!official.listening_interrupted_at) || !official.reading_submitted_at
       || official.writing_scope!=='exam' || official.writing_submitted_at || continuation.receipt) {
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Writing đã thay đổi. Hãy mở lại bài.');
   }

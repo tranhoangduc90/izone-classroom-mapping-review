@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import request from 'supertest';
 import { createMiniFixture } from './helpers/mini-answer-sheet-fixture.js';
 import { createTermTestWritingGradingService } from '../src/term-test-writing-grading.js';
@@ -21,6 +22,109 @@ async function seedTerm1(db) {
     SELECT 'term-test-1', 'Fixture Term 1', 1, listening_definition, reading_definition, true
     FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
 }
+
+test('Term 1 Listening continuation can record an interruption on the official Reading attempt', async () => {
+  let grading;
+  const fixture = await createMiniFixture({examOrder:true,completeSchema:true,term1CbtJourneyMode:'on',
+    listeningContinuityEnabled:true,term1ParallelEntryEnabled:true,assets:testAssets,termTestWritingGradingService:{
+      ensureSubmissionInTransaction: (...args) => grading.ensureSubmissionInTransaction(...args),
+      getStatus: attemptToken => grading.getStatus(attemptToken),
+    }});
+  try {
+    grading=createTermTestWritingGradingService({pool:fixture.pool});
+    await fixture.db.exec(await readFile(new URL('../db/028-listening-interruption.sql',import.meta.url),'utf8'));
+    await seedTerm1(fixture.db);
+    const prepare=(profile,examMode,examSessionToken)=>profile.post(endpoint+'/session/prepare').send({
+      ...identity,examMode,examSessionToken,orderClientVersion:1,term1ContinuationVersion:1
+    });
+    async function open(profile,lobby){
+      assert.ok(lobby.ok,lobby.body.error);
+      const scope={examSessionToken:lobby.body.examSessionToken,generation:lobby.body.generation,
+        deviceProof:randomUUID().replaceAll('-','').repeat(2)};
+      const path=endpoint+'/cbt-journey/';
+      const bundle=await profile.post(path+'prepare').send({...identity,...scope});
+      assert.ok(bundle.ok,bundle.body.error);
+      const post=(suffix,data={})=>profile.post(path+suffix).set('x-term2-permit',bundle.body.permit).send({...scope,...data});
+      const begin=await post('begin');
+      assert.ok(begin.ok,begin.body.error);
+      return {post,scope,operation:(section,answers)=>({operationId:randomUUID(),section,previousOperationId:null,
+        startedAt:begin.body.activatedAt,capturedAt:begin.body.activatedAt,revision:1,automatic:false,eofAt:null,heardSeconds:0,answers})};
+    }
+    const readingProfile=request.agent(fixture.app);
+    const listeningProfile=request.agent(fixture.app);
+    const competingProfile=request.agent(fixture.app);
+    const reading=await open(readingProfile,await prepare(readingProfile,'read_first'));
+    const readOp=reading.operation('reading',{14:'B'});
+    const accepted=await reading.post('seal',readOp);
+    assert.ok(accepted.ok,accepted.body.error);
+    const official=accepted.body.receipt.attemptToken;
+    const granted=await prepare(listeningProfile,'lis_first');
+    const competingGrant=await prepare(competingProfile,'lis_first');
+    assert.equal(granted.body.continuationSection,'listening');
+    assert.equal(competingGrant.body.continuationSection,'listening');
+    const listening=await open(listeningProfile,granted);
+    const competing=await open(competingProfile,competingGrant);
+    const interruption=listening.operation('listening',{});
+    const first=await listening.post('interrupt',interruption);
+    assert.ok(first.ok,first.body.error);
+    const receipt=first.body.receipt;
+    assert.equal(receipt.outcome,'interrupted');
+    assert.equal(receipt.continuationSection,'listening');
+    assert.equal(receipt.nextSection,'writing');
+    assert.equal(receipt.examSessionToken,listening.scope.examSessionToken);
+    assert.equal(receipt.attemptToken,listening.scope.examSessionToken);
+    assert.equal(receipt.result,undefined);
+    assert.deepEqual((await listening.post('interrupt',interruption)).body,first.body);
+    assert.deepEqual((await listening.post('status',{section:'listening',operationId:interruption.operationId})).body.receipt,receipt);
+    assert.equal((await listening.post('interrupt',{...interruption,revision:2})).status,409);
+    const late=await competing.post('seal',competing.operation('listening',{11:'Synthetic late Listening'}));
+    assert.equal(late.status,409,late.body.error);
+    assert.equal(late.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+    assert.equal((await competing.post('interrupt',competing.operation('listening',{}))).status,409);
+    const lateOriginal=await reading.post('seal',{
+      ...reading.operation('listening',{11:'Late Listening on original profile'}),previousOperationId:readOp.operationId
+    });
+    assert.equal(lateOriginal.status,409,lateOriginal.body.error);
+    assert.equal(lateOriginal.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+    const repeatedReading=await reading.post('status',{section:'reading',operationId:readOp.operationId});
+    assert.deepEqual(repeatedReading.body.receipt,accepted.body.receipt);
+    const {rows}=await fixture.db.query(`SELECT id,reading_answers,listening_submitted_at,listening_answers,
+      listening_interrupted_at,combined_result FROM assessment.term_test_attempt WHERE test_slug='term-test-1'`);
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].id,official);
+    assert.deepEqual(rows[0].reading_answers,{14:'B'});
+    assert.equal(rows[0].listening_answers,null);
+    assert.equal(rows[0].listening_submitted_at,null);
+    assert.ok(rows[0].listening_interrupted_at);
+    assert.equal(rows[0].combined_result.listeningStatus,'interrupted');
+    assert.equal(rows[0].combined_result.listening,null);
+    const originalReopens=await prepare(readingProfile,'read_first',reading.scope.examSessionToken);
+    assert.equal(originalReopens.body.nextSection,'writing');
+    assert.equal(originalReopens.body.continuationSection,'writing');
+    assert.notEqual(originalReopens.body.examSessionToken,reading.scope.examSessionToken);
+    assert.equal(originalReopens.body.result,null);
+    const writingLobby=await prepare(listeningProfile,'lis_first',listening.scope.examSessionToken);
+    assert.equal(writingLobby.body.continuationSection,'writing');
+    assert.equal(writingLobby.body.nextSection,'writing');
+    assert.equal(writingLobby.body.listeningInterrupted,true);
+    assert.equal(writingLobby.body.listeningSubmitted,false);
+    const writing=await open(listeningProfile,writingLobby);
+    const writeOp=writing.operation('writing',{task1:'',task2:'A synthetic answer after interruption.'});
+    const written=await writing.post('seal',writeOp);
+    assert.ok(written.ok,written.body.error);
+    const result=await listeningProfile.post('/api/term-tests/result').send({officialTerm1:identity});
+    assert.ok(result.ok,result.body.error);
+    assert.equal(result.body.result.listeningStatus,'interrupted');
+    assert.equal(result.body.result.reading.details.find(item=>item.number===14).studentAnswer,'B');
+    assert.equal(result.body.writing.task2,writeOp.answers.task2);
+    const jobs=await fixture.db.query(`SELECT run.task_number AS task,job.job_type AS kind
+      FROM assessment.term_test_writing_grading_run run JOIN assessment.term_test_writing_grading_job job ON job.run_id=run.id
+      WHERE run.attempt_id=$1`,[official]);
+    assert.deepEqual(jobs.rows,[{task:2,kind:'dispatch'}]);
+  }finally{
+    await fixture.db.close();
+  }
+});
 
 test('Term 1 keeps the first official submission while another profile completes Listening', async () => {
   const deliveries = [];
@@ -341,6 +445,10 @@ for (const [examMode,first,second] of [['lis_first','listening','reading'],['rea
       assert.deepEqual((await resumed.post('seal',secondOperation)).body,sealed.body);
       assert.deepEqual((await resumed.post('status',{section:second,operationId:secondOperation.operationId})).body.receipt,sealed.body.receipt);
       assert.equal((await resumed.post('seal',{...secondOperation,answers:operation(second,resumed.startedAt,'D').answers})).status,409);
+      if(second==='listening'){
+        const late=await resumed.post('interrupt',{...operation(second,resumed.startedAt,''),answers:{}});
+        assert.equal(late.status,409,late.body.error);
+      }
       assert.deepEqual((await original.post('status',{section:first,operationId:firstOperation.operationId})).body.receipt,accepted.body.receipt);
 
       const rows=(await fixture.db.query(`SELECT id,listening_answers,reading_answers FROM assessment.term_test_attempt
