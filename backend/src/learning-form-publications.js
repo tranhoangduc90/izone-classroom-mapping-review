@@ -1,8 +1,9 @@
 // Nhận nháp đã duyệt hoặc bản xuất bản; không tạo bài nộp/điểm danh khi xuất bản hay giao.
 // Mỗi đích giao có transaction và mã retry riêng; lỗi một đích không nhân các đích đã thành công.
 import {withTransaction} from './db.js';
-import {catalogVisible,lockCatalog,assertCatalogSource} from './learning-catalog-archive.js';
+import {catalogVisible,lockCatalog,assertCatalogSource,lockSharedLibraryDraft} from './learning-catalog-archive.js';
 import {assignmentOrigin} from './learning-assignment-origin.js';
+import {assertSharedLibraryCurrent,assertSharedPublicationCurrent,sharedLibraryItem} from './learning-shared-library-revisions.js';
 import crypto from 'node:crypto';
 import {validateAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {sha256,stableStringify,gradeLearningSubmission} from './learning-domain.js';
@@ -60,7 +61,8 @@ function targetOperation(operationId,classId,sessionNumber){
   return h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-a'+h.slice(17,20)+'-'+h.slice(20,32);
 }
 
-export function createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader}){
+export function createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader,
+  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}){
   async function lockSource(database,key){
     await database.query('INSERT INTO learning.form_publication_lock(source_key) VALUES($1) ON CONFLICT DO NOTHING',[key]);
     await database.query('SELECT source_key FROM learning.form_publication_lock WHERE source_key=$1 FOR UPDATE',[key]);
@@ -252,6 +254,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             FROM learning.form_library_entry entry
             WHERE entry.id=$1::uuid AND (entry.sharing_scope='izone' OR lower(entry.owner_email)=lower($2))`,[id,reviewer.email])).rows[0];
           if(!row)throw fail('PUBLICATION_SOURCE_DENIED','Không tìm thấy bản chụp trong kho bạn được dùng.',403);
+          if(sharedRevisionCatalog&&row.sharing_scope==='izone')assertSharedLibraryCurrent(id,await sharedLibraryItem(database,id));
           // Cùng thứ tự khóa draft → version như publishLibrary; đợi save đang chạy rồi đọc revision thật.
           // Không dùng hash đọc trước khóa để quyết định giữ ID và vô tình đóng băng nháp mới hơn.
           const currentDraft=(await database.query(`SELECT status AS draft_status,approved_by_email AS draft_approver,
@@ -299,6 +302,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     },
     async publishLibrary({id,expectedRevision,operationId,reviewer}){
       return withTransaction(pool,async database=>{
+        const revision=await lockSharedLibraryDraft(database,id,sharedRevisionCatalog);
         const draft=await owned(database,id,reviewer,{lock:true});
         const shared=draft.draft_scope==='izone';
         async function publishedResult(row,replayed){
@@ -315,6 +319,11 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         if(prior.length){const row=prior[0];if(prior.length!==1||row.source_draft_id!==id||!shared&&row.operation_id!==operationId)
           throw fail('PUBLICATION_OPERATION_CONFLICT','Phiếu đã được xuất bản hoặc mã thao tác đã dùng.');
           return publishedResult(row,true);}
+        if(revision){
+          if(!sharedEditingEnabled)throw fail('SHARED_EDIT_UNAVAILABLE','Tạm dừng xuất bản bản sửa trong Kho chung.');
+          assertSharedLibraryCurrent(revision.base_entry_id,revision.item);
+          if(draft.public_definition.courseCode!==revision.item.course_code)throw fail('SHARED_COURSE_MISMATCH','Bản sửa phải giữ khóa của bài trong Kho chung.');
+        }
         const existing=(await database.query('SELECT * FROM learning.form_publication WHERE form_version_id=$1::uuid',[draft.public_definition.formVersionId])).rows[0];
         if(existing){if(shared||existing.content_hash!==draft.content_hash)throw fail('PUBLICATION_CONTENT_MISMATCH','Mã phiên bản đã được dùng cho nội dung khác. Tạo bản riêng trước khi xuất bản.');
           return {...publicationDto({...existing,bound_draft_id:id}),replayed:true};}
@@ -340,11 +349,17 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           JOIN learning.form_grading_key grading ON grading.form_version_id=version.id WHERE version.id=$1::uuid`,[saved.form_version_id])).rows[0];
         if(!readback||readback.definition_hash!==sha256(stableStringify(definition))||readback.content_hash!==sha256(stableStringify(key)))
           throw fail('PUBLICATION_READBACK_MISMATCH','Chưa xác nhận được phiên bản vừa xuất bản.',500);
-        if(shared)await database.query(`INSERT INTO learning.form_library_entry(operation_id,owner_email,sharing_scope,source_draft_id,source_revision,
+        if(shared){
+          const entry=(await database.query(`INSERT INTO learning.form_library_entry(operation_id,owner_email,sharing_scope,source_draft_id,source_revision,
           course_code,title,public_definition,private_definition,content_hash,approved_by_email,approval_hash,approved_at)
-          VALUES($1,$2,'izone',$3,$4,$5,$6,$7,$8,$9,$10,$9,$11)`,
+          VALUES($1,$2,'izone',$3,$4,$5,$6,$7,$8,$9,$10,$9,$11) RETURNING id`,
         [operationId,draft.owner_email,id,draft.revision,definition.courseCode,definition.title,
-          JSON.stringify(definition),JSON.stringify(key),draft.content_hash,draft.approved_by_email,draft.approved_at]);
+          JSON.stringify(definition),JSON.stringify(key),draft.content_hash,draft.approved_by_email,draft.approved_at])).rows[0];
+          if(revision){
+            await database.query('UPDATE learning.form_shared_library_revision SET published_entry_id=$2 WHERE draft_id=$1',[id,entry.id]);
+            await database.query('UPDATE learning.form_shared_library_item SET current_entry_id=$2 WHERE id=$1',[revision.item_id,entry.id]);
+          }
+        }
         return publishedResult(saved,false);
       });
     },
@@ -361,6 +376,11 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         if(prior){
           if(prior.publication_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
             throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác.');
+          if(sharedRevisionCatalog&&selectedOrigin?.scope==='izone'){
+            const recorded=(await database.query('SELECT source_scope,source_library_id FROM learning.form_assignment_origin WHERE assignment_id=$1',[prior.assignment_id])).rows[0];
+            if(recorded?.source_scope!==selectedOrigin.scope||recorded.source_library_id!==selectedOrigin.libraryId)
+              throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một nguồn khác.');
+          }
           if(target.portalTarget){
             const pinned=(await database.query('SELECT portal_session_id::text,starts_at FROM learning.form_assignment_portal_target WHERE assignment_id=$1::uuid',[prior.assignment_id])).rows[0];
             if(pinned?.portal_session_id!==target.portalTarget.id||pinned.starts_at!==target.portalTarget.startsAt)
@@ -368,6 +388,8 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           }
           return {...await readDelivery(database,prior),replayed:true};
         }
+        if(sharedRevisionCatalog&&(!selectedOrigin||selectedOrigin.scope==='izone'))
+          await assertSharedPublicationCurrent(database,source,selectedOrigin);
         const result=await deliverVersion(database,{target,definition:source.public_definition,classInfo,reviewer,assertAssignable});
         await database.query(`INSERT INTO learning.form_delivery(operation_id,publication_id,owner_email,erp_course_class_id,session_number,assignment_id)
           VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid)`,[operation,id,reviewer.email,target.classId,target.sessionNumber,result.assignmentId]);

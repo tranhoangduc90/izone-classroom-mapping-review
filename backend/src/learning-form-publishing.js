@@ -7,13 +7,16 @@ import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {decorateSchedule} from './learning-schedule-plan.js';
 import {createLearningFormPublications} from './learning-form-publications.js';
 import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
+import {lockSharedLibraryDraft} from './learning-catalog-archive.js';
+import {assertSharedLibraryCurrent} from './learning-shared-library-revisions.js';
 import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
 
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const scored=definition=>definition.blocks.some(block=>block.items.some(item=>item.graderType!=='none'||item.maxScore>0));
 
-export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null,portalAssignmentReader=null}) {
+export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null,portalAssignmentReader=null,
+  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
   async function authority(database,email,definition,ownerEmail,shared=false) {
     const owner=email.toLowerCase()===ownerEmail.toLowerCase();
     if(!scored(definition)){
@@ -69,14 +72,18 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
       definitionHash:current.definition_hash,rosterCount:current.roster_count,blockCount:current.block_count,replayed};
   }
   return {
-    ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader}),
+    ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader,
+      sharedRevisionCatalog,sharedEditingEnabled}),
     async reviewQueue({classId,scope,reviewer}) {
       if(scope==='izone'){
         const {reviewCourses}=await sharedCourseCapabilities(pool,reviewer.email);
         if(!reviewCourses.length)return [];
-        const {rows}=await pool.query(`SELECT * FROM learning.form_draft WHERE draft_scope='izone'
-          AND status='pending_review' AND public_definition->>'courseCode'=ANY($1::text[])
-          ORDER BY updated_at,id LIMIT 100`,[reviewCourses]);
+        const {rows}=await pool.query(`SELECT d.* FROM learning.form_draft d WHERE d.draft_scope='izone'
+          AND d.status='pending_review' AND d.public_definition->>'courseCode'=ANY($1::text[])
+          ${sharedRevisionCatalog?`AND NOT EXISTS (SELECT 1 FROM learning.form_shared_library_revision r
+             JOIN learning.form_shared_library_item i ON i.id=r.item_id WHERE r.draft_id=d.id
+             AND (i.archived_at IS NOT NULL OR i.current_entry_id<>r.base_entry_id))`:''}
+          ORDER BY d.updated_at,d.id LIMIT 100`,[reviewCourses]);
         const allowed=[];
         for(const row of rows)if(await authority(pool,reviewer.email,row.public_definition,row.owner_email,true))
           allowed.push(dto(row,{includeKey:false}));
@@ -92,7 +99,9 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     async getReview({id,reviewer}) {return dto(await reviewable(pool,id,reviewer));},
     async requestReview({id,expectedRevision,reviewer}) {
       return withTransaction(pool,async client=>{
+        const revision=await lockSharedLibraryDraft(client,id,sharedRevisionCatalog);
         const row=await owned(client,id,reviewer,{lock:true});
+        if(revision)assertSharedLibraryCurrent(revision.base_entry_id,revision.item);
         if(Number(row.revision)!==expectedRevision) throw fail('DRAFT_STALE','Nháp đã đổi; tải và đối chiếu trước khi gửi duyệt.');
         if(row.status==='published'||row.draft_scope==='izone'&&(await client.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[id])).rowCount)
           throw fail('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành.');
@@ -100,12 +109,14 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
         await assertCourse(client,row);
         const result=await client.query(`UPDATE learning.form_draft SET status='pending_review',approved_hash=NULL,
           approved_revision=NULL,approved_by_email=NULL,approved_at=NULL,updated_at=now() WHERE id=$1::uuid RETURNING *;`,[id]);
-        return dto(result.rows[0]);
+        return {...dto(result.rows[0]),...(revision?{sharedLibraryEdit:true}:{})};
       });
     },
     async approve({id,expectedRevision,expectedHash,reviewer,libraryOnly=false}) {
       return withTransaction(pool,async client=>{
+        const revision=await lockSharedLibraryDraft(client,id,sharedRevisionCatalog);
         const row=await reviewable(client,id,reviewer,{lock:true});
+        if(revision)assertSharedLibraryCurrent(revision.base_entry_id,revision.item);
         if(row.draft_scope==='izone'&&row.status!=='pending_review'){
           const canApproveOwnDraft=row.status==='draft'&&row.owner_email.toLowerCase()===reviewer.email.toLowerCase()
             &&(await sharedCourseCapabilities(client,reviewer.email)).selfApproveCourses.includes(row.public_definition.courseCode);
@@ -118,7 +129,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
         if(!libraryOnly)await assertCourse(client,row);
         const result=await client.query(`UPDATE learning.form_draft SET status='approved',approved_hash=content_hash,
           approved_revision=revision,approved_by_email=$2,approved_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *;`,[id,reviewer.email.toLowerCase()]);
-        return dto(result.rows[0]);
+        return {...dto(result.rows[0]),...(revision?{sharedLibraryEdit:true}:{})};
       });
     },
     async publish({id,expectedRevision,operationId,reviewer}) {
