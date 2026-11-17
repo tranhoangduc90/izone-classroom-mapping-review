@@ -38,7 +38,7 @@ import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
 import { term1SubmissionGuardError } from './term1-submission-guard.js';
-import { commitTerm1ListeningContinuation, Term1ContinuationError } from './term1-section-continuation.js';
+import { commitTerm1ListeningContinuation, term1ParallelEntryInUse, Term1ContinuationError } from './term1-section-continuation.js';
 import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
@@ -1121,7 +1121,7 @@ export function createApp({
         return {...selected,listeningResult:gradeSection(testDefinition.listening_definition,
           selected.answers,testDefinition.listening_band_adjustment)};
       };
-      if (config.term1ParallelEntryEnabled && slug.data==='term-test-1') {
+      if (term1ParallelEntryInUse(config) && slug.data==='term-test-1') {
         const resumed = await commitTerm1ListeningContinuation(pool,session,parsed.data,testDefinition,evaluateSubmission);
         if (resumed) {
           if (resumed.official) {
@@ -1149,7 +1149,7 @@ export function createApp({
       ]);
       const attempt = inserted.rows[0];
       if (!attempt || attempt.exam_session_token !== parsed.data.examSessionToken) {
-        if (config.term1ParallelEntryEnabled && slug.data === 'term-test-1') {
+        if (term1ParallelEntryInUse(config) && slug.data === 'term-test-1') {
           // INSERT ... ON CONFLICT DO NOTHING can observe the unique index winner
           // after a concurrent commit even if its starting snapshot saw no winner.
           const official = await pool.query(`SELECT 1 FROM assessment.term_test_attempt
@@ -1438,7 +1438,7 @@ export function createApp({
 
   const authorizeOfficialResult = asyncRoute(async (req, res, next) => {
     if (!Object.hasOwn(req.body || {}, 'officialTerm1')) return next();
-    if (!config.term1ParallelEntryEnabled) {
+    if (!term1ParallelEntryInUse(config)) {
       return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
     }
     const identity = term1OfficialIdentitySchema.safeParse(req.body.officialTerm1);

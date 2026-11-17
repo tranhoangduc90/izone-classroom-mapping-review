@@ -8,7 +8,7 @@ import { term1SubmissionGuardError } from './term1-submission-guard.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 import { readTerm1TimerRoom } from './term1-listening-timer.js';
-import { commitTerm1OfflineContinuation, commitTerm1OfflineWriting } from './term1-section-continuation.js';
+import { commitTerm1OfflineContinuation, commitTerm1OfflineWriting, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
@@ -402,7 +402,7 @@ function writingHoldClassesFromFile(file) {
 
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
-  const readContinuation = async (db, sessionId) => profile===term1&&config.term1ParallelEntryEnabled
+  const readContinuation = async (db, sessionId) => profile===term1&&term1ParallelEntryInUse(config)
     ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode
         FROM assessment.term1_section_continuation AS continuation
         JOIN assessment.term_test_attempt AS official ON official.id=continuation.official_attempt_id

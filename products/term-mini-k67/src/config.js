@@ -8,6 +8,7 @@ const schema = z.object({
   K67_ENV: z.enum(['production', 'test', 'development']).default('production'),
   K67_READ_FIRST_NEW_ENABLED: z.enum(['true','false']).default('false'),
   K67_TERM1_PARALLEL_ENTRY_ENABLED: z.enum(['true','false']).default('false'),
+  K67_TERM1_PARALLEL_ENTRY_MODE: z.enum(['off','on','drain']).optional(),
   K67_MINI_PAPER_OFFLINE_MODE: z.enum(['off','drain','on']).default('off'),
   K67_MINI_CBT_OFFLINE_MODE: z.enum(['off','drain','on']).default('off'),
   K67_MINI_CBT_JOURNEY_MODE: z.enum(['off','drain','on']).default('off'),
@@ -123,7 +124,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv: p.K67_ENV, port: p.K67_PORT,
     readFirstNewEnabled: p.K67_READ_FIRST_NEW_ENABLED === 'true',
-    term1ParallelEntryEnabled: p.K67_TERM1_PARALLEL_ENTRY_ENABLED === 'true',
+    term1ParallelEntryMode: p.K67_TERM1_PARALLEL_ENTRY_MODE ?? (p.K67_TERM1_PARALLEL_ENTRY_ENABLED==='true'?'on':'off'),
     miniPaperOfflineMode: p.K67_MINI_PAPER_OFFLINE_MODE,
     miniCbtOfflineMode: p.K67_MINI_CBT_OFFLINE_MODE,
     miniCbtJourneyMode: p.K67_MINI_CBT_JOURNEY_MODE,

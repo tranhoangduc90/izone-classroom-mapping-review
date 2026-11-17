@@ -45,9 +45,9 @@ test('Term 1 keeps the first official submission while another profile completes
 
     const profileA = request.agent(fixture.app);
     const profileB = request.agent(fixture.app);
-    const prepare = (profile, examMode, examSessionToken, term1ContinuationVersion) => profile.post(`${endpoint}/session/prepare`).send({
+    const prepare = (profile, examMode, examSessionToken, term1ContinuationVersion = 1) => profile.post(`${endpoint}/session/prepare`).send({
       ...identity, examMode, examDelivery: 'cbt', orderClientVersion: 1, examSessionToken,
-      term1ContinuationVersion,
+      term1ContinuationVersion:term1ContinuationVersion || undefined,
     });
 
     const listening = await prepare(profileA, 'lis_first');
@@ -105,15 +105,12 @@ test('Term 1 keeps the first official submission while another profile completes
     assert.equal(lateListening.status, 409, lateListening.body.error);
     assert.equal(lateListening.body.error, 'EXAM_FIRST_SUBMISSION_ACCEPTED');
 
-    const official = await prepare(profileA, 'lis_first', owner.examSessionToken);
-    assert.ok(official.ok, official.body.error);
-    assert.equal(official.body.examMode, 'read_first');
-    assert.equal(official.body.listeningSubmitted, false);
-    assert.equal(official.body.readingSubmitted, true);
-    assert.equal(official.body.nextSection, 'listening');
-    assert.equal(official.body.attemptToken, null);
-    assert.equal(official.body.examSessionToken, null);
-    assert.deepEqual(official.body.readingDraft, {});
+    const oldClient = await prepare(profileA, 'lis_first', owner.examSessionToken, 0);
+    assert.equal(oldClient.status,409);
+    assert.equal(oldClient.body.error,'TERM1_CLIENT_UPDATE_REQUIRED');
+    assert.equal(oldClient.body.attemptToken,undefined);
+    assert.equal(oldClient.body.examSessionToken,undefined);
+    assert.equal(oldClient.body.readingDraft,undefined);
 
     const accepted = await fixture.db.query(`SELECT id, reading_answers, listening_answers, term1_first_submission_guard
       FROM assessment.term_test_attempt
@@ -476,6 +473,64 @@ test('Term 1 simultaneous Listening submissions keep one official receipt and op
     assert.deepEqual((await fixture.db.query(`SELECT id,listening_answers FROM assessment.term_test_attempt
       WHERE test_slug='term-test-1' AND listening_submitted_at IS NOT NULL`)).rows,
     [{id:confirmed.attemptToken,listening_answers:winner.op.answers}]);
+  } finally {
+    await fixture.db.close();
+  }
+});
+
+test('Term 1 old client stays on the legacy protocol and active permits survive draining admissions', async () => {
+  const fixture=await createMiniFixture({examOrder:true,completeSchema:true,term1CbtJourneyMode:'on',
+    term1ParallelEntryEnabled:true,assets:testAssets});
+  try {
+    await seedTerm1(fixture.db);
+    let app=fixture.app;
+    const base=`${endpoint}/cbt-journey`;
+    const prepare=(options={})=>request(app).post(`${endpoint}/session/prepare`).send({
+      ...identity,examMode:'lis_first',examDelivery:'cbt',orderClientVersion:1,...options
+    });
+    const open=async (response,letter)=>{
+      assert.ok(response.ok,response.body.error);
+      const {examSessionToken,generation}=response.body;
+      const scope={examSessionToken,generation,deviceProof:letter.repeat(64)};
+      const bundle=await request(app).post(`${base}/prepare`).send({...identity,...scope});
+      assert.ok(bundle.ok,bundle.body.error);
+      const send=(route,body={})=>request(app).post(`${base}/${route}`)
+        .set('x-term2-permit',bundle.body.permit).send({...scope,...body});
+      const began=await send('begin');
+      assert.ok(began.ok,began.body.error);
+      return {scope,send,activatedAt:began.body.activatedAt};
+    };
+    const modern=await prepare({term1ContinuationVersion:1});
+    assert.equal(modern.body.term1ParallelEntry,true);
+    const active=await open(modern,'a');
+    const old=await prepare({examMode:'read_first'});
+    assert.equal(old.body.term1ParallelEntry,undefined);
+    assert.notEqual(old.body.examSessionToken,active.scope.examSessionToken);
+    const legacy=await open(old,'b');
+
+    app=fixture.appForTerm1Mode('drain');
+    const fresh=await prepare({term1ContinuationVersion:1,studentRef:'44444444-4444-4444-8444-444444444444'});
+    assert.ok(fresh.ok,fresh.body.error);
+    assert.equal(fresh.body.term1ParallelEntry,undefined);
+    const original=await prepare({term1ContinuationVersion:1,examSessionToken:active.scope.examSessionToken});
+    assert.equal(original.body.examSessionToken,active.scope.examSessionToken);
+    const payload=(section,at,answers)=>({operationId:randomUUID(),section,previousOperationId:null,
+      startedAt:at,capturedAt:at,revision:1,automatic:false,eofAt:null,heardSeconds:0,answers});
+    const first=payload('reading',legacy.activatedAt,{14:'B'});
+    const accepted=await legacy.send('seal',first);
+    assert.ok(accepted.ok,accepted.body.error);
+    const reply=await prepare({term1ContinuationVersion:1,examSessionToken:active.scope.examSessionToken});
+    assert.equal(reply.body.continuationSection,'listening');
+    assert.equal(reply.body.examSessionToken,active.scope.examSessionToken);
+    const next=payload('listening',active.activatedAt,{11:'C'});
+    const completed=await active.send('seal',next);
+    assert.ok(completed.ok,completed.body.error);
+    assert.equal(completed.body.receipt.nextSection,'writing');
+    assert.deepEqual((await active.send('seal',next)).body.receipt,completed.body.receipt);
+    assert.deepEqual((await legacy.send('status',{section:'reading',operationId:first.operationId})).body.receipt,accepted.body.receipt);
+    const {rows} = await fixture.db.query(`SELECT id,reading_answers,listening_answers FROM assessment.term_test_attempt
+      WHERE test_slug='term-test-1' AND erp_student_contact_id=900001 AND completed_at IS NOT NULL`);
+    assert.deepEqual(rows,[{id:accepted.body.receipt.attemptToken,reading_answers:{14:'B'},listening_answers:{11:'C'}}]);
   } finally {
     await fixture.db.close();
   }

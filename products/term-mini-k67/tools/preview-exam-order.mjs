@@ -76,6 +76,7 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
 });
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
+const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
 const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
@@ -160,7 +161,7 @@ const gradingRoundTrip=Boolean(termHoldSlug)
 const fixtureGradeRequests=[];
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
-  term1ParallelEntryEnabled:process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY==='true',
+  term1ParallelEntryEnabled:['true','warm-up'].includes(term1Parallel),
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
@@ -231,6 +232,12 @@ for(const slug of Object.keys(timing)){
   );
 }
 const outer=express();
+let previewApp=term1Parallel==='warm-up'?fixture.appForTerm1Mode('off'):fixture.app;
+if (['true','warm-up'].includes(term1Parallel)) outer.post('/preview/term1-parallel-mode',express.json(),(req,res)=>{
+  if (!['on','drain'].includes(req.body?.mode)) return res.sendStatus(400);
+  previewApp=fixture.appForTerm1Mode(req.body.mode);
+  return res.json({ok:true,mode:req.body.mode});
+});
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
 if (gradingRoundTrip) {
   outer.post('/preview/writing-portal',express.json(),(req,res)=>{
@@ -320,10 +327,12 @@ if(previousPagesRevision){
   if(!/^[a-f0-9]{40}$/.test(previousPagesRevision))throw new Error('Revision Pages thử không hợp lệ.');
   const route=term1JourneyMode==='on'?'term-test-1-computer-based'
     :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
-  const files=[`term-tests/${route}/index.html`,`term-tests/${route}/offline-assets.mjs`,
+  const files=[`term-tests/${route}/index.html`];
+  // The versioned Term 1 release retains every previous asset path and byte.
+  if (term1JourneyMode!=='on') files.push(`term-tests/${route}/offline-assets.mjs`,
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
-    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
+    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs');
   if(term2JourneyMode==='on')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt-audio-status-v2.mjs',
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt-audio-status-v2.js',
@@ -357,6 +366,7 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
+    ...(entry==='term-test-1-computer-based'?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
@@ -406,7 +416,7 @@ if (holdSlug) outer.use((req,_res,next)=>{
   if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
   sealClock.run(now,next);
 });
-outer.use(fixture.app);
+outer.use((req,res,next)=>previewApp(req,res,next));
 const refresh=setInterval(()=>fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now()').catch(console.error),30000);
 const server=outer.listen(port,'127.0.0.1',()=>console.log(`Bản thử K67: http://127.0.0.1:${port}/term-tests/?class=IC2304`));
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{clearInterval(refresh);server.close(async()=>{await fixture.db.close();process.exit(0);});});

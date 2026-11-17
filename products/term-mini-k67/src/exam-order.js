@@ -8,7 +8,7 @@ import { useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
-import { commitTerm1ReadingContinuation, createTerm1ReadingDraft, openTerm1SectionContinuation, term1ContinuationGrant } from './term1-section-continuation.js';
+import { commitTerm1ReadingContinuation, createTerm1ReadingDraft, openTerm1SectionContinuation, term1ContinuationGrant, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -168,6 +168,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
           AND (exam_mode='read_first' OR prepared_at>=now()-interval '8 hours')`, [...key,data.examSessionToken])).rows[0];
     }
     if (!session) {
+      if (config.term1ParallelEntryMode==='drain') return null;
       if (data.examMode==='read_first'&&!config.readFirstNewEnabled) {
         throw error('READ_FIRST_NOT_ENABLED','Phiên bản Reading trước chưa được mở cho lượt mới.');
       }
@@ -203,26 +204,42 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const found=await readStudent(req,data.classCode,slug,data.studentRef);
     if(found.rowCount!==1)return next();
     const student=found.rows[0];
+    let writeAdmission;
+    const admitOpen = () => (writeAdmission ??= admit(req,res,writeLimiter));
     const out=await tx(async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${slug}:${student.class_id}:${student.student_id}`]);
-      if (config.term1ParallelEntryEnabled && slug==='term-test-1' && !paper && data.examDelivery==='cbt' && data.orderClientVersion===1) {
-        if(!await admit(req,res,writeLimiter))return null;
-        return openParallelTerm1(db,data,student);
+      if (term1ParallelEntryInUse(config) && slug==='term-test-1' && !paper && data.examDelivery==='cbt') {
+        if (data.orderClientVersion===1 && data.term1ContinuationVersion===1) {
+          if (!await admitOpen()) return null;
+          const parallel = await openParallelTerm1(db,data,student);
+          if (parallel) return parallel;
+        } else {
+          const {rows} = await db.query(`SELECT 1 FROM assessment.term_test_attempt
+            WHERE test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3 AND erp_student_contact_id=$4
+              AND superseded_at IS NULL AND term1_parallel_entry
+              AND (listening_submitted_at IS NOT NULL OR reading_submitted_at IS NOT NULL) LIMIT 1`,
+          [slug,student.definition_version,student.class_id,student.student_id]);
+          if (rows.length) {
+            if (!await admitOpen()) return null;
+            throw error('TERM1_CLIENT_UPDATE_REQUIRED','Hãy mở lại đường dẫn bài thi để đọc tiến độ chính thức.');
+          }
+        }
       }
-      const previous=(await db.query(`SELECT * FROM assessment.term_test_attempt WHERE test_slug=$1 AND definition_version=$2
+      const previous=(await db.query(`SELECT * FROM assessment.term_test_attempt AS a WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
+        AND (test_slug<>'term-test-1' OR (to_jsonb(a)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
         ORDER BY (completed_at IS NULL) DESC,created_at DESC LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
       if(previous) {
         // Yêu cầu Reading trước không được nối âm thầm vào lượt Listening trước.
         // Giữ nguyên bài/điểm đã có và báo giảng viên xử lý đúng lượt.
         if(previous.exam_mode!=='read_first') {
           if(!paper&&data.examMode==='read_first') {
-            if(!await admit(req,res,writeLimiter))return null;
+            if(!await admitOpen())return null;
             throw error('EXAM_ORDER_CONFLICT','Bạn đã có lượt Listening trước. Không thể tự chuyển sang Reading trước. Hãy nhờ giảng viên kiểm tra lượt bài; bài đã lưu vẫn được giữ.');
           }
           return null;
         }
-        if(!await admit(req,res,writeLimiter))return null;
+        if(!await admitOpen())return null;
         const bound=await reload(db,previous.id);
         if(!bound)throw error('STALE_ATTEMPT','Lượt bài đã được mở lại. Hãy xác nhận lại tên.');
         clientCheck({...data,generation:Number(previous.generation)},bound,paper);
@@ -230,25 +247,27 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         if(previous.exam_delivery!==(paper?'answer_sheet':data.examDelivery))throw error('MODE_CONFLICT','Lượt này đã gắn với cách làm bài khác. Hãy dùng link ban đầu.');
         return bound;
       }
-      const oldSession=(await db.query(`SELECT id,exam_mode FROM assessment.term_test_exam_session WHERE test_slug=$1 AND definition_version=$2
+      const oldSession=(await db.query(`SELECT id,exam_mode FROM assessment.term_test_exam_session AS s WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
+        AND (test_slug<>'term-test-1' OR (to_jsonb(s)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
         AND (prepared_at>=now()-interval '8 hours' OR attempt_mode='answer_sheet') LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
       // Phiên còn trong cửa sổ nối lại không có nghĩa Listening còn giờ làm bài.
       // Chặn trước tuyến cũ để không tự thu một bài trắng của phiên đã hết hạn.
       if(!paper&&oldSession&&data.examMode==='read_first'&&oldSession.exam_mode!=='read_first') {
-        if(!await admit(req,res,writeLimiter))return null;
+        if(!await admitOpen())return null;
         throw error('EXAM_ORDER_CONFLICT','Bạn đã có phiên Listening trước. Không thể tự chuyển sang Reading trước. Hãy nhờ giảng viên kiểm tra phiên cũ; hệ thống chưa thu bài và giữ nguyên bản nháp.');
       }
       if(oldSession||data.examMode!=='read_first')return null;
-      if(!await admit(req,res,writeLimiter))return null;
+      if(!await admitOpen())return null;
       if(!config.readFirstNewEnabled)throw error('READ_FIRST_NOT_ENABLED','Phiên bản Reading trước chưa được mở cho lượt mới.');
       if(data.orderClientVersion!==1)throw error('ORDER_CLIENT_UPDATE_REQUIRED','Hãy tải lại trang để dùng phiên bản mới.');
       if(paper&&!data.identityConfirmed)throw error('IDENTITY_REQUIRED','Hãy xác nhận đúng lớp và tên.',400);
       if(!assets)throw error('EXAM_ASSETS_UNAVAILABLE','Chưa cấp được đề thi. Hãy thử lại.',503);
       // Giữ cách hết hạn phòng chờ cũ: chỉ thay phiên Listening chưa nộp, quá 8 giờ.
-      await db.query(`UPDATE assessment.term_test_exam_session SET superseded_at=now(),updated_at=now()
+      await db.query(`UPDATE assessment.term_test_exam_session AS s SET superseded_at=now(),updated_at=now()
         WHERE test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3 AND erp_student_contact_id=$4
           AND superseded_at IS NULL AND listening_submitted_at IS NULL AND exam_mode='lis_first'
+          AND (test_slug<>'term-test-1' OR (to_jsonb(s)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
           AND attempt_mode<>'answer_sheet' AND prepared_at<now()-interval '8 hours'`,
         [slug,student.definition_version,student.class_id,student.student_id]);
       const mode=paper?'answer_sheet':data.examDelivery==='cbt'?'cbt':'legacy';
@@ -294,12 +313,13 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(!p.success||!slugs.includes(req.params.testSlug))return null;
     const student=(await pool.query(findStudentForTermTestSql,[p.data.classCode,req.params.testSlug,p.data.studentRef])).rows[0];
     if(!student)return null;
-    if(config.term1ParallelEntryEnabled&&req.params.testSlug==='term-test-1') {
+    if(term1ParallelEntryInUse(config)&&req.params.testSlug==='term-test-1') {
       const official = await readOfficialTerm1(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id]);
       return officialTerm1View(official,p.data.examSessionToken);
     }
     const row=(await pool.query(`${select} WHERE a.test_slug=$1 AND a.definition_version=$2
       AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4
+      AND (a.test_slug<>'term-test-1' OR (to_jsonb(a)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
       AND a.exam_mode='read_first' AND a.superseded_at IS NULL ORDER BY a.created_at DESC LIMIT 1`,
       [req.params.testSlug,student.definition_version,student.class_id,student.student_id])).rows[0];
     return row;
@@ -367,7 +387,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const r=await locked(db,row);clientCheck(data,r,paper);
       const state=orderState(r),section=action.startsWith('reading')?'reading':'listening';
       if(action==='result')return r;
-      const continuation=config.term1ParallelEntryEnabled&&slug==='term-test-1'&&section==='reading'
+      const continuation=term1ParallelEntryInUse(config)&&slug==='term-test-1'&&section==='reading'
         ? await term1ContinuationGrant(db,r.exam_session_id,'reading') : null;
       if(continuation?.receipt&&action!=='reading')throw error('EXAM_FIRST_SUBMISSION_ACCEPTED','Reading đã có bài được ghi nhận.');
       if (paper) await guardMiniPaperOfflineWrite(db, config, r.exam_session_id, r.generation);

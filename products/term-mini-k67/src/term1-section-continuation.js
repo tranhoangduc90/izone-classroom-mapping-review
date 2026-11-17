@@ -3,6 +3,10 @@ import { audioTransaction } from './audio-incidents.js';
 import { assertAudioOwner } from './audio-owner.js';
 import { buildCombinedResult } from './term-tests.js';
 
+export function term1ParallelEntryInUse(config) {
+  return config.term1ParallelEntryMode==='on' || config.term1ParallelEntryMode==='drain';
+}
+
 export class Term1ContinuationError extends Error {
   constructor(code, message) {
     super(message);
