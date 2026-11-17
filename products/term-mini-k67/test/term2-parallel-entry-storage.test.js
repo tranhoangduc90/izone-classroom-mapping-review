@@ -151,8 +151,9 @@ test('Term 2 competing Listening and Reading writers are serialized by the offic
   }
 });
 
-test('Term 2 competing profiles keep the first receipt and complete remaining skills on the official attempt', async () => {
+for (const firstSkill of ['listening','reading']) test(`Term 2 ${firstSkill} first: the competing profile completes the official attempt`, async () => {
   let grading;
+  const deliveries=[];
   const { db, app, pool } = await createMiniFixture({ ...options, term2ParallelEntryMode:'on',
     termTestWritingGradingService:{
       ensureSubmission:input=>grading.ensureSubmission(input),
@@ -169,7 +170,10 @@ test('Term 2 competing profiles keep the first receipt and complete remaining sk
   const identity = { classCode:'IC2304', studentRef:'11111111-1111-4111-8111-111111111111',
     examDelivery:'cbt', orderClientVersion:1, term2ContinuationVersion:1 };
   try {
-    grading=createTermTestWritingGradingService({pool});
+    grading=createTermTestWritingGradingService({pool,syncErpGrades:async payload=>{
+      deliveries.push(payload);
+      return {status:'synced'};
+    }});
     await seed(db);
     async function openProfile(examMode, deviceProof, api=request.agent(app), previous={}) {
       const prepared = await api.post(root+'/session/prepare').send({ ...identity, examMode, ...previous });
@@ -199,15 +203,15 @@ test('Term 2 competing profiles keep the first receipt and complete remaining sk
       answers:{11:'B'} };
     const firstReading = { section:'reading', operationId:randomUUID(), previousOperationId:null, startedAt,
       capturedAt:startedAt+2_000, revision:1, automatic:false, eofAt:null, heardSeconds:0, answers:{14:'A'} };
-    const contenders = [{...a, body:firstListening},{...b, body:firstReading}];
-    const outcomes = await Promise.all(contenders.map(async item=>({ ...item, result:await item.post('seal',item.body) })));
-    const winners = outcomes.filter(item=>item.result.ok);
-    assert.equal(winners.length,1,outcomes.map(item=>item.result.text).join('\n'));
-    const [winner] = winners;
-    const loser = outcomes.find(item=>!item.result.ok);
-    assert.equal(loser.result.status,409,loser.result.text);
-    assert.equal(loser.result.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
-    const receipt = winner.result.body.receipt;
+    const listeningProfile={...a,body:firstListening};
+    const readingProfile={...b,body:firstReading};
+    const [winner,loser]=firstSkill==='listening'?[listeningProfile,readingProfile]:[readingProfile,listeningProfile];
+    const first=await winner.post('seal',winner.body);
+    assert.ok(first.ok,first.text);
+    const rejected=await loser.post('seal',loser.body);
+    assert.equal(rejected.status,409,rejected.text);
+    assert.equal(rejected.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+    const receipt = first.body.receipt;
     assert.ok(receipt.receiptId);
     assert.equal(receipt.operationId,winner.body.operationId);
     assert.deepEqual((await winner.post('seal',winner.body)).body.receipt,receipt);
@@ -269,5 +273,24 @@ test('Term 2 competing profiles keep the first receipt and complete remaining sk
     assert.equal((await readResult({officialTerm2:{...resultIdentity,classCode:'BADCLASS'}})).status,404);
     assert.equal((await readResult({officialTerm1:resultIdentity,officialTerm2:resultIdentity})).status,400);
     assert.equal((await db.query(`SELECT count(*)::int AS total FROM assessment.term_test_writing_grading_job`)).rows[0].total,2);
+    assert.deepEqual(deliveries,[]);
+
+    const workerId='term2-fixture-grader';
+    const dispatch=await grading.claimJobs({workerId});
+    assert.equal(dispatch.length,2);
+    for (const job of dispatch) await grading.completeDispatch({workerId,jobId:job.jobId});
+    await db.query("UPDATE assessment.term_test_writing_grading_job SET next_attempt_at=now() WHERE job_type='collect'");
+    const collect=await grading.claimJobs({workerId});
+    assert.equal(collect.length,2);
+    for (const job of collect) {
+      const bandScore=job.taskNumber===1?5:7;
+      const criteria=[job.taskNumber===1?'TA':'TR','CC','LR','GRA']
+        .map(code=>({code,bandScore,feedback:'Synthetic feedback'}));
+      await grading.completeResult({workerId,jobId:job.jobId,runKey:job.runKey,result:{taskScore:bandScore,criteria}});
+    }
+    const graded=await readResult({officialTerm2:resultIdentity});
+    assert.equal(graded.body.writing.grading.writingScore,6.5);
+    assert.deepEqual(deliveries.map(({attemptToken,grades})=>[attemptToken,grades.writing]),[[official.id,6.5]]);
+    assert.deepEqual((await writing.post('seal',essay)).body.receipt,wrote.body.receipt);
   } finally { await db.close(); }
 });
