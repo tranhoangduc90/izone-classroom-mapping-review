@@ -5,6 +5,8 @@ import { basename, resolve } from 'node:path';
 
 const target = resolve(process.argv[2] ?? '');
 const expected = process.argv[3];
+const mountMode = process.argv[4];
+assert.ok(mountMode === undefined || mountMode === '--mounted-gate', 'Use --mounted-gate for the production bind layout');
 assert.equal(basename(target),'src','Use the src directory of an isolated Collector image copy');
 assert.match(expected ?? '',/^[a-f0-9]{64}$/,'Supply the SHA-256 of the current Collector source');
 const file=resolve(target,'service.mjs');
@@ -15,7 +17,10 @@ const replace = (text,before,after) => {
   assert.equal(text.split(before).length,2,'Collector overlay anchor');
   return text.replace(before,after);
 };
-let candidate = "import {createSpeakingProducerGate} from './speaking-journal-producer-gate.mjs';\n" + base;
+const gate = mountMode
+  ? '/run/speaking-collector-overlay/speaking-journal-producer-gate.mjs'
+  : './speaking-journal-producer-gate.mjs';
+let candidate = `import {createSpeakingProducerGate} from '${gate}';\n` + base;
 candidate = replace(candidate,' const intakeMetrics=new IntakeMetrics(Object.keys(config.products));',
   ` const intakeMetrics=new IntakeMetrics(Object.keys(config.products));
  const speakingCloud= { requests:0, requestBytes:0, responseBytes:0, errors:0 };
