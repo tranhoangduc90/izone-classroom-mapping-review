@@ -75,7 +75,8 @@ export async function fixture(mode='lis_first',{writingFailures=0,receiptFailure
       AND OLD.writing_draft_updated_at IS DISTINCT FROM NEW.writing_draft_updated_at
     ) EXECUTE FUNCTION assessment.fixture_sync_writing_timestamp();`);
   await db.exec(await readFile(new URL('../term1-offline-20261107/listening-interruption.sql',import.meta.url),'utf8'));
-  if(PRODUCT===2)await db.exec(await readFile(new URL('../term1-offline-20261107/listening-interruption-k56-phase2.sql',import.meta.url),'utf8'));
+  // Mini uses Task 2 but the serving schema has the shared K56 interruption constraint.
+  await db.exec(await readFile(new URL('../term1-offline-20261107/listening-interruption-k56-phase2.sql',import.meta.url),'utf8'));
  }
  await db.exec(`
   ALTER TABLE assessment.term_test_attempt ADD COLUMN definition_version int DEFAULT 1;

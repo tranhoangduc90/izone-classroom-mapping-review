@@ -20,6 +20,8 @@ Kỹ năng còn mở có thể nhận từ hồ sơ B vào bài chính thức A 
 
 Fixture native dùng roster/nội dung giả, PGlite và Listening nộp thủ công ngắn; ca PostgreSQL kiểm giao dịch SQL. Chúng chưa chứng minh browser/cache/audio đủ thời lượng, AI/Portal, tải vận hành hoặc nguồn cloud. Các log/proof nằm trong hồ sơ riêng tư GOAL Test, không đưa định danh thực vào Git.
 
+Fixture Mini luôn nạp migration gián đoạn K56 phase 2 vì Mini dùng Task 2 nhưng không dùng ràng buộc chỉ Term 1. Đã đối chiếu `k56_listening_interruption_check` đang phục vụ. Browser/native report ca Loa ngoài đã lưu một interrupt, chưa giữ bài chính thức và mở Reading; metadata thực từ browser được envelope trong fixture và đọc qua owner/context/collect vào kho mã hóa cách ly, không suy thành canary Collector VPS/cloud.
+
 ## Trạng thái và bước phát hành
 
 Gói hiện là **ứng viên, chưa phát production**. Còn ghép giao diện Mini qua cả hai thứ tự, cache cũ, nháp và nộp; kiểm/đọc lại policy và dữ liệu cũ trước chuyển. Cần giữ riêng nguồn browser, API/content và lane cloud theo kế hoạch GOAL. Source recipe và migration không tự phát API, bật cờ, thêm lane hoặc gửi điểm.
