@@ -6,6 +6,8 @@ import {sha256,stableStringify} from './learning-domain.js';
 import {createHash} from 'node:crypto';
 import {withTransaction} from './db.js';
 import {catalogVisible,isCatalogAdmin,assertCatalogSource,lockCatalog} from './learning-catalog-archive.js';
+import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
+import {assertSharedLibraryCurrent,sharedLibraryCurrent,sharedLibraryItem} from './learning-shared-library-revisions.js';
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
 const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.sharing_scope,createdAt:row.created_at,
   sourceDraftId:row.source_draft_id,
@@ -14,11 +16,13 @@ const dto=row=>({id:row.id,title:row.title,courseCode:row.course_code,scope:row.
   ...(row.worksheet_id?{worksheetId:row.worksheet_id}:{}),
   ...(row.current_draft_id?{editableDraftId:row.current_draft_id,editableDraftRevision:Number(row.current_revision),editableDraftStatus:row.current_status}:{}),
   ...(row.current_title?{title:row.current_title}:{})});
-export function createLearningFormLibrary({pool,drafts}){
- async function get(id,reviewer,database=pool){
+export function createLearningFormLibrary({pool,drafts,sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}){
+ async function get(id,reviewer,database=pool,{checkCurrent=true}={}){
   const row=(await database.query(`SELECT e.* FROM learning.form_library_entry e WHERE e.id=$1::uuid
     AND (e.sharing_scope='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')}`, [id,reviewer.email])).rows[0];
   if(!row)throw fail('LIBRARY_ENTRY_NOT_FOUND','Không tìm thấy phiếu trong kho bạn được mở.',404);
+  if(checkCurrent&&sharedRevisionCatalog&&row.sharing_scope==='izone')
+   assertSharedLibraryCurrent(id,await sharedLibraryItem(database,id));
   return row;
  }
  function checkedSnapshot(row){
@@ -47,12 +51,50 @@ export function createLearningFormLibrary({pool,drafts}){
   async list({scope='personal',skill='',reviewer,worksheetHeads=false}){
    if(!['personal','izone'].includes(scope))throw fail('LIBRARY_SCOPE_INVALID','Nguồn kho chưa hợp lệ.',400);
    const heads=worksheetHeads&&scope==='personal';
+   const shared=sharedRevisionCatalog&&scope==='izone';
+   const {createCourses} = shared&&sharedEditingEnabled?await sharedCourseCapabilities(pool,reviewer.email):{createCourses:[]};
    const rows=(await pool.query(`SELECT e.*${heads?',w.id AS worksheet_id,w.current_draft_id,d.revision AS current_revision,d.status AS current_status,d.public_definition->>\'title\' AS current_title':''}
      FROM learning.form_library_entry e ${heads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=e.source_draft_id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id AND lower(w.owner_email)=lower(e.owner_email) LEFT JOIN learning.form_draft d ON d.id=w.current_draft_id':''}
-     WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')} ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
-   return rows.map(dto).filter(r=>!skill||r.skills.includes(skill));
+     WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')}
+     ${shared?'AND '+sharedLibraryCurrent('e.id'):''} ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
+   return rows.map(row=>({...dto(row),...(shared?{canEditShared:createCourses.includes(row.course_code)}:{})})).filter(r=>!skill||r.skills.includes(skill));
   },
   async get({id,reviewer}){const row=await get(id,reviewer);return {...dto(row),definition:row.public_definition};},
+  async editShared({id,expectedRevision,expectedHash,operationId,reviewer}){
+   if(!sharedRevisionCatalog||!sharedEditingEnabled)throw fail('SHARED_EDIT_UNAVAILABLE','Sửa bài trong Kho chung hiện chưa mở.',409);
+   const draftId=await withTransaction(pool,async database=>{
+    await lockCatalog(database);
+    const row=await get(id,reviewer,database,{checkCurrent:false});
+    if(row.sharing_scope!=='izone')throw fail('LIBRARY_SCOPE_INVALID','Chọn một bài đã xuất bản trong Kho chung.',400);
+    await assertSharedCourse(database,reviewer.email,row.course_code);
+    if(Number(row.source_revision)!==expectedRevision||row.content_hash!==expectedHash)
+     throw fail('LIBRARY_SOURCE_STALE','Bài đã đổi. Hãy mở lại từ Kho chung.');
+    let item=await sharedLibraryItem(database,id);
+    assertSharedLibraryCurrent(id,item);
+    if(!item)item=(await database.query(`INSERT INTO learning.form_shared_library_item(id,current_entry_id,course_code)
+      VALUES($1,$1,$2) RETURNING *`,[id,row.course_code])).rows[0];
+    const prior=(await database.query(`SELECT d.id,d.owner_email,r.base_entry_id FROM learning.form_draft d
+      LEFT JOIN learning.form_shared_library_revision r ON r.draft_id=d.id WHERE d.create_operation_id=$1`,[operationId])).rows[0];
+    if(prior){
+     if(prior.base_entry_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
+      throw fail('LIBRARY_OPERATION_CONFLICT','Mã thao tác đã dùng cho yêu cầu khác.');
+     return prior.id;
+    }
+    const existing=(await database.query(`SELECT d.id FROM learning.form_shared_library_revision r JOIN learning.form_draft d ON d.id=r.draft_id
+      WHERE r.item_id=$1 AND r.base_entry_id=$2 AND r.published_entry_id IS NULL AND lower(d.owner_email)=lower($3)`,[item.id,id,reviewer.email])).rows[0];
+    if(existing)return existing.id;
+    const source=checkedSnapshot(row);
+    if(source.definition.courseCode!==item.course_code)throw fail('SHARED_COURSE_MISMATCH','Khóa trong bản chụp chưa khớp Kho chung.');
+    const payload=copyAuthoringPayload(source);
+    const draft=(await database.query(`INSERT INTO learning.form_draft(create_operation_id,owner_email,draft_scope,
+      public_definition,private_definition,content_hash) VALUES($1,$2,'izone',$3,$4,$5) RETURNING id`,
+    [operationId,reviewer.email,JSON.stringify(payload.definition),JSON.stringify(payload.gradingKey),payload.contentHash])).rows[0];
+    await database.query(`INSERT INTO learning.form_shared_library_revision(draft_id,item_id,base_entry_id)
+      VALUES($1,$2,$3)`,[draft.id,item.id,id]);
+    return draft.id;
+   });
+   return drafts.get({id:draftId,reviewer});
+  },
   async store({draftId,expectedRevision,expectedHash,scope,operationId,reviewer}){
    if(!['personal','izone'].includes(scope))throw fail('LIBRARY_SCOPE_INVALID','Nguồn kho chưa hợp lệ.',400);
    const draft=await drafts.get({id:draftId,reviewer});

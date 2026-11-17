@@ -5,6 +5,8 @@ import {catalogVisible,assertCatalogSource,lockCatalog} from './learning-catalog
 import {sha256,stableStringify} from './learning-domain.js';
 import {withTransaction} from './db.js';
 import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
+import {lockSharedLibraryDraft} from './learning-catalog-archive.js';
+import {assertSharedLibraryCurrent} from './learning-shared-library-revisions.js';
 import {authorizeLearningClassSql,authorizeLearningJourneyPlanAssignmentSql} from './learning-sql.js';
 import {validateAuthoringPayload,copyAuthoringPayload,FormAuthoringError} from './learning-form-authoring.js';
 import {previewFormImport} from './learning-form-import.js';
@@ -39,7 +41,8 @@ function validateDraftPreview(definition,gradingKey) {
   return checked;
 }
 
-export function createLearningFormDraftService({pool,erpScheduleReader=null,portalAssignmentReader=null}) {
+export function createLearningFormDraftService({pool,erpScheduleReader=null,portalAssignmentReader=null,
+  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
   async function authorizeClass(database,classId,reviewer) {
     const result=await database.query(authorizeLearningClassSql,[reviewer.email,reviewer.canAccessAllClasses,classId]);
     if(result.rowCount!==1) throw error('DRAFT_CLASS_ACCESS_DENIED','Bạn chưa được cấp quyền soạn phiếu cho lớp này.',403);
@@ -80,7 +83,8 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
   }
   const editWorksheet=createWorksheetEditing({pool,owned,dto});
   return {
-    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader,portalAssignmentReader}),
+    ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader,portalAssignmentReader,
+      sharedRevisionCatalog,sharedEditingEnabled}),
     editWorksheet,
     async editAssignedWorksheet({assignmentId,operationId,reviewer}){
       const access=await pool.query(authorizeLearningJourneyPlanAssignmentSql,[assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
@@ -150,6 +154,10 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
     },
     async get({id,reviewer}) {
       const row=await owned(pool,id,reviewer),value=dto(row);
+      if(sharedRevisionCatalog&&row.draft_scope==='izone'){
+        const linked=await pool.query('SELECT 1 FROM learning.form_shared_library_revision WHERE draft_id=$1',[id]);
+        if(linked.rowCount)value.sharedLibraryEdit=true;
+      }
       if(row.status==='published') {
         const assignment=await pool.query('SELECT public_token::text FROM learning.form_assignment WHERE id=$1::uuid;',[row.published_assignment_id]);
         value.publicToken=assignment.rows[0]?.public_token||null;
@@ -159,8 +167,14 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
     async save({id,expectedRevision,sessionNumber=null,definition,gradingKey,reviewer}) {
       const checked=validateAuthoringPayload({definition,gradingKey,allowIncomplete:true});
       return withTransaction(pool,async client=>{
+        const revision=await lockSharedLibraryDraft(client,id,sharedRevisionCatalog);
         const row=await owned(client,id,reviewer,{lock:true});
         const shared=row.draft_scope==='izone';
+        if(revision){
+          if(revision.item.archived_at)assertSharedLibraryCurrent(revision.base_entry_id,revision.item);
+          if(checked.definition.courseCode!==revision.item.course_code)
+            throw error('SHARED_COURSE_MISMATCH','Bản sửa phải giữ khóa của bài trong Kho chung.',409);
+        }
         if((shared||row.draft_scope==='personal')!==(sessionNumber===null))throw error('DRAFT_SCOPE_MISMATCH','Đích lưu nháp không khớp.',400);
         if(shared)await assertSharedCourse(client,reviewer.email,checked.definition.courseCode);
         if(shared&&(await client.query('SELECT 1 FROM learning.form_publication WHERE source_draft_id=$1',[id])).rowCount)
@@ -169,7 +183,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
         if(row.status==='published') throw error('DRAFT_ALREADY_PUBLISHED','Phiếu đã phát hành; hãy sao chép thành nháp mới.');
         if(definition.formVersionId!==row.public_definition.formVersionId) throw error('DRAFT_VERSION_CHANGED','Không đổi ID phiên bản của nháp đang sửa.');
         if(Number(row.revision)===expectedRevision+1&&row.content_hash===checked.contentHash&&storedSession(row.session_number)===sessionNumber) {
-          return {...dto(row),missingAnswers:checked.missingAnswers,replayed:true};
+          return {...dto(row),...(revision?{sharedLibraryEdit:true}:{}),missingAnswers:checked.missingAnswers,replayed:true};
         }
         if(Number(row.revision)!==expectedRevision) throw error('DRAFT_STALE','Nháp đã được lưu ở tab khác. Bản đang soạn chưa được ghi đè; hãy đối chiếu phiên bản mới.');
         const saved=await client.query(`UPDATE learning.form_draft SET public_definition=$2::jsonb,
@@ -182,7 +196,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
         const current=readback.rows[0];
         if(!current||Number(current.revision)!==expectedRevision+1||current.content_hash!==checked.contentHash
           ||storedSession(current.session_number)!==sessionNumber) throw error('DRAFT_READBACK_MISMATCH','Chưa xác nhận được nháp vừa lưu.',500);
-        return {...dto(current),missingAnswers:checked.missingAnswers,replayed:false};
+        return {...dto(current),...(revision?{sharedLibraryEdit:true}:{}),missingAnswers:checked.missingAnswers,replayed:false};
       });
     },
     async copyAssignment({assignmentId,classId,sessionNumber,operationId,reviewer}) {
