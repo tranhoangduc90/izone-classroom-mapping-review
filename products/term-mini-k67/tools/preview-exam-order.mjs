@@ -57,9 +57,9 @@ const configs=new Map();for(const slug of Object.keys(timing))configs.set(slug,a
 const questions=(slug,skill)=>configs.get(slug)[skill].controls.map(c=>`<p data-question-number="${c.number}">Câu ${c.number} · Đáp án thử <span data-answer-slot="${c.number}"></span></p>`).join('');
 const {listeningProfiles}=await import(pathToFileURL(path.join(pages,'term-tests/k67-shared/listening-profiles-v1.mjs')));
 const listeningSections=slug=>{
-  const profile=listeningProfiles[slug];
-  if(!profile)return [{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}];
-  return profile.parts.map(part=>{
+  const parts=slug==='term-test-2'?[1,2,3,4]:listeningProfiles[slug]?.parts;
+  if(!parts)return [{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}];
+  return parts.map(part=>{
     const first=10*(part-1)+1;
     const keys=configs.get(slug).listening.controls.filter(control=>Number(control.number)>=first&&Number(control.number)<first+10)
       .flatMap(control=>control.kind==='pair'?control.keys:[String(control.number)]);
@@ -79,11 +79,12 @@ const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
 const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
+const term2Parallel=process.env.K67_PREVIEW_TERM2_PARALLEL_ENTRY;
 const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
 const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
 const term1R2ConfigFile=process.env.K67_PREVIEW_TERM1_R2_CONFIG;
-const term2Review=term2JourneyMode==='on'&&!term2Audio?3:120;
+const term2Review=term2JourneyMode==='on'&&!term2Audio?Number(process.env.K67_PREVIEW_TERM2_REVIEW_SECONDS||3):120;
 const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>slug===pretestSlug&&nativePretest ? nativePretest.getTiming(slug) : ({...timing[slug],
     listeningReviewSeconds:slug===pretestSlug?2:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
@@ -135,7 +136,8 @@ if(term2JourneyMode==='on'){
     if(createHash('sha256').update(term2Audio).digest('hex')!=='656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e')throw new Error('Sai bản audio Term 2 K67.');
     Object.assign(timing['term-test-2'],{listeningDurationSeconds:1844,listeningTotalSeconds:1964});
   }else Object.assign(timing['term-test-2'],{listeningDurationSeconds:toneSeconds,
-    listeningTotalSeconds:toneSeconds+term2Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
+    listeningTotalSeconds:toneSeconds+term2Review,
+    readingDurationMinutes:Number(process.env.K67_PREVIEW_TERM2_READING_MINUTES||.12),writingDurationMinutes:.2});
 }
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
@@ -164,6 +166,7 @@ const fixtureGradeRequests=[];
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   term1ParallelEntryEnabled:['true','warm-up'].includes(term1Parallel),
+  term2ParallelEntryMode:['true','warm-up'].includes(term2Parallel)?'on':'off',
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
@@ -242,12 +245,39 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 let previewApp=term1Parallel==='warm-up'?fixture.appForTerm1Mode('off'):fixture.app;
+const term2PreviewApps=['true','warm-up'].includes(term2Parallel)
+  ? {off:fixture.appForTerm2Mode('off'),on:fixture.app,drain:fixture.appForTerm2Mode('drain')}
+  : null;
+if(term2PreviewApps && term2Parallel==='warm-up') previewApp=term2PreviewApps.off;
 if (['true','warm-up'].includes(term1Parallel)) outer.post('/preview/term1-parallel-mode',express.json(),(req,res)=>{
   if (!['on','drain'].includes(req.body?.mode)) return res.sendStatus(400);
   previewApp=fixture.appForTerm1Mode(req.body.mode);
   return res.json({ok:true,mode:req.body.mode});
 });
+if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(req,res)=>{
+  if (!['on','drain'].includes(req.body?.mode)) return res.sendStatus(400);
+  previewApp=term2PreviewApps[req.body.mode];
+  return res.json({ok:true,mode:req.body.mode});
+});
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
+  const {rows} = await fixture.db.query(`
+    SELECT a.generation, s.id::text AS session_id,
+           s.erp_course_class_id::text AS native_class_id, j.student_ref::text AS student_ref,
+           s.listening_submitted_at IS NOT NULL AS listening_submitted,
+           a.reading_submitted_at IS NOT NULL AS reading_submitted,
+           a.writing_submitted_at IS NOT NULL AS writing_submitted,
+           a.completed_at IS NOT NULL AS completed,
+           a.listening_answers, a.reading_answers, a.writing_task_1, a.writing_task_2 AS writing,
+           j.sections->'listening'->>'operationId' AS l,
+           j.sections->'reading'->>'operationId' AS r,
+           j.sections->'writing'->>'operationId' AS w
+    FROM assessment.term_test_attempt a
+    JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
+    JOIN assessment.term_k67_cbt_journey j ON j.session_id=s.id AND j.generation=a.generation
+    WHERE a.test_slug='term-test-2' AND a.superseded_at IS NULL`);
+  res.json({rows});
+});
 if (gradingRoundTrip) {
   outer.post('/preview/writing-portal',express.json(),(req,res)=>{
     if(req.get('x-term-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
@@ -351,12 +381,12 @@ if(previousPagesRevision){
   const route=term1JourneyMode==='on'?'term-test-1-computer-based'
     :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
   const files=[`term-tests/${route}/index.html`];
-  // The versioned Term 1 release retains every previous asset path and byte.
-  if (term1JourneyMode!=='on') files.push(`term-tests/${route}/offline-assets.mjs`,
+  // The versioned parallel releases retain every previous asset path and byte.
+  if (term1JourneyMode!=='on' && term2Parallel!=='warm-up') files.push(`term-tests/${route}/offline-assets.mjs`,
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs');
-  if(term2JourneyMode==='on')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
+  if(term2JourneyMode==='on' && term2Parallel!=='warm-up')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt-audio-status-v2.mjs',
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt-audio-status-v2.js',
     'term-tests/term-test-2-computer-based/enhance-terms-cbt.js',
@@ -389,7 +419,7 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
-    ...(entry==='term-test-1-computer-based'?['offline-assets-parallel-v1.mjs']:[]),
+    ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
