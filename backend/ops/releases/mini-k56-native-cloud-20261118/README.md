@@ -1,6 +1,6 @@
 # Mini K56 CBT native journal overlay
 
-Candidate only. This folder does not enable a production route or provision cloud resources.
+This folder contains the runtime overlay and isolated tests. Running the recipe alone does not enable a production route or provision cloud resources; deployment state and canary proofs are recorded separately in the private GOAL Test plan.
 
 `stage.py <captured-journal-directory> <new-output-directory>` adds a Mini CBT router to the captured serving journal. It pins the outer adapter and receipt helper hashes, retains both Term routers and emits a hash manifest. The four modules here are the reviewed generated Mini modules; compare staged bytes before releasing. Keep the complete captured baseline and rollback configuration privately.
 
