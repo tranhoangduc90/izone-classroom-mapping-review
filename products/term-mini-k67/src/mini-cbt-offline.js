@@ -93,8 +93,8 @@ export async function readMiniSectionDefinition(db, session, body, testSlug=slug
   return test;
 }
 
-export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
-  const { session, attempt, record, start, deadline, listening } = state;
+export async function validateMiniCbtSection(db, state, body, testSlug=slug) {
+  const { session, record, start, deadline, listening } = state;
   const observed = Date.parse(body.capturedAt);
   const serverNow = asTime(session.server_now);
   const timeError = () => fail('OFFLINE_REVIEW_REQUIRED', 'Mốc chốt trên máy chưa khớp giờ thi. Bài vẫn được giữ để đối soát.');
@@ -116,7 +116,12 @@ export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
       && hash(nonBlank(body.answers)) !== hash(nonBlank(currentDraft)))) {
     throw fail('OFFLINE_REVISION', 'Bản trên máy chủ có phiên bản khác. Giữ bài để đối soát.');
   }
-  const grade = gradeSection(test[body.section + '_definition'], body.answers, listening ? test.listening_band_adjustment : 0);
+  return {test,grade:gradeSection(test[body.section + '_definition'],body.answers,listening ? test.listening_band_adjustment : 0)};
+}
+
+export async function sealMiniCbtSection(db, state, body, testSlug=slug) {
+  const {session,attempt,record,listening}=state;
+  const {test,grade}=await validateMiniCbtSection(db,state,body,testSlug);
   const answers = JSON.stringify(body.answers);
   const table = listening ? 'term_test_exam_session' : 'term_test_attempt';
   await db.query(`UPDATE assessment.${table} SET ${body.section}_draft=$2::jsonb,${body.section}_draft_revision=$3,

@@ -6,7 +6,7 @@ import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 
 export const explanationSlugs = new Set(['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16']);
-export const explanationAttemptSql = `SELECT
+const explanationAttemptQuery = `SELECT
   attempt.test_slug, attempt.definition_version, attempt.combined_result,
   attempt.listening_answers, attempt.reading_answers,
   definition.listening_definition, definition.reading_definition
@@ -15,7 +15,10 @@ JOIN assessment.test_definition AS definition
   ON definition.slug = attempt.test_slug AND definition.version = attempt.definition_version
 WHERE attempt.id = $1::uuid AND attempt.completed_at IS NOT NULL
   AND (attempt.test_slug = 'mini-test-lesson-5' OR attempt.writing_scope = 'lr_only'
-    OR attempt.writing_submitted_at IS NOT NULL);`;
+    OR attempt.writing_submitted_at IS NOT NULL)`;
+export const explanationAttemptSql = `${explanationAttemptQuery};`;
+const officialExplanationAttemptSql = `${explanationAttemptQuery}
+  AND attempt.superseded_at IS NULL AND attempt.writing_submitted_at IS NOT NULL;`;
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
@@ -86,17 +89,20 @@ export async function streamPretestReviewAudio(assetDir, review, res) {
   await pipeline(createReadStream(file), res);
 }
 
-export function mountAnswerExplanations(app, { pool, config, limiter }) {
-  app.post('/api/term-tests/result/explanations', limiter, async (req, res, next) => {
+export function mountAnswerExplanations(app, { pool, config, limiter, authorizeOfficialResult }) {
+  app.post('/api/term-tests/result/explanations', limiter, ...(authorizeOfficialResult ? [authorizeOfficialResult] : []), async (req, res, next) => {
     res.set('Cache-Control', 'no-store, private');
-    const token = req.body?.attemptToken;
+    const token = req.officialAttemptResult?.attemptToken || req.body?.attemptToken;
     if (typeof token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     try {
-      const { rows } = await pool.query(explanationAttemptSql, [token]);
-      if (!rows.length) return res.status(404).json({ ok: false, error: 'EXPLANATIONS_NOT_READY',
+      const query = req.officialAttemptResult ? officialExplanationAttemptSql : explanationAttemptSql;
+      const { rows } = await pool.query(query, [token]);
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'EXPLANATIONS_NOT_READY',
         message: 'Chỉ xem giải thích sau khi đã hoàn thành mọi kỹ năng của đề.' });
+      }
       const review = await loadAnswerExplanations(config.termTestAssetDir, rows[0]);
       if (!review) return res.status(404).json({ ok: false, error: 'EXPLANATIONS_UNAVAILABLE',
         message: 'Lời giải của đề này chưa sẵn sàng. Bạn có thể thử lại sau.' });

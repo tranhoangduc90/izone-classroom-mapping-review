@@ -243,6 +243,8 @@ export const insertTermTestExamSessionSql = `WITH inserted AS (
     AND existing.erp_student_contact_id = $5::bigint
     AND existing.listening_submitted_at IS NULL
     AND existing.superseded_at IS NULL
+    AND (existing.test_slug<>'term-test-1' OR (to_jsonb(existing)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+    AND (existing.test_slug<>'term-test-2' OR (to_jsonb(existing)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
     AND NOT EXISTS (SELECT 1 FROM inserted)
 )
 SELECT
@@ -285,7 +287,7 @@ WHERE id = $1::uuid
   AND superseded_at IS NULL
   AND prepared_at >= now() - interval '8 hours';`;
 
-export const supersedeStaleTermTestExamSessionsSql = `UPDATE assessment.term_test_exam_session
+export const supersedeStaleTermTestExamSessionsSql = `UPDATE assessment.term_test_exam_session AS session
 SET
   superseded_at = now(),
   updated_at = now()
@@ -296,6 +298,8 @@ WHERE test_slug = $1
   AND listening_submitted_at IS NULL
   AND superseded_at IS NULL
   AND attempt_mode <> 'answer_sheet'
+  AND (test_slug<>'term-test-1' OR (to_jsonb(session)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+  AND (test_slug<>'term-test-2' OR (to_jsonb(session)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
   AND prepared_at < now() - interval '8 hours';`;
 
 export const findLatestTermTestAttemptForStudentSql = `SELECT
@@ -324,6 +328,8 @@ WHERE attempt.test_slug = $1
   AND attempt.erp_student_contact_id = $4::bigint
   AND attempt.listening_submitted_at IS NOT NULL
   AND attempt.superseded_at IS NULL
+  AND (attempt.test_slug<>'term-test-1' OR (to_jsonb(attempt)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+  AND (attempt.test_slug<>'term-test-2' OR (to_jsonb(attempt)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
 ORDER BY attempt.listening_submitted_at DESC, attempt.created_at DESC
 LIMIT 1;`;
 
@@ -345,6 +351,8 @@ WHERE attempt.test_slug = $1
   AND attempt.listening_submitted_at IS NOT NULL
   AND attempt.completed_at IS NULL
   AND attempt.superseded_at IS NULL
+  AND (attempt.test_slug<>'term-test-1' OR (to_jsonb(attempt)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+  AND (attempt.test_slug<>'term-test-2' OR (to_jsonb(attempt)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
   AND attempt.created_at >= now() - interval '8 hours'
 ORDER BY
   attempt.reading_draft_updated_at DESC NULLS LAST,
@@ -877,6 +885,7 @@ export const fetchTermTestResultSql = `SELECT
   attempt.reading_draft_updated_at,
   attempt.reading_submitted_at,
   attempt.completed_at,
+  attempt.superseded_at,
   attempt.writing_task_1,
   attempt.writing_task_2,
   attempt.writing_draft_revision,
@@ -911,6 +920,7 @@ export const fetchTermTestAttemptReviewSql = `SELECT
   attempt.writing_task_1,
   attempt.writing_task_2,
   attempt.completed_at,
+  attempt.superseded_at,
   attempt.writing_submitted_at
 FROM assessment.term_test_attempt AS attempt
 WHERE attempt.id = $1::uuid

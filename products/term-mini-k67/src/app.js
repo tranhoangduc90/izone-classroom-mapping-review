@@ -19,7 +19,7 @@ import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
 import { mountMiniCbtJourney, mountPretestCbtJourney, mountPretestPaperJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
-import { mountExamOrder } from './exam-order.js';
+import { mountExamOrder, readOfficialAttempt, officialResultReady } from './exam-order.js';
 import { mountTerm1ListeningRetake } from './term1-listening-retake.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -37,6 +37,8 @@ import {mountReadinessTeacher} from './readiness-teacher.js';
 import { findTermTestClientEventAttemptSql, termTestTeacherOptionsSql } from './sql.js';
 import { completeReadingAttemptSql, fetchTermTestAttemptReviewSql, fetchTermTestResultSql, findTermTestExamSessionAssetSql, findTermTestListeningSubmissionSql, findAttemptForReadingSql, findActiveTermTestAttemptForStudentSql, findLatestTermTestAttemptForStudentSql, findTermTestAttemptSlugSql, findStudentForTermTestSql, insertProtectedListeningAttemptSql, insertTermTestExamSessionSql, insertListeningAttemptSql, findStudentForMiniTestSql, listTermTestTeacherOptionsSql, listTermTestTeacherResultsSql, fetchTermTestTeacherAttemptReviewSql, fetchTermTestTeacherWritingDetailSql, listTermTestRosterSql, registerTemporaryTermTestStudentSql, resetDemoTermTestStudentSql, resumeTermTestExamSessionSql, resumeTermTestAttemptContentSql, saveReadingDraftSql, saveTermTestWritingSql, saveTermTestListeningDraftSql, startReadingAttemptSql, startTermTestListeningSessionSql, supersedeStaleTermTestExamSessionsSql, upsertMiniTestResultSql } from "./sql.js";
 import { buildCombinedResult, buildListeningResult, gradeSection, parseStoredTest } from "./term-tests.js";
+import { term1SubmissionGuardError } from './term1-submission-guard.js';
+import { commitTerm1ListeningContinuation, term1ParallelEntryInUse, Term1ContinuationError } from './term1-section-continuation.js';
 import { buildErpGradePayload, deliverErpGrades } from "./erp-sync.js";
 import { buildMiniTestResult } from "./mini-tests.js";
 import { buildTermTestWritingImageToken, decodeTermTestWritingImageDataUrl, TermTestWritingGradingError, verifyTermTestWritingImageToken } from "./term-test-writing-grading.js";
@@ -92,6 +94,10 @@ const readingSubmissionSchema = z.object({
 });
 
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
+const officialIdentitySchema = z.object({
+  classCode: z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/),
+  studentRef: z.uuid()
+});
 
 const demoResetSchema = z.object({
   classCode: z.literal('CODEXDEMO806'),
@@ -1103,20 +1109,37 @@ export function createApp({
         test_slug: session.slug,
         definition_version: session.version
       });
-      const selectedSubmission = chooseTimedSubmissionAnswers({
-        timedOut: Boolean(session.listening_timed_out),
-        graceActive: Boolean(session.listening_submission_grace_active),
-        submittedAnswers: parsed.data.answers,
-        submittedRevision: parsed.data.draftRevision,
-        serverDraft: session.listening_draft,
-        serverRevision: session.listening_draft_revision
-      });
-      const effectiveAnswers = selectedSubmission.answers;
-      const listeningResult = gradeSection(
-        testDefinition.listening_definition,
-        effectiveAnswers,
-        testDefinition.listening_band_adjustment
-      );
+      const evaluateSubmission = state => {
+        const selected = chooseTimedSubmissionAnswers({
+          timedOut: Boolean(state.listening_timed_out),
+          graceActive: Boolean(state.listening_submission_grace_active),
+          submittedAnswers: parsed.data.answers,
+          submittedRevision: parsed.data.draftRevision,
+          serverDraft: state.listening_draft,
+          serverRevision: state.listening_draft_revision
+        });
+        return {...selected,listeningResult:gradeSection(testDefinition.listening_definition,
+          selected.answers,testDefinition.listening_band_adjustment)};
+      };
+      if (term1ParallelEntryInUse(config) && slug.data==='term-test-1') {
+        const resumed = await commitTerm1ListeningContinuation(pool,session,parsed.data,testDefinition,evaluateSubmission);
+        if (resumed) {
+          if (resumed.official) {
+            logTermTestEvent('submission_completed',slug.data,parsed.data.examSessionToken,{
+              section:'listening',revision:parsed.data.draftRevision,answeredCount:countAnswered(resumed.answers),
+              timedOut:resumed.timedOut,snapshotSource:resumed.source,receiptId:resumed.receipt.receiptId,
+              reason:'TERM1_LISTENING_CONTINUATION',
+            });
+            const official = resumed.official;
+            await trySyncErpGrades(syncErpGrades,{...official,attempt_token:official.id,
+              class_id:String(official.erp_course_class_id),student_id:String(official.erp_student_contact_id),
+              class_name:official.class_name_snapshot,student_name:official.student_name_snapshot},resumed.receipt.result);
+          }
+          return res.json({ok:true,receipt:resumed.receipt});
+        }
+      }
+      const selectedSubmission = evaluateSubmission(session);
+      const {answers:effectiveAnswers,listeningResult} = selectedSubmission;
       const inserted = await pool.query(insertProtectedListeningAttemptSql, [
         parsed.data.clientSubmissionId,
         parsed.data.examSessionToken,
@@ -1126,6 +1149,20 @@ export function createApp({
       ]);
       const attempt = inserted.rows[0];
       if (!attempt || attempt.exam_session_token !== parsed.data.examSessionToken) {
+        if (term1ParallelEntryInUse(config) && slug.data === 'term-test-1') {
+          // INSERT ... ON CONFLICT DO NOTHING can observe the unique index winner
+          // after a concurrent commit even if its starting snapshot saw no winner.
+          const official = await pool.query(`SELECT 1 FROM assessment.term_test_attempt
+            WHERE test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3
+              AND erp_student_contact_id=$4 AND superseded_at IS NULL
+              AND exam_session_id IS DISTINCT FROM $5::uuid
+              AND (listening_submitted_at IS NOT NULL OR reading_submitted_at IS NOT NULL) LIMIT 1`,
+          [slug.data,session.definition_version,session.class_id,session.student_id,parsed.data.examSessionToken]);
+          if (official.rowCount) {
+            const conflict = term1SubmissionGuardError({code:'P6741'});
+            return res.status(conflict.status).json({ok:false,error:conflict.code,message:conflict.message});
+          }
+        }
         return res.status(409).json({ ok: false, error: 'SUBMISSION_ID_CONFLICT', message: 'Mã gửi bài đã được dùng cho lượt làm khác.' });
       }
       const result = attempt.combined_result || buildListeningResult(testDefinition, attempt.listening_result);
@@ -1399,27 +1436,77 @@ export function createApp({
     });
   }));
 
+  const authorizeOfficialResult = asyncRoute(async (req, res, next) => {
+    const term1 = Object.hasOwn(req.body || {}, 'officialTerm1');
+    const term2 = Object.hasOwn(req.body || {}, 'officialTerm2');
+    if (!term1 && !term2) return next();
+    const key = term1 ? 'officialTerm1' : 'officialTerm2';
+    const slug = term1 ? 'term-test-1' : 'term-test-2';
+    const enabled = term1 ? term1ParallelEntryInUse(config) : ['on','drain'].includes(config.term2ParallelEntryMode);
+    if (!enabled) {
+      return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
+    }
+    const identity = officialIdentitySchema.safeParse(req.body[key]);
+    if (!identity.success || (term1 && term2) || req.body.attemptToken) {
+      return res.status(400).json({ok:false, error:'INVALID_RESULT_IDENTITY', message:'Hãy xác nhận lại lớp và họ tên.'});
+    }
+    return requireContext(req, res, async () => {
+      try {
+        const {classCode, studentRef} = identity.data;
+        const {rows} = await readPreparedStudent(req, classCode, slug, studentRef);
+        const student = rows.length === 1 ? rows[0] : null;
+        const official = student && await readOfficialAttempt(pool,
+          [slug, student.definition_version, student.class_id, student.student_id]);
+        if (!officialResultReady(official)) {
+          return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
+        }
+        req.officialAttemptResult = {attemptToken:official.id, studentRef, examMode:official.exam_mode, key};
+        return next();
+      } catch (error) {
+        if (error.code==='EXAM_HISTORY_REVIEW') {
+          return res.status(error.status).json({ok:false, error:error.code, message:error.message});
+        }
+        return next(error);
+      }
+    });
+  });
   app.locals.termTestResultStream = registerTermTestResultStream(app, { ...resultStreamOptions, pool, limiter: testReadLimiter });
-  mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter });
+  mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter, authorizeOfficialResult });
 
-  app.post('/api/term-tests/result', testReadLimiter, asyncRoute(async (req, res) => {
-    const parsed = resultRequestSchema.safeParse(req.body);
+  app.post('/api/term-tests/result', testReadLimiter, authorizeOfficialResult, asyncRoute(async (req, res) => {
+    const official = req.officialAttemptResult;
+    const parsed = resultRequestSchema.safeParse(official || req.body);
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     const result = await pool.query(fetchTermTestResultSql, [parsed.data.attemptToken]);
-    if (result.rowCount !== 1) {
+    if (result.rowCount !== 1 || (official && (result.rows[0].superseded_at || !officialResultReady(result.rows[0])))) {
       return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
     }
     const row = result.rows[0];
     const termTestResult = row.combined_result || buildListeningResult(row, row.listening_result);
-    const grading = await ensureTermTestWritingGrading(row);
-    const portalSyncStatus = await trySyncErpGrades(
+    const grading = official ? await termTestWritingGradingService?.getStatus?.(row.attempt_token) : await ensureTermTestWritingGrading(row);
+    const portalSyncStatus = official ? null : await trySyncErpGrades(
       syncErpGrades,
       row,
       termTestResult,
       grading?.ready ? grading.writingScore : null
     );
+    if (official) {
+      if (req.body.includeContent === true && !requireTermTestAssets(res)) return;
+      const writing = serializeTermTestWriting(row, grading);
+      delete writing.sourceAttemptId;
+      if (grading?.tasks) writing.grading = {...grading, tasks:grading.tasks.map(({source, ...task}) => {
+        const {attemptId, ...ruleSource} = source || {};
+        return source ? {...task, source:ruleSource} : task;
+      })};
+      return res.json({
+        ok:true, [official.key]:true, studentRef:official.studentRef, testSlug:row.test_slug, examMode:official.examMode,
+        className:row.class_name, studentName:row.student_name, completed:true, completedAt:row.completed_at,
+        writing, result:termTestResult,
+        ...(req.body.includeContent === true ? {content:await termTestAssetService.getContent(row.test_slug)} : {})
+      });
+    }
     return res.json({
       ok: true,
       attemptToken: row.attempt_token,
@@ -1440,14 +1527,14 @@ export function createApp({
     });
   }));
 
-  app.post('/api/term-tests/result/review', testReadLimiter, asyncRoute(async (req, res) => {
+  app.post('/api/term-tests/result/review', testReadLimiter, authorizeOfficialResult, asyncRoute(async (req, res) => {
     if (!requireTermTestAssets(res)) return;
-    const parsed = resultRequestSchema.safeParse(req.body);
+    const parsed = resultRequestSchema.safeParse(req.officialAttemptResult || req.body);
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     const result = await pool.query(fetchTermTestAttemptReviewSql, [parsed.data.attemptToken]);
-    if (result.rowCount !== 1) {
+    if (result.rowCount !== 1 || (req.officialAttemptResult && result.rows[0].superseded_at)) {
       return res.status(404).json({
         ok: false,
         error: 'ATTEMPT_REVIEW_NOT_READY',
@@ -1773,6 +1860,9 @@ export function createApp({
   });
 
   app.use((error, _req, res, _next) => {
+    if (error instanceof Term1ContinuationError) return res.status(error.status).json({ok:false,error:error.code,message:error.message});
+    const protectedSubmission = term1SubmissionGuardError(error);
+    if (protectedSubmission) return res.status(409).json({ok:false,error:protectedSubmission.code,message:protectedSubmission.message});
     if(error?.code==='P6740')return res.status(409).json({ok:false,error:'TIMER_SESSION_REQUIRED',message:'Lượt đang làm ở trang Listening không audio.'});
     if(error?.code==='P6730')return res.status(409).json({ok:false,error:'AUDIO_END_NOT_CONFIRMED',message:'Audio chưa được xác nhận phát hết. Bài làm vẫn được giữ.'});
     if(error?.code==='P6731')return res.status(409).json({ok:false,error:'LISTENING_REVIEW_ACTIVE',message:'Bạn vẫn còn thời gian rà bài Listening sau khi nghe hết audio.'});

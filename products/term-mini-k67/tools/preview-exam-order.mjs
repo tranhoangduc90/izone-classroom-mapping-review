@@ -57,9 +57,9 @@ const configs=new Map();for(const slug of Object.keys(timing))configs.set(slug,a
 const questions=(slug,skill)=>configs.get(slug)[skill].controls.map(c=>`<p data-question-number="${c.number}">Câu ${c.number} · Đáp án thử <span data-answer-slot="${c.number}"></span></p>`).join('');
 const {listeningProfiles}=await import(pathToFileURL(path.join(pages,'term-tests/k67-shared/listening-profiles-v1.mjs')));
 const listeningSections=slug=>{
-  const profile=listeningProfiles[slug];
-  if(!profile)return [{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}];
-  return profile.parts.map(part=>{
+  const parts=slug==='term-test-2'?[1,2,3,4]:listeningProfiles[slug]?.parts;
+  if(!parts)return [{label:'Listening thử',range:'Questions',html:questions(slug,'listening')}];
+  return parts.map(part=>{
     const first=10*(part-1)+1;
     const keys=configs.get(slug).listening.controls.filter(control=>Number(control.number)>=first&&Number(control.number)<first+10)
       .flatMap(control=>control.kind==='pair'?control.keys:[String(control.number)]);
@@ -76,12 +76,18 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
 });
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
+const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
+const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
+const term2ReportCases=process.env.K67_PREVIEW_TERM2_REPORT_CASES==='true';
+if(term1ReportCases&&term2ReportCases)throw new Error('Select one Listening report fixture.');
+const reportSlug=term1ReportCases?'term-test-1':term2ReportCases?'term-test-2':null;
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
+const term2Parallel=process.env.K67_PREVIEW_TERM2_PARALLEL_ENTRY;
 const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
 const term1Review=term1JourneyMode==='on'&&!term1Audio?3:120;
 const term1R2ConfigFile=process.env.K67_PREVIEW_TERM1_R2_CONFIG;
-const term2Review=term2JourneyMode==='on'&&!term2Audio?3:120;
+const term2Review=term2JourneyMode==='on'&&!term2Audio?Number(process.env.K67_PREVIEW_TERM2_REVIEW_SECONDS||3):120;
 const term2R2ConfigFile=process.env.K67_PREVIEW_TERM2_R2_CONFIG;
 const assets={supports:slug=>Boolean(timing[slug]),getTiming:slug=>slug===pretestSlug&&nativePretest ? nativePretest.getTiming(slug) : ({...timing[slug],
     listeningReviewSeconds:slug===pretestSlug?2:slug==='mini-test-lesson-5'?miniReview:slug==='term-test-1'?term1Review:slug==='term-test-2'?term2Review:120}),
@@ -125,14 +131,16 @@ if(term1JourneyMode==='on'||retakeMode==='on'){
     if(createHash('sha256').update(term1Audio).digest('hex')!=='9af027eaaf402acc230fdaeff11bcc1b792b62e55d75067f1a2bcf2392b485f8')throw new Error('Sai bản audio Term 1 K67.');
     Object.assign(timing['term-test-1'],{listeningDurationSeconds:1735,listeningTotalSeconds:1855});
   }else Object.assign(timing['term-test-1'],{listeningDurationSeconds:toneSeconds,
-    listeningTotalSeconds:toneSeconds+term1Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
+    listeningTotalSeconds:toneSeconds+term1Review,
+    readingDurationMinutes:Number(process.env.K67_PREVIEW_TERM1_READING_MINUTES||.12),writingDurationMinutes:.2});
 }
 if(term2JourneyMode==='on'){
   if(term2Audio){
     if(createHash('sha256').update(term2Audio).digest('hex')!=='656921dc9888dcfe778eb0cfa6b61491fd906500edde28054d53d26194df219e')throw new Error('Sai bản audio Term 2 K67.');
     Object.assign(timing['term-test-2'],{listeningDurationSeconds:1844,listeningTotalSeconds:1964});
   }else Object.assign(timing['term-test-2'],{listeningDurationSeconds:toneSeconds,
-    listeningTotalSeconds:toneSeconds+term2Review,readingDurationMinutes:.12,writingDurationMinutes:.2});
+    listeningTotalSeconds:toneSeconds+term2Review,
+    readingDurationMinutes:Number(process.env.K67_PREVIEW_TERM2_READING_MINUTES||.12),writingDurationMinutes:.2});
 }
 const miniR2ConfigFile = process.env.K67_PREVIEW_MINI_R2_CONFIG;
 const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
@@ -146,25 +154,28 @@ const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
 const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
-const journalFixture=holdSlug&&journalSource
-  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
+const journalSlug=reportSlug||holdSlug;
+const journalFixture=journalSlug&&journalSource
+  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,journalSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
 const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbtLrHoldClasses:holdClass}
   :process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
   ? {termCbtLrHoldHours:2,termCbtLrHoldLimit:20,
     ...(holdSlug==='term-test-1'?{term1CbtLrHoldClasses:holdClass}:{term2CbtLrHoldClasses:holdClass})} : {};
 const fakeWorkerKey='fixture-k67-local-writing-grader-only';
-const gradingRoundTrip=Boolean(termHoldSlug&&journalFixture)
+const gradingRoundTrip=Boolean(termHoldSlug)
   &&process.env.K67_PREVIEW_WRITING_RESULT==='true';
 const fixtureGradeRequests=[];
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
+  term1ParallelEntryEnabled:['true','warm-up'].includes(term1Parallel),
+  term2ParallelEntryMode:['true','warm-up'].includes(term2Parallel)?'on':'off',
   mountJournal:journalFixture?.mount,
   writingHold:{
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
-    ...writingHoldEnabled&&journalFixture&&{writingTestSyncSecret:fakeWorkerKey}},
+    ...writingHoldEnabled&&(journalFixture||gradingRoundTrip)&&{writingTestSyncSecret:fakeWorkerKey}},
   termTestWritingGradingService:writingHoldEnabled ? {
     ensureSubmission:input=>writingGrading.ensureSubmission(input),
     ensureSubmissionInTransaction:(db,input)=>writingGrading.ensureSubmissionInTransaction(db,input),
@@ -198,6 +209,13 @@ if(listeningContinuityEnabled&&!pretestMode){
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
+if(reportSlug){
+  for(let n=1;n<=5;n++){
+    const ref='91000000-0000-4000-8000-'+String(n).padStart(12,'0');
+    await fixture.db.query('INSERT INTO mapping.student_mapping_review VALUES($1,1992200,$2,$3,$4)',
+      [ref,991000+n,'Học viên báo âm thanh '+n,'approved']);
+  }
+}
 if(pretestMode){
   await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
     INSERT INTO mapping.student_mapping_review VALUES
@@ -229,7 +247,40 @@ for(const slug of Object.keys(timing)){
   );
 }
 const outer=express();
+let previewApp=term1Parallel==='warm-up'?fixture.appForTerm1Mode('off'):fixture.app;
+const term2PreviewApps=term2Parallel==='warm-up'
+  ? {off:fixture.appForTerm2Mode('off'),on:fixture.app,drain:fixture.appForTerm2Mode('drain')}
+  : null;
+if(term2PreviewApps && term2Parallel==='warm-up') previewApp=term2PreviewApps.off;
+if (['true','warm-up'].includes(term1Parallel)) outer.post('/preview/term1-parallel-mode',express.json(),(req,res)=>{
+  if (!['on','drain'].includes(req.body?.mode)) return res.sendStatus(400);
+  previewApp=fixture.appForTerm1Mode(req.body.mode);
+  return res.json({ok:true,mode:req.body.mode});
+});
+if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(req,res)=>{
+  if (!['on','drain'].includes(req.body?.mode)) return res.sendStatus(400);
+  previewApp=term2PreviewApps[req.body.mode];
+  return res.json({ok:true,mode:req.body.mode});
+});
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
+  const {rows} = await fixture.db.query(`
+    SELECT a.generation, s.id::text AS session_id,
+           s.erp_course_class_id::text AS native_class_id, j.student_ref::text AS student_ref,
+           s.listening_submitted_at IS NOT NULL AS listening_submitted,
+           a.reading_submitted_at IS NOT NULL AS reading_submitted,
+           a.writing_submitted_at IS NOT NULL AS writing_submitted,
+           a.completed_at IS NOT NULL AS completed,
+           a.listening_answers, a.reading_answers, a.writing_task_1, a.writing_task_2 AS writing,
+           j.sections->'listening'->>'operationId' AS l,
+           j.sections->'reading'->>'operationId' AS r,
+           j.sections->'writing'->>'operationId' AS w
+    FROM assessment.term_test_attempt a
+    JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
+    JOIN assessment.term_k67_cbt_journey j ON j.session_id=s.id AND j.generation=a.generation
+    WHERE a.test_slug='term-test-2' AND a.superseded_at IS NULL`);
+  res.json({rows});
+});
 if (gradingRoundTrip) {
   outer.post('/preview/writing-portal',express.json(),(req,res)=>{
     if(req.get('x-term-test-sync')!==fakeWorkerKey)return res.sendStatus(403);
@@ -249,11 +300,26 @@ if (gradingRoundTrip) {
   });
 }
 if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
-  const attempt=String(req.query.attempt||'');
+  const bySession=Boolean(reportSlug)&&typeof req.query.session==='string';
+  const attempt=String((bySession?req.query.session:req.query.attempt)||'');
   if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
-  const result=await journalFixture.read(attempt,req.query.archive==='1');
+  const result=await journalFixture.read(attempt,req.query.archive==='1',bySession);
   res.json(result);
 });
+if(reportSlug){
+  let journalPaused=false;
+  const previewId=reportSlug==='term-test-1'?'term1':'term2';
+  outer.post('/preview/'+previewId+'-report-journal',express.json(),(req,res)=>{
+    if(typeof req.body?.paused!=='boolean')return res.sendStatus(400);
+    journalPaused=req.body.paused;
+    return res.json({ok:true});
+  });
+  outer.post('/api/term-tests/'+reportSlug+'/journal-events',(_req,res,next)=>{
+    if(journalPaused)return res.sendStatus(503);
+    next();
+  });
+  outer.post('/api/term-tests/'+reportSlug+'/listening/report',(_req,res)=>res.sendStatus(503));
+}
 if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
   const {attempt,operation}=req.query;
   const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -318,11 +384,13 @@ if(previousPagesRevision){
   if(!/^[a-f0-9]{40}$/.test(previousPagesRevision))throw new Error('Revision Pages thử không hợp lệ.');
   const route=term1JourneyMode==='on'?'term-test-1-computer-based'
     :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
-  const files=[`term-tests/${route}/index.html`,`term-tests/${route}/offline-assets.mjs`,
+  const files=[`term-tests/${route}/index.html`];
+  // The versioned parallel releases retain every previous asset path and byte.
+  if (term1JourneyMode!=='on' && term2Parallel!=='warm-up') files.push(`term-tests/${route}/offline-assets.mjs`,
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
-    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs'];
-  if(term2JourneyMode==='on')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
+    'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs');
+  if(term2JourneyMode==='on' && term2Parallel!=='warm-up')files.push(`term-tests/${route}/offline-assets-audio-status-v2.mjs`,
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt-audio-status-v2.mjs',
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt-audio-status-v2.js',
     'term-tests/term-test-2-computer-based/enhance-terms-cbt.js',
@@ -355,6 +423,7 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
+    ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
@@ -381,7 +450,9 @@ outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-ba
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));
 outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-lesson-5(?:-computer-based)?)\/)(?:index.html)?$/,async(req,res,next)=>{
   try {const file=path.join(pages,req.path.replace(/^\//,''),req.path.endsWith('/')?'index.html':'');
-    const html=(await readFile(file,'utf8')).replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
+    const source=await readFile(file,'utf8');
+    const local=term1ReportCases?source.replace(/<meta name="izone-term1-journal-ingress"[^>]+>/,''):source;
+    const html=local.replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
       .replace(/(<body[^>]*>)/,`$1<aside class="preview-banner" role="status"><span><strong>Bản thử K67</strong> · Đề và tên giả · ${miniAudio?'Audio Mini thật':'Audio giả'} · Không gửi điểm hoặc chấm AI bên ngoài</span><button id="resetPreview" type="button">Làm lại bản thử</button></aside>`)
       .replace('</body>','<script src="/preview-only.js"></script></body>');res.type('html').send(html);
   }catch(e){next(e);}
@@ -404,7 +475,7 @@ if (holdSlug) outer.use((req,_res,next)=>{
   if(!Number.isSafeInteger(now)||Math.abs(Date.now()-now)>180_000)return next();
   sealClock.run(now,next);
 });
-outer.use(fixture.app);
+outer.use((req,res,next)=>previewApp(req,res,next));
 const refresh=setInterval(()=>fixture.db.exec('UPDATE mapping.k67_context_state SET captured_at=now()').catch(console.error),30000);
 const server=outer.listen(port,'127.0.0.1',()=>console.log(`Bản thử K67: http://127.0.0.1:${port}/term-tests/?class=IC2304`));
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{clearInterval(refresh);server.close(async()=>{await fixture.db.close();process.exit(0);});});

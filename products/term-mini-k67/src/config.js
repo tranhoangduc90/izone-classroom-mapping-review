@@ -7,6 +7,8 @@ const positive = (min, max, fallback) => z.coerce.number().int().min(min).max(ma
 const schema = z.object({
   K67_ENV: z.enum(['production', 'test', 'development']).default('production'),
   K67_READ_FIRST_NEW_ENABLED: z.enum(['true','false']).default('false'),
+  K67_TERM1_PARALLEL_ENTRY_ENABLED: z.enum(['true','false']).default('false'),
+  K67_TERM1_PARALLEL_ENTRY_MODE: z.enum(['off','on','drain']).optional(),
   K67_MINI_PAPER_OFFLINE_MODE: z.enum(['off','drain','on']).default('off'),
   K67_MINI_CBT_OFFLINE_MODE: z.enum(['off','drain','on']).default('off'),
   K67_MINI_CBT_JOURNEY_MODE: z.enum(['off','drain','on']).default('off'),
@@ -19,6 +21,7 @@ const schema = z.object({
   K67_TERM1_LISTENING_TIMER_MODE: z.enum(['off','drain','on']).default('off'),
   K67_TERM1_LISTENING_RETAKE_SECRET: z.union([z.literal(''),secret]).default(''),
   K67_TERM2_CBT_JOURNEY_MODE: z.enum(['off','drain','on']).default('off'),
+  K67_TERM2_PARALLEL_ENTRY_MODE: z.enum(['off','drain','on']).default('off'),
   K67_TERM2_WRITING_HOLD_HOURS: z.coerce.number().int().min(0).max(72).default(0),
   K67_TERM2_WRITING_HOLD_LIMIT: z.coerce.number().int().min(0).max(20_000).default(0),
   K67_TERM2_WRITING_HOLD_CLASSES: z.string().regex(/^(?:\*|[A-Z0-9._-]{2,32}(?:,[A-Z0-9._-]{2,32})*)?$/).default(''),
@@ -122,6 +125,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv: p.K67_ENV, port: p.K67_PORT,
     readFirstNewEnabled: p.K67_READ_FIRST_NEW_ENABLED === 'true',
+    term1ParallelEntryMode: p.K67_TERM1_PARALLEL_ENTRY_MODE ?? (p.K67_TERM1_PARALLEL_ENTRY_ENABLED==='true'?'on':'off'),
     miniPaperOfflineMode: p.K67_MINI_PAPER_OFFLINE_MODE,
     miniCbtOfflineMode: p.K67_MINI_CBT_OFFLINE_MODE,
     miniCbtJourneyMode: p.K67_MINI_CBT_JOURNEY_MODE,
@@ -134,6 +138,7 @@ export function loadConfig(env = process.env) {
     term1ListeningTimerMode: p.K67_TERM1_LISTENING_TIMER_MODE,
     term1ListeningRetakeSecret: p.K67_TERM1_LISTENING_RETAKE_SECRET,
     term2CbtJourneyMode: p.K67_TERM2_CBT_JOURNEY_MODE,
+    term2ParallelEntryMode: p.K67_TERM2_PARALLEL_ENTRY_MODE,
     term2WritingHoldHours: p.K67_TERM2_WRITING_HOLD_HOURS,
     term2WritingHoldLimit: p.K67_TERM2_WRITING_HOLD_LIMIT,
     term2WritingHoldClasses: new Set(p.K67_TERM2_WRITING_HOLD_CLASSES.split(',').filter(Boolean)),
