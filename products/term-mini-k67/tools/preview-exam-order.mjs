@@ -77,6 +77,7 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
+const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
 const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
 const miniReview=journeyMode==='on'?Number(process.env.K67_PREVIEW_MINI_REVIEW_SECONDS||120):120;
@@ -148,8 +149,9 @@ const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
 const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
-const journalFixture=holdSlug&&journalSource
-  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,holdSlug) : null;
+const journalSlug=term1ReportCases?'term-test-1':holdSlug;
+const journalFixture=journalSlug&&journalSource
+  ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,journalSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
 const lrHold=miniHoldEnabled?{miniCbtLrHoldHours:2,miniCbtLrHoldLimit:20,miniCbtLrHoldClasses:holdClass}
   :process.env.K67_PREVIEW_TERM_CBT_LR_HOLD==='true'
@@ -201,6 +203,13 @@ if(listeningContinuityEnabled&&!pretestMode){
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
+if(term1ReportCases){
+  for(let n=1;n<=4;n++){
+    const ref='91000000-0000-4000-8000-'+String(n).padStart(12,'0');
+    await fixture.db.query('INSERT INTO mapping.student_mapping_review VALUES($1,1992200,$2,$3,$4)',
+      [ref,991000+n,'Học viên báo âm thanh '+n,'approved']);
+  }
+}
 if(pretestMode){
   await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
     INSERT INTO mapping.student_mapping_review VALUES
@@ -263,6 +272,19 @@ if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
   const result=await journalFixture.read(attempt,req.query.archive==='1');
   res.json(result);
 });
+if(term1ReportCases){
+  let journalPaused=false;
+  outer.post('/preview/term1-report-journal',express.json(),(req,res)=>{
+    if(typeof req.body?.paused!=='boolean')return res.sendStatus(400);
+    journalPaused=req.body.paused;
+    return res.json({ok:true});
+  });
+  outer.post('/api/term-tests/term-test-1/journal-events',(_req,res,next)=>{
+    if(journalPaused)return res.sendStatus(503);
+    next();
+  });
+  outer.post('/api/term-tests/term-test-1/listening/report',(_req,res)=>res.sendStatus(503));
+}
 if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
   const {attempt,operation}=req.query;
   const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -393,7 +415,9 @@ outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-ba
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));
 outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-lesson-5(?:-computer-based)?)\/)(?:index.html)?$/,async(req,res,next)=>{
   try {const file=path.join(pages,req.path.replace(/^\//,''),req.path.endsWith('/')?'index.html':'');
-    const html=(await readFile(file,'utf8')).replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
+    const source=await readFile(file,'utf8');
+    const local=term1ReportCases?source.replace(/<meta name="izone-term1-journal-ingress"[^>]+>/,''):source;
+    const html=local.replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
       .replace(/(<body[^>]*>)/,`$1<aside class="preview-banner" role="status"><span><strong>Bản thử K67</strong> · Đề và tên giả · ${miniAudio?'Audio Mini thật':'Audio giả'} · Không gửi điểm hoặc chấm AI bên ngoài</span><button id="resetPreview" type="button">Làm lại bản thử</button></aside>`)
       .replace('</body>','<script src="/preview-only.js"></script></body>');res.type('html').send(html);
   }catch(e){next(e);}
