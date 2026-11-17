@@ -78,6 +78,9 @@ const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
 const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
+const term2ReportCases=process.env.K67_PREVIEW_TERM2_REPORT_CASES==='true';
+if(term1ReportCases&&term2ReportCases)throw new Error('Select one Listening report fixture.');
+const reportSlug=term1ReportCases?'term-test-1':term2ReportCases?'term-test-2':null;
 const term2JourneyMode=process.env.K67_PREVIEW_TERM2_CBT_JOURNEY;
 const term2Parallel=process.env.K67_PREVIEW_TERM2_PARALLEL_ENTRY;
 const retakeMode=process.env.K67_PREVIEW_TERM1_RETAKE;
@@ -151,7 +154,7 @@ const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
 const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
-const journalSlug=term1ReportCases?'term-test-1':holdSlug;
+const journalSlug=reportSlug||holdSlug;
 const journalFixture=journalSlug&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,journalSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
@@ -206,7 +209,7 @@ if(listeningContinuityEnabled&&!pretestMode){
 // Thêm lớp giả đúng mã thường mở khi xem demo; không đọc hoặc chép roster lớp thật.
 await fixture.db.query("INSERT INTO mapping.classroom_course_mapping VALUES(1992200,'IC2200')");
 await fixture.db.query("INSERT INTO mapping.student_mapping_review VALUES('22222222-2222-4222-8222-222222222222',1992200,990022,'Học viên mô phỏng IC2200','approved')");
-if(term1ReportCases){
+if(reportSlug){
   for(let n=1;n<=5;n++){
     const ref='91000000-0000-4000-8000-'+String(n).padStart(12,'0');
     await fixture.db.query('INSERT INTO mapping.student_mapping_review VALUES($1,1992200,$2,$3,$4)',
@@ -245,7 +248,7 @@ for(const slug of Object.keys(timing)){
 }
 const outer=express();
 let previewApp=term1Parallel==='warm-up'?fixture.appForTerm1Mode('off'):fixture.app;
-const term2PreviewApps=['true','warm-up'].includes(term2Parallel)
+const term2PreviewApps=term2Parallel==='warm-up'
   ? {off:fixture.appForTerm2Mode('off'),on:fixture.app,drain:fixture.appForTerm2Mode('drain')}
   : null;
 if(term2PreviewApps && term2Parallel==='warm-up') previewApp=term2PreviewApps.off;
@@ -297,24 +300,25 @@ if (gradingRoundTrip) {
   });
 }
 if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
-  const bySession=term1ReportCases&&typeof req.query.session==='string';
+  const bySession=Boolean(reportSlug)&&typeof req.query.session==='string';
   const attempt=String((bySession?req.query.session:req.query.attempt)||'');
   if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
   const result=await journalFixture.read(attempt,req.query.archive==='1',bySession);
   res.json(result);
 });
-if(term1ReportCases){
+if(reportSlug){
   let journalPaused=false;
-  outer.post('/preview/term1-report-journal',express.json(),(req,res)=>{
+  const previewId=reportSlug==='term-test-1'?'term1':'term2';
+  outer.post('/preview/'+previewId+'-report-journal',express.json(),(req,res)=>{
     if(typeof req.body?.paused!=='boolean')return res.sendStatus(400);
     journalPaused=req.body.paused;
     return res.json({ok:true});
   });
-  outer.post('/api/term-tests/term-test-1/journal-events',(_req,res,next)=>{
+  outer.post('/api/term-tests/'+reportSlug+'/journal-events',(_req,res,next)=>{
     if(journalPaused)return res.sendStatus(503);
     next();
   });
-  outer.post('/api/term-tests/term-test-1/listening/report',(_req,res)=>res.sendStatus(503));
+  outer.post('/api/term-tests/'+reportSlug+'/listening/report',(_req,res)=>res.sendStatus(503));
 }
 if (writingHoldEnabled) outer.get('/preview/writing-submission',async (req,res)=>{
   const {attempt,operation}=req.query;

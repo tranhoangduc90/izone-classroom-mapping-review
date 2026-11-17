@@ -35,7 +35,8 @@ const error = (code,message,status=409) => Object.assign(new Error(message),{cod
 // Không dùng sự tồn tại của token làm bằng chứng đã nộp Listening.
 export function orderState(row) {
   const listeningSubmitted=Boolean(row.listening_submitted_at),readingSubmitted=Boolean(row.reading_submitted_at);
-  const listeningInterrupted=row.test_slug==='term-test-1'&&Boolean(row.listening_interrupted_at);
+  const canInterrupt=row.test_slug==='term-test-1'||(row.test_slug==='term-test-2'&&row.exam_delivery==='cbt');
+  const listeningInterrupted=canInterrupt&&Boolean(row.listening_interrupted_at);
   const listeningFinished=listeningSubmitted||listeningInterrupted;
   return {ok:true,examMode:row.exam_mode,examDelivery:row.exam_delivery,attemptMode:row.attempt_mode,
     attemptToken:row.id,examSessionToken:row.exam_session_id,generation:Number(row.generation)||0,
