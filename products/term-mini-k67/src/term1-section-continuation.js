@@ -7,6 +7,10 @@ export function term1ParallelEntryInUse(config) {
   return config.term1ParallelEntryMode==='on' || config.term1ParallelEntryMode==='drain';
 }
 
+export function continuationTable(slug) {
+  return slug==='term-test-2' ? 'assessment.term2_section_continuation' : 'assessment.term1_section_continuation';
+}
+
 export class Term1ContinuationError extends Error {
   constructor(code, message) {
     super(message);
@@ -15,20 +19,22 @@ export class Term1ContinuationError extends Error {
   }
 }
 
-export async function createTerm1ReadingDraft(db, session) {
+export async function createParallelReadingDraft(db, session) {
   const {rows:[attempt]} = await db.query(`INSERT INTO assessment.term_test_attempt
     (client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,
       class_name_snapshot,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation)
-    VALUES($1,'term-test-1',$2,$3,$4,$5,$6,$7,'cbt','read_first','cbt',$8) RETURNING id`,
+    VALUES($1,$9,$2,$3,$4,$5,$6,$7,'cbt','read_first','cbt',$8) RETURNING id`,
   [randomUUID(),session.definition_version,session.erp_course_class_id,session.erp_student_contact_id,
-    session.class_name_snapshot,session.student_name_snapshot,session.id,session.generation]);
+    session.class_name_snapshot,session.student_name_snapshot,session.id,session.generation,session.test_slug]);
   await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[session.id,attempt.id]);
   return attempt.id;
 }
 
-export async function openTerm1SectionContinuation(db, official, token, section) {
+export async function openTermSectionContinuation(db, official, token, section) {
+  const table = continuationTable(official.test_slug);
+  const parallelFlag = official.test_slug==='term-test-2' ? 'term2_parallel_entry' : 'term1_parallel_entry';
   const args = [official.id, official.generation, token || null, section];
-  const previous = (await db.query(`SELECT s.* FROM assessment.term1_section_continuation c
+  const previous = (await db.query(`SELECT s.* FROM ${table} c
     JOIN assessment.term_test_exam_session s ON s.id=c.exam_session_id
     WHERE c.official_attempt_id=$1 AND c.official_generation=$2 AND c.exam_session_id=$3
       AND c.section=$4 AND s.superseded_at IS NULL`,args)).rows[0];
@@ -41,25 +47,25 @@ export async function openTerm1SectionContinuation(db, official, token, section)
   let session = token && section!=='writing' && (await db.query(`SELECT s.*
     FROM assessment.term_test_exam_session s
     LEFT JOIN assessment.term_test_attempt a ON a.id=s.attempt_id
-    WHERE s.id=$4 AND s.test_slug='term-test-1' AND s.definition_version=$1
+    WHERE s.id=$4 AND s.test_slug=$6 AND s.definition_version=$1
       AND s.erp_course_class_id=$2 AND s.erp_student_contact_id=$3
-      AND s.exam_mode=$5 AND s.term1_parallel_entry AND s.superseded_at IS NULL
+      AND s.exam_mode=$5 AND s.${parallelFlag} AND s.superseded_at IS NULL
       AND s.listening_submitted_at IS NULL AND s.listening_audio_incident_id IS NULL
       AND s.prepared_at >= clock_timestamp()-interval '72 hours'
       AND ($5='lis_first' AND s.attempt_id IS NULL OR $5='read_first'
         AND a.id IS NOT NULL AND a.exam_session_id=s.id AND a.generation=s.generation
         AND a.superseded_at IS NULL AND a.reading_submitted_at IS NULL)
-      AND NOT EXISTS (SELECT 1 FROM assessment.term1_section_continuation c WHERE c.exam_session_id=s.id)
-    FOR UPDATE OF s`, [...key,token,examMode])).rows[0];
+      AND NOT EXISTS (SELECT 1 FROM ${table} c WHERE c.exam_session_id=s.id)
+    FOR UPDATE OF s`, [...key,token,examMode,official.test_slug])).rows[0];
   if (!session) {
     session = (await db.query(`INSERT INTO assessment.term_test_exam_session
       (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
-        student_name_snapshot,attempt_mode,exam_mode,term1_parallel_entry)
-      VALUES('term-test-1',$1,$2,$3,$4,$5,'cbt',$6,true) RETURNING *`,
-    [...key,official.class_name_snapshot,official.student_name_snapshot,examMode])).rows[0];
-    if (section==='reading') session.attempt_id = await createTerm1ReadingDraft(db,session);
+        student_name_snapshot,attempt_mode,exam_mode,${parallelFlag})
+      VALUES($7,$1,$2,$3,$4,$5,'cbt',$6,true) RETURNING *`,
+    [...key,official.class_name_snapshot,official.student_name_snapshot,examMode,official.test_slug])).rows[0];
+    if (section==='reading') session.attempt_id = await createParallelReadingDraft(db,session);
   }
-  await db.query(`INSERT INTO assessment.term1_section_continuation
+  await db.query(`INSERT INTO ${table}
     (exam_session_id,official_attempt_id,official_generation,section) VALUES($1,$2,$3,$4)`,
   [session.id,official.id,official.generation,section]);
   return session;
@@ -100,7 +106,8 @@ export async function commitTerm1ListeningContinuation(pool, session, input, def
 async function writeOfficialListening(db,grant,official,child,operationId,hash,definition,answers,grade,offline=false) {
   const combined = buildCombinedResult(definition,grade,official.reading_result);
   if(offline)await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
-  await db.query("SELECT set_config('k67.term1_listening_continuation',$1,true)",[child.id]);
+  const setting=official.test_slug==='term-test-2'?'k67.term2_listening_continuation':'k67.term1_listening_continuation';
+  await db.query('SELECT set_config($1,$2,true)',[setting,child.id]);
   const received = (await db.query(`UPDATE assessment.term_test_attempt
     SET listening_answers=$2,listening_result=$3,listening_submitted_at=clock_timestamp(),
       combined_result=$4,completed_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -128,26 +135,26 @@ export async function term1ContinuationGrant(db, sessionId, section) {
     WHERE exam_session_id=$1 AND section=$2 FOR UPDATE`,[sessionId,section])).rows[0];
 }
 
-async function lockOfficial(db, grant, definitionVersion, classId, studentId) {
+async function lockOfficial(db, grant, definitionVersion, classId, studentId, slug='term-test-1') {
   return (await db.query(`SELECT a.* FROM assessment.term_test_attempt a
     JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id AND s.generation=a.generation AND s.superseded_at IS NULL
-    WHERE a.id=$1 AND a.generation=$2 AND a.test_slug='term-test-1' AND a.definition_version=$3
+    WHERE a.id=$1 AND a.generation=$2 AND a.test_slug=$6 AND a.definition_version=$3
       AND a.erp_course_class_id=$4 AND a.erp_student_contact_id=$5 AND a.superseded_at IS NULL FOR UPDATE OF a,s`,
-  [grant.official_attempt_id,grant.official_generation,definitionVersion,classId,studentId])).rows[0];
+  [grant.official_attempt_id,grant.official_generation,definitionVersion,classId,studentId,slug])).rows[0];
 }
 
 async function writeReceipt(db,grant,official,operationId,hash,result,received) {
   const completed = grant.section==='writing'||official.writing_scope==='lr_only';
   const receipt = {receiptId:randomUUID(),operationId,section:grant.section,nextSection:completed?'result':'writing',
     completed,result,examSessionToken:grant.exam_session_id,receivedAt:new Date(received).toISOString()};
-  await db.query(`UPDATE assessment.term1_section_continuation SET operation_id=$2,payload_hash=$3,receipt=$4
+  await db.query(`UPDATE ${continuationTable(official.test_slug)} SET operation_id=$2,payload_hash=$3,receipt=$4
     WHERE exam_session_id=$1`,[grant.exam_session_id,operationId,hash,JSON.stringify(receipt)]);
   return receipt;
 }
 
-export async function commitTerm1ReadingContinuation(db,grant,child,input,definition,answers,grade,offlineHash) {
+export async function commitTermReadingContinuation(db,grant,child,input,definition,answers,grade,offlineHash) {
   const hash = offlineHash ?? submissionHash(input);
-  const official = await lockOfficial(db,grant,child.definition_version,child.erp_course_class_id,child.erp_student_contact_id);
+  const official = await lockOfficial(db,grant,child.definition_version,child.erp_course_class_id,child.erp_student_contact_id,child.test_slug);
   if (!official?.listening_submitted_at || !child.reading_started_at) {
     throw new Term1ContinuationError('EXAM_SESSION_REQUIRED','Lượt đã thay đổi. Hãy xác nhận lại tên để đọc tiến độ.');
   }
@@ -165,30 +172,30 @@ export async function commitTerm1ReadingContinuation(db,grant,child,input,defini
   return {receipt:await writeReceipt(db,grant,official,input.clientSubmissionId,hash,combined,written.reading_submitted_at),official};
 }
 
-export async function commitTerm1OfflineContinuation(db,state,body,record,hash,definition,grade) {
+export async function commitTermOfflineContinuation(db,state,body,record,hash,definition,grade) {
   const {continuation,session}=state;
   const input={clientSubmissionId:body.operationId};
   if(body.section==='reading') {
-    const {receipt}=await commitTerm1ReadingContinuation(db,continuation,record,input,definition,body.answers,grade,hash);
+    const {receipt}=await commitTermReadingContinuation(db,continuation,record,input,definition,body.answers,grade,hash);
     return receipt;
   }
-  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id);
+  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id,session.test_slug);
   if (!official?.reading_submitted_at || official.listening_submitted_at || official.listening_interrupted_at || continuation.receipt) {
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Listening đã thay đổi. Hãy mở lại bài.');
   }
   return writeOfficialListening(db,continuation,official,record,body.operationId,hash,definition,body.answers,grade,true);
 }
 
-export async function commitTerm1OfflineListeningInterruption(db,state,body,hash) {
+export async function commitTermOfflineListeningInterruption(db,state,body,hash) {
   const {continuation,session}=state;
-  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id);
+  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id,session.test_slug);
   if (!official?.reading_submitted_at || !official.reading_result || official.listening_submitted_at
       || official.listening_interrupted_at || continuation.receipt) {
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Listening đã thay đổi. Hãy mở lại bài.');
   }
   const {rows:[definition]}=await db.query(`
     SELECT slug AS test_slug,title AS test_title,version AS definition_version
-    FROM assessment.test_definition WHERE slug='term-test-1' AND version=$1`,[official.definition_version]);
+    FROM assessment.test_definition WHERE slug=$2 AND version=$1`,[official.definition_version,session.test_slug]);
   if(!definition)throw new Term1ContinuationError('OFFLINE_DEFINITION','Chưa tìm thấy đúng phiên bản đề.');
   const combined={...buildCombinedResult(definition,null,official.reading_result),listeningStatus:'interrupted'};
   const interruptedAt=new Date(body.capturedAt);
@@ -200,9 +207,9 @@ export async function commitTerm1OfflineListeningInterruption(db,state,body,hash
   return {...receipt,attemptToken:session.id,startedAt:body.startedAt};
 }
 
-export async function commitTerm1OfflineWriting(db,state,body,deadline,hash) {
+export async function commitTermOfflineWriting(db,state,body,deadline,hash) {
   const {continuation,session}=state;
-  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id);
+  const official=await lockOfficial(db,continuation,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id,session.test_slug);
   if (!official?.completed_at || (!official.listening_submitted_at&&!official.listening_interrupted_at) || !official.reading_submitted_at
       || official.writing_scope!=='exam' || official.writing_submitted_at || continuation.receipt) {
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Writing đã thay đổi. Hãy mở lại bài.');

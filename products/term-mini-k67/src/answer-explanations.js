@@ -92,12 +92,12 @@ export async function streamPretestReviewAudio(assetDir, review, res) {
 export function mountAnswerExplanations(app, { pool, config, limiter, authorizeOfficialResult }) {
   app.post('/api/term-tests/result/explanations', limiter, ...(authorizeOfficialResult ? [authorizeOfficialResult] : []), async (req, res, next) => {
     res.set('Cache-Control', 'no-store, private');
-    const token = req.officialTerm1Result?.attemptToken || req.body?.attemptToken;
+    const token = req.officialAttemptResult?.attemptToken || req.body?.attemptToken;
     if (typeof token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     try {
-      const query = req.officialTerm1Result ? officialExplanationAttemptSql : explanationAttemptSql;
+      const query = req.officialAttemptResult ? officialExplanationAttemptSql : explanationAttemptSql;
       const { rows } = await pool.query(query, [token]);
       if (!rows.length) {
         return res.status(404).json({ ok: false, error: 'EXPLANATIONS_NOT_READY',

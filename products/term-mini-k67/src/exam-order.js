@@ -8,7 +8,7 @@ import { useSharedTerm1AudioClock } from './term1-listening-timer.js';
 import {audioManifestFor,authorizeAudioSession} from './audio-access.js';
 import {claimAudioOwnerAtStart} from './audio-owner.js';
 import { guardMiniPaperOfflineWrite, offerMiniPaperOffline } from './mini-paper-offline.js';
-import { commitTerm1ReadingContinuation, createTerm1ReadingDraft, openTerm1SectionContinuation, term1ContinuationGrant, term1ParallelEntryInUse } from './term1-section-continuation.js';
+import { commitTermReadingContinuation, createParallelReadingDraft, openTermSectionContinuation, term1ContinuationGrant, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const slugs = ['term-test-1', 'term-test-2', 'mini-test-lesson-5', 'pretest-lesson-16'];
 const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/), studentRef:z.uuid(),
@@ -16,6 +16,7 @@ const identity = z.object({classCode:z.string().trim().toUpperCase().regex(/^[A-
   examDelivery:z.enum(['cbt','answer_sheet']).default('cbt'), identityConfirmed:z.literal(true).optional(),
   examSessionToken:z.uuid().optional(),
   term1ContinuationVersion:z.literal(1).optional(),
+  term2ContinuationVersion:z.literal(1).optional(),
   orderClientVersion:z.literal(1).optional()});
 const input = z.object({attemptToken:z.uuid().optional(),examSessionToken:z.uuid().optional(),
   ownerStartVersion:z.literal(2).optional(),
@@ -69,7 +70,7 @@ const sessionTables = `assessment.term_test_exam_session s ON s.id=a.exam_sessio
 const select = `${attemptProjection} JOIN ${sessionTables}`;
 const officialSelect = `${attemptProjection} LEFT JOIN ${sessionTables}`;
 
-export async function readOfficialTerm1(db, key) {
+export async function readOfficialAttempt(db, key) {
   const { rows } = await db.query(`${officialSelect} WHERE a.test_slug=$1 AND a.definition_version=$2
     AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4 AND a.superseded_at IS NULL
     AND (a.listening_submitted_at IS NOT NULL OR a.reading_submitted_at IS NOT NULL) LIMIT 2`, key);
@@ -81,7 +82,7 @@ export async function readOfficialTerm1(db, key) {
   return row || null;
 }
 
-export function term1OfficialResultReady(row) {
+export function officialResultReady(row) {
   return Boolean(row?.completed_at && row.writing_submitted_at && row.combined_result);
 }
 
@@ -124,7 +125,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     if(Number(current.generation)!==Number(row.generation))throw error('STALE_GENERATION','Lượt bài đã được mở lại.');
     return current;
   }
-  function officialTerm1View(row, token) {
+  function officialView(row, token) {
     if (!row || (token && row.exam_session_id===token)) return row;
     return {...row,id:null,exam_session_id:null,session_draft:{},session_revision:0,reading_draft:{},reading_draft_revision:0,
       combined_result:null,
@@ -133,7 +134,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   }
   async function openParallelTerm1(db, data, student) {
     const key = ['term-test-1',student.definition_version,student.class_id,student.student_id];
-    const official = await readOfficialTerm1(db,key);
+    const official = await readOfficialAttempt(db,key);
     if (official) {
       if (official.writing_submitted_at) {
         const grade = (await db.query(`SELECT status,writing_score FROM assessment.term_test_writing_grading_final
@@ -141,8 +142,8 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         official.writing_grading_status = grade?.status==='ready' ? 'ready' : 'waiting';
         official.writing_grading_score = grade?.writing_score == null ? null : Number(grade.writing_score);
       }
-      const view = officialTerm1View(official,data.examSessionToken);
-      if (data.term1ContinuationVersion && term1OfficialResultReady(official)) {
+      const view = officialView(official,data.examSessionToken);
+      if (data.term1ContinuationVersion && officialResultReady(official)) {
         return {...view,official_next_section:'result',official_result_ready:true};
       }
       if (!data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
@@ -158,18 +159,24 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (section==='result') return {...view,official_next_section:'result'};
       if (section==='writing' && config.term1CbtJourneyMode!=='on') return view;
 
-      const session = await openTerm1SectionContinuation(db,official,data.examSessionToken,section);
-      const draft = section==='reading' ? await reload(db,session.attempt_id) : null;
-      return {...officialTerm1View(official,null),id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
-        term1_parallel_entry:true,
-        continuation_section:section,reading_started_at:draft?.reading_started_at ?? null,reading_deadline_at:draft?.reading_deadline_at ?? null,
-        reading_draft:draft?.reading_draft ?? {},reading_draft_revision:draft?.reading_draft_revision ?? 0,
-        session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
-        session_checkpoint_seconds:session.listening_audio_checkpoint_seconds,session_recovery_seconds:session.listening_recovery_seconds,
-        session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,
-        session_revision:session.listening_draft_revision};
+      return openContinuationView(db,official,data.examSessionToken,section);
     }
 
+    return openParallelDraft(db,data,student,'term-test-1',config.term1ParallelEntryMode);
+  }
+  async function openContinuationView(db, official, token, section) {
+    const session=await openTermSectionContinuation(db,official,token,section);
+    const draft=section==='reading'?await reload(db,session.attempt_id):null;
+    return {...officialView(official,null),id:session.attempt_id,exam_session_id:session.id,exam_delivery:'cbt',generation:session.generation,
+      term1_parallel_entry:session.term1_parallel_entry,term2_parallel_entry:session.term2_parallel_entry,
+      continuation_section:section,reading_started_at:draft?.reading_started_at??null,reading_deadline_at:draft?.reading_deadline_at??null,
+      reading_draft:draft?.reading_draft??{},reading_draft_revision:draft?.reading_draft_revision??0,
+      session_started_at:session.listening_started_at,session_deadline_at:session.listening_deadline_at,
+      session_checkpoint_seconds:session.listening_audio_checkpoint_seconds,session_recovery_seconds:session.listening_recovery_seconds,
+      session_owner_protocol:session.audio_owner_protocol,session_draft:session.listening_draft,session_revision:session.listening_draft_revision};
+  }
+  async function openParallelDraft(db, data, student, slug, mode) {
+    const key = [slug,student.definition_version,student.class_id,student.student_id];
     let session;
     if (data.examSessionToken) {
       session = (await db.query(`SELECT * FROM assessment.term_test_exam_session
@@ -178,18 +185,19 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
           AND (exam_mode='read_first' OR prepared_at>=now()-interval '8 hours')`, [...key,data.examSessionToken])).rows[0];
     }
     if (!session) {
-      if (config.term1ParallelEntryMode==='drain') return null;
+      if (mode==='drain') return null;
       if (data.examMode==='read_first'&&!config.readFirstNewEnabled) {
         throw error('READ_FIRST_NOT_ENABLED','Phiên bản Reading trước chưa được mở cho lượt mới.');
       }
       if (!assets) throw error('EXAM_ASSETS_UNAVAILABLE','Chưa cấp được đề thi. Hãy thử lại.',503);
+      const parallelFlag=slug==='term-test-1'?'term1_parallel_entry':'term2_parallel_entry';
       session = (await db.query(`INSERT INTO assessment.term_test_exam_session
         (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
-          student_name_snapshot,attempt_mode,exam_mode,term1_parallel_entry)
+          student_name_snapshot,attempt_mode,exam_mode,${parallelFlag})
         VALUES($1,$2,$3,$4,$5,$6,'cbt',$7,true) RETURNING *`,
       [...key,student.class_name,student.student_name,data.examMode])).rows[0];
       if (data.examMode==='read_first') {
-        session.attempt_id=await createTerm1ReadingDraft(db,session);
+        session.attempt_id=await createParallelReadingDraft(db,session);
       }
     }
     if (session.attempt_id) {
@@ -218,6 +226,28 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const admitOpen = () => (writeAdmission ??= admit(req,res,writeLimiter));
     const out=await tx(async db=>{
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${slug}:${student.class_id}:${student.student_id}`]);
+      if (slug==='term-test-2' && !paper && data.examDelivery==='cbt' && ['on','drain'].includes(config.term2ParallelEntryMode)
+          && data.orderClientVersion===1 && data.term2ContinuationVersion===1) {
+        if (!await admitOpen()) return null;
+        const official = await readOfficialAttempt(db,[slug,student.definition_version,student.class_id,student.student_id]);
+        if (official) {
+          const view=officialView(official,data.examSessionToken);
+          const section=official.writing_submitted_at?'result':orderState(official).nextSection;
+          if (section==='result' || !official.exam_session_id || official.exam_delivery==='answer_sheet')
+            return {...view,official_next_section:section,official_result_ready:officialResultReady(official)};
+          if (view.id) {
+            const {rows:[journey]}=await db.query(`SELECT sections FROM assessment.term_k67_cbt_journey
+              WHERE session_id=$1 AND generation=$2`,[official.exam_session_id,official.generation]);
+            if (journey && Boolean(journey.sections.listening)===Boolean(official.listening_submitted_at||official.listening_interrupted_at)
+                && Boolean(journey.sections.reading)===Boolean(official.reading_submitted_at)) {
+              return {...view,official_next_section:section};
+            }
+          }
+          return openContinuationView(db,official,data.examSessionToken,section);
+        }
+        const parallel=await openParallelDraft(db,data,student,slug,config.term2ParallelEntryMode);
+        if (parallel) return parallel;
+      }
       if (term1ParallelEntryInUse(config) && slug==='term-test-1' && !paper && data.examDelivery==='cbt') {
         if (data.orderClientVersion===1 && data.term1ContinuationVersion===1) {
           if (!await admitOpen()) return null;
@@ -238,6 +268,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const previous=(await db.query(`SELECT * FROM assessment.term_test_attempt AS a WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
         AND (test_slug<>'term-test-1' OR (to_jsonb(a)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+        AND (test_slug<>'term-test-2' OR (to_jsonb(a)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
         ORDER BY (completed_at IS NULL) DESC,created_at DESC LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
       if(previous) {
         // Yêu cầu Reading trước không được nối âm thầm vào lượt Listening trước.
@@ -260,6 +291,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const oldSession=(await db.query(`SELECT id,exam_mode FROM assessment.term_test_exam_session AS s WHERE test_slug=$1 AND definition_version=$2
         AND erp_course_class_id=$3 AND erp_student_contact_id=$4 AND superseded_at IS NULL
         AND (test_slug<>'term-test-1' OR (to_jsonb(s)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+        AND (test_slug<>'term-test-2' OR (to_jsonb(s)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
         AND (prepared_at>=now()-interval '8 hours' OR attempt_mode='answer_sheet') LIMIT 1`,[slug,student.definition_version,student.class_id,student.student_id])).rows[0];
       // Phiên còn trong cửa sổ nối lại không có nghĩa Listening còn giờ làm bài.
       // Chặn trước tuyến cũ để không tự thu một bài trắng của phiên đã hết hạn.
@@ -278,6 +310,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         WHERE test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3 AND erp_student_contact_id=$4
           AND superseded_at IS NULL AND listening_submitted_at IS NULL AND exam_mode='lis_first'
           AND (test_slug<>'term-test-1' OR (to_jsonb(s)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+          AND (test_slug<>'term-test-2' OR (to_jsonb(s)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
           AND attempt_mode<>'answer_sheet' AND prepared_at<now()-interval '8 hours'`,
         [slug,student.definition_version,student.class_id,student.student_id]);
       const mode=paper?'answer_sheet':data.examDelivery==='cbt'?'cbt':'legacy';
@@ -304,6 +337,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     }
     res.json({...orderState(out),audioOwnerSupported:Boolean(config.audioOwnerEnabled||Number(out.session_owner_protocol)===1),studentRef:data.studentRef,
       ...(out.term1_parallel_entry ? {term1ParallelEntry:true} : {}),
+      ...(out.term2_parallel_entry ? {term2ParallelEntry:true} : {}),
       ...(out.continuation_section ? {continuationSection:out.continuation_section} : {}),
       ...(out.official_next_section ? {nextSection:out.official_next_section} : {}),
       ...(out.official_result_ready ? {officialResultReady:true} : {}),
@@ -324,12 +358,13 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const student=(await pool.query(findStudentForTermTestSql,[p.data.classCode,req.params.testSlug,p.data.studentRef])).rows[0];
     if(!student)return null;
     if(term1ParallelEntryInUse(config)&&req.params.testSlug==='term-test-1') {
-      const official = await readOfficialTerm1(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id]);
-      return officialTerm1View(official,p.data.examSessionToken);
+      const official = await readOfficialAttempt(pool,[req.params.testSlug,student.definition_version,student.class_id,student.student_id]);
+      return officialView(official,p.data.examSessionToken);
     }
     const row=(await pool.query(`${select} WHERE a.test_slug=$1 AND a.definition_version=$2
       AND a.erp_course_class_id=$3 AND a.erp_student_contact_id=$4
       AND (a.test_slug<>'term-test-1' OR (to_jsonb(a)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+      AND (a.test_slug<>'term-test-2' OR (to_jsonb(a)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
       AND a.exam_mode='read_first' AND a.superseded_at IS NULL ORDER BY a.created_at DESC LIMIT 1`,
       [req.params.testSlug,student.definition_version,student.class_id,student.student_id])).rows[0];
     return row;
@@ -469,7 +504,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       const test=parseStoredTest(r),grade=gradeSection(test[`${section}_definition`],effective,section==='listening'?test.listening_band_adjustment:0);
       if (continuation) {
         if(!data.clientSubmissionId)throw error('INVALID_SUBMISSION','Thiếu mã gửi bài.',400);
-        const result=await commitTerm1ReadingContinuation(db,continuation,r,data,test,effective,grade);
+        const result=await commitTermReadingContinuation(db,continuation,r,data,test,effective,grade);
         return {continuation:result,answeredCount:Object.values(effective).filter(value=>String(value).trim()).length};
       }
       const other=section==='reading'?r.listening_result:r.reading_result;
@@ -512,7 +547,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
   for(const action of ['reading/start','reading/draft','listening/draft','reading','listening','result'])
     app.post(`/api/term-tests/mini-test-lesson-5/answer-sheet/${action}`,route((req,res,next)=>handle(req,res,next,action,true)));
   app.post('/api/term-tests/result',route(async(req,res,next)=>{
-    if(Object.hasOwn(req.body||{},'officialTerm1'))return next();
+    if(Object.hasOwn(req.body||{},'officialTerm1')||Object.hasOwn(req.body||{},'officialTerm2'))return next();
     const p=z.uuid().safeParse(req.body?.attemptToken);if(!p.success)return next();
     const row=(await pool.query('SELECT test_slug,completed_at FROM assessment.term_test_attempt WHERE id=$1 AND exam_mode=\'read_first\'',[p.data])).rows[0];
     if(!row)return next();

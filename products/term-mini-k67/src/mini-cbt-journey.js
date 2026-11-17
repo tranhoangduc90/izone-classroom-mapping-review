@@ -8,7 +8,7 @@ import { term1SubmissionGuardError } from './term1-submission-guard.js';
 import { miniR2Audio, term1JourneyR2Audio, term2JourneyR2Audio, pretestJourneyR2Audio, R2_POLICY } from './mini-r2-audio.js';
 import { publicAudioCatalog } from './public-audio-catalog.js';
 import { readTerm1TimerRoom } from './term1-listening-timer.js';
-import { commitTerm1OfflineContinuation, commitTerm1OfflineListeningInterruption, commitTerm1OfflineWriting, term1ParallelEntryInUse } from './term1-section-continuation.js';
+import { commitTermOfflineContinuation, commitTermOfflineListeningInterruption, commitTermOfflineWriting, continuationTable, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
@@ -246,7 +246,7 @@ async function commitInterruption(db, state, body, timing, profile, digest) {
       || attempt?.listening_interrupted_at) {
     throw problem('OFFLINE_CONFLICT', 'Listening đã có kết quả hoặc lượt đang được xử lý.');
   }
-  if(state.continuation)return commitTerm1OfflineListeningInterruption(db,state,body,digest);
+  if(state.continuation)return commitTermOfflineListeningInterruption(db,state,body,digest);
   await db.query('SELECT set_config($1,$2,true)', [profile.guard, session.id]);
   const at = new Date(body.capturedAt).toISOString();
   if (attempt) {
@@ -294,7 +294,7 @@ async function commit(db, state, body, timing, profile, observation, digest) {
       throw Object.assign(problem('OFFLINE_REVIEW_REQUIRED', reviewMessage, 409, 'SERVER_BEFORE_DEADLINE'),
         {retryAfterMs:deadline-clock(state.now)});
     }
-    if(state.continuation)return commitTerm1OfflineWriting(db,state,body,deadline,digest);
+    if(state.continuation)return commitTermOfflineWriting(db,state,body,deadline,digest);
     await db.query('SELECT set_config($1,$2,true)',[profile.guard,session.id]);
     await db.query(`UPDATE assessment.term_test_attempt SET writing_task_1=$2,writing_task_2=$3,writing_started_at=$4,
       writing_deadline_at=$5,writing_draft_revision=$6,writing_submitted_at=$7,writing_updated_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -325,7 +325,7 @@ async function commit(db, state, body, timing, profile, observation, digest) {
   const sectionInput={...body,capturedAt:new Date(body.capturedAt).toISOString()};
   if(state.continuation) {
     const {test,grade}=await validateMiniCbtSection(db,sectionState,sectionInput,profile.slug);
-    const receipt=await commitTerm1OfflineContinuation(db,state,body,row,digest,test,grade);
+    const receipt=await commitTermOfflineContinuation(db,state,body,row,digest,test,grade);
     return {...receipt,attemptToken:session.attempt_id||session.id};
   }
   const result=await sealMiniCbtSection(db,sectionState,sectionInput,profile.slug);
@@ -406,10 +406,12 @@ function writingHoldClassesFromFile(file) {
 
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
-  const readContinuation = async (db, sessionId) => profile===term1&&term1ParallelEntryInUse(config)
+  const hasContinuations=profile===term1&&term1ParallelEntryInUse(config)
+    || profile===term2&&['on','drain'].includes(config.term2ParallelEntryMode);
+  const readContinuation = async (db, sessionId) => hasContinuations
     ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode,
           (to_jsonb(official)->>'listening_interrupted_at') IS NOT NULL AS listening_interrupted
-        FROM assessment.term1_section_continuation AS continuation
+        FROM ${continuationTable(slug)} AS continuation
         JOIN assessment.term_test_attempt AS official ON official.id=continuation.official_attempt_id
         WHERE continuation.exam_session_id=$1 FOR UPDATE OF continuation`, [sessionId])).rows[0] : null;
   const prefix=`/api/term-tests/${slug}/${profile.paper?'paper':'cbt'}-journey`;
@@ -491,6 +493,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const continuation=await readContinuation(db,session.id);
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
+        ...(session.term2_parallel_entry?{term2ParallelEntry:true}:{}),
         ...(continuation?{continuationSection:continuation.section}:{}),
         ...(continuation?.section==='writing'&&continuation.listening_interrupted?{listeningInterrupted:true}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
@@ -645,6 +648,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       const receipt={...publicApplied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         ...(state.continuation?{continuationSection:state.continuation.section}:{}),
+        ...(state.session.term2_parallel_entry&&!publicApplied.receiptId?{receiptId:randomUUID()}:{}),
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt,
         ...(!profile.paper&&interruption?{startedAt:body.startedAt}:{})};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,

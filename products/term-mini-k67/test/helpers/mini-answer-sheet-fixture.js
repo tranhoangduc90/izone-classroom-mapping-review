@@ -5,7 +5,7 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2ParallelEntryMode='off',term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   const journal = mountJournal ? {mountJournal,journalEnv:{EXAM_JOURNAL_ENABLED:'1'}} : {};
   const term1ParallelEntryMode=term1ParallelEntryEnabled?'on':'off';
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
@@ -15,7 +15,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     ?'synthetic-mini-offline-secret-at-least-32-bytes':undefined;
   function applications(pool) {
     const appForTerm1Mode = mode => createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
-      config:{...miniR2,...writingHold,term1ParallelEntryMode:mode,term1ListeningTimerMode,termTestAssetDir,
+      config:{...miniR2,...writingHold,term1ParallelEntryMode:mode,term2ParallelEntryMode,term1ListeningTimerMode,termTestAssetDir,
         miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,
         miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,
         term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
@@ -25,10 +25,14 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     return {app:appForTerm1Mode(term1ParallelEntryMode),appForTerm1Mode};
   }
   const installTermJourney=async db=>{
-    if(term1ParallelEntryEnabled){
+    if(term1ParallelEntryEnabled||term2ParallelEntryMode!=='off'){
       await db.exec(await readFile(new URL('../../db/041-term1-first-submission.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/042-term1-parallel-entry.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/043-term1-section-continuation.sql',import.meta.url),'utf8'));
+    }
+    if(term2ParallelEntryMode!=='off'){
+      await db.exec(await readFile(new URL('../../db/045-term2-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+      await db.exec(await readFile(new URL('../../db/046-term2-cbt-section-continuation.sql',import.meta.url),'utf8'));
     }
     if(term1ListeningTimerMode)await db.exec(await readFile(new URL('../../db/035-term1-listening-timer.sql',import.meta.url),'utf8'));
     if(termJourneys)await db.exec(await readFile(new URL('../../db/023-term1-cbt-journey.sql',import.meta.url),'utf8'));

@@ -19,7 +19,7 @@ import { mountMiniAnswerSheet } from './mini-answer-sheet.js';
 import { mountMiniPaperOffline } from './mini-paper-offline.js';
 import { mountMiniCbtOffline } from './mini-cbt-offline.js';
 import { mountMiniCbtJourney, mountPretestCbtJourney, mountPretestPaperJourney, mountTerm1CbtJourney, mountTerm2CbtJourney, mountTerm1PaperJourney, mountTerm2PaperJourney } from './mini-cbt-journey.js';
-import { mountExamOrder, readOfficialTerm1, term1OfficialResultReady } from './exam-order.js';
+import { mountExamOrder, readOfficialAttempt, officialResultReady } from './exam-order.js';
 import { mountTerm1ListeningRetake } from './term1-listening-retake.js';
 import { checkpointListeningAudio, AudioRecoveryError } from './audio-recovery.js';
 import {mountAudioIncidents,audioTransaction,activateListeningProtection,guardListeningStart,listeningAudioSnapshot} from './audio-incidents.js';
@@ -94,7 +94,7 @@ const readingSubmissionSchema = z.object({
 });
 
 const resultRequestSchema = z.object({ attemptToken: z.string().uuid() });
-const term1OfficialIdentitySchema = z.object({
+const officialIdentitySchema = z.object({
   classCode: z.string().trim().toUpperCase().regex(/^[A-Z0-9._-]{2,32}$/),
   studentRef: z.uuid()
 });
@@ -1437,25 +1437,30 @@ export function createApp({
   }));
 
   const authorizeOfficialResult = asyncRoute(async (req, res, next) => {
-    if (!Object.hasOwn(req.body || {}, 'officialTerm1')) return next();
-    if (!term1ParallelEntryInUse(config)) {
+    const term1 = Object.hasOwn(req.body || {}, 'officialTerm1');
+    const term2 = Object.hasOwn(req.body || {}, 'officialTerm2');
+    if (!term1 && !term2) return next();
+    const key = term1 ? 'officialTerm1' : 'officialTerm2';
+    const slug = term1 ? 'term-test-1' : 'term-test-2';
+    const enabled = term1 ? term1ParallelEntryInUse(config) : ['on','drain'].includes(config.term2ParallelEntryMode);
+    if (!enabled) {
       return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
     }
-    const identity = term1OfficialIdentitySchema.safeParse(req.body.officialTerm1);
-    if (!identity.success || req.body.attemptToken) {
+    const identity = officialIdentitySchema.safeParse(req.body[key]);
+    if (!identity.success || (term1 && term2) || req.body.attemptToken) {
       return res.status(400).json({ok:false, error:'INVALID_RESULT_IDENTITY', message:'Hãy xác nhận lại lớp và họ tên.'});
     }
     return requireContext(req, res, async () => {
       try {
         const {classCode, studentRef} = identity.data;
-        const {rows} = await readPreparedStudent(req, classCode, 'term-test-1', studentRef);
+        const {rows} = await readPreparedStudent(req, classCode, slug, studentRef);
         const student = rows.length === 1 ? rows[0] : null;
-        const official = student && await readOfficialTerm1(pool,
-          ['term-test-1', student.definition_version, student.class_id, student.student_id]);
-        if (!term1OfficialResultReady(official)) {
+        const official = student && await readOfficialAttempt(pool,
+          [slug, student.definition_version, student.class_id, student.student_id]);
+        if (!officialResultReady(official)) {
           return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
         }
-        req.officialTerm1Result = {attemptToken:official.id, studentRef, examMode:official.exam_mode};
+        req.officialAttemptResult = {attemptToken:official.id, studentRef, examMode:official.exam_mode, key};
         return next();
       } catch (error) {
         if (error.code==='EXAM_HISTORY_REVIEW') {
@@ -1469,13 +1474,13 @@ export function createApp({
   mountAnswerExplanations(app, { pool, config, limiter: testReadLimiter, authorizeOfficialResult });
 
   app.post('/api/term-tests/result', testReadLimiter, authorizeOfficialResult, asyncRoute(async (req, res) => {
-    const official = req.officialTerm1Result;
+    const official = req.officialAttemptResult;
     const parsed = resultRequestSchema.safeParse(official || req.body);
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     const result = await pool.query(fetchTermTestResultSql, [parsed.data.attemptToken]);
-    if (result.rowCount !== 1 || (official && (result.rows[0].superseded_at || !term1OfficialResultReady(result.rows[0])))) {
+    if (result.rowCount !== 1 || (official && (result.rows[0].superseded_at || !officialResultReady(result.rows[0])))) {
       return res.status(404).json({ ok: false, error: 'RESULT_NOT_FOUND', message: 'Kết quả chưa sẵn sàng hoặc không tồn tại.' });
     }
     const row = result.rows[0];
@@ -1496,7 +1501,7 @@ export function createApp({
         return source ? {...task, source:ruleSource} : task;
       })};
       return res.json({
-        ok:true, officialTerm1:true, studentRef:official.studentRef, testSlug:row.test_slug, examMode:official.examMode,
+        ok:true, [official.key]:true, studentRef:official.studentRef, testSlug:row.test_slug, examMode:official.examMode,
         className:row.class_name, studentName:row.student_name, completed:true, completedAt:row.completed_at,
         writing, result:termTestResult,
         ...(req.body.includeContent === true ? {content:await termTestAssetService.getContent(row.test_slug)} : {})
@@ -1524,12 +1529,12 @@ export function createApp({
 
   app.post('/api/term-tests/result/review', testReadLimiter, authorizeOfficialResult, asyncRoute(async (req, res) => {
     if (!requireTermTestAssets(res)) return;
-    const parsed = resultRequestSchema.safeParse(req.officialTerm1Result || req.body);
+    const parsed = resultRequestSchema.safeParse(req.officialAttemptResult || req.body);
     if (!parsed.success) {
       return res.status(400).json({ ok: false, error: 'INVALID_RESULT_TOKEN', message: 'Mã kết quả không hợp lệ.' });
     }
     const result = await pool.query(fetchTermTestAttemptReviewSql, [parsed.data.attemptToken]);
-    if (result.rowCount !== 1 || (req.officialTerm1Result && result.rows[0].superseded_at)) {
+    if (result.rowCount !== 1 || (req.officialAttemptResult && result.rows[0].superseded_at)) {
       return res.status(404).json({
         ok: false,
         error: 'ATTEMPT_REVIEW_NOT_READY',
