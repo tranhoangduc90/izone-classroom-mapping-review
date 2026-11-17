@@ -127,7 +127,7 @@ def migrate():
     assert (ROOT/'STAGED.json').is_file() and not (ROOT/'MIGRATED.json').exists()
     preflight();verify(TARGET)
     original=json.loads(scalar("SELECT to_json(pg_get_functiondef('assessment_k56.guard_term2_k56_official_submission()'::regprocedure))"))
-    assert original and 'OR NEW.listening_interrupted_at IS NOT NULL' in original
+    assert original and 'AND NEW.listening_interrupted_at IS NULL' in original
     before=fingerprint()
     with (ROOT/'guard.before.sql').open('x') as output:output.write(original)
     markers=scalar("SELECT coalesce(json_agg(id ORDER BY id),'[]'::json)::text FROM assessment_k56.term_test_attempt WHERE test_slug='term-test-2-k56' AND attempt_mode='cbt' AND superseded_at IS NULL AND term2_official_submission AND listening_submitted_at IS NULL AND reading_submitted_at IS NULL AND writing_submitted_at IS NULL")
@@ -147,7 +147,7 @@ def migrate():
     assert 'COMMIT' in output
     after=fingerprint();assert after==before
     definition=scalar("SELECT replace(pg_get_functiondef('assessment_k56.guard_term2_k56_official_submission()'::regprocedure),E'\\n',' ') ")
-    assert 'OR NEW.listening_interrupted_at' not in definition
+    assert 'NEW.listening_interrupted_at' not in definition
     save('MIGRATED.json',{'phase':'migrated','attemptsBefore':before,'attemptsAfter':after,'correctedMarkers':len(json.loads(markers))})
 
 def replace(data,metadata):
