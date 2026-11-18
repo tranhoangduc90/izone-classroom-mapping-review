@@ -245,6 +245,7 @@ export const insertTermTestExamSessionSql = `WITH inserted AS (
     AND existing.superseded_at IS NULL
     AND (existing.test_slug<>'term-test-1' OR (to_jsonb(existing)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
     AND (existing.test_slug<>'term-test-2' OR (to_jsonb(existing)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
+    AND (existing.test_slug<>'mini-test-lesson-5' OR (to_jsonb(existing)->>'mini_k67_parallel_entry') IS DISTINCT FROM 'true')
     AND NOT EXISTS (SELECT 1 FROM inserted)
 )
 SELECT
@@ -300,6 +301,7 @@ WHERE test_slug = $1
   AND attempt_mode <> 'answer_sheet'
   AND (test_slug<>'term-test-1' OR (to_jsonb(session)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
   AND (test_slug<>'term-test-2' OR (to_jsonb(session)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
+  AND (test_slug<>'mini-test-lesson-5' OR (to_jsonb(session)->>'mini_k67_parallel_entry') IS DISTINCT FROM 'true')
   AND prepared_at < now() - interval '8 hours';`;
 
 export const findLatestTermTestAttemptForStudentSql = `SELECT
@@ -330,6 +332,7 @@ WHERE attempt.test_slug = $1
   AND attempt.superseded_at IS NULL
   AND (attempt.test_slug<>'term-test-1' OR (to_jsonb(attempt)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
   AND (attempt.test_slug<>'term-test-2' OR (to_jsonb(attempt)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
+  AND (attempt.test_slug<>'mini-test-lesson-5' OR (to_jsonb(attempt)->>'mini_k67_parallel_entry') IS DISTINCT FROM 'true')
 ORDER BY attempt.listening_submitted_at DESC, attempt.created_at DESC
 LIMIT 1;`;
 
@@ -353,6 +356,7 @@ WHERE attempt.test_slug = $1
   AND attempt.superseded_at IS NULL
   AND (attempt.test_slug<>'term-test-1' OR (to_jsonb(attempt)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
   AND (attempt.test_slug<>'term-test-2' OR (to_jsonb(attempt)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
+  AND (attempt.test_slug<>'mini-test-lesson-5' OR (to_jsonb(attempt)->>'mini_k67_parallel_entry') IS DISTINCT FROM 'true')
   AND attempt.created_at >= now() - interval '8 hours'
 ORDER BY
   attempt.reading_draft_updated_at DESC NULLS LAST,
