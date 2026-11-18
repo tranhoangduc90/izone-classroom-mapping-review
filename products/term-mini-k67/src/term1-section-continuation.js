@@ -8,6 +8,7 @@ export function term1ParallelEntryInUse(config) {
 }
 
 export function continuationTable(slug) {
+  if(slug==='pretest-lesson-16')return 'assessment.pretest_section_continuation';
   return slug==='term-test-2' ? 'assessment.term2_section_continuation' : 'assessment.term1_section_continuation';
 }
 
@@ -22,8 +23,9 @@ export class Term1ContinuationError extends Error {
 export async function createParallelReadingDraft(db, session) {
   const {rows:[attempt]} = await db.query(`INSERT INTO assessment.term_test_attempt
     (client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,
-      class_name_snapshot,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation)
-    VALUES($1,$9,$2,$3,$4,$5,$6,$7,'cbt','read_first','cbt',$8) RETURNING id`,
+      class_name_snapshot,student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,generation,writing_scope)
+    VALUES($1,$9,$2,$3,$4,$5,$6,$7,'cbt','read_first','cbt',$8,
+      CASE WHEN $9='pretest-lesson-16' THEN 'lr_only' ELSE 'exam' END) RETURNING id`,
   [randomUUID(),session.definition_version,session.erp_course_class_id,session.erp_student_contact_id,
     session.class_name_snapshot,session.student_name_snapshot,session.id,session.generation,session.test_slug]);
   await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1',[session.id,attempt.id]);
@@ -32,7 +34,8 @@ export async function createParallelReadingDraft(db, session) {
 
 export async function openTermSectionContinuation(db, official, token, section) {
   const table = continuationTable(official.test_slug);
-  const parallelFlag = official.test_slug==='term-test-2' ? 'term2_parallel_entry' : 'term1_parallel_entry';
+  const parallelFlag=official.test_slug==='pretest-lesson-16'?'pretest_parallel_entry'
+    :official.test_slug==='term-test-2'?'term2_parallel_entry':'term1_parallel_entry';
   const args = [official.id, official.generation, token || null, section];
   const previous = (await db.query(`SELECT s.* FROM ${table} c
     JOIN assessment.term_test_exam_session s ON s.id=c.exam_session_id
@@ -106,7 +109,8 @@ export async function commitTerm1ListeningContinuation(pool, session, input, def
 async function writeOfficialListening(db,grant,official,child,operationId,hash,definition,answers,grade,offline=false) {
   const combined = buildCombinedResult(definition,grade,official.reading_result);
   if(offline)await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
-  const setting=official.test_slug==='term-test-2'?'k67.term2_listening_continuation':'k67.term1_listening_continuation';
+  const setting=official.test_slug==='pretest-lesson-16'?'k67.pretest_listening_continuation'
+    :official.test_slug==='term-test-2'?'k67.term2_listening_continuation':'k67.term1_listening_continuation';
   await db.query('SELECT set_config($1,$2,true)',[setting,child.id]);
   const received = (await db.query(`UPDATE assessment.term_test_attempt
     SET listening_answers=$2,listening_result=$3,listening_submitted_at=clock_timestamp(),

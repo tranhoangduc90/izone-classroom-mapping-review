@@ -407,7 +407,8 @@ function writingHoldClassesFromFile(file) {
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
   const hasContinuations=profile===term1&&term1ParallelEntryInUse(config)
-    || profile===term2&&['on','drain'].includes(config.term2ParallelEntryMode);
+    || profile===term2&&['on','drain'].includes(config.term2ParallelEntryMode)
+    || profile===pretest&&['on','drain'].includes(config.pretestParallelEntryMode);
   const readContinuation = async (db, sessionId) => hasContinuations
     ? (await db.query(`SELECT continuation.*, official.exam_mode AS official_exam_mode,
           (to_jsonb(official)->>'listening_interrupted_at') IS NOT NULL AS listening_interrupted
@@ -494,6 +495,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
         ...(session.term2_parallel_entry?{term2ParallelEntry:true}:{}),
+        ...(session.pretest_parallel_entry?{pretestParallelEntry:true}:{}),
         ...(continuation?{continuationSection:continuation.section}:{}),
         ...(continuation?.section==='writing'&&continuation.listening_interrupted?{listeningInterrupted:true}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
