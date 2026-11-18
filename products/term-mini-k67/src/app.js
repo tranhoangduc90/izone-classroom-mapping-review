@@ -563,7 +563,8 @@ export function createApp({
   mountMiniCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
     readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, observeSubmission:(...args)=>termJournal?.business(...args) });
   mountPretestCbtJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
-    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, logEvent: logTermTestEvent });
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter, logEvent: logTermTestEvent,
+    observeSubmission:(...args)=>termJournal?.business(...args) });
   const paperJourneyServices={pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
     observeSubmission:(...args)=>termJournal?.business(...args),
     readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,paperAccepted:(attemptToken,slug)=>{
@@ -1437,17 +1438,20 @@ export function createApp({
   }));
 
   const authorizeOfficialResult = asyncRoute(async (req, res, next) => {
-    const term1 = Object.hasOwn(req.body || {}, 'officialTerm1');
-    const term2 = Object.hasOwn(req.body || {}, 'officialTerm2');
-    if (!term1 && !term2) return next();
-    const key = term1 ? 'officialTerm1' : 'officialTerm2';
-    const slug = term1 ? 'term-test-1' : 'term-test-2';
-    const enabled = term1 ? term1ParallelEntryInUse(config) : ['on','drain'].includes(config.term2ParallelEntryMode);
+    const profiles = {
+      officialTerm1: {slug:'term-test-1',enabled:term1ParallelEntryInUse(config)},
+      officialTerm2: {slug:'term-test-2',enabled:['on','drain'].includes(config.term2ParallelEntryMode)},
+      officialPretest: {slug:'pretest-lesson-16',enabled:['on','drain'].includes(config.pretestParallelEntryMode)},
+    };
+    const keys=Object.keys(profiles).filter(name=>Object.hasOwn(req.body||{},name));
+    if (!keys.length) return next();
+    const [key]=keys;
+    const {slug,enabled}=profiles[key];
     if (!enabled) {
       return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
     }
     const identity = officialIdentitySchema.safeParse(req.body[key]);
-    if (!identity.success || (term1 && term2) || req.body.attemptToken) {
+    if (!identity.success || keys.length!==1 || req.body.attemptToken) {
       return res.status(400).json({ok:false, error:'INVALID_RESULT_IDENTITY', message:'Hãy xác nhận lại lớp và họ tên.'});
     }
     return requireContext(req, res, async () => {
@@ -1504,6 +1508,7 @@ export function createApp({
         ok:true, [official.key]:true, studentRef:official.studentRef, testSlug:row.test_slug, examMode:official.examMode,
         className:row.class_name, studentName:row.student_name, completed:true, completedAt:row.completed_at,
         writing, result:termTestResult,
+        ...(official.key==='officialPretest'?{portalSyncStatus:'not_applicable'}:{}),
         ...(req.body.includeContent === true ? {content:await termTestAssetService.getContent(row.test_slug)} : {})
       });
     }
