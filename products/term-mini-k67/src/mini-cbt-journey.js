@@ -406,7 +406,8 @@ function writingHoldClassesFromFile(file) {
 
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
-  const hasContinuations=profile===term1&&term1ParallelEntryInUse(config)
+  const miniParallel=profile===mini&&['on','drain'].includes(config.miniCbtParallelEntryMode);
+  const hasContinuations=miniParallel||profile===term1&&term1ParallelEntryInUse(config)
     || profile===term2&&['on','drain'].includes(config.term2ParallelEntryMode)
     || profile===pretest&&['on','drain'].includes(config.pretestParallelEntryMode);
   const readContinuation = async (db, sessionId) => hasContinuations
@@ -496,6 +497,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
         ...(session.term2_parallel_entry?{term2ParallelEntry:true}:{}),
         ...(session.pretest_parallel_entry?{pretestParallelEntry:true}:{}),
+        ...(session.mini_k67_parallel_entry?{miniParallelEntry:true}:{}),
         ...(continuation?{continuationSection:continuation.section}:{}),
         ...(continuation?.section==='writing'&&continuation.listening_interrupted?{listeningInterrupted:true}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
@@ -547,7 +549,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile.writing||profile.paper||profile.receiptStatus||lrHoldOptions)app.post(prefix+'/status',readLimiter,
+  if(profile.writing||profile.paper||profile.receiptStatus||lrHoldOptions||miniParallel)app.post(prefix+'/status',readLimiter,
     route(profile===mini?termStatus.extend({section:z.enum(['listening','reading'])}):termStatus,async(body,req)=>{
     const {receipt,held,conflict,serverAtMs}=await audioTransaction(pool,async db=>{
       const state=await lock(db,body,profile);
@@ -635,6 +637,13 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return state;
     };
     const record = () => audioTransaction(pool,async db=>{
+      if (miniParallel) {
+        const {rows:[key]}=await db.query(`SELECT erp_course_class_id,erp_student_contact_id
+          FROM assessment.term_test_exam_session WHERE id=$1 AND generation=$2 AND test_slug=$3
+          AND superseded_at IS NULL`, [body.examSessionToken,body.generation,slug]);
+        if (key) await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [`${slug}:${key.erp_course_class_id}:${key.erp_student_contact_id}`]);
+      }
       const state=await authorizedState(db);
       const old=checkReceipt(state.journey.sections[body.section],body.operationId,digest);
       if(old) return {receipt:old,replayed:true};
@@ -650,7 +659,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       const receipt={...publicApplied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         ...(state.continuation?{continuationSection:state.continuation.section}:{}),
-        ...(state.session.term2_parallel_entry&&!publicApplied.receiptId?{receiptId:randomUUID()}:{}),
+        ...((state.session.term2_parallel_entry||state.session.mini_k67_parallel_entry)&&!publicApplied.receiptId?{receiptId:randomUUID()}:{}),
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt,
         ...(!profile.paper&&interruption?{startedAt:body.startedAt}:{})};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,

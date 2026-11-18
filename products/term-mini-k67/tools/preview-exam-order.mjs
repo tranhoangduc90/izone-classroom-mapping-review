@@ -75,6 +75,8 @@ const content=slug=>({baseTestSlug:slug,variant:'semantic-html',deferResultsUnti
   writing:['mini-test-lesson-5',pretestSlug].includes(slug)?null:{tasks:(slug==='term-test-1'?['task2']:['task1','task2']).map(id=>({id,label:id==='task1'?'Task 1':'Task 2',prompt:'Đề Writing mô phỏng; nhập vài từ để kiểm lưu bài.',minimumWords:id==='task1'?150:250,recommendedMinutes:id==='task1'?20:40}))}
 });
 const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
+const miniParallel=process.env.K67_PREVIEW_MINI_CBT_PARALLEL==='true';
+if(miniParallel&&(journeyMode!=='on'||pretestMode!=='on'))throw new Error('Mini parallel preview needs the current journey migrations.');
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
 const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
 const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
@@ -169,9 +171,10 @@ const fixtureGradeRequests=[];
 let writingGrading;
 const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets,termTestAssetDir:pretestAssetDir,listeningContinuityEnabled,audioProtection:protection,audioCache:protection,audioOwner:process.env.K67_PREVIEW_AUDIO_OWNER==='true',
   term1ParallelEntryEnabled:['true','warm-up'].includes(term1Parallel),
-  term2ParallelEntryMode:['true','warm-up'].includes(term2Parallel)?'on':'off',
+  term2ParallelEntryMode:miniParallel||['true','warm-up'].includes(term2Parallel)?'on':'off',
   mountJournal:journalFixture?.mount,
   writingHold:{
+    ...miniParallel&&{miniCbtParallelEntryMode:'on'},
     ...writingHoldEnabled&&(termHoldSlug==='term-test-1'?{term1WritingHoldHours:2,term1WritingHoldLimit:fullWritingHold?1:20,term1WritingHoldClasses:holdClass}
       :{term2WritingHoldHours:2,term2WritingHoldLimit:fullWritingHold?1:20,term2WritingHoldClasses:holdClass}),
     ...lrHold,
@@ -188,6 +191,10 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
+if(miniParallel) {
+  await fixture.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+  await fixture.db.exec(await readFile(new URL('../db/048-mini-k67-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+}
 if (writingHoldEnabled) writingGrading=createTermTestWritingGradingService({pool:fixture.pool,
   syncErpGrades:gradingRoundTrip ? createErpGradeSync({config:{
     erpSyncUrl:`http://127.0.0.1:${port}/preview/writing-portal`,erpSyncSecret:fakeWorkerKey,erpSyncTimeoutMs:5000
@@ -423,6 +430,8 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
+    ...(miniParallel&&entry==='mini-test-lesson-5-computer-based'
+      ?['offline-assets-mini-parallel-v1.mjs','offline-assets-audio-report-v1.mjs']:[]),
     ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
@@ -442,6 +451,19 @@ for(const entry of offlineEntries){
     catch { next(); }
   });
 }
+let miniParallelDefault=false;
+if(miniParallel)outer.post('/preview/mini-parallel-default',(_req,res)=>{
+  miniParallelDefault=true;
+  res.json({fixtureOnly:true,enabled:true});
+});
+if(miniParallel)outer.get('/preview/mini-parallel-readback',async(_req,res)=>{
+  const attempts=await fixture.db.query(`SELECT reading_answers,listening_answers,combined_result,mini_k67_first_submission_guard
+    FROM assessment.term_test_attempt WHERE test_slug='mini-test-lesson-5' AND superseded_at IS NULL
+      AND (reading_submitted_at IS NOT NULL OR listening_submitted_at IS NOT NULL)`);
+  const journey=await fixture.db.query(`SELECT session_id::text AS session_id,sections
+    FROM assessment.mini_k67_cbt_journey WHERE sections<>'{}'::jsonb ORDER BY session_id`);
+  res.json({fixtureOnly:true,attempts:attempts.rows,journey:journey.rows});
+});
 outer.get('/preview-tone.wav',(_req,res)=>res.type('audio/wav').send(wav));
 if(term1Audio)outer.get('/preview-term1-audio',(_req,res)=>res.type('audio/mpeg').send(term1Audio));
 if(term2Audio)outer.get('/preview-term2-audio',(_req,res)=>res.type('audio/mpeg').send(term2Audio));
@@ -450,7 +472,9 @@ outer.get('/preview-only.css',(_req,res)=>res.type('text/css').send(`.preview-ba
 outer.get('/preview-only.js',(_req,res)=>res.type('application/javascript').send(`document.getElementById('resetPreview')?.addEventListener('click',async()=>{if(!confirm('Xóa dữ liệu giả trên bản thử này để làm lại?'))return;await fetch('/preview/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});for(const storage of [localStorage,sessionStorage])for(const key of Object.keys(storage))if(/^izone-(test|mini)/.test(key))storage.removeItem(key);location.href='/term-tests/';});`));
 outer.get(/^\/term-tests\/(?:|(?:term-test-[12](?:-computer-based)?|mini-test-lesson-5(?:-computer-based)?)\/)(?:index.html)?$/,async(req,res,next)=>{
   try {const file=path.join(pages,req.path.replace(/^\//,''),req.path.endsWith('/')?'index.html':'');
-    const source=await readFile(file,'utf8');
+    const switchMini=miniParallelDefault&&/\/mini-test-lesson-5-computer-based\/(?:index\.html)?$/.test(req.path);
+    const selectedFile=switchMini?path.join(pages,'term-tests/mini-test-lesson-5-computer-based/index-mini-parallel-v1.html'):file;
+    const source=await readFile(selectedFile,'utf8');
     const local=term1ReportCases?source.replace(/<meta name="izone-term1-journal-ingress"[^>]+>/,''):source;
     const html=local.replace('</head>','<link rel="stylesheet" href="/preview-only.css"></head>')
       .replace(/(<body[^>]*>)/,`$1<aside class="preview-banner" role="status"><span><strong>Bản thử K67</strong> · Đề và tên giả · ${miniAudio?'Audio Mini thật':'Audio giả'} · Không gửi điểm hoặc chấm AI bên ngoài</span><button id="resetPreview" type="button">Làm lại bản thử</button></aside>`)

@@ -8,6 +8,7 @@ export function term1ParallelEntryInUse(config) {
 }
 
 export function continuationTable(slug) {
+  if(slug==='mini-test-lesson-5')return 'assessment.mini_k67_section_continuation';
   if(slug==='pretest-lesson-16')return 'assessment.pretest_section_continuation';
   return slug==='term-test-2' ? 'assessment.term2_section_continuation' : 'assessment.term1_section_continuation';
 }
@@ -34,7 +35,8 @@ export async function createParallelReadingDraft(db, session) {
 
 export async function openTermSectionContinuation(db, official, token, section) {
   const table = continuationTable(official.test_slug);
-  const parallelFlag=official.test_slug==='pretest-lesson-16'?'pretest_parallel_entry'
+  const parallelFlag=official.test_slug==='mini-test-lesson-5'?'mini_k67_parallel_entry'
+    :official.test_slug==='pretest-lesson-16'?'pretest_parallel_entry'
     :official.test_slug==='term-test-2'?'term2_parallel_entry':'term1_parallel_entry';
   const args = [official.id, official.generation, token || null, section];
   const previous = (await db.query(`SELECT s.* FROM ${table} c
@@ -106,10 +108,16 @@ export async function commitTerm1ListeningContinuation(pool, session, input, def
   });
 }
 
+async function setOfflineJourneyScope(db, slug, sessionId) {
+  const setting=slug==='mini-test-lesson-5'?'k67.mini_journey':'k67.term_journey';
+  await db.query('SELECT set_config($1,$2,true)',[setting,sessionId]);
+}
+
 async function writeOfficialListening(db,grant,official,child,operationId,hash,definition,answers,grade,offline=false) {
   const combined = buildCombinedResult(definition,grade,official.reading_result);
-  if(offline)await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
-  const setting=official.test_slug==='pretest-lesson-16'?'k67.pretest_listening_continuation'
+  if(offline)await setOfflineJourneyScope(db,official.test_slug,official.exam_session_id);
+  const setting=official.test_slug==='mini-test-lesson-5'?'k67.mini_listening_continuation'
+    :official.test_slug==='pretest-lesson-16'?'k67.pretest_listening_continuation'
     :official.test_slug==='term-test-2'?'k67.term2_listening_continuation':'k67.term1_listening_continuation';
   await db.query('SELECT set_config($1,$2,true)',[setting,child.id]);
   const received = (await db.query(`UPDATE assessment.term_test_attempt
@@ -122,7 +130,7 @@ async function writeOfficialListening(db,grant,official,child,operationId,hash,d
     WHERE id=$1 AND generation=$2 AND superseded_at IS NULL`,
   [official.exam_session_id,official.generation,child.listening_started_at,child.listening_deadline_at,received]);
   if(marked.rowCount!==1)throw new Term1ContinuationError('EXAM_SESSION_REQUIRED','Lượt đã thay đổi. Hãy xác nhận lại tên.');
-  if(offline)await db.query("SELECT set_config('k67.term_journey',$1,true)",[child.id]);
+  if(offline)await setOfflineJourneyScope(db,official.test_slug,child.id);
   await db.query(`UPDATE assessment.term_test_exam_session SET listening_submitted_at=$2,updated_at=clock_timestamp()
     WHERE id=$1`,[child.id,received]);
   return writeReceipt(db,grant,official,operationId,hash,combined,received);
@@ -148,7 +156,7 @@ async function lockOfficial(db, grant, definitionVersion, classId, studentId, sl
 }
 
 async function writeReceipt(db,grant,official,operationId,hash,result,received) {
-  const completed = grant.section==='writing'||official.writing_scope==='lr_only';
+  const completed = grant.section==='writing'||official.writing_scope==='lr_only'||official.test_slug==='mini-test-lesson-5';
   const receipt = {receiptId:randomUUID(),operationId,section:grant.section,nextSection:completed?'result':'writing',
     completed,result,examSessionToken:grant.exam_session_id,receivedAt:new Date(received).toISOString()};
   await db.query(`UPDATE ${continuationTable(official.test_slug)} SET operation_id=$2,payload_hash=$3,receipt=$4
@@ -167,7 +175,7 @@ export async function commitTermReadingContinuation(db,grant,child,input,definit
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Reading đã có bài được ghi nhận.');
   }
   const combined = buildCombinedResult(definition,official.listening_result,grade);
-  if(offlineHash)await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
+  if(offlineHash)await setOfflineJourneyScope(db,official.test_slug,official.exam_session_id);
   const {rows:[written]} = await db.query(`UPDATE assessment.term_test_attempt SET reading_answers=$2,reading_result=$3,
     reading_started_at=$4,reading_deadline_at=$5,reading_submitted_at=clock_timestamp(),
     combined_result=$6,completed_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -203,7 +211,7 @@ export async function commitTermOfflineListeningInterruption(db,state,body,hash)
   if(!definition)throw new Term1ContinuationError('OFFLINE_DEFINITION','Chưa tìm thấy đúng phiên bản đề.');
   const combined={...buildCombinedResult(definition,null,official.reading_result),listeningStatus:'interrupted'};
   const interruptedAt=new Date(body.capturedAt);
-  await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
+  await setOfflineJourneyScope(db,official.test_slug,official.exam_session_id);
   await db.query(`UPDATE assessment.term_test_attempt
     SET listening_interrupted_at=$2,completed_at=clock_timestamp(),combined_result=$3,updated_at=clock_timestamp()
     WHERE id=$1`,[official.id,interruptedAt,JSON.stringify(combined)]);
@@ -218,7 +226,7 @@ export async function commitTermOfflineWriting(db,state,body,deadline,hash) {
       || official.writing_scope!=='exam' || official.writing_submitted_at || continuation.receipt) {
     throw new Term1ContinuationError('EXAM_FIRST_SUBMISSION_ACCEPTED','Tiến độ Writing đã thay đổi. Hãy mở lại bài.');
   }
-  await db.query("SELECT set_config('k67.term_journey',$1,true)",[official.exam_session_id]);
+  await setOfflineJourneyScope(db,official.test_slug,official.exam_session_id);
   const {rows:[written]}= await db.query(`UPDATE assessment.term_test_attempt SET writing_task_1=$2,writing_task_2=$3,
     writing_started_at=$4,writing_deadline_at=$5,writing_draft_revision=$6,writing_submitted_at=$7,
     writing_updated_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 RETURNING writing_submitted_at`,

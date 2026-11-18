@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import request from 'supertest';
 import {createMiniFixture} from './helpers/mini-answer-sheet-fixture.js';
 
@@ -69,5 +70,162 @@ test(`Mini journey preserves native order and requires EOF ${mode} · recovery $
     assert.deepEqual(row.listening_answers,{11:'A'});
     assert.deepEqual(row.reading_answers,{14:'A'});
     assert.ok(row.completed_at);
+  }finally{await f.db.close();}
+});
+
+for(const scenario of ['lis_first','read_first','concurrent','interruption'])
+test(`Mini CBT keeps the first receipt and opens the other skill on a second profile · ${scenario}`,async()=>{
+  const interrupted=scenario==='interruption';
+  const first=scenario==='read_first'||interrupted?'read_first':'lis_first';
+  const f=await createMiniFixture({examOrder:true,assets,completeSchema:true,miniCbtJourneyMode:'on',
+    term2ParallelEntryMode:'on',pretestCbtJourneyMode:'on',writingHold:{miniCbtParallelEntryMode:'on'}});
+  try{
+    await f.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+    await f.db.exec(await readFile(new URL('../db/048-mini-k67-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+    const other=first==='lis_first'?'read_first':'lis_first';
+    let firstSkill=first==='lis_first'?'listening':'reading';
+    let secondSkill=firstSkill==='listening'?'reading':'listening';
+    function profile(character,examMode){
+      const api=request.agent(f.app);
+      const proof=character.repeat(64);
+      const prepare=token=>api.post(slug+'/session/prepare').send({...identity,examMode,examDelivery:'cbt',
+        orderClientVersion:1,miniContinuationVersion:1,...(token?{examSessionToken:token}:{})});
+      const offer=scope=>api.post(slug+'/cbt-journey/prepare').send({...identity,...scope});
+      const call=(scope,permit,path,body)=>api.post(slug+'/cbt-journey/'+path)
+        .set('x-term2-permit',permit).send({...scope,...body});
+      return {api,proof,prepare,offer,call};
+    }
+    async function enter(client){
+      const opened=await client.prepare();
+      assert.equal(opened.status,200,opened.text);
+      const scope={examSessionToken:opened.body.examSessionToken,generation:opened.body.generation,deviceProof:client.proof};
+      const offer=await client.offer(scope);
+      assert.equal(offer.status,200,offer.text);
+      const permit=offer.body.permit;
+      const start=await client.call(scope,permit,'begin',{});
+      assert.equal(start.status,200,start.text);
+      const shifted=await f.db.query(`UPDATE assessment.mini_k67_cbt_journey
+        SET activated_at=clock_timestamp()-interval '30 seconds' WHERE session_id=$1 RETURNING activated_at`,[scope.examSessionToken]);
+      return {scope,permit,at:new Date(shifted.rows[0].activated_at).getTime()};
+    }
+    function sealBody(section,startedAt,answer){
+      const listening=section==='listening';
+      return {section,operationId:randomUUID(),previousOperationId:null,startedAt,capturedAt:startedAt+(listening?8000:2000),
+        revision:1,automatic:listening,eofAt:listening?startedAt+6000:null,heardSeconds:listening?6:0,
+        answers:listening?{11:answer}:{14:answer}};
+    }
+    let a=profile('a',first);
+    let b=profile('b',other);
+    let scopeA=await enter(a);
+    let scopeB=await enter(b);
+    assert.notEqual(scopeA.scope.examSessionToken,scopeB.scope.examSessionToken);
+    const lookup=await b.api.post(slug+'/attempt/active').send({...identity,orderClientVersion:1});
+    assert.equal(lookup.status,200,lookup.text);
+    assert.equal(lookup.body.active,false);
+    assert.equal(lookup.body.attemptToken,undefined);
+    let winning=sealBody(firstSkill,scopeA.at,'B');
+    let competing=sealBody(secondSkill,scopeB.at,'C');
+    const sendA=()=>a.call(scopeA.scope,scopeA.permit,'seal',winning);
+    const sendB=()=>b.call(scopeB.scope,scopeB.permit,'seal',competing);
+    let [win,loser]=scenario==='concurrent'?await Promise.all([sendA(),sendB()]):[await sendA(),await sendB()];
+    if(scenario==='concurrent'&&loser.status===200) {
+      [win,loser]=[loser,win];
+      [a,b]=[b,a];
+      [scopeA,scopeB]=[scopeB,scopeA];
+      [winning,competing]=[competing,winning];
+      [firstSkill,secondSkill]=[secondSkill,firstSkill];
+    }
+    assert.equal(win.status,200,win.text);
+    assert.ok(win.body.receipt.receiptId);
+    assert.equal(win.body.receipt.completed,false);
+    assert.equal(loser.status,409,loser.text);
+    assert.equal(loser.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+    const preAdoption=await b.call(scopeB.scope,scopeB.permit,'status',{section:secondSkill,operationId:competing.operationId});
+    assert.equal(preAdoption.status,200,preAdoption.text);
+    assert.equal(preAdoption.body.persisted,false);
+    const stored=await a.call(scopeA.scope,scopeA.permit,'status',{section:firstSkill,operationId:winning.operationId});
+    assert.equal(stored.status,200,stored.text);
+    assert.deepEqual(stored.body.receipt,win.body.receipt);
+    assert.deepEqual((await a.call(scopeA.scope,scopeA.permit,'seal',winning)).body.receipt,win.body.receipt);
+    const progress=await b.prepare(scopeB.scope.examSessionToken);
+    assert.equal(progress.status,200,progress.text);
+    assert.equal(progress.body.continuationSection,secondSkill);
+    assert.equal(progress.body.examSessionToken,scopeB.scope.examSessionToken);
+    assert.equal(progress.body[firstSkill+'Submitted'],true);
+    assert.equal(progress.body[secondSkill+'Submitted'],false);
+    assert.deepEqual(progress.body[firstSkill+'Draft'],{});
+    const afterOffer=await b.offer(scopeB.scope);
+    assert.equal(afterOffer.status,200,afterOffer.text);
+    assert.equal(afterOffer.body.continuationSection,secondSkill);
+    assert.equal(afterOffer.body.permit,scopeB.permit);
+    assert.equal(afterOffer.body.activatedAt,scopeB.at);
+    const notAdopted=await b.call(scopeB.scope,scopeA.permit,'begin',{});
+    assert.equal(notAdopted.status,403);
+    const actual=interrupted?{section:'listening',operationId:randomUUID(),previousOperationId:null,startedAt:scopeB.at,
+      capturedAt:scopeB.at+1000,revision:1,automatic:false,eofAt:null,heardSeconds:0,answers:{}}:sealBody(secondSkill,scopeB.at,'A');
+    const path=interrupted?'interrupt':'seal';
+    const completed=await b.call(scopeB.scope,scopeB.permit,path,actual);
+    assert.equal(completed.status,200,completed.text);
+    assert.equal(completed.body.receipt.completed,true);
+    assert.equal(completed.body.receipt.nextSection,'result');
+    assert.notEqual(completed.body.receipt.receiptId,win.body.receipt.receiptId);
+    const recovered=await b.call(scopeB.scope,scopeB.permit,'status',{section:secondSkill,operationId:actual.operationId});
+    assert.deepEqual(recovered.body.receipt,completed.body.receipt);
+    assert.deepEqual((await b.call(scopeB.scope,scopeB.permit,path,actual)).body.receipt,completed.body.receipt);
+    const rows=(await f.db.query(`SELECT id,reading_answers,listening_answers,combined_result
+      FROM assessment.term_test_attempt WHERE test_slug='mini-test-lesson-5'
+        AND (reading_submitted_at IS NOT NULL OR listening_submitted_at IS NOT NULL) AND superseded_at IS NULL`)).rows;
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].id,win.body.receipt.attemptToken);
+    assert.deepEqual(rows[0][firstSkill+'_answers'],winning.answers);
+    assert.deepEqual(rows[0][secondSkill+'_answers'],interrupted?null:actual.answers);
+    const result=await b.api.post('/api/term-tests/result').send({officialMini:identity});
+    assert.equal(result.status,200,result.text);
+    assert.deepEqual(result.body.result,rows[0].combined_result);
+    assert.equal(result.body.result[firstSkill].correct,0);
+    if(interrupted){
+      assert.equal(completed.body.receipt.outcome,'interrupted');
+      assert.equal(result.body.result.listeningStatus,'interrupted');
+      assert.equal(result.body.result.listening,null);
+      assert.equal(result.body.result.summary.totalCorrect,0);
+    }else{
+      assert.equal(result.body.result[secondSkill].correct,1);
+      assert.equal(result.body.result.summary.totalCorrect,1);
+    }
+    assert.equal(result.body.officialMini,true);
+    assert.equal(result.body.portalSyncStatus,'not_applicable');
+    assert.equal(result.body.attemptToken,undefined);
+  }finally{await f.db.close();}
+});
+
+test('Mini CBT keeps an existing answer-sheet result on the paper route after migration',async()=>{
+  const f=await createMiniFixture({examOrder:true,assets,completeSchema:true,miniCbtJourneyMode:'on',
+    term2ParallelEntryMode:'on',pretestCbtJourneyMode:'on',writingHold:{miniCbtParallelEntryMode:'on'}});
+  try{
+    await f.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+    const api=request(f.app);
+    const paper=slug+'/answer-sheet';
+    const opened=await api.post(paper+'/open').send({...identity,identityConfirmed:true,examMode:'lis_first'});
+    assert.equal(opened.status,200,opened.text);
+    const submitted=await api.post(paper+'/listening').send({examSessionToken:opened.body.examSessionToken,generation:0,
+      clientSubmissionId:randomUUID(),answers:{11:'A'}});
+    assert.equal(submitted.status,201,submitted.text);
+    const scope={attemptToken:submitted.body.attemptToken,generation:0};
+    const started=await api.post(paper+'/reading/start').send(scope);
+    assert.equal(started.status,200,started.text);
+    const before=await api.post(paper+'/reading').send({...scope,answers:{14:'A'}});
+    assert.equal(before.status,200,before.text);
+    await f.db.exec(await readFile(new URL('../db/048-mini-k67-cbt-parallel-entry.sql',import.meta.url),'utf8'));
+    const rejected=await api.post(slug+'/session/prepare').send({...identity,examMode:'lis_first',examDelivery:'cbt',
+      orderClientVersion:1,miniContinuationVersion:1});
+    assert.equal(rejected.status,409,rejected.text);
+    assert.equal(rejected.body.error,'MODE_CONFLICT');
+    const hidden=await api.post('/api/term-tests/result').send({officialMini:identity});
+    assert.equal(hidden.status,404,hidden.text);
+    const readback=await api.post(paper+'/result').send(scope);
+    assert.equal(readback.status,200,readback.text);
+    assert.deepEqual(readback.body.result,before.body.result);
+    assert.equal(readback.body.result.reading.correct,1);
+    assert.equal(readback.body.result.listening.correct,1);
   }finally{await f.db.close();}
 });

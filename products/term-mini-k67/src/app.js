@@ -1442,6 +1442,7 @@ export function createApp({
       officialTerm1: {slug:'term-test-1',enabled:term1ParallelEntryInUse(config)},
       officialTerm2: {slug:'term-test-2',enabled:['on','drain'].includes(config.term2ParallelEntryMode)},
       officialPretest: {slug:'pretest-lesson-16',enabled:['on','drain'].includes(config.pretestParallelEntryMode)},
+      officialMini: {slug:'mini-test-lesson-5',enabled:['on','drain'].includes(config.miniCbtParallelEntryMode)},
     };
     const keys=Object.keys(profiles).filter(name=>Object.hasOwn(req.body||{},name));
     if (!keys.length) return next();
@@ -1461,7 +1462,8 @@ export function createApp({
         const student = rows.length === 1 ? rows[0] : null;
         const official = student && await readOfficialAttempt(pool,
           [slug, student.definition_version, student.class_id, student.student_id]);
-        if (!officialResultReady(official)) {
+        const miniPaper=key==='officialMini' && (official?.exam_delivery==='answer_sheet'||official?.session_attempt_mode==='answer_sheet');
+        if (!officialResultReady(official) || miniPaper) {
           return res.status(404).json({ok:false, error:'RESULT_NOT_FOUND', message:'Kết quả chưa sẵn sàng hoặc không tồn tại.'});
         }
         req.officialAttemptResult = {attemptToken:official.id, studentRef, examMode:official.exam_mode, key};
@@ -1508,7 +1510,7 @@ export function createApp({
         ok:true, [official.key]:true, studentRef:official.studentRef, testSlug:row.test_slug, examMode:official.examMode,
         className:row.class_name, studentName:row.student_name, completed:true, completedAt:row.completed_at,
         writing, result:termTestResult,
-        ...(official.key==='officialPretest'?{portalSyncStatus:'not_applicable'}:{}),
+        ...(['officialPretest','officialMini'].includes(official.key)?{portalSyncStatus:'not_applicable'}:{}),
         ...(req.body.includeContent === true ? {content:await termTestAssetService.getContent(row.test_slug)} : {})
       });
     }
