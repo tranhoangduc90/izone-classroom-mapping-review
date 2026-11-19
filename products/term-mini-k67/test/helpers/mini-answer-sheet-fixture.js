@@ -5,7 +5,7 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2ParallelEntryMode='off',term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniPaperParallelEntryMode='off',miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2ParallelEntryMode='off',term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   const journal = mountJournal ? {mountJournal,journalEnv:{EXAM_JOURNAL_ENABLED:'1'}} : {};
   const term1ParallelEntryMode=term1ParallelEntryEnabled?'on':'off';
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
@@ -14,9 +14,10 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   const termTestSessionSecret=miniPaperOffline||miniCbtOfflineMode||miniCbtJourneyMode||termJourneys||term1ListeningRetakeMode
     ?'synthetic-mini-offline-secret-at-least-32-bytes':undefined;
   function applications(pool) {
-    const appForModes = (term1Mode, term2Mode, term1PaperMode = term1PaperJourneyMode, term2PaperMode = term2PaperJourneyMode) => createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
+    const appForModes = (term1Mode, term2Mode, term1PaperMode = term1PaperJourneyMode, term2PaperMode = term2PaperJourneyMode,
+      miniPaperParallelMode = miniPaperParallelEntryMode, miniPaperOfflineClasses) => createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
       config:{...miniR2,...writingHold,term1ParallelEntryMode:term1Mode,term2ParallelEntryMode:term2Mode,term1ListeningTimerMode,termTestAssetDir,
-        miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,
+        miniPaperOfflineMode:miniPaperOffline,miniPaperParallelEntryMode:miniPaperParallelMode,miniPaperOfflineClasses,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,
         miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode:term1PaperMode,term1R2ConfigFile,term2CbtJourneyMode,
         term2PaperJourneyMode:term2PaperMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,
@@ -26,7 +27,9 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     const appForTerm2Mode = mode => appForModes(term1ParallelEntryMode, mode);
     const appForTerm1PaperMode = mode => appForModes(term1ParallelEntryMode, term2ParallelEntryMode, mode);
     const appForTerm2PaperMode = mode => appForModes(term1ParallelEntryMode, term2ParallelEntryMode, term1PaperJourneyMode, mode);
-    return {app:appForTerm1Mode(term1ParallelEntryMode),appForTerm1Mode,appForTerm2Mode,appForTerm1PaperMode,appForTerm2PaperMode};
+    const appForMiniPaperParallelMode = (mode, classes) => appForModes(term1ParallelEntryMode, term2ParallelEntryMode,
+      term1PaperJourneyMode, term2PaperJourneyMode, mode, classes);
+    return {app:appForTerm1Mode(term1ParallelEntryMode),appForTerm1Mode,appForTerm2Mode,appForTerm1PaperMode,appForTerm2PaperMode,appForMiniPaperParallelMode};
   }
   const installTermJourney=async db=>{
     if(term1ParallelEntryEnabled||term2ParallelEntryMode!=='off'){
