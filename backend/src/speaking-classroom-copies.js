@@ -47,7 +47,7 @@ export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
     ? '/izone-ai-team-pages/speaking-homework/lesson-11.html'
     : assignmentCode === '67-speaking-ke_chuyen_boi_canh_truoc_trong_sau'
     ? '/izone-ai-team-pages/speaking-homework/lesson-10.html'
-    : assignmentCode === '67-speaking-freestyle_on_tap'
+    : assignmentCode === '67-speaking-freestyle_on_tap' || assignmentCode === '67-speaking-freestyle_on_tap-clone'
     ? '/izone-ai-team-pages/speaking-homework/lesson-9.html'
     : assignmentCode === '67-speaking-so_sanh'
     ? '/izone-ai-team-pages/speaking-homework/lesson-8.html'
@@ -55,7 +55,7 @@ export function speakingCopyUrl({ documentId, classCode, assignmentCode }) {
     ? '/izone-ai-team-pages/speaking-homework/lesson-7.html'
     : assignmentCode === '67-speaking-ly_do_hanh_vi'
     ? '/izone-ai-team-pages/speaking-homework/lesson-6.html'
-    : assignmentCode === '67-speaking-on_tap_lam_ro_diem_giua'
+    : assignmentCode === '67-speaking-on_tap_lam_ro_diem_giua' || assignmentCode === '67-speaking-on_tap_lam_ro_diem_giua-clone'
     ? '/izone-ai-team-pages/speaking-homework/lesson-5.html'
     : assignmentCode === LESSON_4_CODE
     ? '/izone-ai-team-pages/speaking-homework/lesson-4.html'
