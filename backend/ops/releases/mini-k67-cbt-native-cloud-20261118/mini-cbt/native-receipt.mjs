@@ -3,25 +3,44 @@ import {canonical, requireValue, UUID} from '../../src/contract.mjs';
 
 const slug='mini-test-lesson-5';
 const receiptQuery=`
-  SELECT s.id::text AS source_id, s.class_name_snapshot AS class_code,
-         s.erp_student_contact_id::text AS student_ref, s.generation,
-         j.sections->$4::text AS receipt,
-         CASE $4 WHEN 'listening' THEN a.listening_submitted_at ELSE a.reading_submitted_at END AS committed_at
-  FROM assessment.mini_k67_cbt_journey j
-  JOIN assessment.term_test_exam_session s ON s.id=j.session_id AND s.generation=j.generation
-  JOIN assessment.term_test_attempt a ON a.exam_session_id=s.id AND a.generation=s.generation
-    AND a.erp_student_contact_id=s.erp_student_contact_id AND a.erp_course_class_id=s.erp_course_class_id
-    AND a.class_name_snapshot=s.class_name_snapshot AND a.superseded_at IS NULL
-  WHERE s.id=$1::uuid AND s.test_slug='mini-test-lesson-5' AND s.generation=$2
-    AND s.superseded_at IS NULL AND s.attempt_mode IN ('legacy','cbt')
-    AND a.exam_delivery IN ('legacy','cbt') AND a.test_slug=s.test_slug
-    AND a.id::text=(j.sections->$4::text)->>'attemptToken'
-    AND (j.sections->$4::text)->>'examSessionToken'=s.id::text
-    AND (j.sections->$4::text)->>'operationId'=$3::text
-    AND (j.sections->$4::text)->>'section'=$4
-    AND (j.sections->$4::text)->>'generation'=s.generation::text
-    AND (j.sections->$4::text)->>'outcome' IS DISTINCT FROM 'interrupted'
-    AND CASE $4 WHEN 'listening' THEN a.listening_submitted_at ELSE a.reading_submitted_at END IS NOT NULL`;
+  WITH receipt_scope AS (
+    SELECT s.id AS session_id, s.class_name_snapshot AS class_code,
+           s.erp_student_contact_id AS student_id, s.erp_course_class_id AS class_id,
+           s.definition_version, s.generation, j.sections->$4::text AS receipt
+    FROM assessment.mini_k67_cbt_journey j
+    JOIN assessment.term_test_exam_session s ON s.id=j.session_id AND s.generation=j.generation
+    WHERE s.id=$1::uuid AND s.test_slug='mini-test-lesson-5' AND s.generation=$2
+      AND s.superseded_at IS NULL AND s.attempt_mode IN ('legacy','cbt')
+      AND (j.sections->$4::text)->>'examSessionToken'=s.id::text
+      AND (j.sections->$4::text)->>'operationId'=$3::text
+      AND (j.sections->$4::text)->>'section'=$4
+      AND (j.sections->$4::text)->>'generation'=s.generation::text
+      AND (j.sections->$4::text)->>'outcome' IS DISTINCT FROM 'interrupted'
+  ), validated_receipt AS (
+    SELECT r.*, CASE $4 WHEN 'listening' THEN a.listening_submitted_at ELSE a.reading_submitted_at END AS committed_at
+    FROM receipt_scope r
+    JOIN assessment.term_test_attempt a ON a.exam_session_id=r.session_id AND a.generation=r.generation
+      AND a.test_slug='mini-test-lesson-5' AND a.erp_student_contact_id=r.student_id AND a.erp_course_class_id=r.class_id
+      AND a.class_name_snapshot=r.class_code AND a.definition_version=r.definition_version
+      AND a.superseded_at IS NULL AND a.exam_delivery IN ('legacy','cbt')
+      AND a.id::text=r.receipt->>'attemptToken'
+    UNION ALL
+    SELECT r.*, CASE $4 WHEN 'listening' THEN a.listening_submitted_at ELSE a.reading_submitted_at END AS committed_at
+    FROM receipt_scope r
+    JOIN assessment.mini_k67_section_continuation c ON c.exam_session_id=r.session_id
+      AND c.section=$4 AND c.operation_id::text=$3 AND c.payload_hash=r.receipt->>'payloadHash'
+      AND c.receipt->>'receiptId'=r.receipt->>'receiptId'
+      AND c.receipt->>'examSessionToken'=r.session_id::text
+    JOIN assessment.term_test_attempt a ON a.id=c.official_attempt_id AND a.generation=c.official_generation
+      AND a.test_slug='mini-test-lesson-5' AND a.erp_student_contact_id=r.student_id AND a.erp_course_class_id=r.class_id
+      AND a.class_name_snapshot=r.class_code AND a.definition_version=r.definition_version
+      AND a.superseded_at IS NULL AND a.exam_delivery IN ('legacy','cbt')
+    JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id AND s.generation=a.generation
+      AND s.superseded_at IS NULL AND s.test_slug=a.test_slug AND s.id<>r.session_id
+      AND s.erp_student_contact_id=r.student_id AND s.erp_course_class_id=r.class_id
+  )
+  SELECT session_id::text AS source_id, class_code, student_id::text AS student_ref, generation, receipt, committed_at
+  FROM validated_receipt WHERE committed_at IS NOT NULL`;
 
 function commitEventId(scope, section, operationId) {
   const bytes=createHash('sha256').update(canonical(['mini-k67-cbt-committed',scope,section,operationId])).digest().subarray(0,16);
@@ -37,8 +56,9 @@ export function createMiniK67CbtReceiptProducer({query,scopeForOwner,spool}) {
     if(event!=='submission_completed'||testSlug!==slug||submission?.delivery!=='cbt'
       ||!['listening','reading'].includes(section)||!UUID.test(sessionId??'')
       ||!UUID.test(submission.operationId??'')||!Number.isSafeInteger(submission.generation)||submission.generation<0) return null;
-    const {rows:[row]}=await query(receiptQuery,[sessionId,submission.generation,submission.operationId.toLowerCase(),section]);
-    if(!row) return null;
+    const {rows}=await query(receiptQuery,[sessionId,submission.generation,submission.operationId.toLowerCase(),section]);
+    if(rows.length!==1) return null;
+    const [row]=rows;
     const scope=await scopeForOwner({testSlug:slug,classCode:row.class_code,studentRef:row.student_ref,
       sourceId:row.source_id,generation:Number(row.generation)});
     requireValue(!expectedScope||canonical(scope)===canonical(expectedScope),'MINI_CBT_NATIVE_SCOPE_DENIED',403);
