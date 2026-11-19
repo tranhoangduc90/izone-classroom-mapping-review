@@ -31,6 +31,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
       await db.exec(await readFile(new URL('../../db/041-term1-first-submission.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/042-term1-parallel-entry.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/043-term1-section-continuation.sql',import.meta.url),'utf8'));
+      await db.exec(await readFile(new URL('../../db/044-term1-parallel-paper-entry.sql',import.meta.url),'utf8'));
     }
     if(term2ParallelEntryMode!=='off'){
       await db.exec(await readFile(new URL('../../db/045-term2-cbt-parallel-entry.sql',import.meta.url),'utf8'));
