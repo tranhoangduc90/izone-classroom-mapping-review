@@ -1,0 +1,21 @@
+{
+  "servingBuild": "98939ddd43a15f866c11abb202e1f1955d35d383",
+  "files": {
+    "config.js": {
+      "serving": "67ea47e9f8f61131b96f64fa05034b756928b969d4dfbe1b6cb9e747010a64ca",
+      "candidate": "dc64951a9f00d582918146d216383ab93cc47ff3814d1acde170949ebe26e2ae"
+    },
+    "mini-cbt-journey.js": {
+      "serving": "ec2df16add657efb42b2d8caa6c7764de8285bb6c7d6b69374b6503887332888",
+      "candidate": "794e783d7e85d70e1593a73fc93b865e3610948247b971a1d733b2c0b4af2907"
+    },
+    "app.js": {
+      "serving": "ea8b985681fd7d2d9e608dd95c387579f4170b27aa3c7719fa9ea67b892b69c6",
+      "candidate": "043c57f426277061506bebd4b9389d742b8809ec9043515b2f622abf53019be0"
+    }
+  },
+  "migration": {
+    "name": "051-pretest-parallel-paper-entry.sql",
+    "sha256": "7e56f98e8a78a2c0c9101221ca48fef28cc3e6de6a6c88bffc55678771af2734"
+  }
+}
