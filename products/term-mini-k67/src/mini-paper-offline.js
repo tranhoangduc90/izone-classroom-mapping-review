@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { findStudentForTermTestSql, insertProtectedListeningAttemptSql } from './sql.js';
 import { buildCombinedResult, gradeSection, parseStoredTest } from './term-tests.js';
 import { canSubmitWithoutHold, readMiniPaperSubmissionHold, retainMiniPaperSubmission, removeMiniPaperSubmissionHold } from './mini-cbt-journey.js';
+import { readOfficialAttempt } from './exam-order.js';
+import { commitTermOfflineContinuation } from './term1-section-continuation.js';
 
 const slug = 'mini-test-lesson-5';
 const prefix = `/api/term-tests/${slug}`;
@@ -20,6 +22,9 @@ const prepareSchema = scope.extend({
   mode: z.enum(['lis_first', 'read_first']),
   attemptMode: z.literal('answer_sheet'),
   identityConfirmed: z.literal(true)
+}).strict();
+const parallelPrepareSchema = prepareSchema.pick({
+  classCode: true, studentRef: true, mode: true, ownerId: true, identityConfirmed: true
 }).strict();
 const statusSchema = scope.extend({ operationId: z.uuid() }).strict();
 const recoveryStatusSchema = statusSchema.extend({ section: sections.optional() }).strict();
@@ -125,16 +130,16 @@ function verifyPermit(secret, run, scope, supplied) {
     && timingSafeEqual(Buffer.from(permit(secret, run), 'hex'), Buffer.from(supplied, 'hex'));
 }
 
-function stateOf({ session, attempt }, studentRef, run, secret, recoveryEnabled) {
+function stateOf({ session, attempt, official = attempt, continuation }, studentRef, run, secret, recoveryEnabled) {
   const examMode = session.exam_mode || 'lis_first';
-  const listeningSubmitted = Boolean(session.listening_submitted_at);
-  const readingSubmitted = Boolean(attempt?.reading_submitted_at);
-  const completed = Boolean(attempt?.completed_at);
+  const listeningSubmitted = Boolean(continuation ? official?.listening_submitted_at : session.listening_submitted_at);
+  const readingSubmitted = Boolean(official?.reading_submitted_at);
+  const completed = Boolean(official?.completed_at);
   const initial = first(examMode);
   const done = { listening: listeningSubmitted, reading: readingSubmitted };
   return {
     ok: true, studentRef, studentName: session.student_name_snapshot, className: session.class_name_snapshot,
-    attemptToken: session.id, examSessionToken: session.id, nativeAttemptToken: attempt?.id || null,
+    attemptToken: session.id, examSessionToken: session.id, nativeAttemptToken: official?.id || null,
     generation: Number(session.generation),
     examMode, examDelivery: 'answer_sheet', attemptMode: 'answer_sheet', policy: { timed: false, autoSubmit: false },
     nextSection: !done[initial] ? initial : !done[other(initial)] ? other(initial) : 'result',
@@ -143,11 +148,106 @@ function stateOf({ session, attempt }, studentRef, run, secret, recoveryEnabled)
     listeningDraftRevision: Number(session.listening_draft_revision) || 0,
     readingDraftRevision: Number(attempt?.reading_draft_revision) || 0,
     readingStartedAt: attempt?.reading_started_at || null, readingDeadlineAt: null, listeningDeadlineAt: null,
-    result: attempt?.combined_result || null, portalSyncStatus: 'not_applicable',
+    result: official?.combined_result || null, portalSyncStatus: 'not_applicable',
+    ...(session.mini_k67_parallel_entry ? { miniPaperParallelEntry: true } : {}),
+    ...(continuation ? { continuationSection: continuation.section, officialAttemptToken: official.id } : {}),
     serverNow: new Date().toISOString(),
     offline: { policy, ownerId: run.owner_id, permit: permit(secret, run), preparedAt: new Date(run.prepared_at).toISOString(),
       ...(recoveryEnabled && run.lr_hold_cohort === true ? { submissionRecoveryVersion: 1 } : {}) }
   };
+}
+
+const officialKey = session => [slug, session.definition_version, session.erp_course_class_id, session.erp_student_contact_id];
+
+async function paperGrant(db, session, official) {
+  if (!session.mini_k67_parallel_entry || !official) return null;
+  return (await db.query(`SELECT * FROM assessment.mini_k67_section_continuation
+    WHERE exam_session_id=$1 AND official_attempt_id=$2 AND official_generation=$3 FOR UPDATE`,
+  [session.id, official.id, official.generation])).rows[0] || null;
+}
+
+async function openParallelPaper(db, student, body, config, recoveryEnabled) {
+  const identity = [slug, student.definition_version, student.class_id, student.student_id];
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${slug}:${student.class_id}:${student.student_id}`]);
+  const official = await readOfficialAttempt(db, identity);
+  if (official?.exam_delivery && official.exam_delivery !== 'answer_sheet') {
+    throw problem('MODE_CONFLICT', 'Bài đã được ghi nhận theo hình thức khác. Hãy mở đúng link của bài đã nộp.');
+  }
+  const { rows: runs } = await db.query(`SELECT s.*,c.official_attempt_id AS granted_attempt,c.section AS granted_section,
+      c.official_generation AS granted_generation
+    FROM assessment.mini_k67_paper_offline_run r
+    JOIN assessment.term_test_exam_session s ON s.id=r.session_id AND s.generation=r.generation
+    LEFT JOIN assessment.mini_k67_section_continuation c ON c.exam_session_id=s.id
+    WHERE s.test_slug=$1 AND s.definition_version=$2 AND s.erp_course_class_id=$3 AND s.erp_student_contact_id=$4
+      AND s.attempt_mode='answer_sheet' AND s.superseded_at IS NULL AND r.owner_id=$5 AND r.student_ref=$6
+    ORDER BY s.prepared_at DESC,s.id`, [...identity, body.ownerId, body.studentRef]);
+  let session = official && runs.find(row => row.id === official.exam_session_id);
+  if (session) return { session, attempt: official, run: await runFor(db, session.id) };
+  if (official?.completed_at && official.combined_result) {
+    return { result: {
+      ok: true, officialResultReady: true, result: official.combined_result, nextSection: 'result',
+      studentRef: body.studentRef, studentName: student.student_name, className: student.class_name,
+      examDelivery: 'answer_sheet', examMode: official.exam_mode, completed: true,
+      policy: { timed: false, autoSubmit: false },
+      listeningSubmitted: true, readingSubmitted: true,
+    } };
+  }
+  const remaining = official ? (official.listening_submitted_at ? 'reading' : 'listening') : null;
+  const mode = remaining ? (remaining === 'reading' ? 'read_first' : 'lis_first') : body.mode;
+  session = runs.find(row => row.exam_mode === mode && (
+    !remaining ? !row.granted_attempt
+      : (!row.granted_attempt || (
+        row.granted_attempt === official.id && row.granted_section === remaining
+        && Number(row.granted_generation) === Number(official.generation)))
+  ));
+  let attempt;
+  let run;
+  if (session) {
+    ({ session, attempt } = await lockedSession(db, {
+      attemptToken: session.id, examSessionToken: session.id, generation: Number(session.generation),
+    }));
+    run = await runFor(db, session.id);
+  } else {
+    if (config.miniPaperParallelEntryMode !== 'on' || config.miniPaperOfflineMode !== 'on') {
+      throw problem('OFFLINE_NEW_DISABLED', 'Chỉ có thể tiếp tục trên hồ sơ đã mở lượt.', 503);
+    }
+    if (!offerMiniPaperOffline(config, body.classCode)) {
+      throw problem('OFFLINE_PARALLEL_NOT_OFFERED', 'Lớp này dùng cách nhập phiếu hiện hành.', 404);
+    }
+    session = (await db.query(`INSERT INTO assessment.term_test_exam_session
+      (test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
+       student_name_snapshot,attempt_mode,exam_mode,mini_k67_parallel_entry)
+      VALUES($1,$2,$3,$4,$5,$6,'answer_sheet',$7,true) RETURNING *`,
+    [...identity, student.class_name, student.student_name, mode])).rows[0];
+    if (mode === 'read_first') {
+      attempt = (await db.query(`INSERT INTO assessment.term_test_attempt
+        (client_submission_id,test_slug,definition_version,erp_course_class_id,erp_student_contact_id,class_name_snapshot,
+         student_name_snapshot,exam_session_id,attempt_mode,exam_mode,exam_delivery,writing_scope,generation)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'answer_sheet','read_first','answer_sheet','lr_only',$9) RETURNING *`,
+      [randomUUID(), ...identity, student.class_name, student.student_name, session.id, session.generation])).rows[0];
+      await db.query('UPDATE assessment.term_test_exam_session SET attempt_id=$2 WHERE id=$1', [session.id, attempt.id]);
+    }
+    const classes = config.miniPaperLrHoldClasses;
+    const enroll = recoveryEnabled && (classes?.has('*') || classes?.has(body.classCode));
+    run = (await db.query(`INSERT INTO assessment.mini_k67_paper_offline_run
+      (session_id,owner_id,student_ref,generation${enroll ? ',lr_hold_cohort' : ''})
+      VALUES($1,$2,$3,$4${enroll ? ',true' : ''}) RETURNING *`,
+    [session.id, body.ownerId, body.studentRef, session.generation])).rows[0];
+  }
+  let continuation;
+  if (official) {
+    if (!session.mini_k67_parallel_entry) {
+      await db.query('UPDATE assessment.term_test_exam_session SET mini_k67_parallel_entry=true WHERE id=$1', [session.id]);
+      session.mini_k67_parallel_entry = true;
+    }
+    continuation = await paperGrant(db, session, official);
+    if (!continuation) {
+      continuation = (await db.query(`INSERT INTO assessment.mini_k67_section_continuation
+        (exam_session_id,official_attempt_id,official_generation,section) VALUES($1,$2,$3,$4) RETURNING *`,
+      [session.id, official.id, official.generation, remaining])).rows[0];
+    }
+  }
+  return { session, attempt, run, official: continuation ? official : undefined, continuation };
 }
 
 async function definitionFor(db, session) {
@@ -171,8 +271,8 @@ function nativeSection({ session, attempt }, section) {
     : { revision: Number(attempt?.reading_draft_revision) || 0, sealed: Boolean(attempt?.reading_submitted_at) };
 }
 
-async function writeSection(db, locked, op, test) {
-  const { session, attempt } = locked;
+async function writeSection(db, locked, op, test, payloadHash) {
+  const { session, attempt, continuation } = locked;
   const { section, kind, revision, payload } = op;
   const isReading = section === 'reading';
   if (isReading && !attempt) throw problem('OFFLINE_ORDER', 'Chưa xác nhận được lượt Reading.');
@@ -181,6 +281,8 @@ async function writeSection(db, locked, op, test) {
     if (isReading) await db.query(`UPDATE assessment.term_test_attempt
       SET reading_started_at=coalesce(reading_started_at,now()),reading_deadline_at=NULL,updated_at=now()
       WHERE id=$1`, [attempt.id]);
+    else if (session.mini_k67_parallel_entry) await db.query(`UPDATE assessment.term_test_exam_session
+      SET listening_started_at=coalesce(listening_started_at,$2),updated_at=now() WHERE id=$1`, [session.id, payload.startedAt]);
     return;
   }
   const id = isReading ? attempt.id : session.id;
@@ -189,6 +291,10 @@ async function writeSection(db, locked, op, test) {
     ${section}_draft_updated_at=now(),updated_at=now() WHERE id=$1`, [id, answers, revision]);
   if (kind !== 'seal') return;
   const grade = gradeSection(test[`${section}_definition`], payload.answers, isReading ? 0 : test.listening_band_adjustment);
+  if (continuation) {
+    const record = { ...session, reading_started_at: attempt?.reading_started_at, reading_deadline_at: null };
+    return commitTermOfflineContinuation(db, locked, { ...op, answers: payload.answers }, record, payloadHash, test, grade);
+  }
   if (!attempt) {
     const inserted = await db.query(insertProtectedListeningAttemptSql, [op.operationId, session.id, slug, answers, JSON.stringify(grade)]);
     const nativeId = inserted.rows[0]?.attempt_token;
@@ -230,6 +336,19 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       throw problem('OFFLINE_SCOPE', 'Quyền gửi bài không khớp lượt.', 403);
     }
     return { ...locked, run };
+  }
+
+  if (['on', 'drain'].includes(config.miniPaperParallelEntryMode)) {
+    app.post(prefix + '/offline/parallel-prepare', writeLimiter, requireContext, route(async (req, res) => {
+      const body = parse(parallelPrepareSchema, req.body);
+      const student = await pool.query(findStudentForTermTestSql, [body.classCode, slug, body.studentRef]);
+      if (student.rowCount !== 1) throw problem('OFFLINE_SCOPE', 'Không tìm thấy học viên trong lớp này.', 403);
+      const response = await transaction(pool, async db => {
+        const prepared = await openParallelPaper(db, student.rows[0], body, config, recoveryEnabled);
+        return prepared.result || stateOf(prepared, body.studentRef, prepared.run, secret, recoveryEnabled);
+      });
+      res.json(response);
+    }));
   }
 
   app.post(prefix + '/offline/prepare', writeLimiter, requireContext, route(async (req, res) => {
@@ -285,6 +404,13 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
     const body = parse(scope.strict(), req.body);
     const response = await transaction(pool, async db => {
       const locked = await authorized(db, body, req);
+      if (locked.session.mini_k67_parallel_entry && !locked.attempt?.completed_at) {
+        const official = await readOfficialAttempt(db, officialKey(locked.session));
+        const continuation = await paperGrant(db, locked.session, official);
+        if (continuation?.receipt && official.completed_at) {
+          return stateOf({ ...locked, official, continuation }, locked.run.student_ref, locked.run, secret, recoveryEnabled);
+        }
+      }
       if (!locked.attempt?.completed_at) throw problem('OFFLINE_PENDING', 'Đang chờ máy chủ nhận đủ hai phần.');
       return stateOf(locked, locked.run.student_ref, locked.run, secret, recoveryEnabled);
     });
@@ -336,12 +462,24 @@ export function mountMiniPaperOffline(app, { pool, config, requireContext, readL
       if (op.kind === 'seal' && op.payload.reason !== 'manual') throw problem('PAPER_MANUAL_ONLY', 'Phiếu giấy chỉ nộp khi học viên xác nhận.');
       const test = await definitionFor(db, session);
       validateAnswerKeys(op, test);
-      await writeSection(db, locked, op, test);
+      if (op.kind === 'seal' && (session.mini_k67_parallel_entry || ['on', 'drain'].includes(config.miniPaperParallelEntryMode))) {
+        const official = await readOfficialAttempt(db, officialKey(session));
+        if (official && official.exam_session_id !== session.id) {
+          const continuation = await paperGrant(db, session, official);
+          if (official.exam_delivery !== 'answer_sheet' || continuation?.section !== op.section) {
+            throw problem('EXAM_FIRST_SUBMISSION_ACCEPTED', 'Bài đã được ghi nhận. Mở theo tiến độ chính thức để làm phần còn lại.');
+          }
+          locked.official = official;
+          locked.continuation = continuation;
+        }
+      }
+      const continued = await writeSection(db, locked, op, test, payloadHash);
       const receipt = {
-        version: 1, receiptId: randomUUID(), operationId: op.operationId, payloadHash,
+        version: 1, receiptId: continued?.receiptId || randomUUID(), operationId: op.operationId, payloadHash,
         attemptToken: op.attemptToken, examSessionToken: op.examSessionToken, generation: op.generation,
         section: op.section, kind: op.kind, acceptedRevision: op.revision, status: 'accepted',
-        serverCommittedAt: new Date().toISOString()
+        serverCommittedAt: continued?.receivedAt || new Date().toISOString(),
+        ...(continued ? { officialAttemptToken: locked.official.id } : {})
       };
       const updated = { ...state, [op.section]: {
         startedAt: op.payload.startedAt, revision: op.revision,
