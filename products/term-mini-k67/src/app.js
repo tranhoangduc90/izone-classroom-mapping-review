@@ -575,7 +575,8 @@ export function createApp({
       }).catch(()=>logger.error('Term offline paper grade sync will retry on result read'));
     }};
   mountPretestPaperJourney(app, { pool, config, assets: termTestAssetService, requireContext, readStudent: readPreparedStudent,
-    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter });
+    readLimiter: testReadLimiter, writeLimiter: testWriteLimiter,
+    observeSubmission: (...args) => termJournal?.business(...args) });
   mountTerm1PaperJourney(app,paperJourneyServices);
   mountTerm2PaperJourney(app,paperJourneyServices);
   const termCbtServices=slug=>({pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,

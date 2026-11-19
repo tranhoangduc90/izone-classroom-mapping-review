@@ -24,7 +24,9 @@ const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2Pap
 const pretest = {slug:'pretest-lesson-16',version:'pretest-lesson-16-k67-cbt-v1',mode:'pretestCbtJourneyMode',
   table:term2.table,guard:term2.guard,receiptStatus:true,lrOnly:true,privateAudio:true};
 const pretestPaper = {...pretest,version:'pretest-lesson-16-k67-paper-v1',mode:'pretestPaperJourneyMode',
-  privateAudio:false,paper:true};
+  privateAudio:false,paper:true,
+  parallelPaper:{flag:'pretest_parallel_entry',config:'pretestPaperParallelEntryMode',
+    request:'pretestPaperParallelVersion',response:'pretestPaperParallelEntry'}};
 const recovery = 72 * 60 * 60 * 1_000;
 const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
@@ -32,7 +34,8 @@ const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int(
 const open = scope.extend({ classCode: z.string().regex(/^[A-Z0-9._-]{2,32}$/), studentRef: z.uuid() });
 const openPaper = open.omit({examSessionToken:true,generation:true}).extend({
   examMode:z.enum(['lis_first','read_first']),identityConfirmed:z.literal(true),
-  term1PaperParallelVersion:z.literal(1).optional(),term2PaperParallelVersion:z.literal(1).optional()
+  term1PaperParallelVersion:z.literal(1).optional(),term2PaperParallelVersion:z.literal(1).optional(),
+  pretestPaperParallelVersion:z.literal(1).optional()
 });
 const attemptSection = scope.extend({ operationId: z.uuid(), section: z.enum(['listening','reading']), previousOperationId: z.uuid().nullable(),
   startedAt: ts, capturedAt: ts, revision: ts, automatic: z.boolean(), eofAt: ts.nullable(),
@@ -713,7 +716,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       return state;
     };
     const record = () => audioTransaction(pool,async db=>{
-      if (miniParallel) {
+      if (miniParallel || (profile === pretestPaper && parallelPaper)) {
         const {rows:[key]}=await db.query(`SELECT erp_course_class_id,erp_student_contact_id
           FROM assessment.term_test_exam_session WHERE id=$1 AND generation=$2 AND test_slug=$3
           AND superseded_at IS NULL`, [body.examSessionToken,body.generation,slug]);
@@ -741,7 +744,8 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       }
       const receipt={...publicApplied,...outcome,version,section:body.section,operationId:body.operationId,payloadHash:digest,
         ...(state.continuation?{continuationSection:state.continuation.section}:{}),
-        ...((state.session.term2_parallel_entry||state.session.mini_k67_parallel_entry)&&!publicApplied.receiptId?{receiptId:randomUUID()}:{}),
+        ...((state.session.term2_parallel_entry||state.session.mini_k67_parallel_entry
+          || (profile===pretestPaper&&state.session.pretest_parallel_entry))&&!publicApplied.receiptId?{receiptId:randomUUID()}:{}),
         examSessionToken:state.session.id,generation:body.generation,capturedAt:body.capturedAt,
         ...(!profile.paper&&interruption?{startedAt:body.startedAt}:{})};
       await db.query(`UPDATE ${table} SET sections=$2::jsonb WHERE session_id=$1`,
