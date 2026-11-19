@@ -188,10 +188,11 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const key = [slug,student.definition_version,student.class_id,student.student_id];
     let session;
     if (data.examSessionToken) {
-      session = (await db.query(`SELECT * FROM assessment.term_test_exam_session
+      session = (await db.query(`SELECT * FROM assessment.term_test_exam_session AS s
         WHERE id=$5 AND test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3
           AND erp_student_contact_id=$4 AND superseded_at IS NULL AND attempt_mode<>'answer_sheet'
           AND (NOT term1_parallel_entry OR attempt_mode='cbt')
+          AND (test_slug<>'term-test-2' OR attempt_mode='cbt' OR (to_jsonb(s)->>'term2_parallel_entry') IS DISTINCT FROM 'true')
           AND (exam_mode='read_first' OR prepared_at>=now()-interval '8 hours')`, [...key,data.examSessionToken])).rows[0];
     }
     if (!session) {
@@ -297,6 +298,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
         if (!await admitOpen()) return null;
         const official = await readOfficialAttempt(db,[slug,student.definition_version,student.class_id,student.student_id]);
         if (official) {
+          if (official.exam_delivery==='answer_sheet' && official.term2_parallel_entry) {
+            throw error('MODE_CONFLICT','Bài đã được ghi nhận trên phiếu. Hãy mở link phiếu để tiếp tục.');
+          }
           const view=officialView(official,data.examSessionToken);
           const section=official.writing_submitted_at?'result':orderState(official).nextSection;
           if (section==='result' || !official.exam_session_id || official.exam_delivery==='answer_sheet')

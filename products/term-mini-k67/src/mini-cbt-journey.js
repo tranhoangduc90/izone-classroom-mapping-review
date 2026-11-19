@@ -15,10 +15,12 @@ const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'
   table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
 const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,writingHold:'term1'};
-const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true};
+const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true,
+  parallelPaper:{flag:'term1_parallel_entry',config:'term1ParallelEntryMode',request:'term1PaperParallelVersion',response:'term1ParallelEntry'}};
 const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
   table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true,writingHold:'term2'};
-const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true};
+const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true,
+  parallelPaper:{flag:'term2_parallel_entry',config:'term2ParallelEntryMode',request:'term2PaperParallelVersion',response:'term2ParallelEntry'}};
 const pretest = {slug:'pretest-lesson-16',version:'pretest-lesson-16-k67-cbt-v1',mode:'pretestCbtJourneyMode',
   table:term2.table,guard:term2.guard,receiptStatus:true,lrOnly:true,privateAudio:true};
 const pretestPaper = {...pretest,version:'pretest-lesson-16-k67-paper-v1',mode:'pretestPaperJourneyMode',
@@ -30,7 +32,7 @@ const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int(
 const open = scope.extend({ classCode: z.string().regex(/^[A-Z0-9._-]{2,32}$/), studentRef: z.uuid() });
 const openPaper = open.omit({examSessionToken:true,generation:true}).extend({
   examMode:z.enum(['lis_first','read_first']),identityConfirmed:z.literal(true),
-  term1PaperParallelVersion:z.literal(1).optional()
+  term1PaperParallelVersion:z.literal(1).optional(),term2PaperParallelVersion:z.literal(1).optional()
 });
 const attemptSection = scope.extend({ operationId: z.uuid(), section: z.enum(['listening','reading']), previousOperationId: z.uuid().nullable(),
   startedAt: ts, capturedAt: ts, revision: ts, automatic: z.boolean(), eofAt: ts.nullable(),
@@ -348,11 +350,12 @@ export function mountTerm2PaperJourney(app, services) {mountCbtJourney(app,servi
 
 async function createPaperBinding(db,profile,student,body,examMode,enroll,parallel=false) {
   const {slug,table}=profile;
+  const flag=parallel?profile.parallelPaper.flag:null;
   const owner=[slug,student.class_id,student.student_id,student.definition_version];
   const current=(await db.query(`INSERT INTO assessment.term_test_exam_session
     (test_slug,erp_course_class_id,erp_student_contact_id,definition_version,class_name_snapshot,student_name_snapshot,attempt_mode,exam_mode
-      ${parallel?',term1_parallel_entry':''})
-    VALUES($1,$2,$3,$4,$5,$6,'legacy',$7${parallel?',true':''}) RETURNING *`,[...owner,student.class_name,student.student_name,examMode])).rows[0];
+      ${flag?','+flag:''})
+    VALUES($1,$2,$3,$4,$5,$6,'legacy',$7${flag?',true':''}) RETURNING *`,[...owner,student.class_name,student.student_name,examMode])).rows[0];
   if(examMode==='read_first') {
     const attempt=(await db.query(`INSERT INTO assessment.term_test_attempt
       (test_slug,erp_course_class_id,erp_student_contact_id,definition_version,class_name_snapshot,student_name_snapshot,
@@ -369,8 +372,9 @@ async function createPaperBinding(db,profile,student,body,examMode,enroll,parall
   return {current,row};
 }
 
-async function prepareTerm1ParallelPaper(db,profile,student,body,enroll,allowNew,parallelMode) {
+async function prepareParallelPaper(db,profile,student,body,enroll,allowNew,parallelMode) {
   const owner=[profile.slug,student.definition_version,student.class_id,student.student_id];
+  const continuations=continuationTable(profile.slug);
   const official=await readOfficialAttempt(db,owner);
   if(official&&official.exam_delivery!=='answer_sheet'){
     throw problem('MODE_CONFLICT','Bài thi đã được ghi nhận theo hình thức khác. Hãy mở đúng link của lượt đã nộp.');
@@ -380,7 +384,7 @@ async function prepareTerm1ParallelPaper(db,profile,student,body,enroll,allowNew
       c.official_attempt_id,c.official_generation,j.sections
     FROM assessment.term_test_exam_session s
     JOIN ${profile.table} j ON j.session_id=s.id AND j.generation=s.generation
-    LEFT JOIN assessment.term1_section_continuation c ON c.exam_session_id=s.id
+    LEFT JOIN ${continuations} c ON c.exam_session_id=s.id
     WHERE s.test_slug=$1 AND s.definition_version=$2 AND s.erp_course_class_id=$3 AND s.erp_student_contact_id=$4
       AND s.attempt_mode='legacy' AND s.superseded_at IS NULL
       AND j.student_ref=$5 AND j.device_hash=$6 AND j.audio_hash='paper'
@@ -392,13 +396,13 @@ async function prepareTerm1ParallelPaper(db,profile,student,body,enroll,allowNew
       &&Number(s.official_generation)===Number(official.generation));
     if(existing)return {current:existing,section,examMode:official.exam_mode};
     const wantedMode=section==='reading'?'read_first':'lis_first';
-    const candidate=sessions.find(s=>s.term1_parallel_entry&&!s.granted_section&&s.exam_mode===wantedMode
+    const candidate=sessions.find(s=>s[profile.parallelPaper.flag]&&!s.granted_section&&s.exam_mode===wantedMode
       &&Object.keys(s.sections).length===0);
     if(!candidate&&(!allowNew||parallelMode!=='on')){
       throw problem('OFFLINE_NEW_DISABLED','Chỉ có thể tiếp tục trên thiết bị đã mở lượt.');
     }
     const binding=candidate?{current:candidate}:await createPaperBinding(db,profile,student,body,wantedMode,enroll,true);
-    await db.query(`INSERT INTO assessment.term1_section_continuation
+    await db.query(`INSERT INTO ${continuations}
       (exam_session_id,official_attempt_id,official_generation,section) VALUES($1,$2,$3,$4)`,
     [binding.current.id,official.id,official.generation,section]);
     return {...binding,section,examMode:official.exam_mode};
@@ -414,7 +418,7 @@ async function preparePaper(db, profile, student, body, secret, timing, {allowNe
   const {class_id:classId,student_id:studentId,definition_version:definition}=student;
   const owner=[slug,classId,studentId,definition];
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${slug}:${classId}:${studentId}`]);
-  const parallel=parallelMode&&await prepareTerm1ParallelPaper(db,profile,student,body,enroll,allowNew,parallelMode);
+  const parallel=parallelMode&&await prepareParallelPaper(db,profile,student,body,enroll,allowNew,parallelMode);
   if(parallel?.resultAttemptToken)return {ok:true,version,examDelivery:'answer_sheet',studentRef:body.studentRef,
     className:student.class_name,studentName:student.student_name,examMode:parallel.examMode,resultAttemptToken:parallel.resultAttemptToken};
   if(parallel){
@@ -424,7 +428,7 @@ async function preparePaper(db, profile, student, body, secret, timing, {allowNe
   }
   const session=(await db.query(`SELECT * FROM assessment.term_test_exam_session AS s
     WHERE test_slug=$1 AND erp_course_class_id=$2 AND erp_student_contact_id=$3 AND definition_version=$4
-    AND (test_slug<>'term-test-1' OR (to_jsonb(s)->>'term1_parallel_entry') IS DISTINCT FROM 'true')
+    ${profile.parallelPaper?`AND (to_jsonb(s)->>'${profile.parallelPaper.flag}') IS DISTINCT FROM 'true'`:''}
     AND superseded_at IS NULL ORDER BY prepared_at DESC LIMIT 1 FOR UPDATE`,owner)).rows[0];
   let row;
   if(session?.attempt_mode==='legacy') {
@@ -453,7 +457,8 @@ async function paperJourneyBundle(db,profile,body,secret,timing,current,row,hold
   return {ok:true,version,examSessionToken:current.id,generation:Number(row.generation),attemptToken:current.attempt_id||current.id,
     studentRef:body.studentRef,studentName:current.student_name_snapshot,className:current.class_name_snapshot,
     examMode:progress.examMode||current.exam_mode,activatedAt:clock(row.activated_at),serverNow:clock(now),permit:signature(secret,row,version),
-    ...(current.term1_parallel_entry?{term1ParallelEntry:true,examDelivery:'answer_sheet'}:{}),
+    ...(profile.parallelPaper&&current[profile.parallelPaper.flag]
+      ?{[profile.parallelPaper.response]:true,examDelivery:'answer_sheet'}:{}),
     ...(progress.section?{continuationSection:progress.section}:{}),
     ...(holdEnabled&&row.lr_hold_cohort===true?{submissionRecoveryVersion:1}:{}),
     timing:{readingDurationMinutes:timing.readingDurationMinutes}};
@@ -472,9 +477,11 @@ function writingHoldClassesFromFile(file) {
 
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
-  const parallelTerm1=term1ParallelEntryInUse(config)&&(profile===term1||profile===term1Paper);
+  const parallelTerm1=profile===term1&&term1ParallelEntryInUse(config);
+  const paperParallelMode=config[profile.parallelPaper?.config];
+  const parallelPaper=profile.parallelPaper&&['on','drain'].includes(paperParallelMode);
   const miniParallel=profile===mini&&['on','drain'].includes(config.miniCbtParallelEntryMode);
-  const hasContinuations=miniParallel||parallelTerm1
+  const hasContinuations=miniParallel||parallelTerm1||parallelPaper
     || profile===term2&&['on','drain'].includes(config.term2ParallelEntryMode)
     || profile===pretest&&['on','drain'].includes(config.pretestParallelEntryMode);
   const readContinuation = async (db, sessionId) => hasContinuations
@@ -516,13 +523,13 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
   };
   if(profile.paper)app.get(prefix+'/availability',readLimiter,(_req,res)=>{
     res.set('Cache-Control','no-store').json({ok:true,enabled:mode==='on',
-      ...(profile===term1Paper&&config.term1ParallelEntryMode==='on'&&mode==='on'?{parallelEntryAvailable:true}:{})});
+      ...(parallelPaper&&paperParallelMode==='on'&&mode==='on'?{parallelEntryAvailable:true}:{})});
   });
   if(profile.paper)app.post(prefix+'/prepare',writeLimiter,requireContext,route(openPaper,async (body,req)=>{
     const selected=(await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     if(!selected)throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
     const allowNew=mode==='on'&&(body.examMode!=='read_first'||config.readFirstNewEnabled);
-    const parallelMode=parallelTerm1&&body.term1PaperParallelVersion?config.term1ParallelEntryMode:null;
+    const parallelMode=parallelPaper&&body[profile.parallelPaper.request]?paperParallelMode:null;
     return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),
       {allowNew,enroll:enrollLr(selected.class_name),holdEnabled:Boolean(lrHoldOptions),parallelMode}));
   }));
@@ -716,7 +723,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const state=await authorizedState(db);
       const old=checkReceipt(state.journey.sections[body.section],body.operationId,digest);
       if(old) return {receipt:old,replayed:true};
-      if(profile===term1Paper&&parallelTerm1&&state.session.term1_parallel_entry&&!state.continuation){
+      if(parallelPaper&&state.session[profile.parallelPaper.flag]&&!state.continuation){
         const {session}=state;
         const official=await readOfficialAttempt(db,[slug,session.definition_version,session.erp_course_class_id,session.erp_student_contact_id]);
         if(official&&official.exam_session_id!==session.id)
