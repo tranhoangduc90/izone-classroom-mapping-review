@@ -87,18 +87,23 @@ class Release:
         self.guard['check_idle'](sql)
         return old, route, sql
 
-    def preflight(self):
-        old, route, _ = self.window()
+    def check_ports(self):
         assert all(not self.api['run']('ss', '-H', '-ltn', f'sport = :{port}').strip()
                    for mode, port in PORTS.items() if mode != 'old')
+
+    def preflight(self):
+        old, route, _ = self.window()
+        self.check_ports()
         print(json.dumps({'build': self.manifest['baseBuild'], 'container': old['Id'],
                           'routeHash': digest(route), 'collectorAndAgentReady': True,
                           'checkedQuietWindow': True}), flush=True)
 
     def stage(self):
         assert not (ROOT / 'staged.json').exists()
-        self.preflight()
+        # Mount and syntax checks use a disconnected probe. The two API
+        # variants are only created here. Migration and cutover use window().
         old, route = self.old()
+        self.check_ports()
         verification = read(PREVIOUS / 'incoming' / 'preflight.json')['helper']
         helper_path = Path(verification['path'])
         assert digest(helper_path.read_bytes()) == verification['sha256']
