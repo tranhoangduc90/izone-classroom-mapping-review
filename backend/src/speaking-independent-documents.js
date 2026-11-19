@@ -10,6 +10,7 @@ const error=(code,message)=>{throw new SpeakingHomeworkError(code,message);};
 const teacherPage='https://tranhoangduc90.github.io/izone-ai-team-pages/speaking-homework/teacher.html';
 function allText(value) {
   if(value?.textRun) return value.textRun.content||'';
+  if(value?.paragraph) return (value.paragraph.elements||[]).map(allText).join('')+'\n';
   return value&&typeof value==='object'?Object.values(value).map(allText).join(''):'';
 }
 export function validateIndependentDocument(document,{documentId,assignmentCode}) {
@@ -17,7 +18,7 @@ export function validateIndependentDocument(document,{documentId,assignmentCode}
   const found=[];
   for(const tab of document.tabs||[]) {
     const text=allText(tab.documentTab?.body).normalize('NFKC');
-    const codes=text.match(/67-speaking-[a-z0-9_]+/g)||[];
+    const codes=[...new Set(text.match(/(?<![a-z0-9_-])67-speaking-[a-z0-9_-]+/gi)||[])];
     if(codes.length===1 && codes[0]===assignmentCode && /SPEAKING\s*[-–]/i.test(text)
       && text.includes('NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING') && text.includes('TÌNH TRẠNG NỘP BÀI SPEAKING')) found.push(tab.tabProperties?.tabId);
   }

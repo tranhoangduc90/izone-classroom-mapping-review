@@ -67,7 +67,7 @@ test('100 HV gửi link trước nộp và 10 cửa sổ GV trên PostgreSQL nat
   simulatedNetworks:4,studentsPerNetwork:25,student:stat(timing.student),teacher:stat(timing.teacher),externalCalls:0,audioDownloads:0}));
 });
 
-async function fixture({start=true,recommendations=[],unapproved=false}={}) {
+async function fixture({start=true,recommendations=[],unapproved=false,templates=[template]}={}) {
   let db,nativePool;
   if(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL) {
     const url=new URL(process.env.SPEAKING_NATIVE_TEST_DATABASE_URL);
@@ -95,7 +95,8 @@ async function fixture({start=true,recommendations=[],unapproved=false}={}) {
   const pool=nativePool||{query,async connect(){return {query,release(){}};}};
   let active=true;
   const source={async context(i){
-    if(i.assignmentCode!==code) throw Object.assign(new Error('Mã cũ'),{code:'UNSUPPORTED_ASSIGNMENT'});
+    const template=templates.find(candidate=>candidate.assignmentCode===i.assignmentCode);
+    if(!template) throw Object.assign(new Error('Mã cũ'),{code:'UNSUPPORTED_ASSIGNMENT'});
     const classes=[{class_id:1293,class_code:'IC2304',course_id:'826336470852'}];
     const exercises=[{id:exercise(1),title:'Bài một',exercise_url:'https://example.invalid/1'},{id:exercise(2),title:'Bài hai',exercise_url:'https://example.invalid/2'}];
     if(!i.classCode) return {template,classes,exercises};
@@ -343,15 +344,133 @@ test('HTTP mở phiên không có Docs và từ chối body lạ, link riêng, h
   }finally{await f.db.close();}
 });
 
-function documentFixture(documentId='fixture-document',ctaUrl='') {
+function documentFixture(documentId='fixture-document',ctaUrl='',assignmentCode=code) {
   const run=(text,index=1,style={})=>({startIndex:index,endIndex:index+text.length,textRun:{content:text,textStyle:style}});
   return {documentId,title:'Homework fixture',revisionId:'fixture-revision',tabs:[{tabProperties:{tabId:'t.0'},documentTab:{body:{content:[
-    {paragraph:{elements:[run(`SPEAKING - LUYỆN LÝ DO\n${code}\n`)]}},
+    {paragraph:{elements:[run(`SPEAKING - HOMEWORK THỬ\n${assignmentCode}\n`)]}},
     {paragraph:{elements:[run('NHẤN VÀO ĐÂY ĐỂ LUYỆN TẬP SPEAKING',60,{link:{url:ctaUrl},foregroundColor:{color:{rgbColor:{red:1,green:1,blue:1}}},underline:false})]}},
     {table:{tableRows:[{tableCells:[{content:[{paragraph:{elements:[run('TÌNH TRẠNG NỘP BÀI SPEAKING\n',131)]}}]}]},
       {tableCells:[{content:[{startIndex:163,paragraph:{elements:[run('\n',163)]}}]}]}]}}
   ]}}}]};
 }
+
+for (const [lesson, originalCode, parts] of [
+  [5, '67-speaking-on_tap_lam_ro_diem_giua', [{ part_key: 'review_clarify_middle', min_questions: 3 }, { part_key: 'freestyle', min_questions: 1 }]],
+  [9, '67-speaking-freestyle_on_tap', [{ part_key: 'freestyle', min_questions: 1 }]]
+]) {
+test(`Lesson ${lesson} kỳ 2 đi từ mã trong Docs tới biên nhận riêng và dùng tiếp hồ sơ Doctor`, async () => {
+  const cloneCode = `${originalCode}-clone`;
+  const originalTemplate = { ...template, lesson, title: `Lesson ${lesson}`, assignmentCode: originalCode, parts };
+  const recommendation = { exercise_id: exercise(1), recommendation_count: 3, practice_count: 2,
+    waiting: true, proposed_at: '2026-10-01T00:00:00Z', last_practiced_at: null };
+  const f = await fixture({ start: false, templates: [originalTemplate, { ...originalTemplate, assignmentCode: cloneCode }],
+    recommendations: [recommendation] });
+  try {
+    const classCode = 'IC2304';
+    const courseId = '826336470852';
+    const documentId = `lesson${lesson}-second-term-fixture`;
+    const courseWorkId = '900002';
+    let doc = documentFixture(documentId, '', cloneCode);
+    const secret = 'fixture-secret-32-characters-long-only';
+    const gateway = { async get(id) { assert.equal(id, documentId); return doc; } };
+    const docs = createIndependentDocuments({ pool: f.pool, source: f.source, accessSecret: secret, gateway });
+    const original = await f.service.startSelected({ assignmentCode: originalCode, classCode, studentRef: ref });
+    const oldIdentity = { accessToken: original.accessToken, studentRef: ref };
+    await f.service.requestCheck({ ...oldIdentity, part: 'freestyle', rawUrl: url(801) });
+    const priorJob = await f.service.claimJob();
+    await f.service.workerService(priorJob).completeCheck({ fingerprint: fingerprint(801), questionCount: 1, qualityPassed: true });
+    const before = await f.service.open(oldIdentity);
+
+    await docs.register({ courseId, courseWorkId, assignmentCode: cloneCode, title: 'Tên Classroom không theo số Lesson', classroomState: 'PUBLISHED' });
+    await docs.sync({ courseId, courseWorkId, submissions: [{ id: 'fixture-term2', userId: 'fixture-user', documentId }] });
+    const plan = await docs.plan({ documentId, document: doc });
+    assert.equal(new URL(plan.url).searchParams.get('assignmentCode'), cloneCode);
+    assert.equal(new URL(plan.url).pathname.split('/').at(-1), `lesson-${lesson}.html`);
+    doc = documentFixture(documentId, plan.url, cloneCode);
+    assert.equal((await docs.verify({ documentId, document: doc })).status, 'pending');
+    assert.equal((await docs.plan({ documentId, document: doc })).status, 'already_current');
+    await assert.rejects(docs.open({ documentId, assignmentCode: originalCode }), { code: 'DOCUMENT_CONTENT_INVALID' });
+    assert.equal((await docs.open({ documentId, assignmentCode: cloneCode, classCode })).selectedStudentRef, ref);
+    assert.equal((await docs.verify({ documentId, document: doc })).status, 'linked');
+    await assert.rejects(docs.open({ documentId, assignmentCode: cloneCode, classCode: 'OTHER' }), { code: 'CLASS_MISMATCH' });
+
+    const selected = { documentId, assignmentCode: cloneCode, classCode, studentRef: ref };
+    const session = await docs.start(selected);
+    const identity = { accessToken: session.accessToken, studentRef: ref };
+    assert.notEqual(session.workUnitId, original.workUnitId);
+    const initial = await f.service.open(identity);
+    assert.equal(initial.status, 'draft');
+    assert.deepEqual(initial.links, []);
+    assert.deepEqual(initial.practiceLinks, []);
+    assert.equal((await f.service.listDoctor(identity)).needed[0].practice_count, 2);
+
+    for (const [index, part] of parts.entries()) {
+      const share = 802 + index;
+      await f.service.requestCheck({ ...identity, part: part.part_key, rawUrl: url(share) });
+      const job = await f.service.claimJob();
+      assert.equal(job.work_unit_id, session.workUnitId);
+      assert.equal(await runSpeakingCheckJob(f.service.workerService(job), job, async () => ({
+        kind: 'pass', fingerprint: fingerprint(share), count: part.min_questions
+      })), 'accepted');
+    }
+    assert.equal((await docs.start(selected)).workUnitId, session.workUnitId);
+    assert.equal((await f.service.open(identity)).links.length, parts.length);
+    for (let slot = 1; slot <= 2; slot++) {
+      const share = 803 + slot;
+      await f.service.requestPracticeCheck({ ...identity, slot, exerciseId: exercise(slot), rawUrl: url(share) });
+      let job = await f.service.claimJob();
+      if (job.kind === 'analyze_practice') {
+        await f.service.failJob(job, 'FIXTURE_PENDING_ANALYSIS');
+        job = await f.service.claimJob();
+      }
+      assert.equal(job.work_unit_id, session.workUnitId);
+      await f.service.workerService(job).completePracticeCheck({ fingerprint: fingerprint(share),
+        questionCount: 1, qualityPassed: true, matchedExerciseId: exercise(slot) });
+    }
+    const receipt = await f.service.finish(identity);
+    assert.ok(receipt.id);
+    assert.equal((await f.service.finish(identity)).id, receipt.id);
+    assert.equal((await f.service.open(identity)).receipt.id, receipt.id);
+    assert.equal((await f.service.teacherReceipt(receipt.id, { cookie: 'teacher=allowed' })).document_id, documentId);
+    assert.equal((await f.pool.query('SELECT count(*)::int n FROM speaking_independent.receipt')).rows[0].n, 1);
+
+    let written = 0;
+    gateway.write = async (id, body) => {
+      assert.equal(id, documentId);
+      written += 1;
+      const cell = doc.tabs[0].documentTab.body.content[2].table.tableRows[1].tableCells[0].content[0].paragraph.elements[0];
+      cell.textRun.content = `${body.requests.find(r => r.insertText).insertText.text}\n`;
+      cell.textRun.textStyle.link = body.requests.find(r => r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link;
+      cell.endIndex = cell.startIndex + cell.textRun.content.length;
+      doc.revisionId = 'fixture-written';
+    };
+    const writer = createSpeakingProgressDocsWorker({ pool: f.pool, schema: 'speaking_independent', gateway });
+    await writer.once(session.workUnitId);
+    assert.equal(written, 1);
+    assert.equal((await f.service.open(identity)).docsProgress.status, 'verified');
+    assert.deepEqual((await f.service.open(oldIdentity)).links, before.links);
+    assert.equal((await f.service.open(oldIdentity)).status, 'draft');
+  } finally {
+    await f.db.close();
+  }
+});
+}
+
+test('Docs xác minh nguyên mã CTA, độc lập với tiêu đề và số buổi', () => {
+  const document = documentFixture();
+  const base = '67-speaking-on_tap_lam_ro_diem_giua';
+  const clone = `${base}-clone`;
+  const run = document.tabs[0].documentTab.body.content[0].paragraph.elements[0].textRun;
+  const input = { documentId: document.documentId, assignmentCode: clone };
+  run.content = `SPEAKING - BUỔI 99\n${clone}\n`;
+  assert.equal(validateIndependentDocument(document, input).tabId, 't.0');
+  assert.throws(() => validateIndependentDocument(document, { ...input, assignmentCode: base }),
+    { code: 'DOCUMENT_CONTENT_INVALID' });
+  run.content += `${base}\n`;
+  assert.throws(() => validateIndependentDocument(document, input), { code: 'DOCUMENT_CONTENT_INVALID' });
+  run.content = `SPEAKING - BUỔI 99\n${clone}-other\n`;
+  assert.throws(() => validateIndependentDocument(document, input), { code: 'DOCUMENT_CONTENT_INVALID' });
+});
 
 test('Docs ngoài Classroom được nhận theo nội dung thật, có hồ sơ riêng và không giả lớp/học viên',async()=>{
   const f=await fixture();try{
