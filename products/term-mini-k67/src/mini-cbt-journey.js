@@ -394,6 +394,9 @@ async function prepareTerm1ParallelPaper(db,profile,student,body,enroll,allowNew
     const wantedMode=section==='reading'?'read_first':'lis_first';
     const candidate=sessions.find(s=>s.term1_parallel_entry&&!s.granted_section&&s.exam_mode===wantedMode
       &&Object.keys(s.sections).length===0);
+    if(!candidate&&(!allowNew||parallelMode!=='on')){
+      throw problem('OFFLINE_NEW_DISABLED','Chỉ có thể tiếp tục trên thiết bị đã mở lượt.');
+    }
     const binding=candidate?{current:candidate}:await createPaperBinding(db,profile,student,body,wantedMode,enroll,true);
     await db.query(`INSERT INTO assessment.term1_section_continuation
       (exam_session_id,official_attempt_id,official_generation,section) VALUES($1,$2,$3,$4)`,

@@ -394,8 +394,8 @@ if(previousPagesRevision){
   const route=paperPreview?'term-test-1':term1JourneyMode==='on'?'term-test-1-computer-based'
     :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
   const files=[`term-tests/${route}/index.html`];
-  // The versioned parallel releases retain every previous asset path and byte.
-  if(paperPreview)files.push(`term-tests/${route}/offline-worker.js`,`term-tests/${route}/offline-assets.mjs`);
+  if(paperPreview)files.push(`term-tests/${route}/offline-worker.js`,`term-tests/${route}/offline-assets.mjs`,
+    'shared/teacher-single-sign-on.js','term-tests/teacher/app.js','term-tests/teacher/index.html');
   else if (term1JourneyMode!=='on' && term2Parallel!=='warm-up') files.push(`term-tests/${route}/offline-assets.mjs`,
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',

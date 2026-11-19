@@ -75,7 +75,12 @@ for(const first of ['listening','reading'])test(`Term 1 paper opens two profiles
   const stale=await post(b.body,proofs[1],'seal',op(b.body,second,'Unconfirmed scope'));
   assert.equal(stale.status,409);
   assert.equal(stale.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
-  const drain=request(f.appForTerm1Mode('drain'));
+  const drain=request(f.appForTerm1PaperMode('drain'));
+  const availability=await drain.get(root+'/paper-journey/availability');
+  assert.equal(availability.body.enabled,false);
+  const unopened=await prepare('e'.repeat(64),mode(second),drain);
+  assert.equal(unopened.status,409);
+  assert.equal(unopened.body.error,'OFFLINE_NEW_DISABLED');
   const resumed=await prepare(proofs[1],mode(second),drain);
   assert.ok(resumed.ok,resumed.body.error);
   assert.equal(resumed.body.continuationSection,second);
