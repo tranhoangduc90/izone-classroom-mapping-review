@@ -14,23 +14,25 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
   const termTestSessionSecret=miniPaperOffline||miniCbtOfflineMode||miniCbtJourneyMode||termJourneys||term1ListeningRetakeMode
     ?'synthetic-mini-offline-secret-at-least-32-bytes':undefined;
   function applications(pool) {
-    const appForModes = (term1Mode, term2Mode) => createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
+    const appForModes = (term1Mode, term2Mode, paperMode = term1PaperJourneyMode) => createApp({pool,termTestAssetService:assets,syncErpGrades,termTestWritingGradingService,...journal,
       config:{...miniR2,...writingHold,term1ParallelEntryMode:term1Mode,term2ParallelEntryMode:term2Mode,term1ListeningTimerMode,termTestAssetDir,
         miniPaperOfflineMode:miniPaperOffline,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,
-        miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,
+        miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode:paperMode,term1R2ConfigFile,term2CbtJourneyMode,
         term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,
         audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
         allowedOrigins,trustProxyHops:0,authMode:'legacy',legacyReviewToken:'fixture-only-key'}});
     const appForTerm1Mode = mode => appForModes(mode, term2ParallelEntryMode);
     const appForTerm2Mode = mode => appForModes(term1ParallelEntryMode, mode);
-    return {app:appForTerm1Mode(term1ParallelEntryMode),appForTerm1Mode,appForTerm2Mode};
+    const appForTerm1PaperMode = mode => appForModes(term1ParallelEntryMode, term2ParallelEntryMode, mode);
+    return {app:appForTerm1Mode(term1ParallelEntryMode),appForTerm1Mode,appForTerm2Mode,appForTerm1PaperMode};
   }
   const installTermJourney=async db=>{
     if(term1ParallelEntryEnabled||term2ParallelEntryMode!=='off'){
       await db.exec(await readFile(new URL('../../db/041-term1-first-submission.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/042-term1-parallel-entry.sql',import.meta.url),'utf8'));
       await db.exec(await readFile(new URL('../../db/043-term1-section-continuation.sql',import.meta.url),'utf8'));
+      await db.exec(await readFile(new URL('../../db/044-term1-parallel-paper-entry.sql',import.meta.url),'utf8'));
     }
     if(term2ParallelEntryMode!=='off'){
       await db.exec(await readFile(new URL('../../db/045-term2-cbt-parallel-entry.sql',import.meta.url),'utf8'));

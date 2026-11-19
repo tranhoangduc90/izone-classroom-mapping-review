@@ -11,6 +11,109 @@ const assets={supports:()=>true,getTiming:()=>({readingDurationMinutes:60}),getC
   throw new Error('Paper must not load CBT content');
 }};
 
+for(const first of ['listening','reading'])test(`Term 1 paper opens two profiles and continues from the official ${first} receipt`,async t=>{
+  const portal=[];
+  const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,term1PaperJourneyMode:'on',
+    term1ParallelEntryEnabled:true,syncErpGrades:async payload=>portal.push(payload),
+    writingHold:{termPaperLrHoldHours:2,termPaperLrHoldLimit:20,term1PaperLrHoldClasses:new Set([identity.classCode])}});
+  t.after(()=>f.db.close());
+  await f.db.query(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
+    SELECT 'term-test-1','Đề phiếu giả',1,listening_definition,reading_definition,true
+    FROM assessment.test_definition WHERE slug='mini-test-lesson-5'`);
+  const root='/api/term-tests/term-test-1';
+  const api=request(f.app);
+  const proofs=['a','b','c'].map(char=>char.repeat(64));
+  const mode=section=>section==='reading'?'read_first':'lis_first';
+  const second=first==='listening'?'reading':'listening';
+  const prepare=(proof,examMode,server=api,extra={})=>server.post(root+'/paper-journey/prepare').send({
+    ...identity,deviceProof:proof,examMode,term1PaperParallelVersion:1,...extra
+  });
+  const post=(bundle,proof,route,payload,server=api)=>server.post(root+'/paper-journey/'+route)
+    .set('x-term2-permit',bundle.permit)
+    .send({examSessionToken:bundle.examSessionToken,generation:bundle.generation,deviceProof:proof,...payload});
+  const op=(bundle,section,answer)=>({operationId:randomUUID(),section,previousOperationId:null,
+    startedAt:bundle.activatedAt+30,capturedAt:bundle.activatedAt+30,revision:1,automatic:false,eofAt:null,heardSeconds:0,
+    answers:{[section==='listening'?11:14]:answer}});
+
+  assert.equal((await prepare(proofs[0],mode(first),api,{classCode:'WRONG'})).status,403);
+  const legacy=()=>prepare('d'.repeat(64),mode(first),api,{term1PaperParallelVersion:undefined});
+  const old=await legacy();
+  assert.ok(old.ok,old.body.error);
+  const a=await prepare(proofs[0],mode(first));
+  const b=await prepare(proofs[1],mode(second));
+  const other=await prepare(proofs[2],mode(first));
+  for(const reply of [a,b,other])assert.ok(reply.ok,reply.body.error);
+  assert.equal(new Set([a,b,other].map(reply=>reply.body.examSessionToken)).size,3);
+  assert.equal((await legacy()).body.examSessionToken,old.body.examSessionToken);
+  assert.equal(a.body.examDelivery,'answer_sheet');
+  assert.equal(b.body.audioManifest,undefined);
+  assert.equal((await prepare(proofs[0],mode(second))).body.examSessionToken,a.body.examSessionToken);
+  const mismatched=await post(a.body,proofs[1],'seal',op(a.body,first,'Unexpected proof'));
+  assert.equal(mismatched.status,403);
+  const openCbt=token=>api.post(root+'/session/prepare').send({...identity,examSessionToken:token,
+    examMode:mode(first),orderClientVersion:1,term1ContinuationVersion:1});
+  const unrelatedCbt=await openCbt(a.body.examSessionToken);
+  assert.ok(unrelatedCbt.ok,unrelatedCbt.body.error);
+  assert.notEqual(unrelatedCbt.body.examSessionToken,a.body.examSessionToken);
+  const contenders=[{bundle:a.body,proof:proofs[0],answer:'A'},{bundle:other.body,proof:proofs[2],answer:'B'}]
+    .map(candidate=>({...candidate,operation:op(candidate.bundle,first,candidate.answer)}));
+  const outcomes=await Promise.all(contenders.map(candidate=>
+    post(candidate.bundle,candidate.proof,'seal',candidate.operation)));
+  assert.deepEqual(outcomes.map(result=>result.status).sort(),[200,409]);
+  const winner=outcomes.findIndex(result=>result.ok);
+  const saved=outcomes[winner];
+  const accepted=contenders[winner];
+  const losing=contenders[1-winner];
+  assert.equal(outcomes[1-winner].body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+  assert.equal(saved.body.receipt.completed,false);
+  assert.equal(saved.body.receipt.attemptToken===accepted.bundle.attemptToken,first==='reading');
+  const wrongDelivery=await openCbt(a.body.examSessionToken);
+  assert.equal(wrongDelivery.status,409);
+  assert.equal(wrongDelivery.body.error,'MODE_CONFLICT');
+  assert.equal(wrongDelivery.body.examSessionToken,undefined);
+  assert.equal((await post(losing.bundle,losing.proof,'status',losing.operation)).body.persisted,false);
+  const stale=await post(b.body,proofs[1],'seal',op(b.body,second,'Unconfirmed scope'));
+  assert.equal(stale.status,409);
+  assert.equal(stale.body.error,'EXAM_FIRST_SUBMISSION_ACCEPTED');
+  const drain=request(f.appForTerm1PaperMode('drain'));
+  const availability=await drain.get(root+'/paper-journey/availability');
+  assert.equal(availability.body.enabled,false);
+  const unopened=await prepare('e'.repeat(64),mode(second),drain);
+  assert.equal(unopened.status,409);
+  assert.equal(unopened.body.error,'OFFLINE_NEW_DISABLED');
+  const resumed=await prepare(proofs[1],mode(second),drain);
+  assert.ok(resumed.ok,resumed.body.error);
+  assert.equal(resumed.body.continuationSection,second);
+  assert.equal(resumed.body.examSessionToken,b.body.examSessionToken);
+  assert.equal(resumed.body.activatedAt,b.body.activatedAt);
+  assert.equal(resumed.body.examMode,mode(first));
+  assert.equal(resumed.body.resultAttemptToken,undefined);
+  const wrongSkill=await post(resumed.body,proofs[1],'seal',op(resumed.body,first,'Wrong skill'),drain);
+  assert.equal(wrongSkill.status,403);
+  const secondOp=op(resumed.body,second,'Second answer');
+  const finished=await post(resumed.body,proofs[1],'seal',secondOp,drain);
+  assert.ok(finished.ok,finished.body.error);
+  assert.equal(finished.body.receipt.nextSection,'result');
+  assert.equal(finished.body.receipt.attemptToken,saved.body.receipt.attemptToken);
+  assert.deepEqual((await post(resumed.body,proofs[1],'status',{section:second,operationId:secondOp.operationId},drain)).body.receipt,finished.body.receipt);
+  assert.deepEqual((await post(resumed.body,proofs[1],'seal',secondOp,drain)).body.receipt,finished.body.receipt);
+  assert.deepEqual((await post(accepted.bundle,accepted.proof,'status',accepted.operation)).body.receipt,saved.body.receipt);
+  const alreadyDone=await prepare(proofs[2],mode(first));
+  assert.equal(alreadyDone.body.resultAttemptToken,finished.body.receipt.attemptToken);
+  assert.equal(alreadyDone.body.permit,undefined);
+
+  const {rows}=await f.db.query(`SELECT id,exam_delivery,writing_scope,listening_answers,reading_answers
+    FROM assessment.term_test_attempt WHERE test_slug='term-test-1'
+      AND (listening_submitted_at IS NOT NULL OR reading_submitted_at IS NOT NULL)`);
+  assert.deepEqual(rows,[{id:finished.body.receipt.attemptToken,exam_delivery:'answer_sheet',writing_scope:'lr_only',
+    listening_answers:{11:first==='listening'?accepted.answer:'Second answer'},
+    reading_answers:{14:first==='reading'?accepted.answer:'Second answer'}}]);
+  for(let n=0;n<30&&!portal.length;n++)await delay(10);
+  assert.equal(portal.length,1);
+  assert.equal(portal[0].attemptToken,rows[0].id);
+  assert.equal(portal[0].grades.writing,undefined);
+});
+
 for(const slug of ['term-test-1','term-test-2'])test(`${slug} paper can open while CBT and EOF remain off`,async t=>{
   const f=await createMiniFixture({examOrder:true,completeSchema:true,assets,
     [slug==='term-test-1'?'term1PaperJourneyMode':'term2PaperJourneyMode']:'on'});

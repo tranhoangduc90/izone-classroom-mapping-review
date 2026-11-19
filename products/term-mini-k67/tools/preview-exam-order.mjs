@@ -78,6 +78,7 @@ const journeyMode=process.env.K67_PREVIEW_MINI_CBT_JOURNEY;
 const miniParallel=process.env.K67_PREVIEW_MINI_CBT_PARALLEL==='true';
 if(miniParallel&&(journeyMode!=='on'||pretestMode!=='on'))throw new Error('Mini parallel preview needs the current journey migrations.');
 const term1JourneyMode=process.env.K67_PREVIEW_TERM1_CBT_JOURNEY;
+const term1PaperMode=process.env.K67_PREVIEW_TERM1_PAPER_JOURNEY;
 const term1Parallel=process.env.K67_PREVIEW_TERM1_PARALLEL_ENTRY;
 const term1ReportCases=process.env.K67_PREVIEW_TERM1_REPORT_CASES==='true';
 const term2ReportCases=process.env.K67_PREVIEW_TERM2_REPORT_CASES==='true';
@@ -156,7 +157,7 @@ const holdSlug=miniHoldEnabled?'mini-test-lesson-5':termHoldSlug;
 const writingHoldEnabled=Boolean(termHoldSlug);
 const fullWritingHold=writingHoldEnabled&&process.env.K67_PREVIEW_FULL_WRITING_HOLD==='true';
 const journalSource=process.env.K67_PREVIEW_EXAM_JOURNAL;
-const journalSlug=reportSlug||holdSlug;
+const journalSlug=reportSlug||(term1PaperMode==='on'?'term-test-1':holdSlug);
 const journalFixture=journalSlug&&journalSource
   ? await startPreviewExamJournal(journalSource,`http://127.0.0.1:${port}`,journalSlug) : null;
 const holdClass=new Set([process.env.K67_PREVIEW_RESCUE_CLASS||'IC2304']);
@@ -188,7 +189,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
     getStatus:input=>writingGrading.getStatus(input)
   } : undefined,
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
-  miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
+  miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term1PaperJourneyMode:term1PaperMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if(miniParallel) {
@@ -307,7 +308,7 @@ if (gradingRoundTrip) {
   });
 }
 if (journalFixture) outer.get('/preview/writing-journal',async (req,res)=>{
-  const bySession=Boolean(reportSlug)&&typeof req.query.session==='string';
+  const bySession=(Boolean(reportSlug)||term1PaperMode==='on')&&typeof req.query.session==='string';
   const attempt=String((bySession?req.query.session:req.query.attempt)||'');
   if(!/^[0-9a-f-]{36}$/.test(attempt))return res.status(400).json({ok:false});
   const result=await journalFixture.read(attempt,req.query.archive==='1',bySession);
@@ -389,11 +390,13 @@ outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/j
 const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
 if(previousPagesRevision){
   if(!/^[a-f0-9]{40}$/.test(previousPagesRevision))throw new Error('Revision Pages thử không hợp lệ.');
-  const route=term1JourneyMode==='on'?'term-test-1-computer-based'
+  const paperPreview=term1PaperMode==='on'&&term1JourneyMode!=='on';
+  const route=paperPreview?'term-test-1':term1JourneyMode==='on'?'term-test-1-computer-based'
     :term2JourneyMode==='on'?'term-test-2-computer-based':'mini-test-lesson-5-computer-based';
   const files=[`term-tests/${route}/index.html`];
-  // The versioned parallel releases retain every previous asset path and byte.
-  if (term1JourneyMode!=='on' && term2Parallel!=='warm-up') files.push(`term-tests/${route}/offline-assets.mjs`,
+  if(paperPreview)files.push(`term-tests/${route}/offline-worker.js`,`term-tests/${route}/offline-assets.mjs`,
+    'shared/teacher-single-sign-on.js','term-tests/teacher/app.js','term-tests/teacher/index.html');
+  else if (term1JourneyMode!=='on' && term2Parallel!=='warm-up') files.push(`term-tests/${route}/offline-assets.mjs`,
     'term-tests/term-test-2-computer-based/bootstrap-terms-cbt.js','term-tests/term-test-2-computer-based/bootstrap.js',
     'term-tests/shared/app-terms-cbt.js','term-tests/shared/app.js',
     'term-tests/mini-test-lesson-5-computer-based/journey-terms-cbt.mjs','term-tests/k67-shared/offline-journey-ui.mjs');
@@ -422,6 +425,7 @@ if(previousPagesRevision){
 const offlineEntries=[];
 if(process.env.K67_PREVIEW_MINI_CBT_OFFLINE==='on'||journeyMode==='on')offlineEntries.push('mini-test-lesson-5-computer-based');
 if(term1JourneyMode==='on')offlineEntries.push('term-test-1-computer-based');
+if(term1PaperMode==='on')offlineEntries.push('term-test-1');
 if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
 if(pretestMode==='on')offlineEntries.push('pretest-lesson-16-computer-based','pretest-lesson-16');
 if(term2JourneyMode==='on'&&rescueClass)offlineEntries.push('term-test-2-rescue');
@@ -432,7 +436,7 @@ for(const entry of offlineEntries){
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
     ...(miniParallel&&entry==='mini-test-lesson-5-computer-based'
       ?['offline-assets-mini-parallel-v1.mjs','offline-assets-audio-report-v1.mjs']:[]),
-    ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
+    ...(['term-test-1-computer-based','term-test-2-computer-based','term-test-1'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
   outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {

@@ -141,6 +141,9 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
     const key = ['term-test-1',student.definition_version,student.class_id,student.student_id];
     const official = await readOfficialAttempt(db,key);
     if (official) {
+      if(official.exam_delivery==='answer_sheet'){
+        throw error('MODE_CONFLICT','Bài đã được ghi nhận trên phiếu. Hãy mở link phiếu để tiếp tục.');
+      }
       if (official.writing_submitted_at) {
         const grade = (await db.query(`SELECT status,writing_score FROM assessment.term_test_writing_grading_final
           WHERE attempt_id=$1`, [official.id])).rows[0];
@@ -151,7 +154,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       if (data.term1ContinuationVersion && officialResultReady(official)) {
         return {...view,official_next_section:'result',official_result_ready:true};
       }
-      if (!data.term1ContinuationVersion || !official.exam_session_id || official.exam_delivery==='answer_sheet'
+      if (!data.term1ContinuationVersion || !official.exam_session_id
         || (official.exam_delivery!=='cbt' && official.session_attempt_mode!=='cbt')) return view;
       if (view.id) {
         if (!official.listening_interrupted_at || config.term1CbtJourneyMode!=='on') return view;
@@ -188,6 +191,7 @@ export function mountExamOrder(app,{pool,config,assets,requireContext,readStuden
       session = (await db.query(`SELECT * FROM assessment.term_test_exam_session
         WHERE id=$5 AND test_slug=$1 AND definition_version=$2 AND erp_course_class_id=$3
           AND erp_student_contact_id=$4 AND superseded_at IS NULL AND attempt_mode<>'answer_sheet'
+          AND (NOT term1_parallel_entry OR attempt_mode='cbt')
           AND (exam_mode='read_first' OR prepared_at>=now()-interval '8 hours')`, [...key,data.examSessionToken])).rows[0];
     }
     if (!session) {
