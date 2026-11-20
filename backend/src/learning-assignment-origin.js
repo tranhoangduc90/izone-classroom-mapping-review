@@ -9,7 +9,9 @@ export async function assignmentOrigin(database,publication,origin,reviewer){
   if(!entry||![publication.content_hash,publication.source_content_hash].includes(entry.content_hash))throw denied();
   return {scope:entry.sharing_scope,libraryId:entry.id};
  }
- const draft=(await database.query(`SELECT d.id,d.content_hash,d.public_definition FROM learning.form_draft d WHERE d.id=$1::uuid AND lower(d.owner_email)=lower($2) AND ${catalogVisible('d.id','d.owner_email')}`,[origin.id,reviewer.email])).rows[0];
+ const draft=(await database.query(`SELECT d.id,d.content_hash,d.public_definition FROM learning.form_draft d WHERE d.id=$1::uuid
+   AND lower(d.owner_email)=lower($2) AND (to_jsonb(d)->>'draft_scope') IS DISTINCT FROM 'izone'
+   AND ${catalogVisible('d.id','d.owner_email')}`,[origin.id,reviewer.email])).rows[0];
  if(!draft||draft.content_hash!==publication.content_hash||draft.public_definition.formVersionId!==publication.form_version_id)throw denied();
  return {scope:'personal',libraryId:null};
 }

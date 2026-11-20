@@ -365,20 +365,26 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     },
     async assignPublication({id,targets,operationId,reviewer,origin,assertAssignable}){
       // Kiểm quyền đọc nguồn trước vòng lặp; không trả nội dung private ra caller.
-      await publication(pool,id,reviewer);
+      try{await publication(pool,id,reviewer);}
+      catch(error){
+        if(!(error instanceof FormAuthoringError)||![403,404,409].includes(error.httpStatus))throw error;
+        const operations=targets.map(target=>targetOperation(operationId,target.classId,target.sessionNumber));
+        const own=await pool.query(`SELECT 1 FROM learning.form_delivery WHERE operation_id=ANY($1::uuid[])
+          AND publication_id=$2::uuid AND lower(owner_email)=lower($3) LIMIT 1`,[operations,id,reviewer.email]);
+        if(!own.rowCount)throw error;
+      }
       return deliverTargets(targets,target=>withTransaction(pool,async database=>{
         await lockCatalog(database);
-        const source=await publication(database,id,reviewer),classInfo=await authorizeClass(database,target.classId,reviewer);
-        const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
+        const classInfo=await authorizeClass(database,target.classId,reviewer);
         await lockClass(database,target.classId);
         const operation=targetOperation(operationId,target.classId,target.sessionNumber);
         const prior=(await database.query('SELECT * FROM learning.form_delivery WHERE operation_id=$1::uuid',[operation])).rows[0];
         if(prior){
           if(prior.publication_id!==id||prior.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
             throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác.');
-          if(sharedRevisionCatalog&&selectedOrigin?.scope==='izone'){
+          if(origin){
             const recorded=(await database.query('SELECT source_scope,source_library_id FROM learning.form_assignment_origin WHERE assignment_id=$1',[prior.assignment_id])).rows[0];
-            if(recorded?.source_scope!==selectedOrigin.scope||recorded.source_library_id!==selectedOrigin.libraryId)
+            if(origin.source==='library'?(recorded?.source_library_id!==origin.id):(recorded?.source_scope!=='personal'||recorded?.source_library_id))
               throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một nguồn khác.');
           }
           if(target.portalTarget){
@@ -388,6 +394,8 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           }
           return {...await readDelivery(database,prior),replayed:true};
         }
+        const source=await publication(database,id,reviewer);
+        const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
         if(sharedRevisionCatalog&&(!selectedOrigin||selectedOrigin.scope==='izone'))
           await assertSharedPublicationCurrent(database,source,selectedOrigin);
         const result=await deliverVersion(database,{target,definition:source.public_definition,classInfo,reviewer,assertAssignable});

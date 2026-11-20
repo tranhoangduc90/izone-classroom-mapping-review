@@ -13,7 +13,8 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
   try {
     for(const name of ['202609160005_publisher_account_lookup.sql','202610010001_progress_log_form_drafts.sql',
       '202610220002_form_library.sql','202610280001_form_publications.sql','202610300001_worksheet_revisions.sql',
-      '202611090002_shared_course_drafts.sql','202611170001_shared_library_revisions.sql']) {
+      '202611090002_shared_course_drafts.sql','202611140001_personal_library_drafts.sql','202611170001_shared_library_revisions.sql',
+      '202611200002_progress_log_shared_draft_actions.sql']) {
       await fixture.pool.query(await readFile(new URL('../ops/learning-migrations/'+name,import.meta.url),'utf8'));
     }
     await fixture.pool.query(`INSERT INTO mapping.reviewer_account VALUES('other56@example.test','active'),('lead67@example.test','active'),
@@ -207,6 +208,76 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
       JOIN learning.grading_run g ON g.id=i.grading_run_id JOIN learning.submission s ON s.id=g.submission_id
       WHERE s.assignment_id=$1`,[writingDelivery.assignmentId]);
     assert.equal(Number(earned.score),8);
+
+    // Quyền ủy quyền hẹp trên mục chưa có dòng phiên bản và mục đã có dòng.
+    await fixture.pool.query(`INSERT INTO learning.shared_library_archive_grant
+      (reviewer_email,course_code,grant_reference,granted_by_email)
+      VALUES('teacher@example.test','56','Fixture Q56','admin@example.test'),
+      ('lead67@example.test','67','Fixture Q67','admin@example.test')`);
+    const sameName=async(actor,course)=>{
+      const value=structuredClone(payload);value.definition.courseCode=course;
+      value.definition.formVersionId=value.gradingKey.formVersionId=randomUUID();
+      return (await checked(api.post('/teacher/form-drafts').set('x-actor',actor)
+        .send({...value,scope:'izone',operationId:randomUUID()}),201)).draft;
+    };
+    const k67=await sameName('lead67','67');
+    await checked(approve(k67,'lead67'));
+    const k67Published=(await checked(publishRevision(k67,'lead67',randomUUID()),201)).publication;
+    const rights=async actor=>(await checked(api.get('/teacher/form-library?scope=izone').set('x-actor',actor))).entries;
+    assert.deepEqual((await rights('lead67')).map(e=>[e.courseCode,e.canArchive,e.canEditShared]).sort(),[['56',false,false],['67',true,true]]);
+    assert.deepEqual((await rights('teacher')).map(e=>[e.courseCode,e.canArchive]).sort(),[['56',true],['67',false]]);
+    const removePublished=(entry,actor,operationId=randomUUID())=>api.post('/teacher/form-catalog/'+entry.libraryEntryId+'/archive')
+      .set('x-actor',actor).send({source:'izone',expectedRevision:entry.revision,expectedHash:entry.contentHash,operationId});
+    assert.equal((await checked(removePublished(writingPublication,'lead67'),403)).error,'CATALOG_ADMIN_REQUIRED');
+    await checked(removePublished(k67Published,'lead67'));
+
+    const {draft:newEdit}=await checked(begin(writingPublication),201);
+    newEdit.definition.blocks[0].items[0].helpText='Chỉ có ở bản sửa giả';
+    const {draft:savedEdit}=await checked(saveWriting(newEdit));
+    const args={expectedRevision:savedEdit.revision,expectedHash:savedEdit.contentHash};
+    const copyId=randomUUID(),copyBody={...args,title:'Bản riêng từ bản sửa',operationId:copyId};
+    const copy=body=>api.post('/teacher/form-drafts/'+savedEdit.id+'/copy-to-personal').send(body);
+    const {draft:copied}=await checked(copy(copyBody),201);
+    assert.equal(copied.scope,'personal');
+    assert.equal(copied.definition.blocks[0].items[0].helpText,'Chỉ có ở bản sửa giả');
+    assert.notEqual(copied.definition.blocks[0].items[0].itemVersionId,savedEdit.definition.blocks[0].items[0].itemVersionId);
+    assert.equal((await checked(copy(copyBody),201)).draft.id,copied.id);
+    await checked(copy({...copyBody,title:'Đích khác'}),409);
+    const removeDraft=(draft,body,actor='teacher')=>api.post('/teacher/form-drafts/'+draft.id+'/archive').set('x-actor',actor).send(body);
+    const removal={...args,expectedStatus:'draft',operationId:randomUUID()};
+    await checked(removeDraft(savedEdit,removal,'lead67'),404);
+    await checked(removeDraft(savedEdit,removal));
+    assert.equal((await checked(removeDraft(savedEdit,removal))).replayed,true);
+    await checked(api.get('/teacher/form-drafts/'+savedEdit.id),409);
+    await checked(api.get('/teacher/form-drafts/'+savedEdit.id+'/review'),409);
+    assert.equal((await rights('teacher'))[0].id,writingPublication.libraryEntryId);
+    assert.equal((await fixture.service.getPublicAssignment(writingDelivery.publicToken)).formVersionId,writingPublication.formVersionId);
+
+    const waiting=await sameName('teacher','56');
+    await checked(api.post('/teacher/form-drafts/'+waiting.id+'/request-review').send({expectedRevision:waiting.revision}));
+    const waitingArgs={expectedRevision:waiting.revision,expectedHash:waiting.contentHash,expectedStatus:'draft',operationId:randomUUID()};
+    assert.equal((await checked(removeDraft(waiting,waitingArgs),409)).error,'DRAFT_STATE_CHANGED');
+    await checked(approve(waiting,'teacher'));
+    const racing=await Promise.all([publishRevision(waiting,'teacher',randomUUID()),
+      removeDraft(waiting,{...waitingArgs,expectedStatus:'approved'})]);
+    assert.equal(racing.filter(r=>r.status<300).length,1);
+    assert.equal(racing.filter(r=>r.status===409).length,1);
+    if(racing[0].status===201)await checked(removePublished(racing[0].body.publication,'teacher'));
+
+    const legacy=await sameName('teacher','56'),legacyPublished=await publish(legacy);
+    const legacyOperation=randomUUID(),legacyDelivery=await deliver(legacyPublished,5,legacyOperation);
+    const assignedBefore=await snapshot(writingPublication.formVersionId);
+    await checked(removePublished(legacyPublished,'teacher'));
+    assert.equal((await deliver(legacyPublished,5,legacyOperation)).assignmentId,legacyDelivery.assignmentId);
+    const noOrigin=await api.post('/teacher/form-publications/'+legacyPublished.id+'/assign')
+      .send({operationId:randomUUID(),targets:[{classId:'2139',sessionNumber:6}]});
+    assert.ok(noOrigin.status===404||noOrigin.status===409||noOrigin.body.delivery?.status==='failure');
+    await checked(removePublished(writingPublication,'teacher'));
+    await checked(api.get('/teacher/form-library/'+writingPublication.libraryEntryId),409);
+    assert.deepEqual(await snapshot(writingPublication.formVersionId),assignedBefore);
+    await fixture.pool.query(`UPDATE learning.shared_library_archive_grant SET revoked_at=now()
+      WHERE reviewer_email='teacher@example.test' AND course_code='56'`);
+    assert.equal((await checked(removePublished(legacyPublished,'teacher'),403)).error,'CATALOG_ADMIN_REQUIRED');
 
   } finally {await fixture.close();}
 });
