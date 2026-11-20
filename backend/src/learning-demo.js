@@ -113,15 +113,22 @@ export function createDemoSourceFetcher({ url, secret, fetchImpl = fetch }) {
     || typeof secret !== 'string' || secret.length < 32) {
     throw new Error('Thiếu cổng đọc phiếu thật hoặc khóa dịch vụ demo hợp lệ.');
   }
-  return async sourceToken => {
+  return async (sourceToken, traceId) => {
     const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-learning-demo-source': secret },
+      headers: { 'content-type': 'application/json', 'x-learning-demo-source': secret,
+        ...(traceId?{'x-progress-preview-id':traceId}:{}) },
       body: JSON.stringify(typeof sourceToken==='object'?sourceToken:{ publicToken: sourceToken }),
       signal: AbortSignal.timeout(7_000)
     });
-    if (!response.ok) throw new Error('Không đọc được phiên bản phiếu đã phát hành.');
-    const payload = await response.json();
+    const payload = await response.json().catch(()=>null);
+    if (!response.ok) {
+      const changed=['DRAFT_PREVIEW_STALE','LIBRARY_PREVIEW_STALE','DRAFT_STALE'].includes(payload?.error);
+      const unavailable=[403,404].includes(response.status);
+      throw Object.assign(new Error('Không đọc được phiên bản phiếu đã phát hành.'),{
+        code:changed?'SOURCE_CHANGED':unavailable?'DEMO_SOURCE_UNAVAILABLE':'DEMO_SOURCE_ERROR'
+      });
+    }
     if (payload?.ok !== true || !payload.source) throw new Error('Nguồn phiếu trả về không hợp lệ.');
     return payload.source;
   };
@@ -135,7 +142,7 @@ function checkedSource(source) {
     || source.title !== definition.title
     || !Number.isInteger(source.sessionNumber) || source.sessionNumber < 1 || source.sessionNumber > 100
     || typeof source.className !== 'string' || !source.className.trim()) {
-    throw new Error('Phiên bản phiếu nguồn không khớp; đã dừng tạo bản thử.');
+    throw Object.assign(new Error('Phiên bản phiếu nguồn không khớp; đã dừng tạo bản thử.'),{code:'DEMO_SOURCE_MISMATCH'});
   }
   return { definition, gradingKey };
 }
@@ -257,8 +264,16 @@ export function createLearningDemoApp({ pool, fetchSource, allowedOrigin, grantS
   app.post('/api/demo/runs', createLimiter, async (req, res, next) => {
     const runToken = uuid.safeParse(req.body?.runToken);
     const grant = verifyLearningDemoGrant(req.body?.grant, grantSecret);
-    if (!runToken.success && !grant) return res.status(403).json({ ok: false, error: 'DEMO_GRANT_REQUIRED',
-      message: 'Link xem thử đã hết hạn. Hãy mở lại từ dashboard giảng viên.' });
+    const traceId=crypto.randomUUID(),started=performance.now();
+    let step='authorization',errorCode=null;
+    res.on('finish',()=>console.info(JSON.stringify({type:'progress_log_preview',traceId,step,errorCode,
+      sourceKind:grant?(grant.kind||'assignment'):runToken.success?'demo_run':null,sourceId:grant?.entryId||grant?.draftId||grant?.assignmentId||null,
+      revision:grant?.revision??null,status:res.statusCode,durationMs:Math.round(performance.now()-started)})));
+    if (!runToken.success && !grant) {
+      errorCode='DEMO_GRANT_REQUIRED';
+      return res.status(403).json({ ok: false, error:errorCode,traceId,
+        message:'Link xem thử đã hết hạn. Hãy mở lại từ dashboard giảng viên.' });
+    }
     try {
       if (runToken.success) {
         const existing = await pool.query(`SELECT assignment.public_token::text AS public_token,
@@ -275,19 +290,32 @@ export function createLearningDemoApp({ pool, fetchSource, allowedOrigin, grantS
         return res.json({ ok: true, existing: true,
           run: { publicToken: existing.rows[0].public_token } });
       }
-      const source = await fetchSource(['draft','library'].includes(grant.kind)?{grant:req.body.grant}:grant.publicToken);
+      step='read_source';
+      const source = await fetchSource(['draft','library'].includes(grant.kind)?{grant:req.body.grant}:grant.publicToken,traceId);
+      step='compare_source';
       const mismatch=grant.kind==='draft'
         ?source.sourceDraftId!==grant.draftId||source.sourceRevision!==grant.revision||source.contentHash!==grant.contentHash
         :grant.kind==='library'?source.sourceLibraryId!==grant.entryId||source.sourceRevision!==grant.revision||source.contentHash!==grant.contentHash
         :source.sourceAssignmentId!==grant.assignmentId||source.definitionHash!==grant.definitionHash;
       if (mismatch) {
-        return res.status(409).json({ ok: false, error: 'SOURCE_CHANGED',
+        errorCode='SOURCE_CHANGED';
+        return res.status(409).json({ ok: false, error: 'SOURCE_CHANGED', traceId,
           message: 'Phiếu nguồn đã thay đổi. Hãy mở lại dashboard giảng viên.' });
       }
+      step='create_run';
       return res.status(201).json({ ok: true, existing: false,
         run: await createRun(grant.kind==='draft'?grant.draftId:grant.kind==='library'?grant.entryId:grant.publicToken, source) });
     }
-    catch (error) { return next(error); }
+    catch (error) {
+      if(error.code==='DEMO_SOURCE_MISMATCH'||error.name==='ZodError')step='verify_source';
+      errorCode=['SOURCE_CHANGED','DEMO_SOURCE_UNAVAILABLE','DEMO_SOURCE_ERROR','DEMO_SOURCE_MISMATCH'].includes(error.code)?error.code:'DEMO_ERROR';
+      const reopen=errorCode==='SOURCE_CHANGED'||errorCode==='DEMO_SOURCE_UNAVAILABLE';
+      const status=errorCode==='SOURCE_CHANGED'?409:errorCode==='DEMO_SOURCE_UNAVAILABLE'?404:500;
+      const message=reopen?'Quyền xem hoặc phiên bản phiếu đã thay đổi. Hãy đóng bản thử và mở lại từ Kho bài tập.':
+        step==='read_source'?'Bản thử chưa đọc được nội dung phiếu.':
+        step==='verify_source'?'Phiên bản phiếu chưa khớp. Hãy mở lại từ Kho bài tập.':'Bản thử chưa xử lý được yêu cầu.';
+      return res.status(status).json({ok:false,error:errorCode,message,traceId});
+    }
   });
   app.post('/api/demo/runs/reset', createLimiter, authenticate, async (req, res, next) => {
     try {

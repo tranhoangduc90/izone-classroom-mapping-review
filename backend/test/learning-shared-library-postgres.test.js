@@ -25,9 +25,9 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
       ('lead67@example.test','67',true,'Isolated fixture only');
       INSERT INTO learning.progress_log_admin(reviewer_email,status,grant_reference) VALUES('admin@example.test','active','Isolated fixture only')`);
     const app=express();
-    const events=[];
+    const events=[],demoSourceSecret='tab7-authoring-preview-fixture-secret';
     app.use(express.json());
-    app.use(createLearningRouter({pool:fixture.clockPool,sharedRevisionCatalog:true,logger:{info:line=>events.push(JSON.parse(line))},authenticate(req,_res,next){
+    app.use(createLearningRouter({pool:fixture.clockPool,sharedRevisionCatalog:true,demoSourceSecret,logger:{info:line=>events.push(JSON.parse(line))},authenticate(req,_res,next){
       req.reviewer={email:`${req.get('x-actor')||'teacher'}@example.test`,canAccessAllClasses:false};next();
     }}));
     const api=request(app);
@@ -52,13 +52,13 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
     };
     const firstOperation=randomUUID();
     const first=await deliver(old,1,firstOperation);
-    const submit=async delivery=>{
+    const submit=async (delivery,response='A')=>{
       const published=await fixture.service.getPublicAssignment(delivery.publicToken);
       const attempt=await fixture.service.startAttempt({publicToken:delivery.publicToken,studentRef:published.roster[0].studentRef,
         identityConfirmed:true,clientIdempotencyKey:randomUUID()});
       const itemId=published.definition.blocks[0].items[0].itemVersionId;
       return fixture.service.submit({attemptToken:attempt.attemptToken,submissionId:randomUUID(),
-        definitionHash:published.definitionHash,draftRevision:0,responses:{[itemId]:'A'}});
+        definitionHash:published.definitionHash,draftRevision:0,responses:{[itemId]:response}});
     };
     await submit(first);
     const snapshot=async version=>{
@@ -162,6 +162,45 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
     await checked(api.post(`/teacher/form-catalog/${winning.libraryEntryId}/archive`).set('x-actor','admin')
       .send({source:'izone',operationId:randomUUID()}));
     assert.equal((await checked(publishRevision(toArchive,'teacher',randomUUID()),409)).error,'CATALOG_ARCHIVED');
+    // Câu kiểu Tab 7 đi trọn từ nháp Khảo sát đến điểm chấm của 8 ô.
+    const writing=previewFormImport('type,prompt,skill\nreflection,Các tiêu chí ... và ...,writing').payload;
+    writing.definition.courseCode='56';
+    const originalWriting=writing.definition.blocks[0].items[0],writingId=originalWriting.itemVersionId;
+    originalWriting.kind='survey';
+    writing.gradingKey.referenceAnswers={[writingId]:['Ý kiến tham khảo của giảng viên']};
+    const {draft:survey}=await checked(api.post('/teacher/form-drafts')
+      .send({...writing,scope:'izone',operationId:randomUUID()}),201);
+    const converted=survey.definition.blocks[0].items[0];
+    converted.prompt='Mục 1 ... và ...\nMục 2 ... và ...\nMục 3 ... và ...\nMục 4 ... và ...';
+    Object.assign(converted,{kind:'exercise',layoutType:'numbered_short_texts',interactionType:'short_text',
+      pedagogicalTypeCode:'sentence_completion',graderType:'accepted_text_sequence',maxScore:8,
+      interactionConfig:{responseCount:8,blankIds:Array.from({length:8},randomUUID),
+        sentenceLines:converted.prompt.split('\n').map(line=>({title:'',parts:line.split('...')}))}});
+    survey.gradingKey.referenceAnswersBySlot={[writingId]:Array.from({length:8},()=>[])};
+    const saveWriting=draft=>api.put('/teacher/form-drafts/'+draft.id).send({expectedRevision:draft.revision,
+      definition:draft.definition,gradingKey:draft.gradingKey});
+    const {draft:convertedWriting}=await checked(saveWriting(survey));
+    const {draft:reopenedWriting}=await checked(api.get('/teacher/form-drafts/'+survey.id));
+    assert.equal(reopenedWriting.revision,convertedWriting.revision);
+    assert.deepEqual(reopenedWriting.definition.blocks[0].items[0].interactionConfig.blankIds,converted.interactionConfig.blankIds);
+    assert.deepEqual(reopenedWriting.gradingKey.referenceAnswers[writingId],['Ý kiến tham khảo của giảng viên']);
+    const {grant}=await checked(api.post('/teacher/form-drafts/'+survey.id+'/preview-grant')
+      .send({expectedRevision:reopenedWriting.revision}));
+    const {source}=await checked(api.post('/assignments/demo-source').set('x-learning-demo-source',demoSourceSecret).send({grant}));
+    assert.equal(source.definition.blocks[0].items[0].interactionConfig.responseCount,8);
+    const missing=await checked(approve(reopenedWriting,'teacher'),400);
+    assert.equal(missing.error,'DRAFT_ANSWER_REQUIRED');
+    const keyBySlot=Array.from({length:8},(_,i)=>['đáp án '+(i+1)]);
+    reopenedWriting.gradingKey.items[writingId]={graderType:'accepted_text_sequence',acceptedBySlot:keyBySlot,normalization:{}};
+    const {draft:markedWriting}=await checked(saveWriting(reopenedWriting));
+    const writingPublication=await publish(markedWriting);
+    const writingDelivery=await deliver(writingPublication,4);
+    await submit(writingDelivery,keyBySlot.map(([answer])=>answer));
+    const {rows:[earned]}=await fixture.pool.query(`SELECT i.score_earned AS score FROM learning.grading_result_item i
+      JOIN learning.grading_run g ON g.id=i.grading_run_id JOIN learning.submission s ON s.id=g.submission_id
+      WHERE s.assignment_id=$1`,[writingDelivery.assignmentId]);
+    assert.equal(Number(earned.score),8);
+
     assert.deepEqual((await checked(api.get('/teacher/form-library?scope=izone'))).entries,[]);
     assert.equal((await deliver(old,1,firstOperation)).assignmentId,first.assignmentId);
     assert.equal((await fixture.service.getPublicAssignment(first.publicToken)).formVersionId,old.formVersionId);
