@@ -33,10 +33,13 @@ const verifier=new OAuth2Client(c.READING_GOOGLE_CLIENT_ID);
 const app=createApp({pool,service,registerCta,origins:c.origins,googleClientId:c.READING_GOOGLE_CLIENT_ID,adminKey:c.READING_ADMIN_KEY,journal:journalRuntime?.intake,
  verifyGoogle:async credential=>(await verifier.verifyIdToken({idToken:credential,audience:c.READING_GOOGLE_CLIENT_ID})).getPayload()});
 const resolveSharedHomework=createSharedHomeworkResolver({url:c.READING_OWNER_SOURCE_URL,key:c.READING_OWNER_SOURCE_KEY,auth,docs});
-const worker=createDocsWorker({pool,docs,resolveSharedHomework,journal:journalRuntime?.metadata});
+const sharedDocsConfig=process.env.READING_PRACTICE_SHARED_DOCS_CONFIG;
+const sharedDocs=sharedDocsConfig?await (await import('/opt/izone-docs-write/leased-practice.js')).loadLeasedPracticeWriter(
+ sharedDocsConfig,{Pool:pg.Pool,pool,product:'reading-practice'}):null;
+const worker=createDocsWorker({pool,docs,resolveSharedHomework,journal:journalRuntime?.metadata,sharedDocs});
 let stopping=false;
 const workerLoop=async()=>{while(!stopping){try{await worker.once();}catch(error){console.error(JSON.stringify({event:'reading_docs_worker_error',type:error.name}));}await new Promise(resolve=>setTimeout(resolve,1000));}};
 const workerDone=workerLoop();
 const server=app.listen(c.READING_PORT,'0.0.0.0',()=>console.log(JSON.stringify({event:'reading_started',port:c.READING_PORT})));
-async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await stopPracticeJournal(journalRuntime);await pool.end();}
+async function stop(){if(stopping)return;stopping=true;await new Promise(resolve=>server.close(resolve));await workerDone;await stopPracticeJournal(journalRuntime);await sharedDocs?.close();await pool.end();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);
