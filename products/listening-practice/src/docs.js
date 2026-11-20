@@ -72,7 +72,7 @@ export function createDocsAdapter(auth){
  }};
 }
 // Hàng xử lý có thứ tự theo học viên. Ghi xong phải đọc lại chữ và link trước khi báo verified.
-export function createDocsWorker({pool,docs,resolveSharedHomework,journal=null,clock=Date.now}){
+export function createDocsWorker({pool,docs,resolveSharedHomework,journal=null,clock=Date.now,sharedDocs=null}){
  async function once(){
   const job=await transaction(pool,async db=>{
    const row=(await db.query(`SELECT j.* FROM listening_practice.doc_job j WHERE
@@ -96,23 +96,34 @@ export function createDocsWorker({pool,docs,resolveSharedHomework,journal=null,c
     b={...b,document_id:target.documentId,tab_id:target.tabId};
    }
    observer.target(b);
-   let plan=planDocWrite(await observer.read(docs,b.document_id),b,job);
-   if(!plan.verified){requireDocsRevision(plan);await observer.write(docs,b.document_id,plan);plan=planDocWrite(await observer.read(docs,b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
-   if(!plan.verified)fail('DOC_READBACK_FAILED','Google Docs chưa khớp chữ và link.');
-   const committed=await transaction(pool,async db=>{
-    const verified=(await db.query("UPDATE listening_practice.doc_job SET status='verified',verified_at=now(),error_code=NULL,lease_until=NULL WHERE id=$1 AND lease_id=$2 AND status='processing' RETURNING id",[job.id,job.leaseId])).rows.length;
+   const useShared=job.kind==='status'&&sharedDocs?.applies(b.class_id);
+   if(job.shared_docs_attempt&&!useShared)
+    fail('DOC_NEEDS_RECONCILIATION','Lượt ghi trước đang chờ đối soát.');
+   const acknowledge=shared=>transaction(pool,async db=>{
+    const verified=(await db.query(`UPDATE listening_practice.doc_job SET status='verified',verified_at=now(),error_code=NULL,lease_until=NULL${shared?',shared_docs_attempt=NULL':''}
+     WHERE id=$1 AND lease_id=$2 AND status='processing'${shared?' AND lease_until>now()':''} RETURNING id`,[job.id,job.leaseId])).rows.length;
     if(!verified)return;
     if(job.kind==='cta')await db.query('UPDATE listening_practice.binding SET cta_verified_at=now() WHERE id=$1',[b.id]);
     else await db.query('UPDATE listening_practice.binding SET last_doc_sequence=$2,last_doc_text=$3,last_doc_link=$4 WHERE id=$1 AND last_doc_sequence<$2',[b.id,job.sequence,job.payload.text,job.payload.link]);
     return true;
    });
+   let committed;
+   if(useShared){
+    committed=await sharedDocs.write({job,binding:b,plan:document=>planDocWrite(document,b,job),observe:observer,
+     acknowledge:()=>acknowledge(true)});
+   }else{
+    let plan=planDocWrite(await observer.read(docs,b.document_id),b,job);
+    if(!plan.verified){requireDocsRevision(plan);await observer.write(docs,b.document_id,plan);plan=planDocWrite(await observer.read(docs,b.document_id),{...b,last_doc_text:job.kind==='status'?job.payload.text:b.last_doc_text},job);}
+    if(!plan.verified)fail('DOC_READBACK_FAILED','Google Docs chưa khớp chữ và link.');
+    committed=await acknowledge(false);
+   }
    observer.emit(committed?'verified':'outcome_unknown',committed?{}:{errorCode:'DOC_LEASE_LOST'});
   }catch(error){
    // Homework có thể được giao sau ngày mở bài: chờ năm phút rồi đối chiếu lại đúng người/mã.
    // Việc chưa có đích không phải lỗi ghi; giữ thứ tự và bài làm, không hết lượt thử sau tám lần.
    const code=error.name==='TimeoutError'?'DOC_TIMEOUT':typeof error.code==='string'?error.code:'DOC_RETRY';
    const missing=code==='HOMEWORK_NOT_FOUND';
-   const recoverable=/^(?:DOC_WRITE_UNAVAILABLE|DOC_TIMEOUT|OWNER_SOURCE_UNAVAILABLE|(?:DOC|HOMEWORK)_HTTP_(?:429|5\d\d)|HOMEWORK_LOOKUP_TIMEOUT)$/.test(code);
+   const recoverable=/^(?:DOC_(?:WRITE_UNAVAILABLE|TIMEOUT|NO_WRITABLE_ACCOUNT|NEEDS_RECONCILIATION|TRANSPORT_UNAVAILABLE|GOOGLE_AUTH_UNAVAILABLE|DOCUMENT_BUSY)|OWNER_SOURCE_UNAVAILABLE|(?:DOC|HOMEWORK)_HTTP_(?:429|5\d\d)|HOMEWORK_LOOKUP_TIMEOUT)$/.test(code);
    const hard=/^DOC_(?:IDENTITY|TAB|CODE|STATUS|CTA|MANUAL|LINK|HTTP_40[134])/.test(code);
    const blocked=!missing&&!recoverable&&(hard||job.attempts>=8);
    const delay=missing?300:recoverable?([60,300,900][job.attempts-1]||3600):Math.min(300,2**Math.min(job.attempts,9));

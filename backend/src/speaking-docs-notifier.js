@@ -16,15 +16,22 @@ export const speakingDocsStatusSql = `SELECT
     WHEN status='failed' THEN updated_at+interval '30 seconds'
     ELSE updated_at+interval '5 minutes' END) AS next_at,
   now() AS server_now
-FROM speaking_homework.outbox
+FROM speaking_homework.outbox o
 WHERE kind='write_doc' AND attempts<5
-  AND status IN ('pending','failed','processing');`;
+  AND status IN ('pending','failed','processing')`;
 
 export function createSpeakingDocsNotifier({ pool, url, secret, fetchImpl = fetch,
+  nativeDocsScope,
   setTimer = setTimeout, clearTimer = clearTimeout,
   setRecurringTimer = setInterval, clearRecurringTimer = clearInterval,
   now = () => Date.now(), log = message => console.error(message) }) {
   const enabled = Boolean(url && pool);
+  const statusSql = nativeDocsScope ? speakingDocsStatusSql + ` AND NOT EXISTS (
+    SELECT 1 FROM speaking_homework.receipt r
+    JOIN speaking_homework.submission s ON s.id=r.submission_id
+    JOIN speaking_homework.access_grant g ON g.id=s.access_grant_id
+    JOIN speaking_homework.assignment a ON a.id=g.assignment_id
+    WHERE r.id=o.receipt_id AND a.class_id=ANY($1::bigint[]))` : speakingDocsStatusSql;
   if (url && !pool) throw new Error('SPEAKING_DOCS_NOTIFY_DATABASE_REQUIRED');
   if (enabled && (new URL(url).protocol !== 'https:' || String(secret || '').length < 32)) {
     throw new Error('SPEAKING_DOCS_NOTIFY_CONFIG_INVALID');
@@ -73,7 +80,7 @@ export function createSpeakingDocsNotifier({ pool, url, secret, fetchImpl = fetc
     if (running) { pending = true; return; }
     running = true;
     try {
-      const result = await pool.query(speakingDocsStatusSql);
+      const result = nativeDocsScope ? await pool.query(statusSql, [nativeDocsScope.classIds]) : await pool.query(statusSql);
       const row = result.rows[0];
       const due = Number(row?.due);
       const serverNow = new Date(row?.server_now).getTime();

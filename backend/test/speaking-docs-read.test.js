@@ -52,8 +52,18 @@ test('hàng n8n chậm 47/86 giây không được gọi khi mở Docs; ghi vẫ
 test('chưa bật cấu hình giữ gateway cũ, cấu hình hỏng không tự quay về hàng n8n', () => {
   const gateway = { get() {}, write() {} };
   assert.equal(createOpeningDocsGateway({ gateway }), gateway);
-  assert.equal(createOpeningDocsGateway({ gateway: null, credentialFile: 'not-used' }), null);
+  assert.equal(createOpeningDocsGateway({ gateway: null }), null);
   assert.throws(() => createOpeningDocsGateway({ gateway, credentialFile: 'bad', readCredentials: () => { throw Error('DOCS_READ_CONFIG_INVALID'); } }), /DOCS_READ_CONFIG_INVALID/);
+});
+
+test('khi bỏ cấu hình webhook, đường mở bài vẫn đọc Docs trực tiếp', async () => {
+  const readOnly = id => ({ documentId: id, tabs: [{ tabProperties: { tabId: 't.0' } }] });
+  const f = fixture({ docs: id => json(readOnly(id)) });
+  const opening = createOpeningDocsGateway({ gateway: null, credentialFile: 'private-fixture.json',
+    readCredentials: () => credentials, call: f.call });
+  assert.deepEqual(await opening.get('canary_document_1'), readOnly('canary_document_1'));
+  assert.equal(typeof opening.write, 'undefined');
+  assert.deepEqual(f.calls.map(({ url }) => new URL(url).hostname), ['oauth2.googleapis.com', 'docs.googleapis.com']);
 });
 
 test('chỉ gộp lượt đọc cùng Docs đang chờ, đọc lại sau đó lấy nội dung mới', async () => {

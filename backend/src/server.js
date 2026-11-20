@@ -15,6 +15,8 @@ import { createSpeakingDocsNotifier } from './speaking-docs-notifier.js';
 import { startSpeakingPracticeWorker } from './speaking-practice-worker.js';
 import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
 import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
+import { loadSpeakingNativeDocs } from './speaking-native-docs-config.js';
+import { startNativeHomeworkReceiptWorker } from './speaking-native-docs.js';
 
 // Khởi động API: đọc cấu hình, kết nối PostgreSQL và lắng nghe trên cổng nội bộ.
 const config = loadConfig();
@@ -22,11 +24,14 @@ const pool = createDatabasePool(config);
 const learningPool = config.learningEnabled ? createLearningDatabasePool(config) : null;
 const learningTestSources = config.learningEnabled ? createLearningTestSources({config,legacyPool:pool}) : null;
 const speakingHomeworkPool = config.speakingHomeworkEnabled ? createSpeakingHomeworkDatabasePool(config) : null;
+const nativeSpeakingDocs = speakingHomeworkPool ? await loadSpeakingNativeDocs(process.env.SPEAKING_DOCS_NATIVE_CONFIG) : null;
+const nativeSpeakingReceipt = startNativeHomeworkReceiptWorker({ pool: speakingHomeworkPool, runtime: nativeSpeakingDocs });
 const progressGateway=process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE?createSpeakingProgressGoogle({credentialFile:process.env.SPEAKING_PROGRESS_DOCS_CREDENTIALS_FILE}):null;
 const speakingProgressWorker=startSpeakingProgressDocsWorker({pool:speakingHomeworkPool,schema:'speaking_homework',gateway:speakingHomeworkPool?progressGateway:null});
 const speakingDocsNotifier = createSpeakingDocsNotifier({
   pool: speakingHomeworkPool,
-  url: process.env.SPEAKING_DOCS_NOTIFY_URL || '',
+  url: nativeSpeakingDocs?.scope.all ? '' : process.env.SPEAKING_DOCS_NOTIFY_URL || '',
+  nativeDocsScope: nativeSpeakingDocs?.scope,
   secret: process.env.SPEAKING_DOCS_NOTIFY_SECRET || ''
 });
 const syncErpGrades = createErpGradeSync({ config });
@@ -54,6 +59,7 @@ const app = createApp({
   learningPool,
   learningTestResultReader: learningTestSources?.reader,
   speakingHomeworkPool,
+  speakingNativeDocsScope: nativeSpeakingDocs?.scope,
   syncErpGrades,
   termTestAssetService,
   termTestWritingGradingService
@@ -102,7 +108,8 @@ async function shutdown(signal) {
     await speakingDoctorWorker.stop();
     await speakingPracticeWorker.stop();
     await speakingProgressWorker.stop();
-    await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end(), learningTestSources?.close()]);
+    await nativeSpeakingReceipt.stop();
+    await Promise.all([pool.end(), learningPool?.end(), speakingHomeworkPool?.end(), learningTestSources?.close(), nativeSpeakingDocs?.close()]);
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

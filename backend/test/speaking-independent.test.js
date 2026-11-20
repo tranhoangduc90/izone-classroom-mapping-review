@@ -8,11 +8,12 @@ import { createIndependentSpeaking } from '../src/speaking-independent.js';
 import { createIndependentApp } from '../src/speaking-independent-server.js';
 import { runSpeakingCheckJob } from '../src/speaking-check-worker.js';
 import { runPracticeCheckJob,runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
-import { createIndependentDocuments,validateIndependentDocument } from '../src/speaking-independent-documents.js';
+import { createIndependentDocuments,validateIndependentDocument,writeIndependentDocument } from '../src/speaking-independent-documents.js';
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
 import { performance } from 'node:perf_hooks';
 import {createSpeakingProgressDocsWorker} from '../src/speaking-progress-docs.js';
+import { createNativeIndependentReceiptWriter } from '../src/speaking-native-docs.js';
 
 const ref='60000000-0000-4000-8000-000000000006';
 const code='67-speaking-ly_do_hanh_vi';
@@ -261,6 +262,45 @@ test('final Docs jobs wait without consuming retries, including when new enrollm
     assert.equal((await old.claimJob()).kind,'write_doc');
     assert.equal((await old.open(f.identity)).receipt.id,receipt.id);
   }finally{await f.db.close();}
+});
+
+test('native Lesson 6 receipt binds the active lease to the document and preserves the independent link', async () => {
+  const f = await fixture();
+  try {
+    await f.db.exec(await readFile(new URL('../ops/migrations/202611200225_speaking_docs_attempt.sql', import.meta.url), 'utf8'));
+    const unit = f.session.workUnitId;
+    await f.pool.query("UPDATE speaking_independent.work_unit SET document_id='fixture-native-docs',tab_id='t.0' WHERE id=$1", [unit]);
+    await f.pool.query('INSERT INTO speaking_independent.receipt(work_unit_id) VALUES($1)', [unit]);
+    await f.pool.query("INSERT INTO speaking_independent.job(work_unit_id,kind,dedupe_key) VALUES($1,'write_doc','native-docs-fixture')", [unit]);
+    const job = await f.service.claimJob();
+    assert.equal(job.kind, 'write_doc');
+    const document = { documentId: job.u.document_id, revisionId: 'before-write', tabs: [{ tabProperties: { tabId: 't.0' },
+      documentTab: { body: { content: [{ table: { tableRows: [
+        { tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: 'TÌNH TRẠNG NỘP BÀI SPEAKING\n' } }] } }] }] },
+        { tableCells: [{ content: [{ startIndex: 160, paragraph: { elements: [{ startIndex: 160, endIndex: 161, textRun: { content: '\n' } }] } }] }] },
+      ] } }] } } }] };
+    const write = createNativeIndependentReceiptWriter({ pool: f.pool, execute: async (input, services) => {
+      await services.verifySource(input);
+      assert.equal(await services.verify(document), false);
+      const patch = await services.plan(document);
+      const link = patch.requests.find(r => r.updateTextStyle).updateTextStyle.textStyle.link.url;
+      assert.equal(new URL(link).searchParams.get('system'), 'independent');
+      assert.equal(new URL(link).searchParams.get('receipt'), job.receipt_id);
+      const { text } = patch.requests[0].insertText;
+      await services.recordAttempt({ input, accountRole: 'primary', revisionId: document.revisionId });
+      const content = document.tabs[0].documentTab.body.content[0].table.tableRows[1].tableCells[0].content[0].paragraph;
+      content.elements = [{ startIndex: 160, endIndex: 160 + text.length + 1, textRun: { content: text + '\n', textStyle: { link: { url: link } } } }];
+      await services.recordVerified({ document: { ...document, revisionId: 'after-write' } });
+      return { readback: true };
+    } });
+    await assert.rejects(write(f.service, { ...job, owner: '60000000-0000-4000-8000-000000000009' }), { code: 'STALE_JOB' });
+    await assert.rejects(write(f.service, { ...job, u: { ...job.u, tab_id: 'wrong' } }), /DOC_IDENTITY_MISMATCH/);
+    await writeIndependentDocument({ ...f.service, progressDocsEnabled: true }, job,
+      { get() { throw Error('LEGACY_GATEWAY_CALLED'); } }, write);
+    const { rows: [saved] } = await f.pool.query('SELECT status,result FROM speaking_independent.job WHERE id=$1', [job.job_id]);
+    assert.equal(saved.status, 'done');
+    assert.equal(saved.result.revisionId, 'after-write');
+  } finally { await f.db.close(); }
 });
 
 test('Lesson 6 mở lớp và phiên khi không có assignment hoặc bản Docs',async()=>{

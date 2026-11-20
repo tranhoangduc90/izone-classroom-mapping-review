@@ -8,6 +8,7 @@ import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 import {createSpeakingDocsJobs} from '../src/speaking-docs-jobs.js';
+import { createNativeHomeworkReceiptWriter } from '../src/speaking-native-docs.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
   verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
@@ -198,6 +199,53 @@ test('legacy managed final waits without consuming attempts and remains compatib
     assert.equal((await writer.plan({jobId:job.job_id,document})).requests.length,0);
     assert.equal((await writer.verifyAndComplete({jobId:job.job_id,document})).status,'done');
   }finally{await f.db.close();}
+});
+
+test('native receipt claims only its class, fences stale attempts and records the verified receipt', async () => {
+  const f = await fixture();
+  try {
+    await f.db.exec(await readFile(new URL('../ops/migrations/202611200225_speaking_docs_attempt.sql', import.meta.url), 'utf8'));
+    await checkAccepted(f.service, accessToken, studentRef, 'paraphrase', 'a', 5);
+    await checkAccepted(f.service, accessToken, studentRef, 'speaking', 'b', 3);
+    const receipt = await f.service.finish({ accessToken, studentRef });
+    const scoped = createSpeakingHomeworkService({ pool: f.pool, nativeDocsScope: { all: false, classIds: ['2304'] } });
+    assert.equal(await scoped.claimOutboxJob('write_doc'), null);
+    const job = await scoped.claimOutboxJob('write_doc', 'native');
+    assert.equal(job.receipt_id, receipt.id);
+    const text = 'Đã nộp bài thành công - giảng viên nhấn vào link này để xem chi tiết.';
+    const link = 'https://tranhoangduc90.github.io/izone-ai-team-pages/speaking-homework/teacher.html?receipt=' + receipt.id;
+    function document(done) {
+      const elements = done ? [
+        { textRun: { content: text.slice(0, text.indexOf('link này')) } },
+        { textRun: { content: 'link này', textStyle: { link: { url: link } } } },
+        { textRun: { content: text.slice(text.indexOf('link này') + 8) + '\n' } },
+      ] : [{ startIndex: 160, endIndex: 161, textRun: { content: '\n' } }];
+      return { documentId: job.document_id, revisionId: done ? 'verified-revision' : 'baseline-revision', tabs: [
+        { tabProperties: { tabId: 't.0' }, documentTab: { body: { content: [{ table: { tableRows: [
+          { tableCells: [{ content: [{ paragraph: { elements: [{ textRun: { content: 'TÌNH TRẠNG NỘP BÀI SPEAKING\n' } }] } }] }] },
+          { tableCells: [{ content: [{ startIndex: 160, paragraph: { elements } }] }] },
+        ] } }] } } },
+      ] };
+    }
+    const write = createNativeHomeworkReceiptWriter({ pool: f.pool, execute: async (input, services) => {
+      await services.verifySource(input);
+      assert.equal((await services.loadCurrentProjection(input)).reconciliation, null);
+      assert.equal(await services.verify(document(false)), false);
+      assert.ok((await services.plan(document(false))).requests.length > 0);
+      await services.assertWriter(input);
+      await services.recordAttempt({ input, revisionId: 'baseline-revision', accountRole: 'fallback' });
+      assert.equal((await services.loadCurrentProjection(input)).reconciliation.accountRole, 'fallback');
+      assert.equal(await services.verify(document(true)), true);
+      await services.recordVerified({ document: document(true) });
+      return { readback: true };
+    } });
+    await assert.rejects(write({ ...job, attempts: 99 }), /DOC_JOB_NOT_ACTIVE/);
+    assert.equal((await write(job)).readback, true);
+    const { rows: [saved] } = await f.pool.query('SELECT status,external_receipt FROM speaking_homework.outbox WHERE id=$1', [job.job_id]);
+    assert.equal(saved.status, 'done');
+    assert.equal(saved.external_receipt, 'docs:' + job.document_id + ':verified-revision');
+    assert.equal((await f.pool.query('SELECT * FROM speaking_docs_write.attempt')).rows.length, 0);
+  } finally { await f.db.close(); }
 });
 
 async function checkAccepted(service, token, ref, part, letter, count, fp = fingerprint(letter)) {
