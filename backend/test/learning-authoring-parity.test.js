@@ -33,3 +33,29 @@ test('Chọn nhiều so tập hợp; nối cặp giữ vị trí; điền từ c
  responses[n.itemVersionId]=['B','','A'];assert.equal(evaluateCompleteness(p.definition,responses).complete,false);
  responses[m.itemVersionId]=['A','A'];assert.throws(()=>gradeLearningSubmission({...p,responses}),/Checklist/);
 });
+
+test('lưu Nối cặp và nhóm ô lịch sử với chế độ rõ, giữ tham khảo riêng khỏi khóa chấm',()=>{
+ const p=payload(),[multi,matching,short]=p.definition.blocks[0].items;
+ matching.kind='exercise';matching.skillCodes=['general'];
+ Object.assign(short,{kind:'exercise',layoutType:'numbered_short_texts',graderType:'accepted_text_sequence',maxScore:2,
+   interactionConfig:{responseCount:2,responseLabels:['Một','Hai']},skillCodes:['general']});
+ p.gradingKey.items[short.itemVersionId]={graderType:'accepted_text_sequence',acceptedBySlot:[['one'],['two']],normalization:{}};
+ p.gradingKey.referenceAnswersBySlot={[short.itemVersionId]:[['gợi ý'],[]]};
+ const validated=validateAuthoringPayload({...p,requireAnswers:true});
+ assert.deepEqual(validated.gradingKey.referenceAnswersBySlot[short.itemVersionId],[['gợi ý'],[]]);
+ matching.kind='survey';matching.graderType='none';matching.maxScore=0;delete p.gradingKey.items[matching.itemVersionId];
+ assert.equal(validateAuthoringPayload({...p,requireAnswers:true}).definition.blocks[0].items[1].kind,'survey');
+});
+test('khảo sát nhiều lựa chọn giữ phương án loại trừ khi không có trần chọn',()=>{
+ const p=payload(),item=p.definition.blocks[0].items[0];
+ Object.assign(item,{kind:'survey',graderType:'none',maxScore:0,skillCodes:['general'],
+   interactionConfig:{exclusiveOptionId:'C'}});
+ delete p.gradingKey.items[item.itemVersionId];
+ const checked=validateAuthoringPayload({...p,requireAnswers:true});
+ assert.doesNotThrow(()=>gradeLearningSubmission({...checked,responses:{[item.itemVersionId]:['A','B']}}));
+ assert.throws(()=>gradeLearningSubmission({...checked,responses:{[item.itemVersionId]:['A','C']}}),/Checklist/);
+ Object.assign(item,{kind:'exercise',graderType:'exact_option_set',maxScore:1});
+ item.interactionConfig.maxSelections=2;
+ p.gradingKey.items[item.itemVersionId]={graderType:'exact_option_set',expectedOptionIds:['A','C']};
+ assert.throws(()=>validateAuthoringPayload({...p,requireAnswers:true}),error=>error.code==='DRAFT_ANSWER_INVALID');
+});

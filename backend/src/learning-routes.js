@@ -377,8 +377,17 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
       return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
     }
+    const inboundTrace=String(req.get('x-progress-preview-id')||'');
+    const traceId=uuidSchema.safeParse(inboundTrace).success?inboundTrace:randomUUID();
+    const started=performance.now();
+    let sourceKind='assignment',sourceId=null,revision=null;
+    res.on('finish',()=>{
+      try{logger?.info?.(JSON.stringify({type:'progress_log_preview_source',traceId,sourceKind,sourceId,revision,
+        status:res.statusCode,durationMs:Math.round(performance.now()-started)}));}catch{/* Chỉ ghi tín hiệu vận hành. */}
+    });
     if(req.body?.grant) {
       const grant=verifyLearningDemoGrant(req.body.grant,demoSourceSecret);
+      sourceKind=grant?.kind||'invalid';sourceId=grant?.entryId||grant?.draftId||null;revision=grant?.revision??null;
       if(!grant||!['draft','library'].includes(grant.kind)) return res.status(403).json({ok:false,error:'DRAFT_PREVIEW_DENIED'});
       res.set('Cache-Control','no-store');return res.json({ok:true,source:grant.kind==='library'?await formLibrary.demoSource({grant}):await drafts.demoSource({grant})});
     }
@@ -389,6 +398,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       return res.status(404).json({ ok: false, error: 'ASSIGNMENT_NOT_AVAILABLE' });
     }
     const row = source.rows[0];
+    sourceId=row.source_assignment_id;
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, source: {
       sourceAssignmentId: row.source_assignment_id,

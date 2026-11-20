@@ -25,6 +25,9 @@ export const AUTHORING_CATALOG=Object.freeze({
   survey:['mcq','multi','short_answer','gapfill','dropdown','reflection','self_reported_score']
 });
 
+const editableExistingTypes=new Set(['matching','numbered_short_texts']);
+const surveyOnlyExistingTypes=new Set(['speaking_checklist','conditional_explanation']);
+
 const legacySentenceLines={
   '56000000-0000-4000-8400-000000000004':[
     {title:'Task Response:',parts:['Yêu cầu người viết phải trả lời đúng ',' và ','.']},
@@ -47,7 +50,7 @@ export function authoringType(item) {
     ?'gapfill':'numbered_short_texts';
   if(pair==='multi_choice_group:speaking_issue_checklist') return 'speaking_checklist';
   if(pair==='multi_choice_group:keyword_selection') return 'keyword_selection';
-  if(['short_text:conditional_other_text','long_text:inline_option_text'].includes(pair)) return 'conditional_explanation';
+  if(['short_text:conditional_other_text','long_text:conditional_other_text','long_text:inline_option_text'].includes(pair)) return 'conditional_explanation';
   if(pair==='number_score:score_fraction') return 'self_reported_score';
   return null;
 }
@@ -75,7 +78,8 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
   for(const block of definition.blocks) for(const item of block.items) {
     const kind=effectiveItemKind(item,block);if(!kind)continue;
     const type=authoringType(item);
-    if(!AUTHORING_CATALOG[kind].includes(type)) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
+    if(!AUTHORING_CATALOG[kind].includes(type)&&!editableExistingTypes.has(type)
+      &&!(kind==='survey'&&surveyOnlyExistingTypes.has(type))) throw new FormAuthoringError('DRAFT_PART_TYPE_INVALID',
       'Câu '+item.position+' không thuộc danh mục '+(kind==='survey'?'Khảo sát':'Bài tập')+'. Giữ nội dung và chọn chế độ phù hợp.');
     if(!item.skillCodes.length || item.skillCodes.some(code=>!['general','listening','reading','speaking','writing'].includes(code)))
       throw new FormAuthoringError('DRAFT_SKILL_REQUIRED','Câu '+item.position+': hãy chọn Kỹ năng, hoặc chủ động chọn Chung.',[{itemVersionId:item.itemVersionId,field:'skillCodes',message:'Cần bổ sung thông tin này'}]);
@@ -84,7 +88,12 @@ export function validateAuthoringPayload({definition:rawDefinition,gradingKey:ra
     if(kind==='exercise'&&item.graderType==='none')
       throw new FormAuthoringError('DRAFT_EXERCISE_GRADER_REQUIRED','Câu '+item.position+' trong Bài tập cần luật chấm.',[{itemVersionId:item.itemVersionId,field:'kind',message:'Chọn chế độ và luật chấm phù hợp cho câu hỏi.'}]);
     if(kind==='exercise'&&type==='multi') {
-      const count=gradingKey.items[item.itemVersionId]?.expectedOptionIds?.length;
+      const selected=gradingKey.items[item.itemVersionId]?.expectedOptionIds;
+      const exclusive=item.interactionConfig.exclusiveOptionId;
+      if(exclusive&&selected?.includes(exclusive)&&selected.length>1) throw new FormAuthoringError(
+        'DRAFT_ANSWER_INVALID','Câu '+item.position+': phương án loại trừ phải đứng riêng.',
+        [{itemVersionId:item.itemVersionId,field:'answer',message:'Phương án loại trừ phải đứng riêng.'}]);
+      const count=selected?.length;
       if(count&&item.interactionConfig.maxSelections!==count) throw new FormAuthoringError('DRAFT_SELECTION_LIMIT_MISMATCH',
         'Câu '+item.position+': giới hạn chọn phải bằng số đáp án đúng.');
     }
@@ -186,6 +195,7 @@ export function copyAuthoringPayload(payload,{uuid=()=>crypto.randomUUID()}={}) 
   if(gradingKey.referenceAnswersBySlot) gradingKey.referenceAnswersBySlot=Object.fromEntries(Object.entries(gradingKey.referenceAnswersBySlot).map(([id,value])=>[ids.get(id),value]));
   if(gradingKey.authoringState)gradingKey.authoringState=Object.fromEntries(Object.entries(gradingKey.authoringState).map(([id,state])=>[ids.get(id),{
     ...(state.exerciseShape?{exerciseShape:remapExerciseShape(state.exerciseShape,blanks)}:{}),
+    ...(state.exerciseMaxScore?{exerciseMaxScore:state.exerciseMaxScore}:{}),
     ...(state.sources?{sources:Object.fromEntries(Object.entries(state.sources).map(([blankId,text])=>[blanks.get(blankId),text]))}:{}),
     ...(state.answerRows?{answerRows:Object.fromEntries(Object.entries(state.answerRows).map(([blankId,rows])=>[blanks.get(blankId)||blankId,rows.map(row=>({...row,id:uuid()}))]))}:{})
   }]));

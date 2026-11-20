@@ -104,12 +104,13 @@ export const formItemSchema = z.object({
   if (['short_text', 'long_text', 'number_score'].includes(item.interactionType) && item.options.length) {
     context.addIssue({ code: 'custom', path: ['options'], message: 'Câu nhập chữ không được chứa option.' });
   }
-  if (item.interactionConfig.maxSelections !== undefined || item.interactionConfig.exclusiveOptionId) {
+  const { maxSelections, exclusiveOptionId } = item.interactionConfig;
+  if (maxSelections !== undefined || exclusiveOptionId) {
+    const surveyMultipleChoice = item.layoutType === 'multiple_choice_cards' && item.graderType === 'none';
     if (item.interactionType !== 'multi_choice_group'
-      || !item.interactionConfig.maxSelections
-      || item.interactionConfig.maxSelections > item.options.length
-      || (item.interactionConfig.exclusiveOptionId
-        && !optionIds.includes(item.interactionConfig.exclusiveOptionId))) {
+      || (maxSelections === undefined && !surveyMultipleChoice)
+      || (maxSelections !== undefined && maxSelections > item.options.length)
+      || (exclusiveOptionId && !optionIds.includes(exclusiveOptionId))) {
       context.addIssue({ code: 'custom', path: ['interactionConfig'], message: 'Giới hạn checklist không hợp lệ.' });
     }
   }
@@ -363,6 +364,7 @@ export const formGradingKeyV1Schema = z.object({
   // Metadata chỉ trả qua bộ soạn có quyền, không có trong public definition.
   authoringState:z.record(uuidSchema,z.object({
     exerciseShape:z.string().max(128000).optional(),
+    exerciseMaxScore:z.number().positive().max(100).optional(),
     sources:z.record(uuidSchema,z.string().max(2000)).optional(),
     answerRows:z.record(z.string().min(1).max(80),z.array(z.object({id:uuidSchema,value:z.string().max(300),touched:z.boolean().optional()}).strict()).max(40)).optional()
   }).strict()).optional(),
