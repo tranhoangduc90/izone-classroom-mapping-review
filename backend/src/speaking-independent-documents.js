@@ -349,9 +349,14 @@ export function createIndependentDocuments({pool,source,accessSecret,gateway,sel
 
 // Ghi ô trạng thái có khóa revision; sau timeout đọc lại trước khi thử ghi lại.
 // Không báo done nếu Docs chưa chứa đúng biên nhận độc lập.
-export async function writeIndependentDocument(service,job,gateway) {
+export async function writeIndependentDocument(service,job,gateway,nativeReceipt) {
   try {
     if(!service.progressDocsEnabled&&!await existingSpeakingDocsProgress(service.pool,'speaking_independent',job.u.id)){
+      if (nativeReceipt) {
+        const result = await nativeReceipt(service, job);
+        if (!result.readback) throw new Error('DOC_NEEDS_RECONCILIATION');
+        return;
+      }
       const document=await gateway.get(job.u.document_id);
       const linkUrl=`${teacherPage}?receipt=${job.receipt_id}&system=independent`;
       if(!verifySpeakingStatusWrite({document,documentId:job.u.document_id,tabId:job.u.tab_id,linkUrl})){

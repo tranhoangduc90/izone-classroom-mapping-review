@@ -58,7 +58,8 @@ function shouldPrioritizeRecommendation(row, occurredAt) {
   return lastTimes.length === 0 || eventTime - Math.max(...lastTimes) > 5 * 86400000;
 }
 
-export function createSpeakingHomeworkService({ pool, accessSecret = '', progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true' }) {
+export function createSpeakingHomeworkService({ pool, accessSecret = '', nativeDocsScope = null,
+  progressDocsEnabled=process.env.SPEAKING_PROGRESS_DOCS_ENABLED==='true' }) {
   const enqueueSpeakingProgress=progressDocsEnabled?enqueueProgress:enqueueExistingSpeakingProgress;
   const readSpeakingDocsProgress=progressDocsEnabled?readDocsProgress:existingSpeakingDocsProgress;
   const progressClaimGuard=`AND (o.kind <> 'write_doc' OR NOT EXISTS (
@@ -497,9 +498,17 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
   }
 
   // Worker đọc một việc đã có biên nhận. Mất phản hồi sau side effect phải đọc lại đích trước khi báo done.
-  async function claimOutboxJob(kind = '') {
+  async function claimOutboxJob(kind = '', writer = 'legacy') {
+    if (writer === 'native' && (!nativeDocsScope || kind !== 'write_doc')) return null;
     return withTransaction(pool, async client => {
       const managed=progressDocsEnabled||(await client.query("SELECT to_regclass('speaking_homework.doc_progress') IS NOT NULL AS present")).rows[0]?.present===true;
+      const params = nativeDocsScope ? [kind, nativeDocsScope.all, nativeDocsScope.classIds, writer === 'native'] : [kind];
+      const writerGuard = nativeDocsScope ? `AND (o.kind <> 'write_doc' OR ($2::boolean OR EXISTS (
+        SELECT 1 FROM speaking_homework.receipt r
+        JOIN speaking_homework.submission s ON s.id=r.submission_id
+        JOIN speaking_homework.access_grant g ON g.id=s.access_grant_id
+        JOIN speaking_homework.assignment a ON a.id=g.assignment_id
+        WHERE r.id=o.receipt_id AND a.class_id=ANY($3::bigint[])))=$4::boolean)` : '';
       const found = await client.query(`
         SELECT o.id AS job_id
         FROM speaking_homework.outbox o
@@ -510,8 +519,8 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
               THEN CASE o.attempts WHEN 1 THEN 60 WHEN 2 THEN 300 WHEN 3 THEN 900 ELSE 3600 END
             ELSE 30 END)*interval '1 second')
           OR (o.status = 'processing' AND o.updated_at < now() - INTERVAL '5 minutes'))
-          AND (o.attempts < 5 OR (o.kind='write_doc' AND o.last_error_code='DOC_WRITE_UNAVAILABLE')) ${managed?progressClaimGuard:''}
-        ORDER BY o.created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [kind]);
+          AND (o.attempts < 5 OR (o.kind='write_doc' AND o.last_error_code='DOC_WRITE_UNAVAILABLE')) ${managed?progressClaimGuard:''} ${writerGuard}
+        ORDER BY o.created_at FOR UPDATE SKIP LOCKED LIMIT 1`, params);
       if (!found.rows.length) return null;
       const details = await client.query(`
         SELECT o.id AS job_id, o.kind, o.attempts, r.id AS receipt_id,
@@ -548,10 +557,11 @@ export function createSpeakingHomeworkService({ pool, accessSecret = '', progres
     throw new SpeakingHomeworkError('OUTBOX_NOT_ACTIVE', 'Việc này chưa được nhận hoặc biên nhận không khớp.');
   }
 
-  async function failOutboxJob({ jobId, errorCode }) {
+  async function failOutboxJob({ jobId, errorCode, expectedAttempt = null }) {
     const result = await pool.query(`UPDATE speaking_homework.outbox
       SET status = 'failed', last_error_code = $2, updated_at = now()
-      WHERE id = $1 AND status = 'processing' RETURNING id,kind,attempts`, [jobId, errorCode]);
+      WHERE id = $1 AND status = 'processing' AND ($3::integer IS NULL OR attempts=$3)
+      RETURNING id,kind,attempts`, [jobId, errorCode, expectedAttempt]);
     if (!result.rows.length) throw new SpeakingHomeworkError('OUTBOX_NOT_ACTIVE', 'Việc này chưa được nhận.');
     if(errorCode==='DOC_WRITE_UNAVAILABLE'&&result.rows[0].kind==='write_doc'&&result.rows[0].attempts===4)
       console.warn(JSON.stringify({event:'speaking_receipt_docs_recovery_delayed',code:errorCode,jobId}));

@@ -17,8 +17,8 @@ export function createSpeakingDocsJobs({ pool,progressDocsEnabled=process.env.SP
     return row;
   }
   async function loadJob(jobId) {
-    const found = await pool.query(`SELECT o.id, o.status, o.kind, r.id AS receipt_id,
-        g.document_id,g.id AS grant_id
+    const found = await pool.query(`SELECT o.id, o.status, o.kind, o.attempts, r.id AS receipt_id,
+        g.document_id,g.id AS grant_id,g.revoked_at,g.student_ref,g.assignment_id
       FROM speaking_homework.outbox o
       JOIN speaking_homework.receipt r ON r.id = o.receipt_id
       JOIN speaking_homework.submission s ON s.id = r.submission_id
@@ -52,20 +52,30 @@ export function createSpeakingDocsJobs({ pool,progressDocsEnabled=process.env.SP
     }
   }
 
-  async function verifyAndComplete({ jobId, document }) {
+  async function verify({ jobId, document }) {
     const job = await loadJob(jobId);
-    const linkUrl = `${TEACHER_PAGE}?receipt=${job.receipt_id}`;
-    if (!await managed(job,document) && !verifySpeakingStatusWrite({ document, documentId: job.document_id, linkUrl })) {
+    if (await managed(job, document)) return { job, matches: true };
+    return { job, matches: verifySpeakingStatusWrite({ document, documentId: job.document_id,
+      linkUrl: `${TEACHER_PAGE}?receipt=${job.receipt_id}` }) };
+  }
+
+  async function verifyAndComplete({ jobId, document, expectedAttempt = null }) {
+    const { job, matches } = await verify({ jobId, document });
+    if (!matches) {
       throw new SpeakingHomeworkError('DOC_READBACK_MISMATCH',
         'Google Docs chưa có đúng dòng xác nhận và link giảng viên.');
     }
     if (job.status === 'processing') {
       const receipt = `docs:${job.document_id}:${document.revisionId}`;
-      await pool.query(`UPDATE speaking_homework.outbox
+      const result = await pool.query(`UPDATE speaking_homework.outbox
         SET status = 'done', external_receipt = $2, updated_at = now()
-        WHERE id = $1 AND kind = 'write_doc' AND status = 'processing'`, [jobId, receipt]);
+        WHERE id = $1 AND kind = 'write_doc' AND status = 'processing'
+          AND ($3::integer IS NULL OR attempts = $3) RETURNING id`, [jobId, receipt, expectedAttempt]);
+      if (expectedAttempt !== null && !result.rowCount) {
+        throw new SpeakingHomeworkError('DOC_JOB_NOT_ACTIVE', 'Lượt xử lý đã đổi trước khi xác nhận.', 409);
+      }
     }
     return { status: 'done', documentId: job.document_id, receiptId: job.receipt_id };
   }
-  return { plan, verifyAndComplete };
+  return { loadJob, plan, verify, verifyAndComplete };
 }

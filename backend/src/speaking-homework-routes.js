@@ -152,9 +152,9 @@ function workerAuth(secret) {
 }
 
 // API chỉ mở khi có database pool và secret riêng. Hai đường nội bộ dành cho worker n8n.
-export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate }) {
+export function createSpeakingHomeworkRouter({ pool, workerSecret, accessSecret, authenticate, nativeDocsScope }) {
   const router = express.Router();
-  const service = createSpeakingHomeworkService({ pool, accessSecret });
+  const service = createSpeakingHomeworkService({ pool, accessSecret, nativeDocsScope });
   const docsJobs = createSpeakingDocsJobs({ pool });
   const alerts = createSpeakingAlerts({ pool });
   const classroomCopies = createSpeakingClassroomCopies({ pool });

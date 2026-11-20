@@ -14,6 +14,8 @@ import { createIndependentDocuments,createDocsGateway,writeIndependentDocument }
 import { createOpeningDocsGateway } from './speaking-docs-read.js';
 import { startSpeakingProgressDocsWorker } from './speaking-progress-docs.js';
 import { createSpeakingProgressGoogle } from './speaking-progress-google.js';
+import { isNativeDocsClass, loadSpeakingNativeDocs } from './speaking-native-docs-config.js';
+import { createNativeIndependentReceiptWriter } from './speaking-native-docs.js';
 import { createSpeakingTeacherProgress,mountSpeakingTeacherProgress } from './speaking-teacher-progress.js';
 import {createSpeakingSelfMatch, speakingSelfMatchMailFromEnv, startSpeakingSelfMatchMailer} from './speaking-self-match.js';
 
@@ -166,6 +168,8 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const env=process.env;
   for(const key of ['INDEPENDENT_DATABASE_URL','INDEPENDENT_ACCESS_SECRET','SPEAKING_SOURCE_URL','SPEAKING_SOURCE_SECRET']) if(!env[key]) throw new Error(`MISSING_${key}`);
   const pool=new pg.Pool({connectionString:env.INDEPENDENT_DATABASE_URL,max:6,connectionTimeoutMillis:5000,application_name:'speaking_independent_api'});
+  const nativeDocs = await loadSpeakingNativeDocs(env.SPEAKING_DOCS_NATIVE_CONFIG);
+  const nativeReceipt = nativeDocs ? createNativeIndependentReceiptWriter({ pool, ...nativeDocs }) : null;
   const source=createIndependentSourceClient({base:env.SPEAKING_SOURCE_URL,secret:env.SPEAKING_SOURCE_SECRET});
   const gateway=env.SPEAKING_DOCS_GATEWAY_URL?createDocsGateway({url:env.SPEAKING_DOCS_GATEWAY_URL,secret:env.SPEAKING_DOCS_GATEWAY_SECRET}):null;
   const openingGateway=createOpeningDocsGateway({gateway,credentialFile:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE});
@@ -179,9 +183,12 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const selfMatchMailer=startSpeakingSelfMatchMailer({pool,send:env.SPEAKING_SELF_MATCH_MAIL_ENABLED==='true'?speakingSelfMatchMailFromEnv(env):null});
   const documents=openingGateway?createIndependentDocuments({pool,source,accessSecret:env.INDEPENDENT_ACCESS_SECRET,gateway:openingGateway,selfMatch}):null;
   const service=createIndependentSpeaking({pool,accessSecret:env.INDEPENDENT_ACCESS_SECRET,source,documents});
-  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{writeDocument:gateway?(service,job)=>writeIndependentDocument(service,job,progressGateway||gateway):null}});
+  const worker=startIndependentWorker({service,enabled:env.WORKER_ENABLED!=='false',dependencies:{
+    writeDocument: gateway || nativeReceipt ? (service, job) => writeIndependentDocument(service, job, progressGateway || gateway,
+      isNativeDocsClass(nativeDocs?.scope, job.u.class_id) ? nativeReceipt : undefined) : null,
+  }});
   const teacher=createSpeakingTeacherProgress({pool,source});
   const server=createIndependentApp({service,teacher,documents,workerSecret:env.SPEAKING_SOURCE_SECRET,
     docsReadMode:env.SPEAKING_DOCS_READ_CREDENTIALS_FILE?'direct':'queued'}).listen(Number(env.PORT||4338));
-  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await selfMatchMailer.stop();await pool.end();});
+  for(const signal of ['SIGTERM','SIGINT']) process.on(signal,async()=>{server.close();await worker.stop();await progressWorker.stop();await selfMatchMailer.stop();await Promise.all([pool.end(),nativeDocs?.close()]);});
 }

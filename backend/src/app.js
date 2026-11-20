@@ -413,6 +413,7 @@ export function createApp({
   learningTestResultReader = null,
   learningErpScheduleReader = null,
   speakingHomeworkPool = null,
+  speakingNativeDocsScope = null,
   verifyGoogleToken,
   syncErpGrades = async () => ({ status: 'disabled' }),
   writingTestService,
@@ -1389,6 +1390,7 @@ export function createApp({
       pool: speakingHomeworkPool,
       workerSecret: config.speakingHomeworkWorkerSecret,
       accessSecret: config.speakingHomeworkAccessSecret,
+      nativeDocsScope: speakingNativeDocsScope,
       authenticate
     }));
   }
