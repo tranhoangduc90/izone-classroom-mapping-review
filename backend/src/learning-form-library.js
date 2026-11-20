@@ -25,12 +25,12 @@ export function createLearningFormLibrary({pool,drafts,sharedRevisionCatalog=fal
    assertSharedLibraryCurrent(id,await sharedLibraryItem(database,id));
   return row;
  }
- function checkedSnapshot(row){
-  validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
+ function checkedSnapshot(row,{normalized=false}={}){
+  const checked=validateAuthoringPayload({definition:row.public_definition,gradingKey:row.private_definition});
   // Kho giữ nguyên bản chụp; parser chỉ kiểm hợp lệ, hash phải đối chiếu dữ liệu thực lưu.
   if(sha256(stableStringify({definition:row.public_definition,gradingKey:row.private_definition}))!==row.content_hash)
     throw fail('LIBRARY_CONTENT_MISMATCH','Nội dung bản chụp trong kho chưa khớp.',500);
-  return {definition:row.public_definition,gradingKey:row.private_definition};
+  return normalized?checked:{definition:row.public_definition,gradingKey:row.private_definition};
  }
  return {
   async previewInfo({id,reviewer}){
@@ -42,7 +42,8 @@ export function createLearningFormLibrary({pool,drafts,sharedRevisionCatalog=fal
    if(active.rowCount!==1)throw fail('LIBRARY_PREVIEW_DENIED','Quyền xem kho đã thay đổi.',403);
    const row=await get(grant.entryId,{email:active.rows[0].email});
    if(row.content_hash!==grant.contentHash||Number(row.source_revision)!==grant.revision)throw fail('LIBRARY_PREVIEW_STALE','Bản nguồn đã đổi; mở lại bản xem trước.');
-   const checked=checkedSnapshot(row);
+   // Dịch vụ demo đối chiếu hash sau khi phân tích định nghĩa.
+   const checked=checkedSnapshot(row,{normalized:true});
    return {sourceLibraryId:row.id,sourceRevision:Number(row.source_revision),contentHash:row.content_hash,
     sourceAssignmentId:null,className:'Lớp mẫu',courseCode:row.course_code||null,sessionNumber:1,title:checked.definition.title,
     definitionHash:sha256(stableStringify(checked.definition)),definition:checked.definition,gradingKey:checked.gradingKey,
