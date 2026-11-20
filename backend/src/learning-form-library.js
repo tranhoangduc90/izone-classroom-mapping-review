@@ -5,7 +5,7 @@ import {copyAuthoringPayload,validateAuthoringPayload,FormAuthoringError} from '
 import {sha256,stableStringify} from './learning-domain.js';
 import {createHash} from 'node:crypto';
 import {withTransaction} from './db.js';
-import {catalogVisible,isCatalogAdmin,assertCatalogSource,lockCatalog} from './learning-catalog-archive.js';
+import {catalogVisible,isCatalogAdmin,assertCatalogSource,lockCatalog,sharedArchiveCourses,sharedArchiveCourse} from './learning-catalog-archive.js';
 import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
 import {assertSharedLibraryCurrent,sharedLibraryCurrent,sharedLibraryItem} from './learning-shared-library-revisions.js';
 const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],status);
@@ -49,16 +49,26 @@ export function createLearningFormLibrary({pool,drafts,sharedRevisionCatalog=fal
     definitionHash:sha256(stableStringify(checked.definition)),definition:checked.definition,gradingKey:checked.gradingKey,
     blockReleases:[],answerReleaseOverride:null};
   },
-  async list({scope='personal',skill='',reviewer,worksheetHeads=false}){
+  async list({scope='personal',skill='',reviewer,worksheetHeads=false,canManageShared=false}){
    if(!['personal','izone'].includes(scope))throw fail('LIBRARY_SCOPE_INVALID','Nguồn kho chưa hợp lệ.',400);
    const heads=worksheetHeads&&scope==='personal';
    const shared=sharedRevisionCatalog&&scope==='izone';
    const {createCourses} = shared&&sharedEditingEnabled?await sharedCourseCapabilities(pool,reviewer.email):{createCourses:[]};
    const rows=(await pool.query(`SELECT e.*${heads?',w.id AS worksheet_id,w.current_draft_id,d.revision AS current_revision,d.status AS current_status,d.public_definition->>\'title\' AS current_title':''}
+     ${shared?',i.course_code AS revision_course':''}
      FROM learning.form_library_entry e ${heads?'LEFT JOIN learning.form_worksheet_revision r ON r.draft_id=e.source_draft_id LEFT JOIN learning.form_worksheet w ON w.id=r.worksheet_id AND lower(w.owner_email)=lower(e.owner_email) LEFT JOIN learning.form_draft d ON d.id=w.current_draft_id':''}
+     ${shared?`LEFT JOIN learning.form_shared_library_revision rev ON rev.published_entry_id=e.id
+       LEFT JOIN learning.form_shared_library_item i ON i.id=COALESCE(rev.item_id,e.id)`:''}
      WHERE e.sharing_scope=$1 AND ($1='izone' OR lower(e.owner_email)=lower($2)) AND ${catalogVisible('e.source_draft_id','e.owner_email','e.sharing_scope')}
      ${shared?'AND '+sharedLibraryCurrent('e.id'):''} ORDER BY e.created_at DESC,e.id LIMIT 200`,[scope,reviewer.email])).rows;
-   return rows.map(row=>({...dto(row),...(shared?{canEditShared:createCourses.includes(row.course_code)}:{})})).filter(r=>!skill||r.skills.includes(skill));
+   const archiveCourses=shared&&!canManageShared?await sharedArchiveCourses(pool,reviewer.email):[];
+   return rows.map(row=>{
+    const entry=dto(row);
+    if(scope==='izone')entry.canArchive=canManageShared||archiveCourses.includes(sharedArchiveCourse(
+      {...row,definition_course:row.public_definition.courseCode},row.revision_course?{course_code:row.revision_course}:null));
+    if(shared)entry.canEditShared=createCourses.includes(row.course_code);
+    return entry;
+   }).filter(r=>!skill||r.skills.includes(skill));
   },
   async get({id,reviewer}){const row=await get(id,reviewer);return {...dto(row),definition:row.public_definition};},
   async editShared({id,expectedRevision,expectedHash,operationId,reviewer}){

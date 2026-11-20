@@ -675,7 +675,8 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
         WHERE c.status='active' AND a.status='active' AND c.course_code=ANY($1::text[])`,[shared.createCourses]);
       shared.configuredReviewCourses=rows.map(row=>row.course_code);
     }
-    res.set('Cache-Control','no-store');return res.json({ok:true,shared,canManageShared:await isCatalogAdmin(pool,req.reviewer.email),entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true})});
+    const canManageShared=await isCatalogAdmin(pool,req.reviewer.email);
+    res.set('Cache-Control','no-store');return res.json({ok:true,shared,canManageShared,entries:await formLibrary.list({...input,reviewer:req.reviewer,worksheetHeads:true,canManageShared})});
   }));
   router.get('/teacher/form-library/:id',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_LIBRARY_ID');if(!input)return;
@@ -683,9 +684,14 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }));
   router.post('/teacher/form-catalog/:id/archive',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_CATALOG_ID');if(!path)return;
-    const input=parseOrReply(z.object({source:z.enum(['personal','izone']),operationId:uuidSchema}).strict(),req.body,res,'INVALID_CATALOG_ARCHIVE');if(!input)return;
-    if(input.source==='izone')res.locals.sharedDraft={scope:'izone',libraryEntryId:path.id,operationId:input.operationId};
-    res.set('Cache-Control','no-store');return res.json({ok:true,...await archiveCatalog({pool,...path,...input,reviewer:req.reviewer,sharedRevisionCatalog})});
+    const input=parseOrReply(z.object({source:z.enum(['personal','izone']),operationId:uuidSchema,
+      expectedRevision:z.number().int().positive().optional(),expectedHash:z.string().regex(/^[a-f0-9]{64}$/u).optional()}).strict(),req.body,res,'INVALID_CATALOG_ARCHIVE');if(!input)return;
+    const audit={scope:'izone',sourceKind:'published_library',action:'archive',libraryEntryId:path.id,
+      revision:input.expectedRevision,operationId:input.operationId};
+    if(input.source==='izone')res.locals.sharedDraft=audit;
+    const result=await archiveCatalog({pool,...path,...input,reviewer:req.reviewer,sharedRevisionCatalog});
+    Object.assign(audit,{courseCode:result.courseCode,replayed:result.replayed});
+    res.set('Cache-Control','no-store');return res.json({ok:true,...result});
   }));
   router.post('/teacher/form-library',authenticate,asyncRoute(async(req,res)=>{
     const input=parseOrReply(z.object({draftId:uuidSchema,expectedRevision:z.number().int().positive(),expectedHash:z.string().regex(/^[0-9a-f]{64}$/u),
@@ -753,6 +759,17 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control','no-store');return res.json({ok:true,delivery,sourceRevision:input.expectedRevision,sourceHash:input.expectedHash});
   }));
   router.get('/teacher/form-drafts/types',authenticate,(_req,res)=>res.set('Cache-Control','no-store').json({ok:true,types:AUTHORING_TYPES}));
+  for(const action of ['archive','copy-to-personal']) router.post('/teacher/form-drafts/:id/'+action,authenticate,asyncRoute(async(req,res)=>{
+    const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_DRAFT_ID');if(!path)return;
+    const input=parseOrReply(z.object({operationId:uuidSchema,expectedRevision:z.number().int().positive(),
+      expectedHash:z.string().regex(/^[a-f0-9]{64}$/u),...(action==='archive'
+        ?{expectedStatus:z.enum(['draft','approved'])}:{title:z.string().trim().min(1).max(120)})}).strict(),req.body,res,'INVALID_SHARED_DRAFT_ACTION');if(!input)return;
+    const audit={scope:'izone',sourceKind:'shared_draft',action,draftId:path.id,revision:input.expectedRevision,operationId:input.operationId};
+    res.locals.sharedDraft=audit;
+    const result=await drafts[action==='archive'?'archiveSharedDraft':'copySharedDraftToPersonal']({...path,...input,reviewer:req.reviewer});
+    Object.assign(audit,{courseCode:result.courseCode,replayed:result.replayed});
+    res.set('Cache-Control','no-store');return res.status(action==='archive'?200:201).json({ok:true,...result});
+  }));
   router.post('/teacher/form-drafts/from-assignment/:id/edit',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({id:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT_ID');if(!path)return;
     const input=parseOrReply(z.object({operationId:uuidSchema}).strict(),req.body,res,'INVALID_DRAFT_EDIT');if(!input)return;

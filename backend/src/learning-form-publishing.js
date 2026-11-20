@@ -7,7 +7,7 @@ import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {decorateSchedule} from './learning-schedule-plan.js';
 import {createLearningFormPublications} from './learning-form-publications.js';
 import {assertSharedCourse,sharedCourseCapabilities} from './learning-shared-course-policy.js';
-import {lockSharedLibraryDraft} from './learning-catalog-archive.js';
+import {lockSharedLibraryDraft,assertCatalogSource,catalogVisible} from './learning-catalog-archive.js';
 import {assertSharedLibraryCurrent} from './learning-shared-library-revisions.js';
 import {insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
@@ -35,6 +35,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
     const row=result.rows[0];
     if(!row) throw fail('DRAFT_NOT_FOUND','Không tìm thấy nháp.',404);
     const shared=row.draft_scope==='izone';
+    if(shared)await assertCatalogSource(database,id,row.owner_email,'izone');
     if(shared&&row.owner_email.toLowerCase()===reviewer.email.toLowerCase())
       await assertSharedCourse(database,reviewer.email,row.public_definition.courseCode);
     if(row.draft_scope==='personal'&&row.owner_email.toLowerCase()!==reviewer.email.toLowerCase())
@@ -80,6 +81,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
         if(!reviewCourses.length)return [];
         const {rows}=await pool.query(`SELECT d.* FROM learning.form_draft d WHERE d.draft_scope='izone'
           AND d.status='pending_review' AND d.public_definition->>'courseCode'=ANY($1::text[])
+          AND ${catalogVisible('d.id','d.owner_email',"'izone'")}
           ${sharedRevisionCatalog?`AND NOT EXISTS (SELECT 1 FROM learning.form_shared_library_revision r
              JOIN learning.form_shared_library_item i ON i.id=r.item_id WHERE r.draft_id=d.id
              AND (i.archived_at IS NOT NULL OR i.current_entry_id<>r.base_entry_id))`:''}

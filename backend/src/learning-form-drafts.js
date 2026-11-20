@@ -14,6 +14,7 @@ import {createLearningFormPublishingService} from './learning-form-publishing.js
 import {previewAiImport} from './learning-ai-import.js';
 import {parseFormDefinition} from './learning-contracts.js';
 import {createWorksheetEditing} from './learning-worksheet-editing.js';
+import {createSharedDraftActions,sharedBaseState} from './learning-shared-draft-actions.js';
 
 function error(code,message,status=409) {return new FormAuthoringError(code,message,[],status);}
 function dto(row,{includeKey=true}={}) {
@@ -83,6 +84,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
   }
   const editWorksheet=createWorksheetEditing({pool,owned,dto});
   return {
+    ...createSharedDraftActions({pool,owned,dto,sharedRevisionCatalog}),
     ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader,portalAssignmentReader,
       sharedRevisionCatalog,sharedEditingEnabled}),
     editWorksheet,
@@ -136,12 +138,14 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
       if(scope==='izone'){
         const {createCourses}=await sharedCourseCapabilities(pool,reviewer.email);
         if(!createCourses.length)return [];
-        const {rows}=await pool.query(`SELECT d.* FROM learning.form_draft d WHERE d.draft_scope='izone'
+        const {rows}=await pool.query(`SELECT d.*${sharedRevisionCatalog?',r.base_entry_id,i.current_entry_id,i.archived_at AS base_archived_at':''}
+          FROM learning.form_draft d ${sharedRevisionCatalog?`LEFT JOIN learning.form_shared_library_revision r ON r.draft_id=d.id
+          LEFT JOIN learning.form_shared_library_item i ON i.id=r.item_id`:''} WHERE d.draft_scope='izone'
           AND lower(d.owner_email)=lower($1) AND d.public_definition->>'courseCode'=ANY($2::text[])
           AND ${catalogVisible('d.id','d.owner_email',"'izone'")}
           AND NOT EXISTS(SELECT 1 FROM learning.form_publication p WHERE p.source_draft_id=d.id)
           ORDER BY d.updated_at DESC,d.id LIMIT 100`,[reviewer.email,createCourses]);
-        return rows.map(row=>dto(row,{includeKey:false}));
+        return rows.map(row=>({...dto(row,{includeKey:false}),canUseSharedDraftActions:true,sharedBaseState:sharedBaseState(row)}));
       }
       await authorizeClass(pool,classId,reviewer);
       const result=await pool.query(`SELECT d.id,d.erp_course_class_id,d.session_number,d.revision,d.status,d.content_hash,
