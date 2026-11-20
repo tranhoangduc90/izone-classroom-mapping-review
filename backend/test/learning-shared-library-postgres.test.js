@@ -162,6 +162,13 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
     await checked(api.post(`/teacher/form-catalog/${winning.libraryEntryId}/archive`).set('x-actor','admin')
       .send({source:'izone',operationId:randomUUID()}));
     assert.equal((await checked(publishRevision(toArchive,'teacher',randomUUID()),409)).error,'CATALOG_ARCHIVED');
+    assert.deepEqual((await checked(api.get('/teacher/form-library?scope=izone'))).entries,[]);
+    assert.equal((await deliver(old,1,firstOperation)).assignmentId,first.assignmentId);
+    assert.equal((await fixture.service.getPublicAssignment(first.publicToken)).formVersionId,old.formVersionId);
+    assert.ok(events.some(event=>event.status===201&&event.draftId===editing.id&&event.libraryEntryId===old.libraryEntryId));
+    assert.ok(events.some(event=>event.status===403&&event.errorCode==='SHARED_COURSE_ACCESS_DENIED'));
+    assert.ok(events.some(event=>event.status===409&&event.errorCode==='LIBRARY_SOURCE_STALE'));
+
     // Câu kiểu Tab 7 đi trọn từ nháp Khảo sát đến điểm chấm của 8 ô.
     const writing=previewFormImport('type,prompt,skill\nreflection,Các tiêu chí ... và ...,writing').payload;
     writing.definition.courseCode='56';
@@ -174,7 +181,7 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
     converted.prompt='Mục 1 ... và ...\nMục 2 ... và ...\nMục 3 ... và ...\nMục 4 ... và ...';
     Object.assign(converted,{kind:'exercise',layoutType:'numbered_short_texts',interactionType:'short_text',
       pedagogicalTypeCode:'sentence_completion',graderType:'accepted_text_sequence',maxScore:8,
-      interactionConfig:{responseCount:8,blankIds:Array.from({length:8},randomUUID),
+      interactionConfig:{responseCount:8,blankIds:Array.from({length:8},()=>randomUUID()),
         sentenceLines:converted.prompt.split('\n').map(line=>({title:'',parts:line.split('...')}))}});
     survey.gradingKey.referenceAnswersBySlot={[writingId]:Array.from({length:8},()=>[])};
     const saveWriting=draft=>api.put('/teacher/form-drafts/'+draft.id).send({expectedRevision:draft.revision,
@@ -201,11 +208,5 @@ test('Kho chung: sửa bài có điểm, xuất bản và giao phiên bản mớ
       WHERE s.assignment_id=$1`,[writingDelivery.assignmentId]);
     assert.equal(Number(earned.score),8);
 
-    assert.deepEqual((await checked(api.get('/teacher/form-library?scope=izone'))).entries,[]);
-    assert.equal((await deliver(old,1,firstOperation)).assignmentId,first.assignmentId);
-    assert.equal((await fixture.service.getPublicAssignment(first.publicToken)).formVersionId,old.formVersionId);
-    assert.ok(events.some(event=>event.status===201&&event.draftId===editing.id&&event.libraryEntryId===old.libraryEntryId));
-    assert.ok(events.some(event=>event.status===403&&event.errorCode==='SHARED_COURSE_ACCESS_DENIED'));
-    assert.ok(events.some(event=>event.status===409&&event.errorCode==='LIBRARY_SOURCE_STALE'));
   } finally {await fixture.close();}
 });
