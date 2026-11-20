@@ -8,7 +8,7 @@ import { createIndependentSpeaking } from '../src/speaking-independent.js';
 import { createIndependentApp } from '../src/speaking-independent-server.js';
 import { runSpeakingCheckJob } from '../src/speaking-check-worker.js';
 import { runPracticeCheckJob,runPracticeAnalysisJob } from '../src/speaking-practice-worker.js';
-import { createIndependentDocuments,validateIndependentDocument } from '../src/speaking-independent-documents.js';
+import { createIndependentDocuments,validateIndependentDocument,writeIndependentDocument } from '../src/speaking-independent-documents.js';
 import { planSpeakingCopyCta } from '../src/speaking-classroom-copies.js';
 import { createSpeakingTeacherProgress } from '../src/speaking-teacher-progress.js';
 import { performance } from 'node:perf_hooks';
@@ -295,7 +295,8 @@ test('native Lesson 6 receipt binds the active lease to the document and preserv
     } });
     await assert.rejects(write(f.service, { ...job, owner: '60000000-0000-4000-8000-000000000009' }), { code: 'STALE_JOB' });
     await assert.rejects(write(f.service, { ...job, u: { ...job.u, tab_id: 'wrong' } }), /DOC_IDENTITY_MISMATCH/);
-    assert.equal((await write(f.service, job)).readback, true);
+    await writeIndependentDocument({ ...f.service, progressDocsEnabled: true }, job,
+      { get() { throw Error('LEGACY_GATEWAY_CALLED'); } }, write);
     const { rows: [saved] } = await f.pool.query('SELECT status,result FROM speaking_independent.job WHERE id=$1', [job.job_id]);
     assert.equal(saved.status, 'done');
     assert.equal(saved.result.revisionId, 'after-write');
