@@ -101,8 +101,12 @@ test('Kho cá nhân xem thử được câu có khoảng trắng và vẫn chặ
     const entry=await library.store({draftId:draft.id,expectedRevision:1,expectedHash:draft.contentHash,scope:'personal',operationId:randomUUID(),reviewer});
     const preview=await library.previewInfo({id:entry.id,reviewer});
     const source=await library.demoSource({grant:{ownerEmail:reviewer.email,entryId:entry.id,contentHash:preview.contentHash,revision:1}});
-    assert.equal(digest(source.definition,source.gradingKey),preview.contentHash);
-    assert.equal(source.definition.blocks[0].items[0].prompt,draft.definition.blocks[0].items[0].prompt);
+    const stored=(await db.query('SELECT public_definition,private_definition FROM learning.form_library_entry WHERE id=$1::uuid',[entry.id])).rows[0];
+    assert.deepEqual(stored.public_definition,draft.definition);
+    assert.equal(digest(stored.public_definition,stored.private_definition),preview.contentHash);
+    assert.equal(source.contentHash,preview.contentHash);
+    assert.equal(source.definitionHash,sha256(stableStringify(source.definition)));
+    assert.equal(source.definition.blocks[0].items[0].prompt,draft.definition.blocks[0].items[0].prompt.trim());
     await db.query("UPDATE learning.form_library_entry SET public_definition=jsonb_set(public_definition,'{blocks,0,items,0,prompt}','\"Câu bị sửa\"') WHERE id=$1::uuid",[entry.id]);
     await assert.rejects(()=>library.previewInfo({id:entry.id,reviewer}),error=>error.code==='LIBRARY_CONTENT_MISMATCH');
   }finally{await db.close();}

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import request from 'supertest';
+import pg from 'pg';
 import { createApp } from '../src/app.js';
 import { parseFormDefinition, parseFormGradingKey } from '../src/learning-contracts.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
@@ -98,10 +99,18 @@ test('Kho chung: khoảng trắng trong phương án không làm hỏng bản th
   } } });
   const preview = await library.previewInfo({ id: row.id, reviewer });
   const grant = createLearningLibraryDemoGrant({ entry: preview, reviewer, secret: grantSecret });
-  const database = new PGlite();
+  const fixture = process.env.PROGRESS_LOG_PREVIEW_FIXTURE_URL;
+  const url = fixture ? new URL(fixture) : null;
+  if (url) {
+    assert.equal(url.protocol, 'postgresql:');
+    assert.equal(url.hostname, '127.0.0.1');
+    assert.equal(url.port, '16547');
+    assert.equal(url.pathname, '/progress_log_preview_fixture');
+  }
+  const database = url ? new pg.Pool({ connectionString: url.toString() }) : new PGlite();
   try {
-    await initializeLearningDemoDatabase(database);
-    const app = createLearningDemoApp({ pool: createPGlitePool(database), allowedOrigin: origin,
+    await initializeLearningDemoDatabase(url ? { query: (...args) => database.query(...args), exec: sql => database.query(sql) } : database);
+    const app = createLearningDemoApp({ pool: url ? database : createPGlitePool(database), allowedOrigin: origin,
       grantSecret, fetchSource: async ({ grant: signed }) => library.demoSource({
         grant: verifyLearningDemoGrant(signed, grantSecret)
       }) });
@@ -113,7 +122,8 @@ test('Kho chung: khoảng trắng trong phương án không làm hỏng bản th
     assert.equal(item.options[1].label, '  Phương án G  ');
     assert.equal(sha256(stableStringify({ definition, gradingKey })), snapshotHash);
   } finally {
-    await database.close();
+    if (url) await database.end();
+    else await database.close();
   }
 });
 
