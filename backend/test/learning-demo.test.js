@@ -7,7 +7,8 @@ import { createApp } from '../src/app.js';
 import { parseFormDefinition, parseFormGradingKey } from '../src/learning-contracts.js';
 import { sha256, stableStringify } from '../src/learning-domain.js';
 import { createLearningDemoApp, createPGlitePool, initializeLearningDemoDatabase } from '../src/learning-demo.js';
-import { createLearningDemoGrant, verifyLearningDemoGrant } from '../src/learning-demo-grant.js';
+import { createLearningFormLibrary } from '../src/learning-form-library.js';
+import { createLearningDemoGrant, createLearningLibraryDemoGrant, verifyLearningDemoGrant } from '../src/learning-demo-grant.js';
 import { createLearningRouter } from '../src/learning-routes.js';
 import { fetchLearningDemoSourceSql, insertLearningAssignmentSql,
   listLearningTeacherOptionsSql } from '../src/learning-sql.js';
@@ -65,6 +66,56 @@ function sources() {
     }]
   ]);
 }
+
+test('Kho chung: khoảng trắng trong phương án không làm hỏng bản thử hoặc đổi snapshot', async () => {
+  const definition = parseFormDefinition({
+    schemaVersion: 'FormDefinitionV1', formVersionId: crypto.randomUUID(), title: 'Phiếu kiểm thử',
+    kind: 'mixed', courseCode: '56', answerReleasePolicy: 'hidden',
+    blocks: [{
+      blockId: crypto.randomUUID(), checkpoint: 1, title: 'Listening', items: [{
+        itemFamilyId: crypto.randomUUID(), itemVersionId: crypto.randomUUID(),
+        position: 1, kind: 'survey', prompt: 'Chọn một phương án', required: true,
+        interactionType: 'single_choice', layoutType: 'choice_cards',
+        pedagogicalTypeCode: 'multiple_choice', graderType: 'none', maxScore: 0,
+        options: [{ id: 'A', label: 'Phương án A' }, { id: 'G', label: 'Phương án G' }],
+        skillCodes: ['listening'], evidenceSource: 'student_self_report'
+      }]
+    }]
+  });
+  const item = definition.blocks[0].items[0];
+  item.options[1].label = '  Phương án G  ';
+  const gradingKey = parseFormGradingKey({
+    schemaVersion: 'FormGradingKeyV1', formVersionId: definition.formVersionId, graderVersion: 1
+  });
+  const snapshotHash = sha256(stableStringify({ definition, gradingKey }));
+  const row = { id: crypto.randomUUID(), public_definition: definition, private_definition: gradingKey,
+    content_hash: snapshotHash, source_revision: 21, course_code: '56' };
+  const reviewer = { email: 'teacher@example.test' };
+  const library = createLearningFormLibrary({ pool: { async query(sql) {
+    if (sql.includes('mapping.reviewer_account')) return { rowCount: 1, rows: [reviewer] };
+    assert.match(sql, /FROM learning\.form_library_entry/);
+    return { rows: [row] };
+  } } });
+  const preview = await library.previewInfo({ id: row.id, reviewer });
+  const grant = createLearningLibraryDemoGrant({ entry: preview, reviewer, secret: grantSecret });
+  const database = new PGlite();
+  try {
+    await initializeLearningDemoDatabase(database);
+    const app = createLearningDemoApp({ pool: createPGlitePool(database), allowedOrigin: origin,
+      grantSecret, fetchSource: async ({ grant: signed }) => library.demoSource({
+        grant: verifyLearningDemoGrant(signed, grantSecret)
+      }) });
+    const run = await request(app).post('/api/demo/runs').set(demoHeaders).send({ grant }).expect(201);
+    const opened = await request(app).post('/api/learning/assignments/open').set(demoHeaders)
+      .send({ publicToken: run.body.run.publicToken }).expect(200);
+    assert.equal(opened.body.assignment.definition.blocks[0].items[0].options[1].label, 'Phương án G');
+    assert.equal(preview.contentHash, snapshotHash);
+    assert.equal(item.options[1].label, '  Phương án G  ');
+    assert.equal(sha256(stableStringify({ definition, gradingKey })), snapshotHash);
+  } finally {
+    await database.close();
+  }
+});
 
 test('bản thử tự tạo từ ba kiểu phiếu, cô lập giảng viên và đặt lại an toàn', async () => {
   const database = new PGlite();
