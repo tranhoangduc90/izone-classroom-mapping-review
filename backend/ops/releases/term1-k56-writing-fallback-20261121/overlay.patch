@@ -1,0 +1,23 @@
+--- a/src/term1-skill-offline-core.mjs
++++ b/src/term1-skill-offline-core.mjs
+@@ -293,10 +293,18 @@
+     else if(b.section==='listening')await client.query(`UPDATE assessment.term_test_exam_session SET listening_started_at=coalesce(listening_started_at,$2::timestamptz),listening_deadline_at=$3::timestamptz,
+      listening_draft=$4::jsonb,listening_draft_revision=$5,listening_draft_updated_at=now(),updated_at=now() WHERE id=$1`,[a.exam_session_token,start,deadline,JSON.stringify(p.answers),b.revision]);
+     else if(b.section==='reading')await client.query(`UPDATE assessment.term_test_attempt SET reading_started_at=coalesce(reading_started_at,$2::timestamptz),reading_deadline_at=$3::timestamptz,
+      reading_draft=$4::jsonb,reading_draft_revision=$5,reading_draft_updated_at=now(),updated_at=now() WHERE id=$1`,[a.attempt_token,start,deadline,JSON.stringify(p.answers),b.revision]);
+-    else if(!crossDevice)await client.query(`UPDATE assessment.term_test_attempt SET writing_started_at=coalesce(writing_started_at,$2::timestamptz),writing_deadline_at=$3::timestamptz,
+-     writing_task_${profile.taskNumber}=$4,writing_draft_revision=$5,writing_draft_updated_at=now(),updated_at=now() WHERE id=$1`,[a.attempt_token,start,deadline,p[profile.taskId],b.revision]);
++    else if(!crossDevice){
++      const fallbackGrantId = SLUG === 'term-test-1-k56' && grant?.section === 'writing' ? grant.id : null;
++      const fields = fallbackGrantId ? ',term1_writing_fallback_grant_id=$6::uuid' : '';
++      const values = [a.attempt_token, start, deadline, p[profile.taskId], b.revision];
++      if(fallbackGrantId)values.push(fallbackGrantId);
++      await client.query(`UPDATE assessment.term_test_attempt
++        SET writing_started_at=coalesce(writing_started_at,$2::timestamptz),writing_deadline_at=$3::timestamptz,
++          writing_task_${profile.taskNumber}=$4,writing_draft_revision=$5,writing_draft_updated_at=now(),
++          updated_at=now()${fields} WHERE id=$1`,values);
++    }
+     if(b.kind==='seal'){
+      if(b.section==='writing')await client.query('UPDATE assessment.term_test_attempt SET writing_submitted_at=$2::timestamptz,updated_at=now() WHERE id=$1',[official.attempt_token,b.occurredAt]);
+      else{
+       const def=parseStoredTest(official),score=gradeSection(def[b.section+'_definition'],p.answers,b.section==='listening'?def.listening_band_adjustment:0,def.scoreMode);
