@@ -8,7 +8,7 @@ import { createApp } from '../src/app.js';
 import { createSpeakingHomeworkService, parseSpeakingShareUrl } from '../src/speaking-homework.js';
 import { createSpeakingAlerts } from '../src/speaking-alerts.js';
 import {createSpeakingDocsJobs} from '../src/speaking-docs-jobs.js';
-import { createNativeHomeworkReceiptWriter } from '../src/speaking-native-docs.js';
+import { createNativeHomeworkReceiptWriter, startNativeHomeworkReceiptWorker } from '../src/speaking-native-docs.js';
 import { createSpeakingClassroomCopies, planSpeakingCopyCta,
   verifySpeakingCopyCta, speakingCopyUrl } from '../src/speaking-classroom-copies.js';
 import { analyzeDoctorConversation, runSpeakingDoctorJob } from '../src/speaking-doctor-worker.js';
@@ -22,6 +22,32 @@ const secondToken = 'second-access-token-32-characters-long';
 const workerSecret = 'test-worker-secret-with-32-characters';
 const fingerprint = letter => letter.repeat(64);
 const share = letter => `https://chatgpt.com/share/${letter.repeat(32)}`;
+
+test('native Docs worker classifies PostgreSQL claim failure and bounds immediate wake retries', async () => {
+  let claims=0, capture;
+  const event=new Promise(resolve=>{capture=resolve;});
+  const worker=startNativeHomeworkReceiptWorker({
+    pool:{async connect(){claims++;throw Object.assign(new Error('private database detail'),{code:'57014'});}},
+    runtime:{scope:{all:true,classIds:[]},log:capture}, idleMs:1000,
+  });
+  let timeout;
+  try {
+    const log=await Promise.race([event,new Promise((_,reject)=>{
+      timeout=setTimeout(()=>reject(new Error('missing native retry log')),1000);
+    })]);
+    assert.equal(log.phase,'claim');
+    assert.equal(log.reason,'DOC_WORKER_RETRY');
+    assert.equal(log.sqlState,'57014');
+    assert.ok(log.retryAfterMs>0);
+    assert.equal(JSON.stringify(log).includes('private database detail'),false);
+    worker.wake();
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(claims,1);
+  } finally {
+    clearTimeout(timeout);
+    await worker.stop();
+  }
+});
 
 function poolFrom(db) {
   const query = async (sql, params) => {
