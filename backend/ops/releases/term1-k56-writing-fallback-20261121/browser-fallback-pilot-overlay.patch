@@ -1,0 +1,107 @@
+--- a/src/term1-journal-cloud/mount.mjs
++++ b/src/term1-journal-cloud/mount.mjs
+@@ -39,4 +39,5 @@
+   const paperMarker = `(s.term${term}_paper_profile_id IS NOT NULL OR s.term${term}_paper_legacy_bridge IS NOT NULL)`;
+   const root = '/api/term-tests/' + testSlug;
++  const fallbackRoot = root + '/skill-fallback';
+   const table = `assessment_k56.journal_term${term}_cloud_enrollment`;
+   const path = env[configPrefix + '_POLICY_FILE'];
+@@ -45,10 +46,16 @@
+     currentKeyId: 'pilot', pilotId, clock });
+   const query = pool.query.bind(pool);
+-  const ownerFor = termOwnerResolver({ query, schema: 'assessment_k56' });
+-
+-  app.post(root + (paper ? '/journal-paper-pilot-context' : '/journal-pilot-context'), async (req, res) => {
++  const ownerFor = termOwnerResolver({ query, schema: 'assessment_k56', allowSkillFallback: term === 1 && !paper });
++  const activeGrant = (parameter, timeWindow = '') => `EXISTS (
++    SELECT 1 FROM assessment_k56.term1_skill_grant g
++    WHERE g.id=$${parameter}::uuid AND g.session_id=s.id AND g.generation=s.generation
++      AND g.class_id=s.erp_course_class_id AND g.bound_at IS NOT NULL AND g.revoked_at IS NULL
++      ${timeWindow}
++  )`;
++
++  const registerContext = (route, fallback = false) => app.post(route, async (req, res) => {
+     res.set('Cache-Control', 'no-store');
+     if (!allowedOrigins.has(req.get('origin'))) return res.status(403).json({ ok: false, error: 'ORIGIN_DENIED' });
+-    const { examSessionToken, attemptToken, sealed } = req.body ?? {};
++    const { examSessionToken, attemptToken, sealed, skillFallback, classCode: claimedClass, clientRunId, generation } = req.body ?? {};
+     const now = clock();
+     try {
+@@ -62,5 +69,9 @@
+       }
+       if (!examSessionToken && !attemptToken) return res.status(401).json({ ok: false, error: 'JOURNAL_OWNER_DENIED' });
+-      const owner = await ownerFor({ examSessionToken, attemptToken }, { testSlug });
++      const owner = fallback
++        ? await ownerFor({ examSessionToken, attemptToken, skillFallback, classCode: claimedClass, clientRunId, generation },
++          { testSlug, credential: req.get('x-term1-skill-grant') || '' })
++        : await ownerFor({ examSessionToken, attemptToken }, { testSlug });
++      if (!owner) return res.status(401).json({ ok: false, error: 'JOURNAL_OWNER_DENIED' });
+       const scope = journal.scopeForOwner(owner);
+       if (owner.identityConfirmed === false || scope.product !== product || scope.testSlug !== testSlug
+@@ -68,4 +79,6 @@
+       if (paper && !sealed && policy.classCode !== '*' && policy.classCode !== scope.classCode)
+         return res.json(legacy('owner_outside_pilot'));
++      if (fallback && !sealed && policy.skillFallbackClassCode !== '*' && policy.skillFallbackClassCode !== scope.classCode)
++        return res.json(legacy('skill_fallback_outside_pilot'));
+       const scopeId = hash(scope);
+       let renewUntil;
+@@ -77,12 +90,14 @@
+         }
+         const enrollmentParameters = [pilotId, scopeId];
+-        const originalPaper = paper ? ` AND EXISTS (
++        const originalDelivery = paper || fallback ? ` AND EXISTS (
+           SELECT 1 FROM assessment_k56.term_test_exam_session s
+           WHERE s.id=$3 AND s.generation=$4 AND s.test_slug=$5 AND s.attempt_mode='cbt'
+-            AND s.class_name_snapshot=$6 AND s.erp_student_contact_id::text=$7 AND ${paperMarker}
++            AND s.class_name_snapshot=$6 AND s.erp_student_contact_id::text=$7
++            AND ${paper ? paperMarker : 'NOT ' + paperMarker + ' AND s.superseded_at IS NULL AND ' + activeGrant(8)}
+         )` : '';
+-        if (paper) enrollmentParameters.push(owner.sourceId, scope.generation, testSlug, scope.classCode, scope.studentRef);
++        if (paper || fallback) enrollmentParameters.push(owner.sourceId, scope.generation, testSlug, scope.classCode, scope.studentRef);
++        if (fallback) enrollmentParameters.push(examSessionToken);
+         const { rows: [known] } = await query(`SELECT renew_until_ms FROM ${table}
+-          WHERE pilot_id=$1 AND scope_id=$2${originalPaper}`, enrollmentParameters);
++          WHERE pilot_id=$1 AND scope_id=$2${originalDelivery}`, enrollmentParameters);
+         if (!known) return res.status(403).json({ ok: false, error: 'PILOT_DRAIN_ORIGINAL_SCOPE_UNVERIFIED' });
+         renewUntil = paper ? Number(known.renew_until_ms) : effectiveSealedRenewal(Number(known.renew_until_ms), policy, { pilotId: sealed.pilotId,
+@@ -91,4 +106,9 @@
+           return res.status(403).json({ok:false,error:'PILOT_DRAIN_ORIGINAL_SCOPE_UNVERIFIED'});
+       } else {
++        const admissionTime = fallback
++          ? activeGrant(11, `AND g.bound_at >= to_timestamp($9::double precision / 1000)
++            AND g.bound_at <= to_timestamp($10::double precision / 1000)`)
++          : `s.prepared_at >= to_timestamp($9::double precision / 1000)
++            AND s.prepared_at <= to_timestamp($10::double precision / 1000)`;
+         const { rows: [enrolled] } = await query(`WITH eligible AS (
+           SELECT 1 FROM assessment_k56.term_test_exam_session s WHERE s.id=$4 AND s.generation=$5
+@@ -96,6 +116,5 @@
+             AND ${paper ? paperMarker : 'NOT ' + paperMarker}
+             AND s.class_name_snapshot=$7 AND s.erp_student_contact_id::text=$8
+-            AND s.prepared_at >= to_timestamp($9::double precision / 1000)
+-            AND s.prepared_at <= to_timestamp($10::double precision / 1000)
++            AND ${admissionTime}
+         ), inserted AS (
+           INSERT INTO ${table} (pilot_id,scope_id,renew_until_ms)
+@@ -105,5 +124,5 @@
+           WHERE pilot_id=$1 AND scope_id=$2 AND EXISTS (SELECT 1 FROM eligible) LIMIT 1`,
+         [pilotId, scopeId, policy.renewUntil, owner.sourceId, scope.generation, testSlug,
+-          scope.classCode, scope.studentRef, policy.opensAt, now]);
++          scope.classCode, scope.studentRef, policy.opensAt, now, ...(fallback ? [examSessionToken] : [])]);
+         if (!enrolled) {
+           if (paper) return res.json(legacy('owner_outside_pilot'));
+@@ -126,4 +145,6 @@
+     }
+   });
++  registerContext(root + (paper ? '/journal-paper-pilot-context' : '/journal-pilot-context'));
++  if (term === 1 && !paper) registerContext(fallbackRoot + '/journal-pilot-context', true);
+
+   let registered = sealedRoutes.get(app);
+@@ -131,5 +152,7 @@
+   if (registered.has(testSlug)) return;
+   registered.add(testSlug);
+-  app.post(root + '/journal-collector-sealed', async (req, res) => {
++  const collectorRoutes = [root + '/journal-collector-sealed'];
++  if (term === 1) collectorRoutes.push(fallbackRoot + '/journal-collector-sealed');
++  app.post(collectorRoutes, async (req, res) => {
+     res.set('Cache-Control', 'no-store');
+     if (!allowedOrigins.has(req.get('origin'))) return res.status(403).json({ error: 'ORIGIN_DENIED' });
