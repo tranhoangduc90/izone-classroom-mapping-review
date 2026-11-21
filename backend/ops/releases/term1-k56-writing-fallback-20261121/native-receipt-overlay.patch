@@ -1,0 +1,22 @@
+--- a/src/exam-journal-runtime/adapters/term1-k56-native/native-offline-receipt.mjs
++++ b/src/exam-journal-runtime/adapters/term1-k56-native/native-offline-receipt.mjs
+@@ -46,5 +46,18 @@
+       AND o.receipt->>'section'=o.section AND o.receipt->>'receiptId'=$4::text
+       AND o.receipt->>'operationId'=o.operation_id::text
+-      AND o.receipt->>'attemptToken'=a.id::text AND o.receipt->>'examSessionToken'=s.id::text
++      AND (
++        (o.receipt->>'attemptToken'=a.id::text AND o.receipt->>'examSessionToken'=s.id::text)
++        OR (
++          run.state->o.section->>'fallbackSeal'='true'
++          AND o.receipt->>'attemptToken'=o.receipt->>'examSessionToken'
++          AND EXISTS (
++            SELECT 1 FROM ${schema}.term1_skill_grant g
++            WHERE g.id=CASE WHEN o.receipt->>'attemptToken' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
++              THEN (o.receipt->>'attemptToken')::uuid END
++              AND g.attempt_id=a.id AND g.session_id=s.id AND g.generation=s.generation
++              AND g.class_id=a.erp_course_class_id AND g.section=o.section AND g.bound_at IS NOT NULL
++          )
++        )
++      )
+       AND o.receipt->>'generation'=s.generation::text
+       AND CASE o.section WHEN 'listening' THEN official.listening_submitted_at IS NOT NULL

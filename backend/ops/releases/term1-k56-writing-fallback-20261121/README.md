@@ -7,6 +7,7 @@ Viết dự phòng được mở bằng quyền riêng cho một kỹ năng. Khi
 - `migration.sql` giữ nguyên các nhánh của ràng buộc đang chạy. Nhánh bổ sung cần quyền Viết đã gắn đúng lượt, phiên, thế hệ và lớp. Thu hồi quyền giữ bản nộp và nguồn gốc đã lưu. Khi mất mạng hoặc phản hồi nộp, đọc lại mã biên nhận bằng hợp đồng hiện hành.
 - `overlay.patch` chỉ đổi `src/term1-skill-offline-core.mjs`. Mã chỉ ghi dấu quyền khi nhận Writing dự phòng của Term 1 K56 trong giao dịch đã xác minh. Giữ contract với bài chính, phiếu, Term 2 và Mini.
 - File nguồn live trước khi ghép có SHA-256 `335ba2f0ea18de57c7ab042b498af2c56a87257e0413286ef4368f7322c411f3`. SHA-256 ứng viên đã kiểm là `40a10643b0d041e0ef24542b533254fa13012f7c2afa0634895ea4a8e188c147`.
+- `native-receipt-overlay.patch` bổ sung nhận diện biên nhận của ba kỹ năng dự phòng. Đối chiếu trạng thái đã chốt và quyền đã gắn đúng kỹ năng, lượt, phiên, lớp và thế hệ. Giữ mã sự kiện khi gửi lại và giữ các điều kiện loại trừ phiếu khỏi CBT. SHA-256 của file live là `51dcb17f80c20ac9783fbe85acfa1833a23d01a2fe333bca8a959b69e5f0b814`. Ứng viên là `65929fe86f446952905aa2929aa54ce3315f191edaec3054204563deca09e993`.
 
 ## Kiểm và phát hành
 
