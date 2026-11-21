@@ -106,13 +106,16 @@ export function startNativeHomeworkReceiptWorker({ pool, runtime, idleMs = 10_00
   let running;
   let stopped = false;
   let pending = false;
+  let retryNotBefore = 0;
   function schedule(ms) {
     if (stopped) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { running = run(); }, ms).unref();
+    timer = setTimeout(() => { running = run(); }, Math.max(ms, retryNotBefore - Date.now())).unref();
   }
   async function run() {
     let delay = idleMs;
+    let phase = 'claim';
+    const started = performance.now();
     try {
       const job = await service.claimOutboxJob('write_doc', 'native');
       if (!job) return;
@@ -124,10 +127,19 @@ export function startNativeHomeworkReceiptWorker({ pool, runtime, idleMs = 10_00
       } catch (error) {
         const value = error.code || error.message;
         errorCode = /^DOC_[A-Z0-9_]{1,80}$/.test(value || '') ? value : 'DOC_WRITE_FAILED';
+        runtime.log({ stage: 'homework_receipt_worker', reason: 'DOC_WRITE_FAILED', phase: 'write', errorCode,
+          httpStatus: Number.isInteger(error.status) && error.status>=400 && error.status<=599 ? error.status : undefined });
       }
+      phase = 'record_failure';
       if (errorCode) await service.failOutboxJob({ jobId: job.job_id, errorCode, expectedAttempt: Number(job.attempts) + 1 });
-    } catch {
-      runtime.log({ stage: 'homework_receipt_worker', reason: 'DOC_WORKER_RETRY' });
+    } catch (error) {
+      const value = error?.code ?? error?.cause?.code;
+      const sqlState = typeof value === 'string' && /^[0-9A-Z]{5}$/.test(value) ? value : undefined;
+      const retryableDatabase = sqlState?.startsWith('08') || ['57014','55P03','57P01','53300'].includes(sqlState)
+        || ['ECONNRESET','ECONNREFUSED','ETIMEDOUT'].includes(value);
+      if (retryableDatabase) retryNotBefore = Date.now() + Math.min(60_000, idleMs * (1 + Math.random()));
+      runtime.log({ stage: 'homework_receipt_worker', reason: 'DOC_WORKER_RETRY', phase, sqlState,
+        durationMs: Math.round(performance.now() - started), retryAfterMs: Math.max(0, Math.ceil(retryNotBefore - Date.now())) });
     } finally {
       running = null;
       schedule(pending ? 0 : delay);
