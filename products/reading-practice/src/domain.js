@@ -18,6 +18,12 @@ export class ReadingError extends Error {
 export const fail=(code,message,status)=>{throw new ReadingError(code,message,status);};
 export const questionIds=Array.from({length:13},(_,i)=>String(i+14));
 const answer=z.string().max(80);
+const clampScrollOffset=offset=>Math.max(0,offset);
+const isPaneOffset=key=>key==='all'||key.startsWith('passage:')||key.startsWith('questions:');
+// Safari can report a negative offset while bouncing at the top. The map also holds active question numbers.
+const questionScroll=z.record(z.string(),z.number()).transform(positions=>Object.fromEntries(
+ Object.entries(positions).map(([key,value])=>[key,isPaneOffset(key)?clampScrollOffset(value):value])
+)).pipe(z.record(z.string(),z.number().nonnegative()));
 function schemaFor(code=CODE){
  const lesson=lessonFor(code),ids=lesson.questionIds;
  return z.object({
@@ -26,7 +32,7 @@ function schemaFor(code=CODE){
  annotations:z.array(z.object({id:z.string().max(80),kind:z.enum(['highlight','note']),
  rootKey:z.string().max(80),skill:z.literal('reading'),start:z.number().int().nonnegative(),end:z.number().int().positive(),
  quote:z.string().max(10000),questionRef:z.string().max(100),note:z.string().max(10000).optional()}).strict()).max(READING_ANNOTATION_LIMIT),
- scroll:z.object({passage:z.number().nonnegative(),questions:z.record(z.string(),z.number().nonnegative())}),
+ scroll:z.object({passage:z.number().transform(clampScrollOffset),questions:questionScroll}),
  activeQuestion:z.number().int().refine(n=>ids.includes(String(n))),tab:z.enum(lesson.groups.map(g=>g.kind)),
  mobilePane:z.enum(['passage','questions']).optional(),notesOpen:z.boolean().optional(),
  highlighted:z.array(z.enum(lesson.paragraphs)).max(lesson.paragraphs.length),
