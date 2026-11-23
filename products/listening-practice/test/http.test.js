@@ -5,6 +5,36 @@ import {fixture} from './helpers.js';
 import {createApp} from '../src/app.js';
 import {secret,uuid} from '../src/domain.js';
 
+test('HTTP: Safari bounce in an existing draft keeps the same attempt and its answers on resume',async t=>{
+ const f=await fixture();t.after(f.close);
+ const app=createApp({pool:f.pool,service:f.service,origins:['https://page.test']});
+ const post=(action,body)=>request(app).post(`/api/${action}`).set('Authorization',`Bearer ${f.token}`).send(body);
+ const start=await f.begin(),attemptId=start.attempts.at(-1).id;
+ const snapshot={...f.draft(),sequence:1,audioPosition:4,activeMs:4000,answers:{21:'A'},flags:[21],notes:'Fixture note',
+  scroll:{passage:-18.5,questions:{all:-6.75,'other-pane':21.25}}};
+ f.advance(4000);
+ const saved=await post('pulse',{attemptId,lease:start.lease,snapshot});
+ assert.equal(saved.status,200,saved.body.error?.code);
+ f.advance(300000);
+ const newer={...snapshot,sequence:2,answers:{...snapshot.answers,22:'B'},notes:'Newer fixture note'};
+ const resumed=await post('resume',{attemptId,owner:'browser',operationId:uuid(),recovery:{snapshot:newer,lease:start.lease}});
+ assert.equal(resumed.status,200,resumed.body.error?.code);
+ assert.notEqual(resumed.body.lease.id,start.lease.id);
+ const activated=await post('activate',{attemptId,lease:resumed.body.lease});
+ assert.equal(activated.status,200,activated.body.error?.code);
+ const state=await request(app).get('/api/state').set('Authorization',`Bearer ${f.token}`);
+ assert.equal(state.status,200);
+ assert.equal(state.body.attempts.length,1);
+ const attempt=state.body.attempts[0];
+ assert.equal(attempt.id,attemptId);
+ assert.equal(attempt.status,'running');
+ assert.equal(attempt.remainingMs,start.attempts[0].remainingMs-4000);
+ assert.deepEqual(attempt.answers,newer.answers);
+ assert.deepEqual(attempt.flags,newer.flags);
+ assert.equal(attempt.notes,newer.notes);
+ assert.deepEqual(attempt.scroll,{passage:0,questions:{all:0,'other-pane':21.25}});
+});
+
 test('HTTP: chỉ chủ Docs mở bài, không rò key trước nộp, teacher không có quyền không xem',async t=>{
  const f=await fixture();t.after(f.close);
  const adminKey=secret(),app=createApp({pool:f.pool,service:f.service,origins:['https://page.test'],googleClientId:'google-client-fixture',adminKey,verifyGoogle:async credential=>({email:credential==='valid-google-fixture'?'teacher@example.test':'other@example.test',sub:'google-fixture',email_verified:true})});
