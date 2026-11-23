@@ -18,6 +18,8 @@ export class ListeningError extends Error {
 export const fail=(code,message,status)=>{throw new ListeningError(code,message,status);};
 export const questionIds=Array.from({length:10},(_,i)=>String(i+21));
 const answer=z.string().max(80);
+// Safari can report an offset below zero while the scroll container bounces at the top.
+const scrollOffset=z.number().transform(offset=>Math.max(0,offset));
 export const timingFor=(code=CODE)=>authoredLesson(code)||{code,audioMs:AUDIO_MS,reviewMs:REVIEW_MS,totalMs:TOTAL_MS,questionIds};
 export const snapshotSchema=z.object({
  answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>questionIds.includes(n))),
@@ -25,7 +27,7 @@ export const snapshotSchema=z.object({
  annotations:z.array(z.object({id:z.string().max(80),kind:z.enum(['highlight','note']),
  rootKey:z.string().max(80),skill:z.literal('reading'),start:z.number().int().nonnegative(),end:z.number().int().positive(),
  quote:z.string().max(10000),questionRef:z.string().max(100),note:z.string().max(10000).optional()}).strict()).max(100),
- scroll:z.object({passage:z.number().nonnegative(),questions:z.record(z.string(),z.number().nonnegative())}),
+ scroll:z.object({passage:scrollOffset,questions:z.record(z.string(),scrollOffset)}),
  activeQuestion:z.number().int().min(21).max(30),tab:z.enum(['mcq','flowchart']),
  mobilePane:z.enum(['passage','questions']).optional(),notesOpen:z.boolean().optional(),
  highlighted:z.array(z.enum(['A','B','C','D','E','F','G'])).max(7),
@@ -34,10 +36,17 @@ export const snapshotSchema=z.object({
 }).strict();
 export const emptyDraft=(code=CODE)=>({answers:{},flags:[],notes:'',annotations:[],scroll:{passage:0,questions:{}},
  phase:'listening',audioPosition:0,activeQuestion:+timingFor(code).questionIds[0],tab:authoredLesson(code)?.groups[0].kind||'mcq',mobilePane:'passage',notesOpen:false,highlighted:[],sequence:0,activeMs:0});
-export function validateSnapshot(input,code=CODE){
+export function validateSnapshot(input,code=CODE,attemptId){
  const l=authoredLesson(code),ids=l?.questionIds;
  const schema=l?snapshotSchema.extend({answers:z.record(z.string(),answer).refine(a=>Object.keys(a).every(n=>ids.includes(n))),flags:z.array(z.number().int().refine(n=>ids.includes(String(n)))).max(ids.length),activeQuestion:z.number().int().refine(n=>ids.includes(String(n))),tab:z.enum([...new Set(l.groups.map(g=>g.kind))]),highlighted:z.array(z.enum(l.paragraphs)).max(l.paragraphs.length),audioPosition:z.number().min(0).max(l.audioMs/1000)}):snapshotSchema;
- const parsed=schema.safeParse(input);if(!parsed.success)fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);return parsed.data;}
+ const parsed=schema.safeParse(input);
+ if(!parsed.success){
+  const fields=[...new Set(parsed.error.issues.map(({path:[field]})=>Object.hasOwn(snapshotSchema.shape,field)?field:'snapshot'))];
+  console.warn(JSON.stringify({event:'listening_draft_rejected',code:'INVALID_DRAFT',attemptId,fields}));
+  fail('INVALID_DRAFT','Nháp gửi lên không hợp lệ.',400);
+ }
+ return parsed.data;
+}
 export function validateContent(bundle){
  if(bundle?.definition?.authored){try{return validateAuthoredContent(bundle);}catch(e){fail('CONTENT_INVALID',e.message,400);}}
  if(bundle?.code!==CODE||bundle.totalMs!==TOTAL_MS||!bundle.version||!bundle.definition||!bundle.key||!bundle.explanations?.entries)
@@ -83,7 +92,7 @@ export function checkLease(a,lease){
  if(!a.lease||a.lease.id!==lease?.id||a.lease.tokenHash!==hash(lease?.token||''))fail('LEASE_LOST','Bài đã chuyển sang phiên khác. Nhấn Tiếp tục để mở tại đây.');
 }
 export function checkpoint(a,input,lease,clock,{recovery=false}={}){
- checkLease(a,lease);const timing=timingFor(a.code),draft=validateSnapshot(input,a.code);
+ checkLease(a,lease);const timing=timingFor(a.code),draft=validateSnapshot(input,a.code,a.id);
  if(draft.sequence<a.draft.sequence)fail('STALE_DRAFT','Nháp này cũ hơn bản đã lưu. Hãy tải lại bài.');
  const old={...a.draft,activeMs:0},next={...draft,activeMs:0};
  if(draft.sequence===a.draft.sequence&&canonical(old)!==canonical(next))fail('STALE_DRAFT','Nháp cùng phiên bản có nội dung khác nhau.');
@@ -134,7 +143,7 @@ export function recoverCheckpoint(a,input,lease,clock){
  try{checkpoint(candidate,input,lease,clock,{recovery:true});Object.assign(a,candidate);delete a.progressRecovery;return true;}
  catch(error){
   if(!['AUDIO_POSITION_INVALID','AUDIO_REWIND_DENIED','AUDIO_NOT_FINISHED','AUDIO_REPLAY_DENIED'].includes(error.code))throw error;
-  checkLease(a,lease);const draft=validateSnapshot(input,a.code);
+  checkLease(a,lease);const draft=validateSnapshot(input,a.code,a.id);
   const {phase,audioPosition,activeMs,...content}=draft;
   a.draft={...a.draft,...content};a.status='paused';a.lease.activationCancelled=true;
   a.progressRecovery={code:'PROGRESS_RESYNC_REQUIRED',reason:error.code,
