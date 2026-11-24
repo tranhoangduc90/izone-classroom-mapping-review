@@ -4,8 +4,9 @@ import {writeFile} from 'node:fs/promises';
 import test from 'node:test';
 import {pathToFileURL} from 'node:url';
 
-const entry = process.env.TERM2_NATIVE_RECOVERY_FIXTURE;
-const flag = 'TERM2_LISTENING_RECOVERY_V1';
+const term1 = Boolean(process.env.TERM1_NATIVE_RECOVERY_FIXTURE);
+const entry = process.env.TERM1_NATIVE_RECOVERY_FIXTURE || process.env.TERM2_NATIVE_RECOVERY_FIXTURE;
+const flag = term1?'TERM1_LISTENING_RECOVERY_V1':'TERM2_LISTENING_RECOVERY_V1';
 
 test('native HTTP enables fresh attempts and drains enrolled attempts after flag rollback',
   {skip: !entry && 'Requires a captured K56 application with an isolated database'}, async () => {
@@ -13,23 +14,27 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
     const previousFlag = process.env[flag];
     const app = await createNativeRecoveryFixture();
     const identity = {classCode:app.classCode,studentRef:app.student,mode:'lis_first',attemptMode:'cbt',
-      identityConfirmed:true,term2ContinuationVersion:1};
+      identityConfirmed:true,[term1?'term1ContinuationVersion':'term2ContinuationVersion']:1};
+    const confirmedStudents=new Map();
+    let nextStudent=0;
     async function post(path, body, permit) {
       const response = await fetch(app.base + path, {method:'POST', headers:{'content-type':'application/json',
         ...(permit ? {'x-term2-permit':permit} : {})}, body:JSON.stringify(body)});
       return {status:response.status, json:await response.json()};
     }
     async function prepare(scope) {
-      const result = await post('/offline/prepare',{classCode:identity.classCode,studentRef:identity.studentRef,
+      const result = await post('/offline/prepare',{classCode:identity.classCode,studentRef:confirmedStudents.get(scope.attemptToken) || identity.studentRef,
         mode:identity.mode,audioTransport:'r2-direct-v1', ...scope});
       assert.equal(result.status,200,JSON.stringify(result.json));
       return result.json.offline;
     }
     async function createAttempt() {
-      const result = await post('/attempt/prepare',identity);
+      const studentRef=term1?app.students[nextStudent++].ref:identity.studentRef;
+      const result = await post('/attempt/prepare',{...identity,studentRef});
       assert.equal(result.status,200,JSON.stringify(result.json));
       const {attemptToken,examSessionToken,generation} = result.json;
       const scope = {attemptToken,examSessionToken,generation,ownerId:randomUUID()};
+      confirmedStudents.set(attemptToken,studentRef);
       return {scope,offline:await prepare(scope)};
     }
     async function startListening({scope,offline}) {
@@ -65,6 +70,11 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
       const heldRequest = operation('paused',interruption);
       const held = await send(enrolled,heldRequest);
       assert.equal(held.status,200,JSON.stringify(held.json));
+      if(term1) {
+        const foreign={...enrolled,scope:{...enrolled.scope,ownerId:randomUUID()}};
+        assert.equal((await send(foreign,heldRequest)).status,403);
+        assert.equal((await send(enrolled,{...heldRequest,positionMs:1})).status,409);
+      }
 
       process.env[flag] = 'false';
       const fresh = await createAttempt();
@@ -82,7 +92,8 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
       assert.equal((await app.read(legacy.scope)).events.length,0);
       assert.equal((await app.read(previouslyPrepared.scope)).events.length,0);
       assert.equal((await app.read(fresh.scope)).events.length,0);
-      if (process.env.TERM2_ROLLOUT_EVIDENCE) await writeFile(process.env.TERM2_ROLLOUT_EVIDENCE,JSON.stringify({
+      const evidence = term1?process.env.TERM1_ROLLOUT_EVIDENCE:process.env.TERM2_ROLLOUT_EVIDENCE;
+      if (evidence) await writeFile(evidence,JSON.stringify({
         profile:app.classCode,isolatedDatabase:true,legacyDenied:rejected.status,keptPreparedAttempt:true,enabledForFresh:true,
         stoppedEnrollment:true,drainedAfterRollback:true,receipts:stored.events.length,revision:stored.clock.revision,
       },null,2));
