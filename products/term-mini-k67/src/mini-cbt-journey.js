@@ -13,17 +13,20 @@ import { readOfficialAttempt } from './exam-order.js';
 import { commitTermOfflineContinuation, commitTermOfflineListeningInterruption, commitTermOfflineWriting, continuationTable, term1ParallelEntryInUse } from './term1-section-continuation.js';
 
 const mini = {slug:'mini-test-lesson-5',version:'mini-k67-cbt-journey-v1',mode:'miniCbtJourneyMode',
-  table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey'};
+  table:'assessment.mini_k67_cbt_journey',guard:'k67.mini_journey',listeningRecovery:'miniCbtListeningRecoveryMode'};
 const term1 = {slug:'term-test-1',version:'term1-k67-cbt-journey-v1',mode:'term1CbtJourneyMode',
-  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,writingHold:'term1'};
+  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,writingHold:'term1',
+  listeningRecovery:'term1CbtListeningRecoveryMode'};
 const term1Paper = {...term1,version:'term1-k67-paper-journey-v1',mode:'term1PaperJourneyMode',writing:false,paper:true,
   parallelPaper:{flag:'term1_parallel_entry',config:'term1ParallelEntryMode',request:'term1PaperParallelVersion',response:'term1ParallelEntry'}};
 const term2 = {slug:'term-test-2',version:'term2-k67-cbt-journey-v1',mode:'term2CbtJourneyMode',
-  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true,writingHold:'term2'};
+  table:'assessment.term_k67_cbt_journey',guard:'k67.term_journey',writing:true,twoTasks:true,writingHold:'term2',
+  listeningRecovery:'term2CbtListeningRecoveryMode'};
 const term2Paper = {...term2,version:'term2-k67-paper-journey-v1',mode:'term2PaperJourneyMode',writing:false,paper:true,
   parallelPaper:{flag:'term2_parallel_entry',config:'term2ParallelEntryMode',request:'term2PaperParallelVersion',response:'term2ParallelEntry'}};
 const pretest = {slug:'pretest-lesson-16',version:'pretest-lesson-16-k67-cbt-v1',mode:'pretestCbtJourneyMode',
-  table:term2.table,guard:term2.guard,receiptStatus:true,lrOnly:true,privateAudio:true};
+  table:term2.table,guard:term2.guard,receiptStatus:true,lrOnly:true,privateAudio:true,
+  listeningRecovery:'pretestCbtListeningRecoveryMode'};
 const pretestPaper = {...pretest,version:'pretest-lesson-16-k67-paper-v1',mode:'pretestPaperJourneyMode',
   privateAudio:false,paper:true,
   parallelPaper:{flag:'pretest_parallel_entry',config:'pretestPaperParallelEntryMode',
@@ -482,6 +485,9 @@ function writingHoldClassesFromFile(file) {
 
 function mountCbtJourney(app, { pool, config, assets, requireContext, readStudent, readLimiter, writeLimiter, writingAccepted, writingCommitted, paperAccepted, observeSubmission, queueWriting, logEvent = () => {} }, profile) {
   const {slug,table,version}=profile;
+  const supportsListeningRecovery=Boolean(!profile.paper&&profile.listeningRecovery);
+  const recoveryStorage=profile===mini?'mini':'term';
+  const recoveryMode=supportsListeningRecovery?config[profile.listeningRecovery]:'off';
   const parallelTerm1=profile===term1&&term1ParallelEntryInUse(config);
   const paperParallelMode=config[profile.parallelPaper?.config];
   const parallelPaper=profile.parallelPaper&&['on','drain'].includes(paperParallelMode);
@@ -538,7 +544,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),
       {allowNew,enroll:enrollLr(selected.class_name),holdEnabled:Boolean(lrHoldOptions),parallelMode}));
   }));
-  else app.post(prefix+'/prepare',writeLimiter,requireContext,route((profile===term1||profile===term2)?protectedOpen:open,async (body,req) => {
+  else app.post(prefix+'/prepare',writeLimiter,requireContext,route(supportsListeningRecovery?protectedOpen:open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     // Read protected asset metadata after identifying a permitted roster member and outside the DB transaction.
     if (!selected) throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
@@ -575,19 +581,14 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         profile===pretest?pretestJourneyR2Audio({config,row:session,manifest}):{};
       const continuation=await readContinuation(db,session.id);
       const timing=timingForAudio(assets,slug,row.audio_hash,manifest);
-      const recoveryMode=config.term1CbtListeningRecoveryMode;
       const examMode=continuation?.official_exam_mode||session.exam_mode||'lis_first';
-      const term1RecoveryOffered=recoveryMode==='on'||(examMode==='lis_first'&&(
+      const orderAllowed=profile!==term1||examMode==='lis_first';
+      const recoveryOffered=recoveryMode==='on'||(orderAllowed&&(
         recoveryMode==='listening_first'||(recoveryMode==='demo'&&session.class_name_snapshot==='CODEXDEMO806')));
-      const term2RecoveryMode=config.term2CbtListeningRecoveryMode;
-      const term2RecoveryOffered=term2RecoveryMode==='on'||
-        (term2RecoveryMode==='demo'&&session.class_name_snapshot==='CODEXDEMO806');
-      const supportedProfile=profile===term1||profile===term2;
-      const recoveryOffered=profile===term1?term1RecoveryOffered:profile===term2&&term2RecoveryOffered;
-      const canEnroll=supportedProfile&&!journey&&config.listeningContinuityEnabled&&recoveryOffered
+      const canEnroll=!journey&&config.listeningContinuityEnabled&&recoveryOffered
         &&body.listeningRecoveryClientVersion===1&&(!continuation||continuation.section==='listening');
-      const recoveryVersion=supportedProfile&&(canEnroll||journey)
-        ? await listeningRecoveryVersion(db,session.id,canEnroll?Math.round(timing.listeningDurationSeconds*1000):undefined)
+      const recoveryVersion=supportsListeningRecovery&&(canEnroll||journey)
+        ? await listeningRecoveryVersion(db,session.id,canEnroll?Math.round(timing.listeningDurationSeconds*1000):undefined,recoveryStorage)
         : undefined;
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
@@ -646,7 +647,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile===term1||profile===term2)app.post(prefix+'/listening-clock',writeLimiter,
+  if(supportsListeningRecovery)app.post(prefix+'/listening-clock',writeLimiter,
     route(scope.extend(listeningOperation.shape),async(body,req)=>{
       let duplicate=false;
       const receipt=await audioTransaction(pool,async db=>{
@@ -654,7 +655,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         authorize(body,state,req.get('x-term2-permit'),secret,version);
         const continuation=await readContinuation(db,state.session.id);
         if(continuation?.section==='writing')throw problem('LISTENING_CLOCK_CLOSED','Lượt này đã chuyển sang Writing.');
-        return commitCbtListeningClock(db,{state,operation:listeningOperation.parse(body),
+        return commitCbtListeningClock(db,{state,operation:listeningOperation.parse(body),storage:recoveryStorage,
           first:continuation?.section||initial(state.session),onDuplicate:()=>{duplicate=true;}});
       });
       try{
