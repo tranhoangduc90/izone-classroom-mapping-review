@@ -538,7 +538,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),
       {allowNew,enroll:enrollLr(selected.class_name),holdEnabled:Boolean(lrHoldOptions),parallelMode}));
   }));
-  else app.post(prefix+'/prepare',writeLimiter,requireContext,route(profile===term1?protectedOpen:open,async (body,req) => {
+  else app.post(prefix+'/prepare',writeLimiter,requireContext,route((profile===term1||profile===term2)?protectedOpen:open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     // Read protected asset metadata after identifying a permitted roster member and outside the DB transaction.
     if (!selected) throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
@@ -577,11 +577,16 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       const timing=timingForAudio(assets,slug,row.audio_hash,manifest);
       const recoveryMode=config.term1CbtListeningRecoveryMode;
       const examMode=continuation?.official_exam_mode||session.exam_mode||'lis_first';
-      const recoveryOffered=recoveryMode==='on'||(examMode==='lis_first'&&(
+      const term1RecoveryOffered=recoveryMode==='on'||(examMode==='lis_first'&&(
         recoveryMode==='listening_first'||(recoveryMode==='demo'&&session.class_name_snapshot==='CODEXDEMO806')));
-      const canEnroll=profile===term1&&!journey&&config.listeningContinuityEnabled&&recoveryOffered
+      const term2RecoveryMode=config.term2CbtListeningRecoveryMode;
+      const term2RecoveryOffered=term2RecoveryMode==='on'||
+        (term2RecoveryMode==='demo'&&session.class_name_snapshot==='CODEXDEMO806');
+      const supportedProfile=profile===term1||profile===term2;
+      const recoveryOffered=profile===term1?term1RecoveryOffered:profile===term2&&term2RecoveryOffered;
+      const canEnroll=supportedProfile&&!journey&&config.listeningContinuityEnabled&&recoveryOffered
         &&body.listeningRecoveryClientVersion===1&&(!continuation||continuation.section==='listening');
-      const recoveryVersion=profile===term1&&(canEnroll||journey)
+      const recoveryVersion=supportedProfile&&(canEnroll||journey)
         ? await listeningRecoveryVersion(db,session.id,canEnroll?Math.round(timing.listeningDurationSeconds*1000):undefined)
         : undefined;
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
@@ -641,7 +646,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
-  if(profile===term1)app.post(prefix+'/listening-clock',writeLimiter,
+  if(profile===term1||profile===term2)app.post(prefix+'/listening-clock',writeLimiter,
     route(scope.extend(listeningOperation.shape),async(body,req)=>{
       let duplicate=false;
       const receipt=await audioTransaction(pool,async db=>{
