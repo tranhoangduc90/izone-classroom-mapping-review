@@ -150,7 +150,8 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
-const previewListeningRecovery=term2JourneyMode==='on'&&process.env.K67_PREVIEW_TERM2_LISTENING_RECOVERY==='true';
+const previewTerm2ListeningRecovery=term2JourneyMode==='on'&&process.env.K67_PREVIEW_TERM2_LISTENING_RECOVERY==='true';
+const previewTerm1ListeningRecovery=term1JourneyMode==='on'&&process.env.K67_PREVIEW_TERM1_LISTENING_RECOVERY==='true';
 const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
   :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
 const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
@@ -192,7 +193,8 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term1PaperJourneyMode:term1PaperMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
-  term2CbtListeningRecoveryV1:previewListeningRecovery,
+  term1CbtListeningRecoveryMode:previewTerm1ListeningRecovery?(process.env.K67_PREVIEW_TERM1_RECOVERY_MODE||'on'):'off',
+  term2CbtListeningRecoveryMode:previewTerm2ListeningRecovery?(process.env.K67_PREVIEW_TERM2_RECOVERY_MODE||'on'):'off',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if(miniParallel) {
   await fixture.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
@@ -236,10 +238,11 @@ if(pretestMode){
       (token_hash bytea,reviewer_email text,google_subject text,revoked_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz);
     CREATE TABLE IF NOT EXISTS mapping.reviewer_class_access (reviewer_email text,erp_course_class_id bigint)`);
 }
-if(!pretestMode&&previewListeningRecovery&&process.env.K67_PREVIEW_TERM2_DEMO_CBT==='true'){
+if(!pretestMode&&(previewTerm1ListeningRecovery&&process.env.K67_PREVIEW_TERM1_DEMO_CBT==='true'||
+  previewTerm2ListeningRecovery&&process.env.K67_PREVIEW_TERM2_DEMO_CBT==='true')){
   await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
     INSERT INTO mapping.student_mapping_review VALUES
-      ('66666666-6666-4666-8666-666666666666',1992806,990806,'Học viên Term 2 demo giả','approved');`);
+      ('66666666-6666-4666-8666-666666666666',1992806,990806,'Học viên Term demo giả','approved');`);
 }
 const rescueClass=process.env.K67_PREVIEW_RESCUE_CLASS;
 if(rescueClass){
@@ -262,6 +265,13 @@ for(const slug of Object.keys(timing)){
   );
 }
 const outer=express();
+if(process.env.K67_PREVIEW_TERM2_JOURNAL_RECORDER_DOWN==='1'){
+  const requests={primary:0,fallback:0};
+  const shared='/term-tests/shared/exam-journal/';
+  outer.get(shared+'recorder.mjs',(_req,res)=>{requests.primary++;res.status(503).end();});
+  outer.get(shared+'recorder-term1-k56-fallback-v1.mjs',(_req,_res,next)=>{requests.fallback++;next();});
+  outer.get('/preview/recorder-requests',(_req,res)=>res.json(requests));
+}
 let previewApp=term1Parallel==='warm-up'?fixture.appForTerm1Mode('off'):fixture.app;
 const term2PreviewApps=term2Parallel==='warm-up'
   ? {off:fixture.appForTerm2Mode('off'),on:fixture.app,drain:fixture.appForTerm2Mode('drain')}
@@ -278,14 +288,14 @@ if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(
   return res.json({ok:true,mode:req.body.mode});
 });
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
-if(previewListeningRecovery)outer.get('/preview/listening-recovery-clock',async(_req,res)=>{
+if(previewTerm1ListeningRecovery||previewTerm2ListeningRecovery)outer.get('/preview/listening-recovery-clock',async(_req,res)=>{
   const {rows}=await fixture.db.query(`SELECT j.session_id,c.revision,c.snapshot,
     s.listening_submitted_at,s.listening_eof_at,
     (SELECT count(*)::int FROM assessment.term_k67_cbt_listening_clock_operation o WHERE o.session_id=c.session_id) AS operations
     FROM assessment.term_k67_cbt_listening_clock c
     JOIN assessment.term_k67_cbt_journey j ON j.session_id=c.session_id
     JOIN assessment.term_test_exam_session s ON s.id=c.session_id
-    WHERE s.test_slug='term-test-2'`);
+    WHERE s.test_slug=$1 ORDER BY s.id`,[previewTerm2ListeningRecovery?'term-test-2':'term-test-1']);
   res.json({rows});
 });
 if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
@@ -451,7 +461,7 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
-    ...(entry==='term-test-2-computer-based'?[
+    ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?[
       'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1.mjs',
       'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1-listening-recovery-v1.mjs'
     ]:[]),

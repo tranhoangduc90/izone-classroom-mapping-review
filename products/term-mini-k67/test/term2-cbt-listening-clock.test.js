@@ -14,10 +14,10 @@ const assets={
   getSessionAudioKey:()=>Buffer.alloc(32)
 };
 
-for (const [mode,clientVersion] of [['lis_first',1],['read_first',1],['lis_first',undefined]]) {
+for (const [mode,clientVersion,rollout] of [['lis_first',1,'on'],['read_first',1,'on'],['lis_first',undefined,'on'],['read_first',1,'demo']]) {
   test(`Term 2 K67 Listening clock · ${mode} · client ${clientVersion??'legacy'}`,async()=>{
     const fixture=await createMiniFixture({assets,examOrder:true,completeSchema:true,term2CbtJourneyMode:'on',
-      listeningContinuityEnabled:true,term2CbtListeningRecoveryV1:true});
+      listeningContinuityEnabled:true,term2CbtListeningRecoveryMode:rollout});
     try {
       await fixture.db.exec(`INSERT INTO assessment.test_definition(slug,title,version,listening_definition,reading_definition,is_active)
         SELECT 'term-test-2','Term 2 fixture',1,listening_definition,reading_definition,true
@@ -32,7 +32,8 @@ for (const [mode,clientVersion] of [['lis_first',1],['read_first',1],['lis_first
         ...scope,...identity,listeningRecoveryClientVersion:clientVersion
       });
       assert.ok(offer.ok,offer.text);
-      assert.equal(offer.body.listeningRecoveryVersion,clientVersion);
+      const offered=rollout==='on'?clientVersion:undefined;
+      assert.equal(offer.body.listeningRecoveryVersion,offered);
       const send=(path,payload)=>api.post(base+'/cbt-journey/'+path).set('x-term2-permit',offer.body.permit)
         .send({...scope,...payload});
       const began=await send('begin',{});
@@ -48,7 +49,7 @@ for (const [mode,clientVersion] of [['lis_first',1],['read_first',1],['lis_first
         positionMs:450,resumeCount:0,interruptionId:randomUUID(),recoverable:true,startedAt:firstAt,
         observedAt:new Date(firstAt+600).toISOString()};
       const stopped=await send('listening-clock',pause);
-      if(!clientVersion){
+      if(!offered){
         assert.equal(stopped.body.error,'LISTENING_CLOCK_NOT_ENABLED',stopped.text);
         const reopened=await api.post(base+'/cbt-journey/prepare').send({
           ...scope,...identity,listeningRecoveryClientVersion:1
