@@ -150,6 +150,7 @@ const miniListeningEofEnabled = process.env.K67_PREVIEW_MINI_EOF === 'true';
 const term1ListeningEofEnabled = process.env.K67_PREVIEW_TERM1_EOF === 'true';
 const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
+const previewListeningRecovery=term2JourneyMode==='on'&&process.env.K67_PREVIEW_TERM2_LISTENING_RECOVERY==='true';
 const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
   :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
 const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
@@ -191,6 +192,7 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   publicAudio:Boolean(miniR2ConfigFile),miniR2ConfigFile,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,miniCbtOfflineMode:process.env.K67_PREVIEW_MINI_CBT_OFFLINE,
   miniCbtJourneyMode:journeyMode,pretestCbtJourneyMode:pretestMode,pretestPaperJourneyMode:pretestMode,pretestR2ConfigFile,term1CbtJourneyMode:term1JourneyMode,term1PaperJourneyMode:term1PaperMode,term2CbtJourneyMode:term2JourneyMode,term1R2ConfigFile,term2R2ConfigFile,
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
+  term2CbtListeningRecoveryV1:previewListeningRecovery,
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if(miniParallel) {
   await fixture.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
@@ -234,6 +236,11 @@ if(pretestMode){
       (token_hash bytea,reviewer_email text,google_subject text,revoked_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz);
     CREATE TABLE IF NOT EXISTS mapping.reviewer_class_access (reviewer_email text,erp_course_class_id bigint)`);
 }
+if(!pretestMode&&previewListeningRecovery&&process.env.K67_PREVIEW_TERM2_DEMO_CBT==='true'){
+  await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
+    INSERT INTO mapping.student_mapping_review VALUES
+      ('66666666-6666-4666-8666-666666666666',1992806,990806,'Học viên Term 2 demo giả','approved');`);
+}
 const rescueClass=process.env.K67_PREVIEW_RESCUE_CLASS;
 if(rescueClass){
   if(!['IC2213','IC2207'].includes(rescueClass))throw new Error('Mã lớp thử cứu hộ không hợp lệ.');
@@ -271,6 +278,16 @@ if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(
   return res.json({ok:true,mode:req.body.mode});
 });
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+if(previewListeningRecovery)outer.get('/preview/listening-recovery-clock',async(_req,res)=>{
+  const {rows}=await fixture.db.query(`SELECT j.session_id,c.revision,c.snapshot,
+    s.listening_submitted_at,s.listening_eof_at,
+    (SELECT count(*)::int FROM assessment.term_k67_cbt_listening_clock_operation o WHERE o.session_id=c.session_id) AS operations
+    FROM assessment.term_k67_cbt_listening_clock c
+    JOIN assessment.term_k67_cbt_journey j ON j.session_id=c.session_id
+    JOIN assessment.term_test_exam_session s ON s.id=c.session_id
+    WHERE s.test_slug='term-test-2'`);
+  res.json({rows});
+});
 if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
   const {rows} = await fixture.db.query(`
     SELECT a.generation, s.id::text AS session_id,
@@ -434,6 +451,10 @@ for(const entry of offlineEntries){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
   const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
+    ...(entry==='term-test-2-computer-based'?[
+      'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1.mjs',
+      'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1-listening-recovery-v1.mjs'
+    ]:[]),
     ...(miniParallel&&entry==='mini-test-lesson-5-computer-based'
       ?['offline-assets-mini-parallel-v1.mjs','offline-assets-audio-report-v1.mjs']:[]),
     ...(['term-test-1-computer-based','term-test-2-computer-based','term-test-1'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
