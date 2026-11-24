@@ -13,10 +13,9 @@ function replaceOnce(source, anchor, replacement) {
 export function integrateListeningClock(source) {
   if (source.includes('term2-listening-clock.mjs')) throw new Error('K56 Listening clock overlay already applied');
   const imported = "import {enrollListeningClock, mountListeningClock} from './term2-listening-clock.mjs';\n";
-  const preparation = source.match(/^   return \{run:row(?:,audioDownload:issueK56TermAudio\(current,body.audioTransport\))?\};$/m)?.[0];
-  if (!preparation) throw Error('K56 offline prepare response changed');
-  let revised = replaceOnce(source, preparation,
-    "   if (profile.tablePrefix==='term2') row=await enrollListeningClock(client,row,current,process.env.TERM2_LISTENING_RECOVERY_V1==='true');\n"+preparation);
+  const endOfNewRun = "\n   }\n   if(row.owner_id!==body.ownerId)";
+  let revised = replaceOnce(source, endOfNewRun,
+    "\n    if (profile.tablePrefix==='term2') row=await enrollListeningClock(client,row,current,process.env.TERM2_LISTENING_RECOVERY_V1==='true');"+endOfNewRun);
   const capability = 'sendWindowHours:24';
   revised = replaceOnce(revised, capability,
     "sendWindowHours:24,...(profile.tablePrefix==='term2'&&run.state?.listeningRecoveryVersion===1?{listeningRecoveryVersion:1}:{})");

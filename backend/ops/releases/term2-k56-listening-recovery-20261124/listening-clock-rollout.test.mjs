@@ -47,9 +47,13 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
       const legacy = await createAttempt();
       assert.equal(legacy.offline.listeningRecoveryVersion,undefined);
       await startListening(legacy);
+      const previouslyPrepared = await createAttempt();
+      assert.equal(previouslyPrepared.offline.listeningRecoveryVersion,undefined);
 
       process.env[flag] = 'true';
       assert.equal((await prepare(legacy.scope)).listeningRecoveryVersion,undefined);
+      assert.equal((await prepare(previouslyPrepared.scope)).listeningRecoveryVersion,undefined,
+        'a prepared attempt keeps its original capability across a flag change');
       const rejected = await send(legacy,operation('paused',randomUUID()));
       assert.equal(rejected.status,403);
       assert.equal(rejected.json.error,'LISTENING_CLOCK_NOT_ENABLED');
@@ -76,9 +80,10 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
       assert.deepEqual(stored.events.map(row=>row.operationId),[held.json.operationId,resumed.json.operationId]);
       assert.equal(stored.session.listening_submitted_at,null);
       assert.equal((await app.read(legacy.scope)).events.length,0);
+      assert.equal((await app.read(previouslyPrepared.scope)).events.length,0);
       assert.equal((await app.read(fresh.scope)).events.length,0);
       if (process.env.TERM2_ROLLOUT_EVIDENCE) await writeFile(process.env.TERM2_ROLLOUT_EVIDENCE,JSON.stringify({
-        profile:app.classCode,isolatedDatabase:true,legacyDenied:rejected.status,enabledForFresh:true,
+        profile:app.classCode,isolatedDatabase:true,legacyDenied:rejected.status,keptPreparedAttempt:true,enabledForFresh:true,
         stoppedEnrollment:true,drainedAfterRollback:true,receipts:stored.events.length,revision:stored.clock.revision,
       },null,2));
     } finally {
