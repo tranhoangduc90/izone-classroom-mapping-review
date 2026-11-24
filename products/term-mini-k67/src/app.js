@@ -580,7 +580,7 @@ export function createApp({
   mountTerm1PaperJourney(app,paperJourneyServices);
   mountTerm2PaperJourney(app,paperJourneyServices);
   const termCbtServices=slug=>({pool,config,assets:termTestAssetService,requireContext,readStudent:readPreparedStudent,
-    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,
+    readLimiter:testReadLimiter,writeLimiter:testWriteLimiter,logEvent:logTermTestEvent,
     observeSubmission:(...args)=>termJournal?.business(...args),
     writingCommitted:()=>termTestWritingGradingService?.notifyCommitted?.(),
     queueWriting:termTestWritingGradingService?.ensureSubmissionInTransaction && (async (db,attemptToken,testSlug)=>{
