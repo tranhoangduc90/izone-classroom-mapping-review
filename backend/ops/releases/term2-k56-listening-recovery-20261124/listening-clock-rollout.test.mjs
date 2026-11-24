@@ -25,21 +25,22 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
         ...(permit ? {'x-term2-permit':permit} : {})}, body:JSON.stringify(body)});
       return {status:response.status, json:await response.json()};
     }
-    async function prepare(scope) {
+    async function prepare(scope,{miniClientVersion=1}={}) {
       const {studentRef,attemptMode}=confirmedStudents.get(scope.attemptToken);
       const result = await post('/offline/prepare',{classCode:identity.classCode,studentRef,
-        mode:identity.mode,audioTransport:'r2-direct-v1', ...(mini?{attemptMode,identityConfirmed:true}:{}), ...scope});
+        mode:identity.mode,audioTransport:'r2-direct-v1', ...(mini?{attemptMode,identityConfirmed:true,
+          ...(miniClientVersion===null?{}:{listeningRecoveryClientVersion:miniClientVersion})}:{}), ...scope});
       assert.equal(result.status,200,JSON.stringify(result.json));
       return result.json.offline;
     }
-    async function createAttempt(attemptMode='cbt') {
+    async function createAttempt(attemptMode='cbt',prepareOptions) {
       const studentRef=term1||mini?app.students[nextStudent++].ref:identity.studentRef;
       const result = await post('/attempt/prepare',{...identity,studentRef,attemptMode,...(attemptMode==='cbt'?{[continuation]:1}:{})});
       assert.equal(result.status,200,JSON.stringify(result.json));
       const {attemptToken,examSessionToken,generation} = result.json;
       const scope = {attemptToken,examSessionToken,generation,ownerId:randomUUID()};
       confirmedStudents.set(attemptToken,{studentRef,attemptMode});
-      return {scope,offline:await prepare(scope)};
+      return {scope,offline:await prepare(scope,prepareOptions)};
     }
     async function startListening({scope,offline}) {
       const startedAt = new Date().toISOString();
@@ -66,6 +67,14 @@ test('native HTTP enables fresh attempts and drains enrolled attempts after flag
       const rejected = await send(legacy,operation('paused',randomUUID()));
       assert.equal(rejected.status,403);
       assert.equal(rejected.json.error,'LISTENING_CLOCK_NOT_ENABLED');
+      if(mini) {
+        const pinned = await createAttempt('cbt',{miniClientVersion:null});
+        assert.equal(pinned.offline.listeningRecoveryVersion,undefined);
+        assert.equal((await prepare(pinned.scope)).listeningRecoveryVersion,undefined,
+          'opening a newer shell retains the original protocol for a pinned attempt');
+        assert.equal((await send(pinned,operation('paused',randomUUID()))).status,403);
+        assert.equal((await app.read(pinned.scope)).events.length,0);
+      }
       const enrolled = await createAttempt();
       assert.equal(enrolled.offline.listeningRecoveryVersion,1);
       assert.notEqual(enrolled.scope.attemptToken,legacy.scope.attemptToken);
