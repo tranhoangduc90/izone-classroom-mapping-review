@@ -20,4 +20,6 @@ Run `listening-clock-rollout.test.mjs` and the Pages native browser test using e
 
 Keep `MINI_K56_LISTENING_RECOVERY_V1` off while staging the migration, API and pinned frontend. Open DEMO first and read the browser journal and SQL receipts for both exam orders before opening the main profile. Preserve the existing Term 1 and Term 2 settings and routes.
 
+New Mini CBT attempts enroll only when the flag is on and the pinned web client sends `listeningRecoveryClientVersion: 1` on `/offline/prepare`. An older web client and the answer sheet retain their original protocol. An existing prepared attempt keeps its original capability.
+
 Turn the flag off to stop enrollment. Keep the new API, tables and compatible frontend entrypoint available for attempts that already received the capability. Retain previous immutable assets for sessions still using their original pinned shell.

@@ -25,7 +25,9 @@ export function integrateMiniClock(source){
   if(source.includes('mini-k56-listening-clock.mjs'))throw Error('Mini K56 clock is already installed');
   const afterInsert="\n   }\n   if(row.owner_id!==body.ownerId)";
   let revised=replaceOnce(source,afterInsert,
-    "\n    if(mini)row=await enrollMiniClock(client,row,current,process.env.MINI_K56_LISTENING_RECOVERY_V1==='true');"+afterInsert);
+    "\n    if(mini&&body.listeningRecoveryClientVersion===1)row=await enrollMiniClock(client,row,current,process.env.MINI_K56_LISTENING_RECOVERY_V1==='true');"+afterInsert);
+  revised=replaceOnce(revised,"identityConfirmed:z.literal(true).optional()}:{})}),req.body);",
+    "identityConfirmed:z.literal(true).optional(),listeningRecoveryClientVersion:z.literal(1).optional()}:{})}),req.body);");
   revised=replaceOnce(revised,'sendWindowHours:24',
     "sendWindowHours:24,...(mini&&!paper&&run.state?.listeningRecoveryVersion===1?{listeningRecoveryVersion:1}:{})");
   const route=" router.post('/:testSlug/offline/operation',onlyThis,draftLimiter,route(async(req,res)=>{";
