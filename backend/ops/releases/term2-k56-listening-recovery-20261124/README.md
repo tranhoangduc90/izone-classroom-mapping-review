@@ -21,3 +21,5 @@ Test the HTTP app in isolation with the migration, then run the Pages `term2-k56
 The default is disabled. With `TERM2_LISTENING_RECOVERY_V1=true`, fresh CBT offline attempts receive `listeningRecoveryVersion: 1`. Existing Listening attempts and paper routes keep their original path. Apply the additive database migration and stage the backend before switching the Pages entrypoints. Enabling the flag is a separate cutover step after pilot acceptance.
 
 To stop enrollment, turn off `TERM2_LISTENING_RECOVERY_V1` and verify that a fresh attempt has no capability. Retain the endpoint, tables and pinned frontend assets for attempts already enrolled. Keep the existing receipt and draft data. Restore the baseline entrypoints if the frontend requires rollback.
+
+The `listening-clock-rollout.test.mjs` HTTP check exercises this transition using each profile’s isolated `TERM2_NATIVE_RECOVERY_FIXTURE`. It verifies that an attempt already in Listening stays on its original contract when the flag opens, a new attempt is enrolled, and toggling the flag off stops enrollment while existing clock receipts and queued events can still drain.
