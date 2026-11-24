@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {pathToFileURL} from 'node:url';
 import {clockSchema, commitListeningClock, enrollListeningClock, parseClockOperation} from './listening-clock.mjs';
+import {listeningClockMigration} from './print-listening-clock-migration.mjs';
 
 const {PGlite} = await import(process.env.TERM2_CLOCK_PGLITE_ENTRY
   ? pathToFileURL(process.env.TERM2_CLOCK_PGLITE_ENTRY).href : '@electric-sql/pglite');
@@ -34,6 +35,43 @@ function operation(expectedRevision, phase, positionMs, observedAt, extra = {}) 
     interruptionId:null,recoverable:null,...extra};
 }
 const hold = interruptionId => ({interruptionId,recoverable:true});
+
+test('migration addresses the serving profile and gives its application role only the required clock privileges', async () => {
+  const isolated = new PGlite();
+  try {
+    await isolated.exec(`CREATE SCHEMA assessment; CREATE SCHEMA assessment_k56;
+      CREATE ROLE k56_demo_runtime; CREATE ROLE k56_shared_api;
+      GRANT USAGE ON SCHEMA assessment TO k56_demo_runtime;
+      GRANT USAGE ON SCHEMA assessment_k56 TO k56_shared_api;
+      CREATE TABLE assessment.term2_offline_run (attempt_id uuid PRIMARY KEY);
+      CREATE TABLE assessment_k56.term2_offline_run (attempt_id uuid PRIMARY KEY);`);
+    assert.throws(() => listeningClockMigration('k67'), /Choose/);
+    for (const [profile, schema, role, other] of [
+      ['k56-ic2264', 'assessment_k56', 'k56_shared_api', 'k56_demo_runtime'],
+      ['k56-demo', 'assessment', 'k56_demo_runtime', 'k56_shared_api'],
+    ]) {
+      await isolated.exec(listeningClockMigration(profile));
+      await isolated.exec(listeningClockMigration(profile));
+      const attemptId = randomUUID();
+      await isolated.query(`INSERT INTO ${schema}.term2_offline_run VALUES ($1)`, [attemptId]);
+      const pause = operation(0, 'paused', 53122, at(53200), hold(randomUUID()));
+      await isolated.transaction(async client => {
+        await client.exec(`SET LOCAL ROLE ${role}`);
+        const scoped = {query: (sql, params) => client.query(sql.replace(/\bassessment\./g, `${schema}.`), params)};
+        const receipt = await commitListeningClock(scoped, {
+          run:{generation:0,state:{listeningRecoveryVersion:1,listening:{startedAt:at(0)}}},
+          attempt:{attempt_token:attemptId,attempt_mode:'cbt',server_now:at(600000)}, durationMs,
+          operation:parseClockOperation(pause),
+        });
+        assert.equal(receipt.clock.positionMs, 53122);
+      });
+      const receiptTable = `${schema}.term2_offline_listening_clock_operation`;
+      const {rows:[access]} = await isolated.query(`SELECT has_table_privilege($1,$2,'UPDATE') AS edit_receipt,
+        has_table_privilege($1,$2,'DELETE') AS delete_receipt, has_table_privilege($3,$2,'SELECT') AS wrong_role`, [role,receiptTable,other]);
+      assert.deepEqual(access,{edit_receipt:false,delete_receipt:false,wrong_role:false});
+    }
+  } finally { await isolated.close(); }
+});
 
 test('a lost acknowledgement resends the exact receipt without advancing time twice', async () => {
   const {attemptId,commit} = await enrolled();

@@ -12,7 +12,9 @@ Copy `k56-offline-core.mjs` and `exam-journal-runtime/adapters/term.mjs` from ea
 node integrate-k56-clock.mjs CAPTURE/k56-offline-core.mjs STAGE/src/k56-offline-core.mjs CAPTURE/term.mjs STAGE/src/exam-journal-runtime/adapters/term.mjs
 ```
 
-The integration writes `term2-listening-clock.mjs` next to the candidate core. `clockSchema` is the additive database migration for both tables. Test the HTTP app in isolation with the migration, then run the Pages `term2-k56-listening-clock-native-browser.test.mjs` against its local fixture for each profile. The fixture must populate a synthetic class and learner and expose the original HTTP application and isolated SQL readback. The browser test loses the response for both transitions after the database accepts them.
+The integration writes `term2-listening-clock.mjs` next to the candidate core. Generate the additive SQL with `node print-listening-clock-migration.mjs k56-ic2264` or `node print-listening-clock-migration.mjs k56-demo`. The regular CBT pool rewrites logical `assessment` names to `assessment_k56`. The isolated DEMO uses `assessment`. The generated migration selects the profile's schema and grants its runtime the privileges needed to upsert the clock and append receipts. Run the SQL as the schema owner or equivalent migration role after verifying the target database and the runtime role. The command only prints SQL.
+
+Test the HTTP app in isolation with the migration, then run the Pages `term2-k56-listening-clock-native-browser.test.mjs` against its local fixture for each profile. The fixture must populate a synthetic class and learner and expose the original HTTP application and isolated SQL readback. The browser test loses the response for both transitions after the database accepts them.
 
 ## Release and rollback
 
