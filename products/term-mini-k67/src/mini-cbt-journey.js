@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import {commitCbtListeningClock,listeningOperation,listeningRecoveryVersion} from './cbt-listening-clock.js';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { audioTransaction } from './audio-incidents.js';
@@ -32,6 +33,7 @@ const ts = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.object({ examSessionToken: z.uuid(), generation: z.number().int().nonnegative(),
   deviceProof: z.string().regex(/^[a-f0-9]{64}$/) });
 const open = scope.extend({ classCode: z.string().regex(/^[A-Z0-9._-]{2,32}$/), studentRef: z.uuid() });
+const protectedOpen = open.extend({listeningRecoveryClientVersion:z.literal(1).optional()});
 const openPaper = open.omit({examSessionToken:true,generation:true}).extend({
   examMode:z.enum(['lis_first','read_first']),identityConfirmed:z.literal(true),
   term1PaperParallelVersion:z.literal(1).optional(),term2PaperParallelVersion:z.literal(1).optional(),
@@ -536,7 +538,7 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
     return audioTransaction(pool,db=>preparePaper(db,profile,selected,body,secret,assets.getTiming(slug),
       {allowNew,enroll:enrollLr(selected.class_name),holdEnabled:Boolean(lrHoldOptions),parallelMode}));
   }));
-  else app.post(prefix+'/prepare',writeLimiter,requireContext,route(open,async (body,req) => {
+  else app.post(prefix+'/prepare',writeLimiter,requireContext,route(profile===term1?protectedOpen:open,async (body,req) => {
     const selected = (await readStudent(req,body.classCode,slug,body.studentRef)).rows[0];
     // Read protected asset metadata after identifying a permitted roster member and outside the DB transaction.
     if (!selected) throw problem('OFFLINE_SCOPE','Không đúng lớp hoặc học viên.',403);
@@ -572,6 +574,16 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         profile===term2?term2JourneyR2Audio({config,row:session,manifest}):
         profile===pretest?pretestJourneyR2Audio({config,row:session,manifest}):{};
       const continuation=await readContinuation(db,session.id);
+      const timing=timingForAudio(assets,slug,row.audio_hash,manifest);
+      const recoveryMode=config.term1CbtListeningRecoveryMode;
+      const examMode=continuation?.official_exam_mode||session.exam_mode||'lis_first';
+      const recoveryOffered=recoveryMode==='on'||(examMode==='lis_first'&&(
+        recoveryMode==='listening_first'||(recoveryMode==='demo'&&session.class_name_snapshot==='CODEXDEMO806')));
+      const canEnroll=profile===term1&&!journey&&config.listeningContinuityEnabled&&recoveryOffered
+        &&body.listeningRecoveryClientVersion===1&&(!continuation||continuation.section==='listening');
+      const recoveryVersion=profile===term1&&(canEnroll||journey)
+        ? await listeningRecoveryVersion(db,session.id,canEnroll?Math.round(timing.listeningDurationSeconds*1000):undefined)
+        : undefined;
       return {ok:true,version,examSessionToken:session.id,generation:body.generation,attemptToken:attempt?.id||session.id,
         ...(session.term1_parallel_entry?{term1ParallelEntry:true}:{}),
         ...(session.term2_parallel_entry?{term2ParallelEntry:true}:{}),
@@ -580,11 +592,12 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
         ...(continuation?{continuationSection:continuation.section}:{}),
         ...(continuation?.section==='writing'&&continuation.listening_interrupted?{listeningInterrupted:true}:{}),
         studentRef:body.studentRef,studentName:session.student_name_snapshot,
-        examMode:continuation?.official_exam_mode||session.exam_mode||'lis_first',
+        examMode,
         activatedAt:row.activated_at?clock(row.activated_at):null,serverNow:clock(now),permit:signature(secret,row,version),
         ...(config.listeningContinuityEnabled?{listeningContinuityVersion:1}:{}),
+        ...(recoveryVersion?{listeningRecoveryVersion:recoveryVersion}:{}),
         ...(lrHoldAllowed(row)?{readingDeadlineReviewVersion:1}:{}),
-        content:await assets.getContent(slug),timing:timingForAudio(assets,slug,row.audio_hash,manifest),audioManifest:manifest,...audio};
+        content:await assets.getContent(slug),timing,audioManifest:manifest,...audio};
     });
   }));
   if (profile.privateAudio) {
@@ -628,6 +641,27 @@ function mountCbtJourney(app, { pool, config, assets, requireContext, readStuden
       SET activated_at=clock_timestamp() WHERE session_id=$1 RETURNING activated_at`,[state.session.id])).rows[0].activated_at;
     return {ok:true,version,examSessionToken:state.session.id,generation:body.generation,activatedAt:clock(activated),serverNow:clock(state.now)};
   })));
+  if(profile===term1)app.post(prefix+'/listening-clock',writeLimiter,
+    route(scope.extend(listeningOperation.shape),async(body,req)=>{
+      let duplicate=false;
+      const receipt=await audioTransaction(pool,async db=>{
+        const state=await lock(db,body,profile);
+        authorize(body,state,req.get('x-term2-permit'),secret,version);
+        const continuation=await readContinuation(db,state.session.id);
+        if(continuation?.section==='writing')throw problem('LISTENING_CLOCK_CLOSED','Lượt này đã chuyển sang Writing.');
+        return commitCbtListeningClock(db,{state,operation:listeningOperation.parse(body),
+          first:continuation?.section||initial(state.session),onDuplicate:()=>{duplicate=true;}});
+      });
+      try{
+        logEvent(duplicate?'listening_clock_receipt_replayed':'listening_clock_synced',slug,body.examSessionToken,{
+          section:'listening',operationId:receipt.operationId,playerId:receipt.playerId,generation:receipt.generation,
+          revision:receipt.revision,transition:receipt.clock.phase,positionMs:receipt.clock.positionMs,
+          remainingMs:receipt.clock.remainingMs,interruptionId:receipt.clock.interruptionId,
+          resumeCount:receipt.clock.resumeCount,observedAt:receipt.clock.observedAt
+        });
+      }catch{/* Journal delivery cannot change the clock receipt. */}
+      return receipt;
+    }));
   if(profile.writing||profile.paper||profile.receiptStatus||lrHoldOptions||miniParallel)app.post(prefix+'/status',readLimiter,
     route(profile===mini?termStatus.extend({section:z.enum(['listening','reading'])}):termStatus,async(body,req)=>{
     const {receipt,held,conflict,serverAtMs}=await audioTransaction(pool,async db=>{
