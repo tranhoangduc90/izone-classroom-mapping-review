@@ -17,11 +17,14 @@ export const listeningOperation = z.object({
   startedAt: timestamp
 });
 
-const clockTable = 'assessment.term_k67_cbt_listening_clock';
-const operationTable = 'assessment.term_k67_cbt_listening_clock_operation';
+const clockTables = {
+  term: {clockTable:'assessment.term_k67_cbt_listening_clock',operationTable:'assessment.term_k67_cbt_listening_clock_operation'},
+  mini: {clockTable:'assessment.mini_k67_cbt_listening_clock',operationTable:'assessment.mini_k67_cbt_listening_clock_operation'}
+};
 const error = (code,message,status=409) => Object.assign(new Error(message),{code,status});
 
-export async function listeningRecoveryVersion(db,sessionId,enrollDurationMs) {
+export async function listeningRecoveryVersion(db,sessionId,enrollDurationMs,storage) {
+  const {clockTable}=clockTables[storage];
   if (enrollDurationMs !== undefined) {
     await db.query(`INSERT INTO ${clockTable} (session_id,duration_ms) VALUES ($1,$2)`,
       [sessionId,enrollDurationMs]);
@@ -54,7 +57,8 @@ function sample(previous,operation,{durationMs,serverNow}) {
   return {phase,positionMs,resumeCount,interruptionId,recoverable,observedAt,remainingMs:durationMs-positionMs};
 }
 
-export async function commitCbtListeningClock(db,{state,operation,first,onDuplicate}) {
+export async function commitCbtListeningClock(db,{state,operation,first,onDuplicate,storage}) {
+  const {clockTable,operationTable}=clockTables[storage];
   const {session,journey,now} = state;
   const {rows:[saved]} = await db.query(`SELECT duration_ms,revision,started_at_ms,snapshot
     FROM ${clockTable} WHERE session_id=$1 FOR UPDATE`,[session.id]);

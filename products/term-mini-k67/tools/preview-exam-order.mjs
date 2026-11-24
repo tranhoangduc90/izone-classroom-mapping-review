@@ -152,6 +152,8 @@ const term2ListeningEofEnabled = process.env.K67_PREVIEW_TERM2_EOF === 'true';
 const listeningContinuityEnabled=process.env.K67_PREVIEW_LISTENING_CONTINUITY==='true';
 const previewTerm2ListeningRecovery=term2JourneyMode==='on'&&process.env.K67_PREVIEW_TERM2_LISTENING_RECOVERY==='true';
 const previewTerm1ListeningRecovery=term1JourneyMode==='on'&&process.env.K67_PREVIEW_TERM1_LISTENING_RECOVERY==='true';
+const previewMiniListeningRecovery=journeyMode==='on'&&process.env.K67_PREVIEW_MINI_LISTENING_RECOVERY==='true';
+const previewPretestListeningRecovery=pretestMode==='on'&&process.env.K67_PREVIEW_PRETEST_LISTENING_RECOVERY==='true';
 const termHoldSlug=process.env.K67_PREVIEW_TERM1_WRITING_HOLD==='true'?'term-test-1'
   :process.env.K67_PREVIEW_TERM2_WRITING_HOLD==='true'?'term-test-2':null;
 const miniHoldEnabled=process.env.K67_PREVIEW_MINI_CBT_LR_HOLD==='true';
@@ -195,6 +197,8 @@ const fixture=await createMiniFixture({examOrder:true,completeSchema:true,assets
   term1ListeningRetakeMode:retakeMode,term1ListeningRetakeSecret:'synthetic-retake-ticket-key-at-least-32-characters',
   term1CbtListeningRecoveryMode:previewTerm1ListeningRecovery?(process.env.K67_PREVIEW_TERM1_RECOVERY_MODE||'on'):'off',
   term2CbtListeningRecoveryMode:previewTerm2ListeningRecovery?(process.env.K67_PREVIEW_TERM2_RECOVERY_MODE||'on'):'off',
+  miniCbtListeningRecoveryMode:previewMiniListeningRecovery?(process.env.K67_PREVIEW_MINI_RECOVERY_MODE||'on'):'off',
+  pretestCbtListeningRecoveryMode:previewPretestListeningRecovery?(process.env.K67_PREVIEW_PRETEST_RECOVERY_MODE||'on'):'off',
   allowedOrigins:new Set([`http://127.0.0.1:${port}`])});
 if(miniParallel) {
   await fixture.db.exec(await readFile(new URL('../db/047-pretest-cbt-parallel-entry.sql',import.meta.url),'utf8'));
@@ -239,7 +243,8 @@ if(pretestMode){
     CREATE TABLE IF NOT EXISTS mapping.reviewer_class_access (reviewer_email text,erp_course_class_id bigint)`);
 }
 if(!pretestMode&&(previewTerm1ListeningRecovery&&process.env.K67_PREVIEW_TERM1_DEMO_CBT==='true'||
-  previewTerm2ListeningRecovery&&process.env.K67_PREVIEW_TERM2_DEMO_CBT==='true')){
+  previewTerm2ListeningRecovery&&process.env.K67_PREVIEW_TERM2_DEMO_CBT==='true'||
+  previewMiniListeningRecovery&&process.env.K67_PREVIEW_MINI_DEMO_CBT==='true')){
   await fixture.db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1992806,'CODEXDEMO806');
     INSERT INTO mapping.student_mapping_review VALUES
       ('66666666-6666-4666-8666-666666666666',1992806,990806,'Học viên Term demo giả','approved');`);
@@ -288,17 +293,24 @@ if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(
   return res.json({ok:true,mode:req.body.mode});
 });
 outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
-if(previewTerm1ListeningRecovery||previewTerm2ListeningRecovery)outer.get('/preview/listening-recovery-clock',async(_req,res)=>{
+const recoverySlug=previewTerm1ListeningRecovery?'term-test-1':previewTerm2ListeningRecovery?'term-test-2':
+  previewMiniListeningRecovery?'mini-test-lesson-5':previewPretestListeningRecovery?pretestSlug:null;
+const recoveryJourneyTable=previewMiniListeningRecovery?'assessment.mini_k67_cbt_journey':'assessment.term_k67_cbt_journey';
+const recoveryClockTable=previewMiniListeningRecovery?'assessment.mini_k67_cbt_listening_clock':'assessment.term_k67_cbt_listening_clock';
+if(recoverySlug)outer.get('/preview/listening-recovery-clock',async(_req,res)=>{
   const {rows}=await fixture.db.query(`SELECT j.session_id,c.revision,c.snapshot,
     s.listening_submitted_at,s.listening_eof_at,
-    (SELECT count(*)::int FROM assessment.term_k67_cbt_listening_clock_operation o WHERE o.session_id=c.session_id) AS operations
-    FROM assessment.term_k67_cbt_listening_clock c
-    JOIN assessment.term_k67_cbt_journey j ON j.session_id=c.session_id
+    (SELECT count(*)::int FROM ${recoveryClockTable}_operation o WHERE o.session_id=c.session_id) AS operations
+    FROM ${recoveryClockTable} c
+    JOIN ${recoveryJourneyTable} j ON j.session_id=c.session_id
     JOIN assessment.term_test_exam_session s ON s.id=c.session_id
-    WHERE s.test_slug=$1 ORDER BY s.id`,[previewTerm2ListeningRecovery?'term-test-2':'term-test-1']);
+    WHERE s.test_slug=$1 ORDER BY s.id`,[recoverySlug]);
   res.json({rows});
 });
-if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
+const rehearsalSlug=term2JourneyMode==='on'?'term-test-2':term1JourneyMode==='on'?'term-test-1':
+  pretestMode==='on'?pretestSlug:journeyMode==='on'?'mini-test-lesson-5':null;
+const rehearsalTable=rehearsalSlug==='mini-test-lesson-5'?'assessment.mini_k67_cbt_journey':'assessment.term_k67_cbt_journey';
+if (rehearsalSlug) outer.get('/preview/rehearsal-receipt-readback', async (_req, res) => {
   const {rows} = await fixture.db.query(`
     SELECT a.generation, s.id::text AS session_id,
            s.erp_course_class_id::text AS native_class_id, j.student_ref::text AS student_ref,
@@ -312,8 +324,8 @@ if (term2JourneyMode==='on') outer.get('/preview/rehearsal-receipt-readback', as
            j.sections->'writing'->>'operationId' AS w
     FROM assessment.term_test_attempt a
     JOIN assessment.term_test_exam_session s ON s.id=a.exam_session_id
-    JOIN assessment.term_k67_cbt_journey j ON j.session_id=s.id AND j.generation=a.generation
-    WHERE a.test_slug='term-test-2' AND a.superseded_at IS NULL`);
+    JOIN ${rehearsalTable} j ON j.session_id=s.id AND j.generation=a.generation
+    WHERE a.test_slug=$1 AND a.superseded_at IS NULL`,[rehearsalSlug]);
   res.json({rows});
 });
 if (gradingRoundTrip) {
@@ -467,6 +479,8 @@ for(const entry of offlineEntries){
     ]:[]),
     ...(miniParallel&&entry==='mini-test-lesson-5-computer-based'
       ?['offline-assets-mini-parallel-v1.mjs','offline-assets-audio-report-v1.mjs']:[]),
+    ...(entry==='mini-test-lesson-5-computer-based'
+      ?['offline-assets-mini-student-cache-v3-preview-verified-v1-confirmed-departure-v1-listening-recovery-v1.mjs']:[]),
     ...(['term-test-1-computer-based','term-test-2-computer-based','term-test-1'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
     ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
     :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];

@@ -5,7 +5,7 @@ import {createNativeOrderFixture} from './native-exam-order-fixture.js';
 
 // Dữ liệu lớp và đáp án đều giả; chạy SQL thật trong PostgreSQL nhúng trên máy local.
 // Trả ứng dụng và database để kiểm giao diện, đồng thời đọc lại đúng kết quả đã ghi.
-export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,term1CbtListeningRecoveryMode='off',term2CbtListeningRecoveryMode='off',audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniPaperParallelEntryMode='off',miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2ParallelEntryMode='off',term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
+export async function createMiniFixture({examOrder=false,assets=null,termTestAssetDir,syncErpGrades,completeSchema=false,listeningContinuityEnabled=false,term1CbtListeningRecoveryMode='off',term2CbtListeningRecoveryMode='off',miniCbtListeningRecoveryMode='off',pretestCbtListeningRecoveryMode='off',audioProtection=false,audioCache=false,audioOwner=false,publicAudio=false,miniPaperOffline,miniPaperParallelEntryMode='off',miniR2ConfigFile,miniListeningEofEnabled=false,term1ListeningEofEnabled=false,term2ListeningEofEnabled=false,miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1ParallelEntryEnabled=false,term1PaperJourneyMode,term1R2ConfigFile,term2CbtJourneyMode,term2ParallelEntryMode='off',term2PaperJourneyMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,term1ListeningRetakeMode,term1ListeningRetakeSecret,term1ListeningTimerMode,termTestWritingGradingService,mountJournal,writingHold={},allowedOrigins=new Set(['https://tranhoangduc90.github.io'])}={}) {
   const journal = mountJournal ? {mountJournal,journalEnv:{EXAM_JOURNAL_ENABLED:'1'}} : {};
   const term1ParallelEntryMode=term1ParallelEntryEnabled?'on':'off';
   const miniR2 = { miniR2Enabled: Boolean(miniR2ConfigFile), miniR2ConfigFile };
@@ -19,7 +19,7 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
       config:{...miniR2,...writingHold,term1ParallelEntryMode:term1Mode,term2ParallelEntryMode:term2Mode,term1ListeningTimerMode,termTestAssetDir,
         miniPaperOfflineMode:miniPaperOffline,miniPaperParallelEntryMode:miniPaperParallelMode,miniPaperOfflineClasses,listeningContinuityEnabled,miniListeningEofEnabled,term1ListeningEofEnabled,term2ListeningEofEnabled,
         miniCbtOfflineMode,miniCbtJourneyMode,term1CbtJourneyMode,term1PaperJourneyMode:term1PaperMode,term1R2ConfigFile,term2CbtJourneyMode,
-        term1CbtListeningRecoveryMode,term2CbtListeningRecoveryMode,
+        term1CbtListeningRecoveryMode,term2CbtListeningRecoveryMode,miniCbtListeningRecoveryMode,pretestCbtListeningRecoveryMode,
         term2PaperJourneyMode:term2PaperMode,term2R2ConfigFile,pretestCbtJourneyMode,pretestPaperJourneyMode,pretestR2ConfigFile,termTestSessionSecret,
         term1ListeningRetakeMode,term1ListeningRetakeSecret,audioIncidentEnabled:audioProtection,audioCacheEnabled:audioCache,
         audioOwnerEnabled:audioOwner,publicAudioEnabled:publicAudio,...(examOrder?{readFirstNewEnabled:true}:{}),
@@ -47,7 +47,10 @@ export async function createMiniFixture({examOrder=false,assets=null,termTestAss
     if(term1ListeningTimerMode)await db.exec(await readFile(new URL('../../db/035-term1-listening-timer.sql',import.meta.url),'utf8'));
     if(termJourneys)await db.exec(await readFile(new URL('../../db/023-term1-cbt-journey.sql',import.meta.url),'utf8'));
     if(term2Journeys)await db.exec(await readFile(new URL('../../db/024-term2-cbt-journey.sql',import.meta.url),'utf8'));
-    if(term1CbtJourneyMode||term2CbtJourneyMode)await db.exec(await readFile(new URL('../../db/052-cbt-listening-recovery.sql',import.meta.url),'utf8'));
+    if(term1CbtJourneyMode||term2CbtJourneyMode||pretestCbtJourneyMode)
+      await db.exec(await readFile(new URL('../../db/052-cbt-listening-recovery.sql',import.meta.url),'utf8'));
+    if(miniCbtJourneyMode)
+      await db.exec(await readFile(new URL('../../db/053-mini-cbt-listening-recovery.sql',import.meta.url),'utf8'));
     if(term1ListeningRetakeMode)await db.exec(await readFile(new URL('../../db/027-term1-listening-retake.sql',import.meta.url),'utf8'));
     if(pretestCbtJourneyMode||pretestPaperJourneyMode){
       await db.exec(await readFile(new URL('../../db/028-listening-interruption.sql',import.meta.url),'utf8'));
