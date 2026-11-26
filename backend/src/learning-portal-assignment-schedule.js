@@ -1,17 +1,104 @@
+import { readFile } from 'node:fs/promises';
 import { decorateSchedule } from './learning-schedule-plan.js';
 
 const normalizeTime = value => typeof value === 'string' ? value.replace('T', ' ') : '';
 const portalBase = 'https://gateway.izone.edu.vn/portal/v1/course-classes/';
+const tokenUrl = 'https://accounts.izone.edu.vn/realms/izone/protocol/openid-connect/token';
+const tokenErrors = new Set(['invalid_grant', 'invalid_client', 'unauthorized_client', 'unsupported_grant_type']);
+const jwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
+const unavailable = () => Error('PORTAL_SCHEDULE_UNAVAILABLE');
+
+function logFailure(logger, operation, reason, response, classId) {
+  const requestId = ['x-request-id', 'x-correlation-id', 'cf-ray']
+    .map(name => response?.headers.get(name))
+    .find(value => value && /^[A-Za-z0-9-]{1,100}$/u.test(value));
+  logger?.warn?.(JSON.stringify({ type: 'progress_log_read', operation, status: 'failed',
+    classId, httpStatus: response?.status, requestId, reason }));
+}
+
+function createPortalTokenReader({ credentialsFile, fetchImpl, logger }) {
+  let saved;
+  let pending;
+  let nextAttemptAt = 0;
+
+  async function signIn() {
+    let credentials;
+    try {
+      credentials = JSON.parse(await readFile(credentialsFile, 'utf8'));
+    } catch {
+      logFailure(logger, 'portal_schedule_token', 'credentials_unreadable');
+      throw unavailable();
+    }
+    const { username, password, clientId = 'lms' } = credentials ?? {};
+    if (![username, password, clientId].every(value => typeof value === 'string' && value.trim())) {
+      logFailure(logger, 'portal_schedule_token', 'credentials_invalid');
+      throw unavailable();
+    }
+    let response;
+    try {
+      response = await fetchImpl(tokenUrl, {
+        method: 'POST', headers: { Accept: 'application/json' },
+        body: new URLSearchParams({ grant_type: 'password', client_id: clientId, username, password }),
+        redirect: 'error', signal: AbortSignal.timeout(8000)
+      });
+    } catch {
+      logFailure(logger, 'portal_schedule_token', 'request_failed');
+      throw unavailable();
+    }
+    const payload = await response.json().catch(() => null);
+    const token = payload?.access_token;
+    if (!response.ok || typeof token !== 'string' || !jwtPattern.test(token)) {
+      const reason = response.ok ? 'invalid_token_response'
+        : tokenErrors.has(payload?.error) ? payload.error : 'upstream_http_error';
+      logFailure(logger, 'portal_schedule_token', reason, response);
+      throw unavailable();
+    }
+    const lifetimeMs = typeof payload.expires_in === 'number' && Number.isFinite(payload.expires_in)
+      ? Math.max(0, payload.expires_in * 1000) : 0;
+    saved = { token, validUntil: Date.now() + lifetimeMs - Math.min(30000, lifetimeMs / 2) };
+    return token;
+  }
+
+  return {
+    async get() {
+      if (saved?.validUntil > Date.now()) return saved.token;
+      if (!credentialsFile || nextAttemptAt > Date.now()) throw unavailable();
+      if (!pending) {
+        pending = signIn().catch(error => {
+          nextAttemptAt = Date.now() + 60000;
+          throw error;
+        }).finally(() => { pending = undefined; });
+      }
+      return pending;
+    },
+    invalidate(token) {
+      if (saved?.token === token) saved = undefined;
+    }
+  };
+}
 
 // Portal supplies the ID, start and status. A faulty end time is kept in the
 // attendance fingerprint, but does not change the identity or order of a lesson.
-export function createPortalAssignmentScheduleReader({ fetchImpl = fetch } = {}) {
+export function createPortalAssignmentScheduleReader({ credentialsFile, fetchImpl = fetch, logger } = {}) {
+  const auth = createPortalTokenReader({ credentialsFile, fetchImpl, logger });
   return async classId => {
     if (!/^[1-9]\d{0,17}$/u.test(classId)) throw Error('PORTAL_CLASS_INVALID');
-    const response = await fetchImpl(portalBase + classId + '/class-sessions', {
-      headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000)
-    });
-    if (!response.ok) throw Error('PORTAL_SCHEDULE_UNAVAILABLE');
+    const token = await auth.get();
+    let response;
+    try {
+      response = await fetchImpl(portalBase + classId + '/class-sessions', {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        redirect: 'error', signal: AbortSignal.timeout(12000)
+      });
+    } catch {
+      logFailure(logger, 'portal_schedule_read', 'request_failed', undefined, classId);
+      throw unavailable();
+    }
+    if (!response.ok) {
+      if (response.status === 401) auth.invalidate(token);
+      logFailure(logger, 'portal_schedule_read', 'upstream_http_error', response, classId);
+      throw unavailable();
+    }
     const payload = await response.json();
     const rows = Array.isArray(payload) ? payload : payload?.data;
     if (!Array.isArray(rows) || rows.length > 200 || rows.some(row => String(row?.course_class_id) !== classId)) {

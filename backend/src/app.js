@@ -1375,7 +1375,9 @@ export function createApp({
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
       erpScheduleReader: scheduleReader,
       classPolicy,
-      portalAssignmentScheduleReader: createPortalAssignmentScheduleReader(),
+      portalAssignmentScheduleReader: createPortalAssignmentScheduleReader({
+        credentialsFile: config.learningPortalScheduleCredentialsFile, logger
+      }),
       testSourceReader: createLearningTestSourceReader({ pool }),
       testResultReader: learningTestResultReader ?? createLearningTestResultReader({ pool })
     });
