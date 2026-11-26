@@ -51,3 +51,26 @@ test('phân biệt ERP trống với lỗi nguồn và giữ cách đọc nghiê
  await assert.rejects(()=>monitor('1294'),/ERP_SCHEDULE_INCOMPLETE/);assert.equal(calls,1);
  await assert.rejects(()=>monitor('1295',{allowEmpty:true}),/offline/);
 });
+test('Portal: lớp đang xem gộp lượt đọc 30 giây, ghi buộc đọc mới, chỉ màn xem nhận lịch cũ khi lỗi',async()=>{
+ let time=0,calls=0,fail=false;
+ const monitor=createScheduleMonitor(async id=>{
+   calls++;time+=800;
+   if(fail)throw Error('offline');
+   return {classId:id,sessions:[row('35819','2026-11-26')]};
+ },{now:()=>time,cacheMs:30000,displayCacheMs:30000,cacheFromStart:true,
+   timers:{setInterval(){assert.fail('Không kiểm nền khi chưa có người xem');}}});
+ const reads=await Promise.all(Array.from({length:20},(_,i)=>monitor('1294',{displayOnly:i%2===0})));
+ assert.equal(calls,1);
+ assert.equal(reads[0].scheduleRefreshInMs,29200);
+ time=29999;await monitor('1294',{displayOnly:true});assert.equal(calls,1);
+ time=30000;await monitor('1294',{displayOnly:true});assert.equal(calls,2);
+ fail=true;time=60000;
+ const [display,delivery]=await Promise.allSettled([
+   monitor('1294',{displayOnly:true,allowStale:true}),monitor('1294',{fresh:true,allowStale:true})
+ ]);
+ assert.equal(calls,3);
+ assert.equal(display.value.scheduleStale,true);
+ assert.equal(display.value.scheduleCheckedAt, new Date(30800).toISOString());
+ assert.equal(delivery.reason?.message,'offline');
+ fail=false;assert.equal((await monitor('1294',{fresh:true})).scheduleStale,false);assert.equal(calls,4);
+});

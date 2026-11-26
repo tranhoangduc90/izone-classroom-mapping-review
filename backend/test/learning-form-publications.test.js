@@ -10,6 +10,7 @@ import {createPGlitePool,initializeLearningDemoDatabase} from '../src/learning-d
 import {createLearningFormDraftService} from '../src/learning-form-drafts.js';
 import {previewFormImport} from '../src/learning-form-import.js';
 import {createLearningRouter} from '../src/learning-routes.js';
+import {createLearningService} from '../src/learning-service.js';
 
 test('R22/R30: xuất bản riêng, giao nhiều đích, giữ thành công khi lỗi một phần và retry không nhân',async()=>{
   const db=new PGlite();
@@ -73,4 +74,72 @@ test('R22/R30: xuất bản riêng, giao nhiều đích, giữ thành công khi 
     await db.exec(await readFile(new URL('../ops/learning-migrations/202610280001_form_publications.sql',import.meta.url),'utf8'));
     assert.equal((await service.listPublications({reviewer})).length,1);
   }finally{await db.close();}
+});
+
+test('Portal: sau buổi nghỉ, giao vào số hiển thị bị trùng mà vẫn đọc lại đúng hai mã buổi',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-23T10:00:00Z')});
+  const db=new PGlite();
+  try {
+    await initializeLearningDemoDatabase(db);
+    for(const file of ['202609160002_learning_api_mapping_schema_usage.sql','202609160005_publisher_account_lookup.sql',
+      '202610010001_progress_log_form_drafts.sql','202610070001_student_journey_comments.sql','202610220002_form_library.sql',
+      '202610280001_form_publications.sql','202611020001_teacher_comment_drafts.sql','202611040001_form_assignment_portal_target.sql'])
+      await db.exec(await readFile(new URL('../ops/learning-migrations/'+file,import.meta.url),'utf8'));
+    await db.exec(`INSERT INTO mapping.classroom_course_mapping VALUES (1294,'Lớp thử nghỉ','approved',NULL,NULL);
+      INSERT INTO mapping.reviewer_account VALUES('owner@example.test','active');
+      INSERT INTO mapping.reviewer_class_access VALUES('owner@example.test',1294);
+      INSERT INTO mapping.student_mapping_review(erp_course_class_id,erp_student_contact_id,erp_student_name_snapshot)
+        VALUES(1294,123,'Học viên mẫu');
+      INSERT INTO mapping.erp_class_membership_snapshot VALUES(1294,123);`);
+    const classId='1294',reviewer={email:'owner@example.test',canAccessAllClasses:false};
+    const row=(id,date)=>({erpSessionId:id,date,startsAt:date+' 18:30:00',endsAt:date+' 21:00:00',statusCode:0});
+    const holiday=row('35831','2026-11-23'),following=row('35832','2026-11-26');
+    const pool=createPGlitePool(db),options={pool,portalFirstForClass:id=>id===classId,
+      portalAssignmentReader:async()=>({classId,sessions:[holiday,following]})};
+    const drafts=createLearningFormDraftService(options),learning=createLearningService(options);
+    const payload=previewFormImport('type,prompt,skill\nreflection,Phiếu kiểm nghỉ lễ,speaking').payload;
+    payload.definition.courseCode='56';
+    const draft=await drafts.create({classId,sessionNumber:1,operationId:randomUUID(),...payload,reviewer});
+    await drafts.approve({id:draft.id,expectedRevision:1,expectedHash:draft.contentHash,reviewer});
+    const publication=await drafts.publishLibrary({id:draft.id,expectedRevision:1,operationId:randomUUID(),reviewer});
+    const assignInput={id:publication.id,reviewer};
+    const target=slot=>({classId,sessionNumber:1,portalTarget:{id:slot.erpSessionId,startsAt:slot.startsAt}});
+    await db.exec('SET ROLE learning_api');
+    const deliveredBefore=await drafts.assignPublication({...assignInput,operationId:randomUUID(),targets:[target(holiday)]});
+    assert.equal(deliveredBefore.status,'success',JSON.stringify(deliveredBefore));
+    holiday.statusCode=2;
+    t.mock.timers.setTime(Date.parse('2026-11-26T10:00:00Z'));
+    const availability=await learning.getTeacherAssignmentSessions({classId,source:'portal',reviewer});
+    assert.deepEqual(availability.sessions.map(({sessionNumber,portalTarget})=>[sessionNumber,portalTarget.id]),[[1,'35832']]);
+    const operation={...assignInput,operationId:randomUUID(),targets:[target(following)]};
+    const deliveredAfter=await drafts.assignPublication(operation);
+    assert.equal(deliveredAfter.status,'success',JSON.stringify(deliveredAfter));
+    assert.equal(deliveredAfter.results[0].delivery.sessionNumber,1);
+    assert.notEqual(deliveredAfter.results[0].delivery.storageSessionNumber,1);
+    assert.equal((await drafts.assignPublication(operation)).results[0].delivery.replayed,true);
+    assert.deepEqual((await db.query(`SELECT a.session_number,t.portal_session_id::text
+      FROM learning.form_assignment a JOIN learning.form_assignment_portal_target t ON t.assignment_id=a.id
+      ORDER BY a.session_number`)).rows,[{session_number:1,portal_session_id:'35831'},
+      {session_number:deliveredAfter.results[0].delivery.storageSessionNumber,portal_session_id:'35832'}]);
+    const overview=await learning.getCourseOverview({classId,reviewer});
+    assert.deepEqual(overview.portalSchedule.entries.map(entry=>[entry.id,entry.sessionNumber,entry.date,entry.status,entry.linked]),
+      [['35831',null,'2026-11-23','cancelled',true],['35832',1,'2026-11-26','active',true]]);
+    assert.equal(overview.sessions.find(row=>row.erpSessionId==='35831')?.scheduleStatus,'cancelled');
+    const next=overview.sessions.find(row=>row.erpSessionId==='35832');
+    assert.equal(next.portalSessionNumber,1);
+    assert.equal(next.sessionStartTime,'18:30:00');
+    assert.notEqual(next.sessionNumber,1);
+    const publicToken=deliveredAfter.results[0].delivery.publicToken;
+    const assignment=await learning.getPublicAssignment(publicToken);
+    const studentRef=assignment.roster[0].studentRef;
+    const calendar=await learning.getStudentPortalCalendar({publicToken,studentRef});
+    assert.equal(calendar.classId,classId);
+    assert.equal(calendar.portalSchedule.entries.find(slot=>slot.id==='35832').sessionNumber,1);
+    await assert.rejects(()=>learning.getStudentPortalCalendar({publicToken,studentRef:randomUUID()}),{code:'PROGRESS_LINK_INVALID'});
+    assert.equal((await learning.getPublicAssignment(publicToken,undefined,{verifyPortalSchedule:true})).submissionWindow.canSubmit,false);
+    t.mock.timers.setTime(Date.parse('2026-11-26T11:25:00Z'));
+    assert.equal((await learning.getPublicAssignment(publicToken,undefined,{verifyPortalSchedule:true})).submissionWindow.canSubmit,true);
+    following.startsAt='2026-11-26 19:30:00';
+    assert.equal((await learning.getPublicAssignment(publicToken,undefined,{verifyPortalSchedule:true})).submissionWindow.canSubmit,false);
+  } finally { await db.close(); }
 });

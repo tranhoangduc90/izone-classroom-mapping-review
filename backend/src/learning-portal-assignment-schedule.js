@@ -126,6 +126,72 @@ export function portalAssignmentTargets(schedule) {
   return schedule.sessions.filter(row => row.proposalEligible && row.erpSessionNumber <= 100);
 }
 
+export function isPortalAssignmentOccupied(rows, slot, portalFirst = false) {
+  return rows.some(row => row.portal_session_id === slot.erpSessionId
+    || ((!portalFirst || !row.portal_session_id) && Number(row.session_number) === slot.erpSessionNumber));
+}
+
+// Keep persisted session numbers unique for existing detail, comments and attendance lookups.
+export function portalAssignmentStorageNumber(slot, reserved) {
+  const blocked = new Set(reserved.filter(row => row.portal_session_id !== slot.erpSessionId || row.fixed)
+    .map(row => Number(row.session_number)));
+  const planned = reserved.find(row => row.portal_session_id === slot.erpSessionId && !row.fixed);
+  for (const candidate of [Number(planned?.session_number), slot.erpSessionNumber]) {
+    if (candidate >= 1 && candidate <= 100 && !blocked.has(candidate)) return candidate;
+  }
+  // Put a displaced lookup number at the end of the supported range so later lessons can use their usual numbers.
+  for (let candidate = 100; candidate >= 1; candidate--) if (!blocked.has(candidate)) return candidate;
+  return null;
+}
+
+export function portalCalendar(schedule) {
+  return {version:schedule.fingerprint,checkedAt:schedule.scheduleCheckedAt,refreshInMs:schedule.scheduleRefreshInMs,
+    stale:schedule.scheduleStale===true,entries:schedule.sessions.map(slot=>({
+      id:slot.erpSessionId,sessionNumber:slot.proposalEligible?slot.erpSessionNumber:null,startsAt:slot.startsAt,
+      date:slot.date,status:slot.statusCode===2?'cancelled':slot.proposalEligible?'active':'needs_review'
+    }))};
+}
+
+export function projectPortalJourney(view, schedule, planDates, booked, today) {
+  const byId = new Map(schedule.sessions.map(slot => [slot.erpSessionId,slot]));
+  const bookedByNumber = new Map(booked.map(item => [Number(item.session_number),item.portal_session_id]));
+  const planByNumber = new Map(planDates.map(item => [item.sessionNumber,item.erpSessionId]));
+  const linked = new Set();
+  const sessions = view.sessions.map(session => {
+    const id = bookedByNumber.get(session.sessionNumber) || planByNumber.get(session.sessionNumber);
+    if (!id) return {...session,sessionDate:null,scheduleStatus:'needs_review'};
+    const latest = byId.get(id);
+    const confirmed = latest && !schedule.ambiguous && latest.proposalEligible;
+    const cancelled = latest?.statusCode === 2;
+    // Keep action keys scoped to the stored lesson, including when its current Portal number has changed.
+    linked.add(id);
+    return { ...session, erpSessionId:id, portalSessionNumber:confirmed?latest.erpSessionNumber:null,
+      sessionDate:latest?.date||session.sessionDate, sessionStartTime:latest?.startsAt.slice(11)||session.sessionStartTime,
+      future:!cancelled&&Boolean(latest?.date && latest.date>today),
+      scheduleStatus:cancelled?'cancelled':!confirmed?'needs_review':schedule.scheduleStale?'temporarily_unavailable':'connected' };
+  });
+  const calendar=portalCalendar(schedule);
+  calendar.entries=calendar.entries.map(entry=>({...entry,linked:linked.has(entry.id)}));
+  const total=calendar.entries.filter(entry=>entry.status==='active').length;
+  const activeSummary=schedule.ambiguous?{}:{
+    ...(view.totalSessions===undefined?{}:{totalSessions:total,planOutdated:false}),
+    ...(view.summary?{summary:{...view.summary,totalSessions:total},
+      coverage:{...view.coverage,schedule:'portal',plannedSessions:total,planOutdated:false}}:{})
+  };
+  return { ...view,...activeSummary,sessions,scheduleStatus:schedule.scheduleStale?'temporarily_unavailable':schedule.ambiguous?'needs_review':'connected',
+    portalSchedule:calendar };
+}
+
+export const reservedPortalStorageNumbersSql = `SELECT session_number,NULL::text AS portal_session_id,true AS fixed
+  FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
+  UNION ALL SELECT (item->>'sessionNumber')::integer,item->>'erpSessionId',false
+    FROM learning.class_journey_plan plan, LATERAL jsonb_array_elements(plan.session_dates) item
+    WHERE plan.erp_course_class_id=$1::bigint
+  UNION ALL SELECT session_number,NULL,true FROM learning.student_session_comment
+    WHERE erp_course_class_id=$1::bigint
+  UNION ALL SELECT session_number,NULL,true FROM learning.teacher_session_comment_draft
+    WHERE erp_course_class_id=$1::bigint`;
+
 export const occupiedPortalTargetsSql = `SELECT a.session_number,
   COALESCE(target.portal_session_id::text,binding.target_session_id::text,
     (SELECT item->>'erpSessionId' FROM jsonb_array_elements(plan.session_dates) item

@@ -8,7 +8,8 @@ import {canRefreshBoundSchedule,currentConfirmedDates} from './learning-schedule
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql, fetchQuestionResponsesSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
-import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets } from './learning-portal-assignment-schedule.js';
+import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets, isPortalAssignmentOccupied,
+  projectPortalJourney,portalCalendar } from './learning-portal-assignment-schedule.js';
 import { withTransaction } from './db.js';
 import {studentJourneyJitOffSql} from './learning-query-plans.js';
 import {
@@ -42,6 +43,7 @@ import {
   fetchPublishedLearningDefinitionSql,
   fetchLearningJourneyContextSql,
   fetchLearningJourneyPlanSql,
+  fetchStudentPortalCalendarClassSql,
   fetchStudentCourseJourneySql,
   fetchLatestLearningSessionFeedbackSql,
   findLearningSessionFeedbackByOperationSql,
@@ -254,7 +256,7 @@ function buildStudentCourseJourney(row) {
 
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
   testResultReader = null, portalTestReader = null, portalAssignmentReader = null, journeyCommentsEnabled = false, progressLinkCipher = null,
-  journeyJitOff = true, publicDefinitionCacheBytes = 16 * 1024 * 1024 }) {
+  portalFirstForClass=()=>false,journeyJitOff = true, publicDefinitionCacheBytes = 16 * 1024 * 1024 }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
   const pendingPublicAssignments=new Map();
@@ -424,7 +426,56 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     }
   }
 
+  async function readPortalSchedule(classId,timing) {
+    return assignmentPortalSchedule(classId,await measureJourney(timing,'portalScheduleMs',()=>portalAssignmentReader(classId,{
+      allowEmpty:true,displayOnly:true,allowStale:true,
+      observe:timing?(value=>{timing.portalScheduleCache=value;}):undefined
+    })));
+  }
+
+  async function readPortalCalendar(classId,timing) {
+    if(!portalFirstForClass(classId))return null;
+    try { return portalCalendar(await readPortalSchedule(classId,timing)); }
+    catch { throw new LearningError('ERP_SCHEDULE_UNAVAILABLE','Tạm thời chưa đọc được lịch Portal.',503); }
+  }
+
+  async function verifyPortalOpen(assignment) {
+    if(!portalFirstForClass(assignment.class.id))return assignment;
+    const [saved,plan]=await Promise.all([
+      pool.query(`SELECT coalesce(t.portal_session_id,b.target_session_id)::text AS portal_id
+        FROM learning.form_assignment a
+        LEFT JOIN learning.form_assignment_portal_target t ON t.assignment_id=a.id
+        LEFT JOIN learning.portal_attendance_binding b ON b.assignment_id=a.id
+        WHERE a.id=$1::uuid`,[assignment.assignmentId]),
+      pool.query(fetchLearningJourneyPlanSql,[assignment.class.id])
+    ]);
+    const id=saved.rows[0]?.portal_id||normalizeJourneySessionDates(plan.rows[0]?.session_dates)
+      .find(item=>item.sessionNumber===assignment.sessionNumber)?.erpSessionId;
+    let current;
+    try {
+      const raw=await portalAssignmentReader(assignment.class.id,{fresh:true,allowEmpty:true});
+      current=assignmentPortalSchedule(assignment.class.id,raw).sessions.filter(item=>item.erpSessionId===id);
+    } catch { throw new LearningError('ERP_SCHEDULE_UNAVAILABLE','Chưa kiểm được lịch Portal trước khi mở phiếu.',503); }
+    const lesson=current.length===1?current[0]:null;
+    const start=lesson?Date.parse(lesson.startsAt.replace(' ','T')+'+07:00'):NaN;
+    if(!lesson||![0,1].includes(lesson.statusCode)||!Number.isFinite(start))
+      throw new LearningError('ERP_SESSION_REVIEW_REQUIRED','Buổi Portal đã nghỉ hoặc chưa có lịch hợp lệ.',409);
+    if(Date.now()>=start-300000)return assignment;
+    return {...assignment,submissionWindow:{...assignment.submissionWindow,canSubmit:false,reason:'not_open'}};
+  }
+
   async function attachCurrentSchedule(view, classId, timing) {
+    if (portalFirstForClass(classId)) {
+      try {
+        const [schedule, plan, booked]=await Promise.all([
+          readPortalSchedule(classId,timing),
+          pool.query(fetchLearningJourneyPlanSql,[classId]),
+          pool.query(occupiedPortalTargetsSql,[classId])
+        ]);
+        return projectPortalJourney(view,schedule,
+          normalizeJourneySessionDates(plan.rows[0]?.session_dates),booked.rows,vietnamDate.format(new Date()));
+      } catch { return {...view,scheduleStatus:'temporarily_unavailable'}; }
+    }
     let result=view;
     try {
       if(erpScheduleReader){
@@ -470,6 +521,16 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
 
   return {
     ...(comments||{}),
+    async getTeacherPortalCalendar({classId,reviewer},timing) {
+      const target=await authorizeJourneyTarget(pool,{classId,reviewer});
+      return {classId:target.class_id,portalSchedule:await readPortalCalendar(target.class_id,timing)};
+    },
+    async getStudentPortalCalendar({accessToken,publicToken,studentRef},timing) {
+      const access=assertSingleRow(await pool.query(fetchStudentPortalCalendarClassSql,
+        [accessToken?sha256(accessToken):null,publicToken||null,studentRef||null]),
+        'PROGRESS_LINK_INVALID','Không tìm thấy hành trình cho người học và lớp đã chọn.',404);
+      return {classId:access.class_id,studentRef:access.student_ref,portalSchedule:await readPortalCalendar(access.class_id,timing)};
+    },
     async warmPublicDefinitions(classIds) {
       if(!publicDefinitionCacheBytes||!classIds.length)return;
       // Giờ Portal chỉ dùng để chọn nội dung làm nóng khi phiếu không đặt giờ mở.
@@ -499,11 +560,12 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const reader=createLearningService({pool:database,erpScheduleReader,testSourceReader,testResultReader,portalTestReader,journeyCommentsEnabled,progressLinkCipher});
       return {getTeacherDashboard:reader.getTeacherDashboard,getTeacherLiveDrafts:reader.getTeacherLiveDrafts,getQuestionAnalytics:reader.getQuestionAnalytics};
     },
-    async getPublicAssignment(publicToken,timing) {
+    async getPublicAssignment(publicToken,timing,{verifyPortalSchedule=false}={}) {
       // Kế thừa cơ chế đang chạy: chỉ gộp lượt đọc cùng phiếu đang chờ, không lưu quyền lâu hơn.
       if(pendingPublicAssignments.has(publicToken)){
         if(timing)timing.definitionCache='coalesced';
-        return pendingPublicAssignments.get(publicToken);
+        const assignment=await pendingPublicAssignments.get(publicToken);
+        return verifyPortalSchedule?verifyPortalOpen(assignment):assignment;
       }
       const pending=(async()=>{
         const result = await measureJourney(timing,'assignmentSqlMs',()=>pool.query(fetchPublicLearningAssignmentSql,[publicToken]));
@@ -517,7 +579,10 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         return { ...assignment, submissionWindow: await measureJourney(timing,'windowMs',()=>readSubmissionWindow(pool,assignment.assignmentId)) };
       })();
       pendingPublicAssignments.set(publicToken,pending);
-      try{return await pending;}finally{pendingPublicAssignments.delete(publicToken);}
+      try{
+        const assignment=await pending;
+        return verifyPortalSchedule?verifyPortalOpen(assignment):assignment;
+      }finally{pendingPublicAssignments.delete(publicToken);}
     },
 
     async startAttempt({ publicToken, studentRef, clientIdempotencyKey, identityConfirmed, resumeOnly=false }) {
@@ -1218,17 +1283,19 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         const [roster,booked,schedule]=await Promise.all([
           pool.query(fetchCourseCurrentRosterSql,[classId]),
           pool.query(occupiedPortalTargetsSql,[classId]),
-          portalAssignmentReader?.(classId,{allowEmpty:true}).then(raw=>assignmentPortalSchedule(classId,raw)).catch(()=>null)
+          portalAssignmentReader?.(classId,{allowEmpty:true,displayOnly:true,allowStale:true})
+            .then(raw=>assignmentPortalSchedule(classId,raw)).catch(()=>null)
         ]);
-        const occupiedNumbers=new Set(booked.rows.map(row=>Number(row.session_number)));
-        const occupiedIds=new Set(booked.rows.map(row=>row.portal_session_id));
+        const portalFirst=portalFirstForClass(classId);
         const today=vietnamDate.format(new Date());
         const sessions=schedule?portalAssignmentTargets(schedule)
-          .filter(row=>row.date>=today&&!occupiedNumbers.has(row.erpSessionNumber)&&!occupiedIds.has(row.erpSessionId))
+          .filter(row=>row.date>=today&&!isPortalAssignmentOccupied(booked.rows,row,portalFirst))
           .map(row=>({sessionNumber:row.erpSessionNumber,date:row.date,kind:'lesson',status:'available',
             portalTarget:{id:row.erpSessionId,startsAt:row.startsAt}})):[];
         return {classId:target.class_id,rosterStatus:!roster.rowCount?'empty':roster.rows.some(row=>row.membership_verified!==true)?'unverified':'verified',
-          scheduleStatus:!schedule?'unavailable':schedule.ambiguous?'needs_review':schedule.sessions.length?'ready':'empty',sessions,proposals:[]};
+          scheduleStatus:!schedule||schedule.scheduleStale?'unavailable':schedule.ambiguous?'needs_review':schedule.sessions.length?'ready':'empty',
+          scheduleVersion:schedule?.fingerprint,scheduleCheckedAt:schedule?.scheduleCheckedAt,
+          scheduleRefreshInMs:schedule?.scheduleRefreshInMs,scheduleStale:schedule?.scheduleStale===true,sessions,proposals:[]};
       }
       const [planResult, roster, baselineResult] = await Promise.all([
         pool.query(fetchLearningJourneyPlanSql, [classId]),

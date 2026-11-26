@@ -224,6 +224,7 @@ function attemptRateKey(req) {
 
 export function createLearningRouter({ pool, authenticate:sharedAuthenticate, erpScheduleReader = null, classPolicy=null,
   portalAssignmentScheduleReader = null,
+  portalFirstClasses=process.env.LEARNING_PORTAL_FIRST_CLASSES||'',
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
   realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null,
@@ -258,8 +259,11 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   const warmClasses=[...new Set(String(process.env.LEARNING_SCHEDULE_MONITOR_CLASSES ??
     (process.env.NODE_ENV==='production'?'1294':'')).split(',').filter(id=>/^[1-9]\d{0,17}$/.test(id)))].slice(0,10);
   const monitoredReader = createScheduleMonitor(erpScheduleReader, {classIds:warmClasses});
-  const portalAssignmentReader = createScheduleMonitor(portalAssignmentScheduleReader);
-  const service = createLearningService({ pool, erpScheduleReader: monitoredReader, portalAssignmentReader, testSourceReader, testResultReader,
+  const portalAssignmentReader = createScheduleMonitor(portalAssignmentScheduleReader,
+    { cacheMs: 30000, displayCacheMs: 30000, cacheFromStart: true });
+  const portalClassIds=new Set(portalFirstClasses.split(',').map(value=>value.trim()).filter(value=>/^[1-9]\d{0,17}$/u.test(value)));
+  const portalFirstForClass=classId=>portalFirstClasses==='all'||portalClassIds.has(String(classId));
+  const service = createLearningService({ pool, erpScheduleReader: monitoredReader, portalAssignmentReader, portalFirstForClass, testSourceReader, testResultReader,
     portalTestReader:portalTestReader||createLearningPortalTestReader({pool}),
     journeyJitOff:process.env.LEARNING_JOURNEY_JIT_OFF!=='false',
     publicDefinitionCacheBytes:process.env.LEARNING_PUBLIC_DEFINITION_CACHE==='false'?0:undefined,
@@ -280,7 +284,8 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     };
     setInterval(warm,60000+Math.floor(Math.random()*10000)).unref();
   }
-  const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader,portalAssignmentReader,sharedRevisionCatalog,sharedEditingEnabled});
+  const drafts=createLearningFormDraftService({pool,erpScheduleReader:monitoredReader,portalAssignmentReader,
+    portalFirstForClass,sharedRevisionCatalog,sharedEditingEnabled});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts,sharedRevisionCatalog,sharedEditingEnabled});
   const liveUpdates=createLearningLiveUpdates({pool,service,revalidate:refreshReviewer,assignmentRead,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
@@ -415,9 +420,10 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   }));
 
   router.post('/assignments/open', asyncRoute(async (req, res) => {
-    const input = parseOrReply(publicAssignmentSchema, req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
+    const input = parseOrReply(publicAssignmentSchema.extend({verifyPortalSchedule:z.boolean().optional()}), req.body, res, 'INVALID_ASSIGNMENT_TOKEN');
     if (!input) return;
-    const assignment = await service.getPublicAssignment(input.publicToken,learningReadTiming('assignment_open',req,res));
+    const assignment = await service.getPublicAssignment(input.publicToken,learningReadTiming('assignment_open',req,res),
+      {verifyPortalSchedule:input.verifyPortalSchedule===true});
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, assignment });
   }));
@@ -505,6 +511,12 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     const journey = await service.getStudentCourseJourney(input,learningReadTiming('course_journey',req,res));
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, journey });
+  }));
+  router.post('/student/course-calendar', journeyLimiter, asyncRoute(async (req,res)=>{
+    const input=parseOrReply(studentJourneySchema,req.body,res,'INVALID_PROGRESS_LINK');
+    if(!input)return;
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,...await service.getStudentPortalCalendar(input,learningReadTiming('portal_calendar',req,res))});
   }));
 
   router.post('/student/course-session-detail', journeyLimiter, asyncRoute(async (req, res) => {
@@ -612,6 +624,13 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     });
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, plan });
+  }));
+  router.get('/teacher/course-calendar',authenticate,asyncRoute(async(req,res)=>{
+    const input=parseOrReply(z.object({classId:z.string().regex(/^[1-9]\d{0,17}$/u)}).strict(),req.query,res,'INVALID_CLASS');
+    if(!input)return;
+    res.set('Cache-Control','no-store');
+    return res.json({ok:true,...await service.getTeacherPortalCalendar({...input,reviewer:await classRead(req.reviewer,input.classId)},
+      learningReadTiming('portal_calendar',req,res))});
   }));
 
   router.get('/teacher/assignment-sessions', authenticate, asyncRoute(async (req, res) => {
