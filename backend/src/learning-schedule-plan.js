@@ -7,14 +7,18 @@ export function scheduleFingerprint(classId, sessions) {
     sessions.map(s => [s.erpSessionId, s.date, s.startsAt, s.endsAt, s.statusCode])])).digest('hex');
 }
 
+export function isScheduleStart(value) {
+  if(!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value))return false;
+  const utc=value.replace(' ','T'),timestamp=Date.parse(utc+'Z');
+  return Number.isFinite(timestamp)&&new Date(timestamp).toISOString().slice(0,19)===utc;
+}
+
 export function decorateSchedule(classId, schedule, confirmedDates = []) {
   const ids = new Set(), starts = new Set();
   const confirmed = new Map(confirmedDates.filter(s => s.erpSessionId).map(s => [s.erpSessionId, s.sessionNumber]));
   let ambiguous = false;
   for (const s of schedule.sessions) {
-    const validTime = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s.startsAt)
-      && Number.isFinite(Date.parse(s.startsAt.replace(' ', 'T') + 'Z'))
-      && new Date(s.startsAt.replace(' ', 'T') + 'Z').toISOString().slice(0, 19) === s.startsAt.replace(' ', 'T');
+    const validTime = isScheduleStart(s.startsAt);
     if (ids.has(s.erpSessionId) || ([0, 1].includes(s.statusCode) && starts.has(s.startsAt))
       || !/^[1-9]\d*$/.test(s.erpSessionId) || ![0, 1, 2].includes(s.statusCode) || !validTime) ambiguous = true;
     ids.add(s.erpSessionId);

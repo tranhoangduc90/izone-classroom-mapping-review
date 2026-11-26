@@ -1123,7 +1123,7 @@ WHERE learning.class_journey_plan.revision = $4
 RETURNING erp_course_class_id::text AS class_id, total_sessions,
   test_session_numbers, test_sources, session_dates, revision, confirmed_by_email, confirmed_at;`;
 
-export const fetchStudentCourseJourneySql = `WITH access AS (
+const studentJourneyAccessSql = `WITH access AS (
   SELECT erp_course_class_id, student_ref, expires_at
   FROM learning.student_progress_access
   WHERE token_hash = $1
@@ -1136,7 +1136,17 @@ export const fetchStudentCourseJourneySql = `WITH access AS (
   WHERE assignment.public_token = $2::uuid
     AND roster.student_ref = $3::uuid
     AND assignment.status IN ('published', 'closed')
-), identity_snapshot AS (
+)`;
+
+export const fetchStudentPortalCalendarClassSql = `${studentJourneyAccessSql}
+SELECT access.erp_course_class_id::text AS class_id,access.student_ref::text AS student_ref FROM access
+WHERE EXISTS (SELECT 1 FROM mapping.student_mapping_review person WHERE
+  person.public_id=access.student_ref AND person.erp_course_class_id=access.erp_course_class_id)
+OR EXISTS (SELECT 1 FROM learning.form_assignment assignment
+  JOIN learning.form_assignment_roster roster ON roster.assignment_id=assignment.id
+  WHERE assignment.erp_course_class_id=access.erp_course_class_id AND roster.student_ref=access.student_ref)`;
+
+export const fetchStudentCourseJourneySql = `${studentJourneyAccessSql}, identity_snapshot AS (
   SELECT
     access.erp_course_class_id,
     access.student_ref,

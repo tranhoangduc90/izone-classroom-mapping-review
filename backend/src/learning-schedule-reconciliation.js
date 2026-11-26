@@ -46,7 +46,8 @@ export function reconcileJourneySchedule(view, schedule, confirmedDates = [], bi
 // Chỉ đọc theo lớp, gộp yêu cầu đồng thời, giới hạn số lớp theo dõi.
 // Lỗi không biến thành lịch rỗng và không ghi DB; chu kỳ nền mặc định 5 phút.
 export function createScheduleMonitor(reader, { classIds = [], intervalMs = 300000,
-  cacheMs = 15000, displayCacheMs = 45000, maxClasses = 80, now = Date.now, timers = globalThis } = {}) {
+  cacheMs = 15000, displayCacheMs = 45000, maxClasses = 80, now = Date.now, timers = globalThis,
+  cacheFromStart = false } = {}) {
   if (!reader) return null;
   const cache = new Map(), pending = new Map();
   const watched = [...new Set(classIds.map(String).filter(id => /^[1-9]\d*$/.test(id)))].slice(0, 10);
@@ -55,38 +56,50 @@ export function createScheduleMonitor(reader, { classIds = [], intervalMs = 3000
     cache.set(id,entry);
     if(cache.size>maxClasses)cache.delete(cache.keys().next().value);
   }
-  async function read(id, { fresh = false, allowEmpty = false, displayOnly = false, observe } = {}) {
+  async function read(id, { fresh = false, allowEmpty = false, displayOnly = false, observe, allowStale = false } = {}) {
     id = String(id);
-    const checked = value => {
+    const checked = (value, at, stale = false) => {
       if (!allowEmpty && !value.sessions.length) throw Error('ERP_SCHEDULE_INCOMPLETE');
-      return value;
+      if (!cacheFromStart && !stale) return value;
+      return { ...value, scheduleStale: stale,
+        scheduleRefreshInMs: Math.max(0, at + (displayOnly ? displayCacheMs : cacheMs) - now()) };
+    };
+    const readEntry = entry => {
+      if (!entry.error) return checked(entry.value, entry.at);
+      if (allowStale && !fresh && entry.value) return checked(entry.value, entry.at, true);
+      throw entry.error;
     };
     const saved = cache.get(id);
     const ttl=displayOnly&&!saved?.error?displayCacheMs:cacheMs;
     if (!fresh && saved && now() - saved.at < ttl) {
       observe?.(saved.error?'error_cache':'hit');
       store(id,saved);
-      if (saved.error) throw saved.error;
-      return checked(saved.value);
+      return readEntry(saved);
     }
     if (pending.has(id)) {
       observe?.('coalesced');
-      return checked(await pending.get(id));
+      return readEntry(await pending.get(id));
     }
     observe?.(fresh?'fresh':'miss');
+    const startedAt = now();
     const request = (async () => {
       try {
         const data = await Promise.resolve().then(()=>reader(id));
         if ((data.classId !== undefined && String(data.classId) !== id) || !Array.isArray(data.sessions))
           throw new Error('ERP_SCHEDULE_INCOMPLETE');
         const value = { ...data, scheduleCheckedAt: new Date(now()).toISOString() };
-        store(id,{ value, at: now() });
-        return value;
-      } catch (error) { store(id,{ ...saved, error, at: now() }); throw error; }
+        const entry = { value, at: cacheFromStart ? startedAt : now() };
+        store(id,entry);
+        return entry;
+      } catch (error) {
+        const entry = { ...saved, error, at: now() };
+        store(id,entry);
+        return entry;
+      }
       finally { pending.delete(id); }
     })();
     pending.set(id, request);
-    return checked(await request);
+    return readEntry(await request);
   }
   const poll = async () => {
     // Tuần tự để một lần kiểm nền không dồn request ERP.

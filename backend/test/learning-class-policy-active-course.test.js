@@ -48,6 +48,23 @@ test('ERP failure closes course-viewer reads instead of exposing assigned histor
   await assert.rejects(()=>policy.classRead(viewer,'2'),{code:'CLASS_STATUS_UNAVAILABLE',httpStatus:503});
 });
 
+test('course classification keeps Portal scope on transient directory failure and discovers newly added classes',async()=>{
+  let time=Date.parse('2026-11-04T17:30:00Z'),failure=false;
+  const data=structuredClone(rows);
+  const policy=createLearningClassPolicy({pool:{},directoryReader:async()=>{
+    if(failure)throw Error('ERP unavailable');
+    return structuredClone(data);
+  },now:()=>new Date(time)});
+  assert.equal(await policy.sourceCourseId('1'),'4');
+  assert.equal(await policy.sourceCourseId('7'),'5');
+  failure=true;time+=60001;
+  assert.equal(await policy.sourceCourseId('7'),'5');
+  await assert.rejects(()=>policy.classRead(viewer,'1'),{code:'CLASS_STATUS_UNAVAILABLE'});
+  failure=false;time+=5001;data.push({class_id:'8',course_id:'5'});
+  assert.equal(await policy.sourceCourseId('8'),'5');
+  assert.equal(await policy.sourceCourseId('9'),null);
+});
+
 test('admin and ordinary teacher retain their existing class scope',async()=>{
   const policy=makePolicy();
   for(const actor of [{canAccessAllClasses:true},{canAccessAllClasses:false}]){

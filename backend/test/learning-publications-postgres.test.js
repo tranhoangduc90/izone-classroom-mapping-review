@@ -180,5 +180,17 @@ test('PostgreSQL learning_api: lọc buổi theo ngày Việt Nam, giao và nh�
     const lesson=journey.sessions.find(row=>row.assignmentId===assignment.assignmentId);
     assert.equal(lesson.erpSessionId,'71901');assert.equal(lesson.sessionStartTime,'19:00:00');
     await assert.rejects(()=>f.clockPool.query('UPDATE learning.form_assignment_portal_target SET portal_session_id=71902'),{code:'42501'});
+    for(const file of ['202610070001_student_journey_comments.sql','202611020001_teacher_comment_drafts.sql'])
+      await f.pool.query(await readFile(new URL('../ops/learning-migrations/'+file,import.meta.url),'utf8'));
+    prior.statusCode=2;
+    const portalFirst={pool:f.clockPool,portalAssignmentReader,portalFirstForClass:id=>id==='2139'};
+    const nextService=createLearningService(portalFirst),nextDrafts=createLearningFormDraftService(portalFirst);
+    const [nextSlot]= (await nextService.getTeacherAssignmentSessions({classId:'2139',source:'portal',reviewer})).sessions;
+    assert.deepEqual([nextSlot.sessionNumber,nextSlot.portalTarget.id],[2,'71902']);
+    const deliveryAfter=await nextDrafts.assignPublication({...assignmentInput,operationId:randomUUID(),
+      targets:[{classId:'2139',sessionNumber:2,portalTarget:nextSlot.portalTarget}]});
+    assert.equal(deliveryAfter.status,'success',JSON.stringify(deliveryAfter));
+    assert.notEqual(deliveryAfter.results[0].delivery.storageSessionNumber,2);
+    assert.equal((await f.pool.query('SELECT target_session_id::text FROM learning.portal_attendance_binding')).rows[0].target_session_id,'71901');
   }finally{await f.close();}
 });

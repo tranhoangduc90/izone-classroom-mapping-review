@@ -43,7 +43,7 @@ function validateDraftPreview(definition,gradingKey) {
 }
 
 export function createLearningFormDraftService({pool,erpScheduleReader=null,portalAssignmentReader=null,
-  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
+  portalFirstForClass=()=>false,sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
   async function authorizeClass(database,classId,reviewer) {
     const result=await database.query(authorizeLearningClassSql,[reviewer.email,reviewer.canAccessAllClasses,classId]);
     if(result.rowCount!==1) throw error('DRAFT_CLASS_ACCESS_DENIED','Bạn chưa được cấp quyền soạn phiếu cho lớp này.',403);
@@ -86,7 +86,7 @@ export function createLearningFormDraftService({pool,erpScheduleReader=null,port
   return {
     ...createSharedDraftActions({pool,owned,dto,sharedRevisionCatalog}),
     ...createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader,portalAssignmentReader,
-      sharedRevisionCatalog,sharedEditingEnabled}),
+      portalFirstForClass,sharedRevisionCatalog,sharedEditingEnabled}),
     editWorksheet,
     async editAssignedWorksheet({assignmentId,operationId,reviewer}){
       const access=await pool.query(authorizeLearningJourneyPlanAssignmentSql,[assignmentId,reviewer.email,reviewer.canAccessAllClasses]);

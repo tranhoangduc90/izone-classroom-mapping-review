@@ -6,14 +6,14 @@ const isRunning = (row,today) => row?.class_status === 'on_going'
 
 export function createLearningClassPolicy({pool,directoryReader,now=()=>new Date()}) {
   const readCourseId='4';
-  let directory=null,expires=0,pending;
+  let directory=null,lastDirectory=null,expires=0,pending;
 
   async function load({fresh=false}={}) {
     if(!directoryReader)return null;
     if(!fresh&&now().getTime()<expires)return directory;
     if(!pending){
       pending=Promise.resolve().then(directoryReader).then(rows=>{
-        directory=new Map(rows.map(row=>[row.class_id,row]));
+        directory=lastDirectory=new Map(rows.map(row=>[row.class_id,row]));
         expires=now().getTime()+60000;
         return directory;
       }).catch(()=>{
@@ -91,5 +91,11 @@ export function createLearningClassPolicy({pool,directoryReader,now=()=>new Date
     };
   }
 
-  return {reviewer,courseClass,classRead,assignmentRead,options,deliveryCheck};
+  // Course identity can use the last known directory during an outage. Never use it for access checks.
+  async function sourceCourseId(classId){
+    const catalog=await load()||lastDirectory;
+    return catalog?.get(String(classId))?.course_id||null;
+  }
+
+  return {reviewer,courseClass,classRead,assignmentRead,options,deliveryCheck,sourceCourseId};
 }

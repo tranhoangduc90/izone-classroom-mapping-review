@@ -9,7 +9,8 @@ import {validateAuthoringPayload,FormAuthoringError} from './learning-form-autho
 import {sha256,stableStringify,gradeLearningSubmission} from './learning-domain.js';
 import {parseFormDefinition,parseFormGradingKey} from './learning-contracts.js';
 import {decorateSchedule,matchesConfirmedScheduleSlot} from './learning-schedule-plan.js';
-import {assignmentPortalSchedule,occupiedPortalTargetsSql,portalAssignmentTargets} from './learning-portal-assignment-schedule.js';
+import {assignmentPortalSchedule,occupiedPortalTargetsSql,portalAssignmentTargets,isPortalAssignmentOccupied,
+  portalAssignmentStorageNumber,reservedPortalStorageNumbersSql} from './learning-portal-assignment-schedule.js';
 import {fetchCourseCurrentRosterSql} from './learning-course-overview.js';
 import {buildLearningClassAccessPredicate,authorizeLearningJourneyPlanAssignmentSql,insertLearningAssignmentSql,insertLearningAssignmentRosterSql,
   insertLearningAssignmentBlockReleaseSql,fetchLearningRosterForClassSql} from './learning-sql.js';
@@ -62,7 +63,7 @@ function targetOperation(operationId,classId,sessionNumber){
 }
 
 export function createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader,
-  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}){
+  portalFirstForClass=()=>false,sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}){
   async function lockSource(database,key){
     await database.query('INSERT INTO learning.form_publication_lock(source_key) VALUES($1) ON CONFLICT DO NOTHING',[key]);
     await database.query('SELECT source_key FROM learning.form_publication_lock WHERE source_key=$1 FOR UPDATE',[key]);
@@ -90,15 +91,19 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
   }
   async function checkPortalTarget(database,{classId,sessionNumber,portalTarget}){
     let schedule;
-    try{schedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{fresh:true,allowEmpty:true}));}
+    const portalFirst=await portalFirstForClass(classId);
+    try{schedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{fresh:true,allowEmpty:true}),{portalFirst});}
     catch{throw fail('ERP_SCHEDULE_UNAVAILABLE','Chưa đọc được lịch Portal. Hãy thử lại.',503);}
     const selected=portalAssignmentTargets(schedule).find(row=>row.erpSessionNumber===sessionNumber);
     if(selected?.erpSessionId!==portalTarget.id||selected.startsAt!==portalTarget.startsAt)
       throw fail('ERP_SESSION_REVIEW_REQUIRED','Buổi trên Portal đã đổi. Hãy chọn lại buổi.');
     const booked=(await database.query(occupiedPortalTargetsSql,[classId])).rows;
-    if(booked.some(row=>Number(row.session_number)===sessionNumber||row.portal_session_id===portalTarget.id))
+    if(isPortalAssignmentOccupied(booked,selected,portalFirst))
       throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu. Hãy chọn buổi khác.');
-    return schedule.attendanceFingerprint;
+    const storage=portalFirst?portalAssignmentStorageNumber(selected,(await database.query(reservedPortalStorageNumbersSql,[classId])).rows)
+      :sessionNumber;
+    if(storage===null)throw fail('PORTAL_SESSION_STORAGE_EXHAUSTED','Chưa có vị trí lưu an toàn cho buổi Portal này.');
+    return {storage,attendanceFingerprint:schedule.attendanceFingerprint};
   }
   async function publication(database,id,reviewer){
     const row=(await database.query(`SELECT publication.*,version.public_definition,grading.private_definition,
@@ -128,7 +133,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     if(row.shared_course_draft)await assertCatalogSource(database,row.source_draft_id,row.draft_owner_email,'izone');
     return row;
   }
-  async function readDelivery(database,delivery){
+  async function readDelivery(database,delivery,displayNumber=Number(delivery.session_number)){
     const row=(await database.query(`SELECT assignment.id::text AS assignment_id,assignment.form_version_id::text,
       assignment.public_token::text,assignment.erp_course_class_id::text,assignment.session_number,
       (SELECT count(*)::integer FROM learning.form_assignment_roster WHERE assignment_id=assignment.id) AS roster_count,
@@ -138,14 +143,18 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
       ||Number(row.session_number)!==Number(delivery.session_number)||row.roster_count<1)
       throw fail('DELIVERY_READBACK_MISMATCH','Chưa xác nhận được đúng lớp, buổi và danh sách vừa giao.',500);
     return {assignmentId:row.assignment_id,formVersionId:row.form_version_id,publicToken:row.public_token,
-      classId:String(row.erp_course_class_id),sessionNumber:Number(row.session_number),rosterCount:row.roster_count,blockCount:row.block_count};
+      classId:String(row.erp_course_class_id),sessionNumber:displayNumber,
+      ...(displayNumber!==Number(row.session_number)?{storageSessionNumber:Number(row.session_number)}:{}),
+      rosterCount:row.roster_count,blockCount:row.block_count};
   }
-  async function deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable}){
+  async function deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable,prepareVersion}){
     if(assertAssignable)await assertAssignable(target.classId);
     await assertCourse(database,{erp_course_class_id:target.classId,public_definition:definition});
-    let attendanceFingerprint;
-    if(target.portalTarget) attendanceFingerprint=await checkPortalTarget(database,target);
+    let storage=target.sessionNumber,attendanceFingerprint;
+    if(target.portalTarget) ({storage,attendanceFingerprint}=await checkPortalTarget(database,target));
     else{
+      if(await portalFirstForClass(target.classId))
+        throw fail('ERP_SCHEDULE_CHANGED','Hãy chọn lại mã buổi từ lịch Portal rồi giao bài.');
       await checkSchedule(database,target.classId,target.sessionNumber);
       const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
         AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
@@ -155,15 +164,16 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     if(!current.rowCount||current.rows.some(s=>s.membership_verified!==true))throw fail('DRAFT_ROSTER_UNVERIFIED','Đọc lại danh sách ERP trước khi giao bài.');
     const refs=new Set(current.rows.map(s=>s.student_ref)),roster=(await database.query(fetchLearningRosterForClassSql,[target.classId])).rows.filter(s=>refs.has(s.student_ref));
     if(roster.length!==refs.size)throw fail('DRAFT_ROSTER_CHANGED','Danh sách học viên cần được đối chiếu lại.');
+    await prepareVersion?.(storage);
     const assignment=(await database.query(insertLearningAssignmentSql,[definition.formVersionId,definition.courseCode||null,
-      target.classId,classInfo.class_name,target.sessionNumber,definition.title,null,null,reviewer.email])).rows[0];
+      target.classId,classInfo.class_name,storage,definition.title,null,null,reviewer.email])).rows[0];
     if(target.portalTarget)await database.query(`INSERT INTO learning.form_assignment_portal_target
       (assignment_id,portal_session_id,starts_at,attendance_fingerprint) VALUES($1::uuid,$2::bigint,$3,$4)`,
       [assignment.assignment_id,target.portalTarget.id,target.portalTarget.startsAt,attendanceFingerprint]);
     for(const student of roster) await database.query(insertLearningAssignmentRosterSql,[assignment.assignment_id,student.student_ref,student.student_id,student.student_name,student.display_discriminator]);
     const first=Math.min(...definition.blocks.map(block=>block.checkpoint));
     for(const block of definition.blocks)await database.query(insertLearningAssignmentBlockReleaseSql,[assignment.assignment_id,block.blockId,block.checkpoint,block.checkpoint===first?'open':'locked',reviewer.email]);
-    const result=await readDelivery(database,{...assignment,erp_course_class_id:target.classId,session_number:target.sessionNumber});
+    const result=await readDelivery(database,{...assignment,erp_course_class_id:target.classId,session_number:storage},target.sessionNumber);
     if(result.formVersionId!==definition.formVersionId||result.blockCount!==definition.blocks.length)
       throw fail('DELIVERY_READBACK_MISMATCH','Phiên bản hoặc các phần vừa giao chưa khớp.',500);
     return result;
@@ -205,7 +215,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             ||prior.draft_revision!==expectedRevision||prior.draft_hash!==expectedHash
             ||String(prior.portal_session_id)!==target.portalTarget.id||prior.starts_at!==target.portalTarget.startsAt)
             throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho bản khác hoặc mốc Portal khác.');
-          return {...await readDelivery(database,prior),replayed:true};
+          return {...await readDelivery(database,prior,target.sessionNumber),replayed:true};
         }
         if(draft.revision!==expectedRevision||draft.content_hash!==expectedHash)
           throw fail('DRAFT_STALE','Bài đã thay đổi. Mở lại Giao bài để kiểm đáp án bản mới.');
@@ -215,12 +225,15 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
         if(sha256(stableStringify({definition,gradingKey}))!==draft.content_hash)
           throw fail('PUBLICATION_CONTENT_MISMATCH','Nội dung nháp chưa khớp bản đã xác nhận; đã dừng giao.',500);
         definition.formVersionId=gradingKey.formVersionId=crypto.randomUUID();
-        await database.query(`INSERT INTO learning.class_draft_delivery
-          (operation_id,draft_id,draft_revision,draft_hash,form_version_id,owner_email,erp_course_class_id,session_number,portal_session_id,starts_at)
-          VALUES($1::uuid,$2::uuid,$3,$4,$5::uuid,$6,$7::bigint,$8,$9::bigint,$10)`,
-          [operation,id,expectedRevision,expectedHash,definition.formVersionId,draft.owner_email,target.classId,target.sessionNumber,target.portalTarget.id,target.portalTarget.startsAt]);
-        await storeVersion(database,definition,gradingKey,draft.owner_email,draft.owner_email);
-        const result=await deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable});
+        const result=await deliverVersion(database,{target,definition,classInfo,reviewer,assertAssignable,prepareVersion:async storage=>{
+          // The database approval trigger needs this scoped confirmation before publishing a scored version.
+          await database.query(`INSERT INTO learning.class_draft_delivery
+            (operation_id,draft_id,draft_revision,draft_hash,form_version_id,owner_email,erp_course_class_id,session_number,portal_session_id,starts_at)
+            VALUES($1::uuid,$2::uuid,$3,$4,$5::uuid,$6,$7::bigint,$8,$9::bigint,$10)`,
+            [operation,id,expectedRevision,expectedHash,definition.formVersionId,draft.owner_email,target.classId,
+              storage,target.portalTarget.id,target.portalTarget.startsAt]);
+          await storeVersion(database,definition,gradingKey,draft.owner_email,draft.owner_email);
+        }});
         await database.query("INSERT INTO learning.form_assignment_origin(assignment_id,source_scope) VALUES($1::uuid,'personal')",[result.assignmentId]);
         return {...result,replayed:false};
       }));
@@ -392,7 +405,7 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
             if(pinned?.portal_session_id!==target.portalTarget.id||pinned.starts_at!==target.portalTarget.startsAt)
               throw fail('DELIVERY_OPERATION_CONFLICT','Mã thao tác đã được dùng cho một mốc Portal khác.');
           }
-          return {...await readDelivery(database,prior),replayed:true};
+          return {...await readDelivery(database,prior,target.sessionNumber),replayed:true};
         }
         const source=await publication(database,id,reviewer);
         const selectedOrigin=origin?await assignmentOrigin(database,source,origin,reviewer):null;
@@ -400,7 +413,8 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
           await assertSharedPublicationCurrent(database,source,selectedOrigin);
         const result=await deliverVersion(database,{target,definition:source.public_definition,classInfo,reviewer,assertAssignable});
         await database.query(`INSERT INTO learning.form_delivery(operation_id,publication_id,owner_email,erp_course_class_id,session_number,assignment_id)
-          VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid)`,[operation,id,reviewer.email,target.classId,target.sessionNumber,result.assignmentId]);
+          VALUES($1::uuid,$2::uuid,$3,$4::bigint,$5,$6::uuid)`,[operation,id,reviewer.email,target.classId,
+          result.storageSessionNumber??result.sessionNumber,result.assignmentId]);
         if(selectedOrigin)await database.query('INSERT INTO learning.form_assignment_origin(assignment_id,source_scope,source_library_id) VALUES($1::uuid,$2,$3::uuid)',[result.assignmentId,selectedOrigin.scope,selectedOrigin.libraryId]);
         return {...result,replayed:false};
       }));

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createPortalAssignmentScheduleReader } from '../src/learning-portal-assignment-schedule.js';
+import { createPortalAssignmentScheduleReader, assignmentPortalSchedule, portalAssignmentTargets } from '../src/learning-portal-assignment-schedule.js';
 
 const tokenUrl = 'https://accounts.izone.edu.vn/realms/izone/protocol/openid-connect/token';
 const scheduleUrl = id => `https://gateway.izone.edu.vn/portal/v1/course-classes/${id}/class-sessions`;
@@ -105,4 +105,14 @@ test('a reader without credentials sends no request', async () => {
     fetchImpl: async () => assert.fail('unexpected upstream request')
   });
   await assert.rejects(reader('1001'), { message: 'PORTAL_SCHEDULE_UNAVAILABLE' });
+});
+
+test('Portal-first only offers ordinals before an unknown status that could change the ordering',()=>{
+  const slot=(id,date,statusCode)=>({erpSessionId:id,date,statusCode,startsAt:date+' 18:30:00',endsAt:date+' 21:00:00'});
+  const raw={classId:'1001',sessions:[
+    slot('201','2026-11-26',0),slot('202','2026-11-27',4),slot('203','2026-11-29',0)]};
+  assert.deepEqual(portalAssignmentTargets(assignmentPortalSchedule('1001',raw)),[]);
+  const newSchedule=assignmentPortalSchedule('1001',raw,{portalFirst:true});
+  assert.equal(newSchedule.ambiguous,true);
+  assert.deepEqual(portalAssignmentTargets(newSchedule).map(item=>[item.erpSessionId,item.erpSessionNumber]),[['201',1]]);
 });

@@ -16,7 +16,7 @@ const fail=(code,message,status=409)=>new FormAuthoringError(code,message,[],sta
 const scored=definition=>definition.blocks.some(block=>block.items.some(item=>item.graderType!=='none'||item.maxScore>0));
 
 export function createLearningFormPublishingService({pool,authorizeClass,owned,dto,erpScheduleReader=null,portalAssignmentReader=null,
-  sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
+  portalFirstForClass=()=>false,sharedRevisionCatalog=false,sharedEditingEnabled=sharedRevisionCatalog}) {
   async function authority(database,email,definition,ownerEmail,shared=false) {
     const owner=email.toLowerCase()===ownerEmail.toLowerCase();
     if(!scored(definition)){
@@ -74,7 +74,7 @@ export function createLearningFormPublishingService({pool,authorizeClass,owned,d
   }
   return {
     ...createLearningFormPublications({pool,authorizeClass,owned,authority,assertCourse,erpScheduleReader,portalAssignmentReader,
-      sharedRevisionCatalog,sharedEditingEnabled}),
+      portalFirstForClass,sharedRevisionCatalog,sharedEditingEnabled}),
     async reviewQueue({classId,scope,reviewer}) {
       if(scope==='izone'){
         const {reviewCourses}=await sharedCourseCapabilities(pool,reviewer.email);
