@@ -430,17 +430,21 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     return assignmentPortalSchedule(classId,await measureJourney(timing,'portalScheduleMs',()=>portalAssignmentReader(classId,{
       allowEmpty:true,displayOnly:true,allowStale:true,
       observe:timing?(value=>{timing.portalScheduleCache=value;}):undefined
-    })));
+    })),{portalFirst:true});
   }
 
   async function readPortalCalendar(classId,timing) {
-    if(!portalFirstForClass(classId))return null;
-    try { return portalCalendar(await readPortalSchedule(classId,timing)); }
+    if(!await portalFirstForClass(classId))return null;
+    try {
+      const [schedule, plan, booked]=await Promise.all([readPortalSchedule(classId,timing),
+        pool.query(fetchLearningJourneyPlanSql,[classId]),pool.query(occupiedPortalTargetsSql,[classId])]);
+      return portalCalendar(schedule,normalizeJourneySessionDates(plan.rows[0]?.session_dates),booked.rows);
+    }
     catch { throw new LearningError('ERP_SCHEDULE_UNAVAILABLE','Tạm thời chưa đọc được lịch Portal.',503); }
   }
 
   async function verifyPortalOpen(assignment) {
-    if(!portalFirstForClass(assignment.class.id))return assignment;
+    if(!await portalFirstForClass(assignment.class.id))return assignment;
     const [saved,plan]=await Promise.all([
       pool.query(`SELECT coalesce(t.portal_session_id,b.target_session_id)::text AS portal_id
         FROM learning.form_assignment a
@@ -465,7 +469,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
   }
 
   async function attachCurrentSchedule(view, classId, timing) {
-    if (portalFirstForClass(classId)) {
+    if (await portalFirstForClass(classId)) {
       try {
         const [schedule, plan, booked]=await Promise.all([
           readPortalSchedule(classId,timing),
@@ -474,7 +478,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         ]);
         return projectPortalJourney(view,schedule,
           normalizeJourneySessionDates(plan.rows[0]?.session_dates),booked.rows,vietnamDate.format(new Date()));
-      } catch { return {...view,scheduleStatus:'temporarily_unavailable'}; }
+      } catch { return {...view,scheduleStatus:'temporarily_unavailable',
+        portalSchedule:{version:null,checkedAt:null,refreshInMs:30000,stale:true,entries:[]}}; }
     }
     let result=view;
     try {
@@ -1279,14 +1284,14 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     async getTeacherAssignmentSessions({ classId, source, reviewer, assertAssignable }) {
       const target = await authorizeJourneyTarget(pool, { classId, reviewer });
       if(assertAssignable)await assertAssignable(target.class_id);
-      if(source==='portal'){
+      const portalFirst=await portalFirstForClass(classId);
+      if(source==='portal'||portalFirst){
         const [roster,booked,schedule]=await Promise.all([
           pool.query(fetchCourseCurrentRosterSql,[classId]),
           pool.query(occupiedPortalTargetsSql,[classId]),
           portalAssignmentReader?.(classId,{allowEmpty:true,displayOnly:true,allowStale:true})
-            .then(raw=>assignmentPortalSchedule(classId,raw)).catch(()=>null)
+            .then(raw=>assignmentPortalSchedule(classId,raw,{portalFirst})).catch(()=>null)
         ]);
-        const portalFirst=portalFirstForClass(classId);
         const today=vietnamDate.format(new Date());
         const sessions=schedule?portalAssignmentTargets(schedule)
           .filter(row=>row.date>=today&&!isPortalAssignmentOccupied(booked.rows,row,portalFirst))
@@ -1372,11 +1377,13 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       const target = await authorizeJourneyTarget(pool, {assignmentId,classId,reviewer});
       const result = await pool.query(fetchLearningJourneyPlanSql, [target.class_id]);
       const plan = result.rows[0];
+      const portalManaged=await portalFirstForClass(target.class_id);
       let dates=plan?normalizeJourneySessionDates(plan.session_dates):[];
-      if(erpScheduleReader)try{dates=currentConfirmedDates(dates,decorateSchedule(target.class_id,await readErpSchedule(target.class_id)));}catch{/* Keep the confirmed ID/date while the source is unavailable. */}
+      if(erpScheduleReader&&!portalManaged)try{dates=currentConfirmedDates(dates,decorateSchedule(target.class_id,await readErpSchedule(target.class_id)));}catch{/* Keep the confirmed ID/date while the source is unavailable. */}
       return {
         classId: target.class_id,
         className: target.class_name,
+        ...(portalManaged?{portalManaged:true}:{}),
         highestKnownSession: Number(target.highest_known_session || 0),
         totalSessions: plan ? Number(plan.total_sessions) : null,
         testSessionNumbers: plan ? asArray(plan.test_session_numbers).map(Number) : [],
@@ -1469,13 +1476,16 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         }
         await client.query('SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint ORDER BY id FOR UPDATE', [target.class_id]);
         Object.assign(target, await authorizeJourneyTarget(client, {assignmentId,classId,reviewer}));
-        if (totalSessions < Number(target.highest_known_session || 0)) {
+        const portalManaged=await portalFirstForClass(target.class_id);
+        if (!portalManaged&&totalSessions < Number(target.highest_known_session || 0)) {
           throw new LearningError('JOURNEY_PLAN_TOO_SHORT',
             'Tổng số buổi nhỏ hơn số buổi cao nhất đã có dữ liệu.', 409);
         }
         const current = await client.query(fetchLearningJourneyPlanSql, [target.class_id]);
         const prior = current.rows[0];
         const datesToSave = normalizeJourneySessionDates(sessionDates ?? prior?.session_dates ?? []);
+        if(portalManaged&&(expectedScheduleFingerprint||JSON.stringify(datesToSave)!==JSON.stringify(normalizeJourneySessionDates(prior?.session_dates))))
+          throw new LearningError('PORTAL_SCHEDULE_MANAGED','Ngày học được đồng bộ từ Portal. Có thể lưu cấu hình Test.',409);
         const assignedNumbers = new Set(asArray(target.assignment_session_numbers).map(Number));
         const newByNumber = new Map(datesToSave.map(item => [item.sessionNumber, item]));
         const baseline = operationId ? (await client.query('SELECT erp_snapshot FROM learning.journey_plan_change WHERE class_id=$1::bigint ORDER BY id DESC LIMIT 1',[target.class_id])).rows[0]?.erp_snapshot : null;
@@ -1553,6 +1563,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
             'Kế hoạch lưu không khớp dữ liệu đã gửi.', 500);
         }
         const outcome = {
+          ...(portalManaged?{portalManaged:true}:{}),
           classId: target.class_id, className: target.class_name,
           highestKnownSession: Number(target.highest_known_session || 0),
           totalSessions, testSessionNumbers, testSources: sourcesToSave,

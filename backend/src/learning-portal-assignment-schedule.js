@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { decorateSchedule } from './learning-schedule-plan.js';
+import { decorateSchedule, isScheduleStart } from './learning-schedule-plan.js';
 
 const normalizeTime = value => typeof value === 'string' ? value.replace('T', ' ') : '';
 const portalBase = 'https://gateway.izone.edu.vn/portal/v1/course-classes/';
@@ -114,8 +114,25 @@ export function createPortalAssignmentScheduleReader({ credentialsFile, fetchImp
   };
 }
 
-export function assignmentPortalSchedule(classId, raw) {
+export function assignmentPortalSchedule(classId, raw, {portalFirst=false} = {}) {
   const schedule = decorateSchedule(classId, raw);
+  if(portalFirst&&schedule.ambiguous){
+    const countsById=new Map(),countsByStart=new Map();
+    for(const slot of schedule.sessions){
+      countsById.set(slot.erpSessionId,(countsById.get(slot.erpSessionId)||0)+1);
+      if([0,1].includes(slot.statusCode))
+        countsByStart.set(slot.startsAt,(countsByStart.get(slot.startsAt)||0)+1);
+    }
+    // A historical unknown status can change all later ordinals, but it cannot change the earlier ones.
+    const unordered=schedule.sessions.some(slot=>!isScheduleStart(slot.startsAt));
+    let unsafe=unordered;
+    schedule.sessions=schedule.sessions.map(slot=>{
+      if(countsById.get(slot.erpSessionId)>1||!(/^[1-9]\d*$/u.test(slot.erpSessionId))
+        ||[0,1].includes(slot.statusCode)&&countsByStart.get(slot.startsAt)>1||![0,1,2].includes(slot.statusCode))
+        unsafe=true;
+      return {...slot,proposalEligible:!unsafe&&[0,1].includes(slot.statusCode)};
+    });
+  }
   // Attendance uses the Portal response order as the tie-breaker for equal starts.
   const attendanceRows=[...raw.sessions].sort((a,b)=>a.startsAt.localeCompare(b.startsAt));
   return { ...schedule, attendanceFingerprint: JSON.stringify([classId,
@@ -144,8 +161,17 @@ export function portalAssignmentStorageNumber(slot, reserved) {
   return null;
 }
 
-export function portalCalendar(schedule) {
+export function portalCalendar(schedule, planDates = [], booked = []) {
+  const links=new Map(planDates.filter(item=>item.erpSessionId).map(item=>[item.sessionNumber,item.erpSessionId]));
+  const occupied=new Map();
+  for(const item of booked){
+    const key=Number(item.session_number);
+    if(occupied.has(key)&&occupied.get(key)!==item.portal_session_id)occupied.set(key,null);
+    else if(!occupied.has(key))occupied.set(key,item.portal_session_id);
+  }
+  for(const [key,id] of occupied)if(id)links.set(key,id);else links.delete(key);
   return {version:schedule.fingerprint,checkedAt:schedule.scheduleCheckedAt,refreshInMs:schedule.scheduleRefreshInMs,
+    links:[...links].sort(([a],[b])=>a-b).map(([storageSessionNumber,id])=>({storageSessionNumber,id})),
     stale:schedule.scheduleStale===true,entries:schedule.sessions.map(slot=>({
       id:slot.erpSessionId,sessionNumber:slot.proposalEligible?slot.erpSessionNumber:null,startsAt:slot.startsAt,
       date:slot.date,status:slot.statusCode===2?'cancelled':slot.proposalEligible?'active':'needs_review'
@@ -154,14 +180,14 @@ export function portalCalendar(schedule) {
 
 export function projectPortalJourney(view, schedule, planDates, booked, today) {
   const byId = new Map(schedule.sessions.map(slot => [slot.erpSessionId,slot]));
-  const bookedByNumber = new Map(booked.map(item => [Number(item.session_number),item.portal_session_id]));
-  const planByNumber = new Map(planDates.map(item => [item.sessionNumber,item.erpSessionId]));
+  const calendar=portalCalendar(schedule,planDates,booked);
+  const byNumber=new Map(calendar.links.map(item=>[item.storageSessionNumber,item.id]));
   const linked = new Set();
   const sessions = view.sessions.map(session => {
-    const id = bookedByNumber.get(session.sessionNumber) || planByNumber.get(session.sessionNumber);
-    if (!id) return {...session,sessionDate:null,scheduleStatus:'needs_review'};
+    const id = byNumber.get(session.sessionNumber);
+    if (!id) return {...session,portalSessionNumber:null,scheduleStatus:'needs_review'};
     const latest = byId.get(id);
-    const confirmed = latest && !schedule.ambiguous && latest.proposalEligible;
+    const confirmed = latest?.proposalEligible;
     const cancelled = latest?.statusCode === 2;
     // Keep action keys scoped to the stored lesson, including when its current Portal number has changed.
     linked.add(id);
@@ -170,7 +196,6 @@ export function projectPortalJourney(view, schedule, planDates, booked, today) {
       future:!cancelled&&Boolean(latest?.date && latest.date>today),
       scheduleStatus:cancelled?'cancelled':!confirmed?'needs_review':schedule.scheduleStale?'temporarily_unavailable':'connected' };
   });
-  const calendar=portalCalendar(schedule);
   calendar.entries=calendar.entries.map(entry=>({...entry,linked:linked.has(entry.id)}));
   const total=calendar.entries.filter(entry=>entry.status==='active').length;
   const activeSummary=schedule.ambiguous?{}:{

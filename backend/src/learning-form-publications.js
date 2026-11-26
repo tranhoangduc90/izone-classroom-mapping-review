@@ -91,13 +91,13 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
   }
   async function checkPortalTarget(database,{classId,sessionNumber,portalTarget}){
     let schedule;
-    try{schedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{fresh:true,allowEmpty:true}));}
+    const portalFirst=await portalFirstForClass(classId);
+    try{schedule=assignmentPortalSchedule(classId,await portalAssignmentReader(classId,{fresh:true,allowEmpty:true}),{portalFirst});}
     catch{throw fail('ERP_SCHEDULE_UNAVAILABLE','Chưa đọc được lịch Portal. Hãy thử lại.',503);}
     const selected=portalAssignmentTargets(schedule).find(row=>row.erpSessionNumber===sessionNumber);
     if(selected?.erpSessionId!==portalTarget.id||selected.startsAt!==portalTarget.startsAt)
       throw fail('ERP_SESSION_REVIEW_REQUIRED','Buổi trên Portal đã đổi. Hãy chọn lại buổi.');
     const booked=(await database.query(occupiedPortalTargetsSql,[classId])).rows;
-    const portalFirst=portalFirstForClass(classId);
     if(isPortalAssignmentOccupied(booked,selected,portalFirst))
       throw fail('ASSIGNMENT_SESSION_CONFLICT','Buổi này đã có phiếu. Hãy chọn buổi khác.');
     const storage=portalFirst?portalAssignmentStorageNumber(selected,(await database.query(reservedPortalStorageNumbersSql,[classId])).rows)
@@ -153,6 +153,8 @@ export function createLearningFormPublications({pool,authorizeClass,owned,author
     let storage=target.sessionNumber,attendanceFingerprint;
     if(target.portalTarget) ({storage,attendanceFingerprint}=await checkPortalTarget(database,target));
     else{
+      if(await portalFirstForClass(target.classId))
+        throw fail('ERP_SCHEDULE_CHANGED','Hãy chọn lại mã buổi từ lịch Portal rồi giao bài.');
       await checkSchedule(database,target.classId,target.sessionNumber);
       const existing=await database.query(`SELECT id FROM learning.form_assignment WHERE erp_course_class_id=$1::bigint
         AND session_number=$2 AND status IN ('published','closed') LIMIT 1`,[target.classId,target.sessionNumber]);
