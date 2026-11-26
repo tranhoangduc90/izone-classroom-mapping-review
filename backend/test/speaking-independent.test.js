@@ -396,6 +396,8 @@ function documentFixture(documentId='fixture-document',ctaUrl='',assignmentCode=
 
 for (const [lesson, originalCode, parts] of [
   [5, '67-speaking-on_tap_lam_ro_diem_giua', [{ part_key: 'review_clarify_middle', min_questions: 3 }, { part_key: 'freestyle', min_questions: 1 }]],
+  [6, code, template.parts],
+  [7, '67-speaking-cach_lam_mot_viec', [{ part_key: 'how_to_do', min_questions: 4 }]],
   [9, '67-speaking-freestyle_on_tap', [{ part_key: 'freestyle', min_questions: 1 }]]
 ]) {
 test(`Lesson ${lesson} kỳ 2 đi từ mã trong Docs tới biên nhận riêng và dùng tiếp hồ sơ Doctor`, async () => {
@@ -416,9 +418,11 @@ test(`Lesson ${lesson} kỳ 2 đi từ mã trong Docs tới biên nhận riêng 
     const docs = createIndependentDocuments({ pool: f.pool, source: f.source, accessSecret: secret, gateway });
     const original = await f.service.startSelected({ assignmentCode: originalCode, classCode, studentRef: ref });
     const oldIdentity = { accessToken: original.accessToken, studentRef: ref };
-    await f.service.requestCheck({ ...oldIdentity, part: 'freestyle', rawUrl: url(801) });
+    const originalPart = parts.at(-1);
+    await f.service.requestCheck({ ...oldIdentity, part: originalPart.part_key, rawUrl: url(801) });
     const priorJob = await f.service.claimJob();
-    await f.service.workerService(priorJob).completeCheck({ fingerprint: fingerprint(801), questionCount: 1, qualityPassed: true });
+    await f.service.workerService(priorJob).completeCheck({ fingerprint: fingerprint(801),
+      questionCount: originalPart.min_questions, qualityPassed: true });
     const before = await f.service.open(oldIdentity);
 
     await docs.register({ courseId, courseWorkId, assignmentCode: cloneCode, title: 'Tên Classroom không theo số Lesson', classroomState: 'PUBLISHED' });
@@ -446,8 +450,13 @@ test(`Lesson ${lesson} kỳ 2 đi từ mã trong Docs tới biên nhận riêng 
 
     for (const [index, part] of parts.entries()) {
       const share = 802 + index;
-      await f.service.requestCheck({ ...identity, part: part.part_key, rawUrl: url(share) });
+      const linked = await f.service.requestCheck({ ...identity, part: part.part_key, rawUrl: url(share) });
       const job = await f.service.claimJob();
+      if (part.min_questions === 0) {
+        assert.equal(linked.status, 'accepted');
+        assert.equal(job, null);
+        continue;
+      }
       assert.equal(job.work_unit_id, session.workUnitId);
       assert.equal(await runSpeakingCheckJob(f.service.workerService(job), job, async () => ({
         kind: 'pass', fingerprint: fingerprint(share), count: part.min_questions
@@ -456,7 +465,7 @@ test(`Lesson ${lesson} kỳ 2 đi từ mã trong Docs tới biên nhận riêng 
     assert.equal((await docs.start(selected)).workUnitId, session.workUnitId);
     assert.equal((await f.service.open(identity)).links.length, parts.length);
     for (let slot = 1; slot <= 2; slot++) {
-      const share = 803 + slot;
+      const share = 810 + slot;
       await f.service.requestPracticeCheck({ ...identity, slot, exerciseId: exercise(slot), rawUrl: url(share) });
       let job = await f.service.claimJob();
       if (job.kind === 'analyze_practice') {
