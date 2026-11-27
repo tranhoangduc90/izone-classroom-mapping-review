@@ -1,0 +1,174 @@
+--- a/src/term-test-writing-grading.js
++++ b/src/term-test-writing-grading.js
+@@ -457,6 +457,31 @@
+   onResultStored = null,
+   logger = console
+ }) {
++  async function lockAttemptForJob(client, jobId) {
++    const { rows } = await client.query(`SELECT attempt.id::text AS id
++      FROM assessment.term_test_writing_grading_job job
++      JOIN assessment.term_test_writing_grading_run run ON run.id=job.run_id
++      JOIN assessment.term_test_attempt attempt ON attempt.id=run.attempt_id
++      WHERE job.id=$1::uuid
++      FOR NO KEY UPDATE OF attempt;`, [jobId]);
++    if (rows.length !== 1) {
++      throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc chấm Writing.', 404);
++    }
++    return rows[0].id;
++  }
++
++  async function withJobTransaction(operation, handler) {
++    const started = performance.now();
++    try {
++      return await inTransaction(pool, handler);
++    } catch (error) {
++      if (['40P01', '55P03', '40001'].includes(error?.code)) {
++        logger.warn?.(`Writing transaction operation=${operation} sqlstate=${error.code} elapsed_ms=${Math.round(performance.now()-started)}`);
++      }
++      throw error;
++    }
++  }
++
+   async function ensureSubmission({ attemptToken, testSlug, task1, task2, taskDefinitions }, executor, { qualifiedOnline = false } = {}) {
+     async function enqueue(client) {
+       const attemptResult = await client.query(`SELECT *, id::text
+@@ -465,7 +490,7 @@
+         AND test_slug = $2
+         AND (completed_at IS NOT NULL OR ${writingAllowedWithoutCompleteExam(testSlug)})
+         AND writing_submitted_at IS NOT NULL
+-      FOR UPDATE;`, [attemptToken, testSlug]);
++      FOR NO KEY UPDATE;`, [attemptToken, testSlug]);
+       if (attemptResult.rows.length !== 1) {
+         throw new TermTestWritingGradingError(
+           'WRITING_GRADING_ATTEMPT_NOT_READY',
+@@ -642,14 +667,16 @@
+   }
+ 
+   async function completeDispatch({ jobId, workerId, sourceRecordId = null }) {
+-    return inTransaction(pool, async client => {
++    return withJobTransaction('completeDispatch', async client => {
++      const attemptId = await lockAttemptForJob(client, jobId);
+       const jobResult = await client.query(`SELECT
+         job.id::text, job.status, job.job_type, job.worker_id,
++        COALESCE(job.lease_until > clock_timestamp(), false) AS lease_live,
+         run.id::text AS run_id, run.run_key
+       FROM assessment.term_test_writing_grading_job AS job
+       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+-      WHERE job.id = $1::uuid
+-      FOR UPDATE;`, [jobId]);
++      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
++      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
+       if (jobResult.rows.length !== 1) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc chấm.', 404);
+       }
+@@ -658,7 +685,7 @@
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_TYPE_MISMATCH', 'Sai loại việc chấm.', 409);
+       }
+       if (job.status === 'complete') return { status: 'duplicate', runKey: job.run_key };
+-      if (job.status !== 'processing' || job.worker_id !== workerId) {
++      if (job.status !== 'processing' || job.worker_id !== workerId || !job.lease_live) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc chấm không thuộc tiến trình này.', 409);
+       }
+       await client.query(`UPDATE assessment.term_test_writing_grading_job
+@@ -679,17 +706,19 @@
+   }
+ 
+   async function completeResult({ jobId, workerId, runKey, sourceRecordId = null, result }) {
+-    const stored = await inTransaction(pool, async client => {
++    const stored = await withJobTransaction('completeResult', async client => {
++      const attemptId = await lockAttemptForJob(client, jobId);
+       const jobResult = await client.query(`SELECT
+         job.id::text, job.status, job.job_type, job.worker_id,
++        COALESCE(job.lease_until > clock_timestamp(), false) AS lease_live,
+         run.id::text AS run_id, run.run_key, run.task_number, run.attempt_id::text AS attempt_id,
+         run.created_at AS run_created_at,
+-        attempt.test_slug
++        run.status AS run_status, attempt.test_slug
+       FROM assessment.term_test_writing_grading_job AS job
+       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+       JOIN assessment.term_test_attempt AS attempt ON attempt.id = run.attempt_id
+-      WHERE job.id = $1::uuid
+-      FOR UPDATE;`, [jobId]);
++      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
++      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
+       if (jobResult.rows.length !== 1) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc thu kết quả.', 404);
+       }
+@@ -705,10 +734,16 @@
+           attemptId: job.attempt_id
+         };
+       }
+-      if (job.status !== 'processing' || job.worker_id !== workerId) {
++      if (job.status !== 'processing' || job.worker_id !== workerId || !job.lease_live) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc thu kết quả không thuộc tiến trình này.', 409);
+       }
+       const isMini = job.test_slug === 'mini-test-k56';
++      if (!isMini && job.run_status === 'complete' && typeof syncErpGrades === 'function') {
++        const grading = await readStatus(client, job.attempt_id);
++        if (grading.ready) {
++          return { status: 'accepted', grading, portalSyncRequired: true, testSlug: job.test_slug, attemptId: job.attempt_id };
++        }
++      }
+       const isMiniHomework = isMini && result?.mode === 'homework';
+       if (isMini && !isMiniHomework) {
+         const cutoff = Date.parse(process.env.K56_MINI_HOMEWORK_CUTOVER_AT || '');
+@@ -848,23 +883,27 @@
+       }
+     }
+ 
+-    await inTransaction(pool, async client => {
++    const finalStatus = await withJobTransaction('finalizeResult', async client => {
+       const finalized = await client.query(`UPDATE assessment.term_test_writing_grading_job
+       SET status = 'complete', completed_at = now(), lease_until = NULL,
+           last_error_code = NULL, updated_at = now()
+       WHERE id = $1::uuid
+         AND status = 'processing'
+-        AND worker_id = $2
++        AND worker_id = $2 AND lease_until > clock_timestamp()
+       RETURNING id::text;`, [jobId, workerId]);
+       if (finalized.rows.length !== 1) {
++        const prior = await client.query(
++          'SELECT status FROM assessment.term_test_writing_grading_job WHERE id=$1::uuid', [jobId]);
++        if (prior.rows[0]?.status === 'complete') return 'duplicate';
+         throw new TermTestWritingGradingError(
+           'WRITING_GRADING_JOB_LEASE_MISMATCH',
+           'Việc ghi điểm Portal không còn thuộc tiến trình này.',
+           409
+         );
+       }
++      return 'accepted';
+     });
+-    return { status: 'accepted', grading: stored.grading, portalSyncStatus };
++    return { status: finalStatus, grading: stored.grading, portalSyncStatus };
+   }
+ 
+   async function failJob({ jobId, workerId, errorCode }) {
+@@ -872,21 +911,23 @@
+     if (!/^[A-Z0-9_:-]{3,100}$/.test(safeCode)) {
+       throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_ERROR', 'Mã lỗi không hợp lệ.', 400);
+     }
+-    return inTransaction(pool, async client => {
++    return withJobTransaction('failJob', async client => {
++      const attemptId = await lockAttemptForJob(client, jobId);
+       const jobResult = await client.query(`SELECT
+-        job.id::text, job.status, job.worker_id, job.job_type,
++        job.id::text, job.status, job.worker_id,
++        COALESCE(job.lease_until > clock_timestamp(), false) AS lease_live, job.job_type,
+         job.attempt_count, job.max_attempts, job.run_id::text,
+         run.run_key
+       FROM assessment.term_test_writing_grading_job AS job
+       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+-      WHERE job.id = $1::uuid
+-      FOR UPDATE;`, [jobId]);
++      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
++      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
+       if (jobResult.rows.length !== 1) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc lỗi.', 404);
+       }
+       const job = jobResult.rows[0];
+       if (job.status === 'complete') return { status: 'already_complete' };
+-      if (job.status !== 'processing' || job.worker_id !== workerId) {
++      if (job.status !== 'processing' || job.worker_id !== workerId || !job.lease_live) {
+         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc lỗi không thuộc tiến trình này.', 409);
+       }
+       const terminal = Number(job.attempt_count) >= Number(job.max_attempts);
