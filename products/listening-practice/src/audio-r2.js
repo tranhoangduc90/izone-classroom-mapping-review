@@ -3,6 +3,7 @@ import {createHmac,createHash} from 'node:crypto';
 const catalog=JSON.parse(readFileSync(new URL('./r2-audio-catalog.json',import.meta.url),'utf8'));
 export const R2_HEADER='X-Izone-Audio-Transport';
 export const R2_POLICY='r2-direct-v1';
+const PRACTICE_CATALOG='r2-direct-v1-practice-catalog';
 const enc=s=>encodeURIComponent(s).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
 const mac=(key,value)=>createHmac('sha256',key).update(value).digest();
 function settings(env=process.env){
@@ -11,13 +12,22 @@ function settings(env=process.env){
 }
 export function r2Eligible(hash,options={}){
  const c=options.settings??settings(options.env);
- return !!(catalog[hash]&&c?.enabled===true&&Array.isArray(c.assets)&&c.assets.includes(hash));
+ return !!(catalog[hash]&&c?.enabled===true&&Array.isArray(c.assets)&&(c.assets.includes(hash)||c.assets.includes('*')));
+}
+export function registeredPagesAudio(){
+ return Object.fromEntries(Object.values(catalog).filter(asset=>Array.isArray(asset.pagesChunks)).map(asset=>{
+  const {sha256,byteLength,url,pagesChunks:chunks}=asset;
+  return [sha256,{assetVersion:'sha256-'+sha256,sha256,byteLength,encryptedByteLength:byteLength,
+    envelopeVersion:'MP3',url,chunkSize:1048576,chunks}];
+ }));
 }
 // Called only after the native product route has authorized the exact pinned file.
 export function issueR2Download(manifest,{requested,eligible=true,now=new Date(),...options}={}){
- if(requested!==R2_POLICY||!eligible)return undefined;
+ if(requested!==R2_POLICY&&requested!==PRACTICE_CATALOG)return undefined;
  const c=options.settings??settings(options.env),asset=catalog[manifest?.sha256];
  if(!r2Eligible(manifest?.sha256,{settings:c,env:options.env}))return undefined;
+ if(asset.pagesChunks&&requested!==PRACTICE_CATALOG)return undefined;
+ if(!eligible&&!(Array.isArray(c.adoptExistingAssets)&&c.adoptExistingAssets.includes(manifest.sha256)))return undefined;
  if(!asset||manifest.url!==asset.url||manifest.byteLength!==asset.byteLength||manifest.envelopeVersion!=='MP3')throw Object.assign(Error('AUDIO_R2_MANIFEST_DENIED'),{status:403,code:'AUDIO_R2_MANIFEST_DENIED'});
  if(!/^[a-f0-9]{32}$/.test(c.accountId||'')||!c.bucket||!c.accessKeyId||!c.secretAccessKey)throw Object.assign(Error('AUDIO_R2_UNAVAILABLE'),{status:503,code:'AUDIO_R2_UNAVAILABLE'});
  const date=now.toISOString().replace(/[:-]|\.\d{3}/g,''),day=date.slice(0,8),scope=day+'/auto/s3/aws4_request';
