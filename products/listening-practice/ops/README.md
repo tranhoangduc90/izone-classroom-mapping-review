@@ -1,5 +1,15 @@
 # Phát hành và vận hành Listening buổi 8
 
+## Audio mặc định cho bài mới · 27/11/2026
+
+Bài Listening thực chiến mới dùng Cloudflare R2 trực tiếp, có GitHub Pages dự phòng cùng byte. VPS kiểm quyền và cấp link GET ngắn hạn. Chỉ đưa MP3 đã được phép làm nguồn Pages lên repo public. Giữ đề, đáp án, transcript, khóa và dữ liệu học viên trong nguồn riêng.
+
+1. Dùng `node tools/register-r2-audio.mjs <asset-id> <local-mp3> <native-content-sha256>` để đăng ký theo đúng hash của bản nội dung. Tệp tên `<ten>-<16-ky-tu-dau-cua-sha>.mp3`. Lệnh tạo một mục chung chứa hash từng khối R2 và Pages. Frontend Listening nhận thông tin này từ API đã kiểm quyền.
+2. Đưa tệp vào bucket private theo object key trả về và phát bản cùng byte tại URL dự phòng trả về. Đọc lại toàn tệp ở cả hai nguồn, xác minh SHA-256. Kiểm request Range của R2 và cấu hình CORS từ origin Pages.
+3. Phát danh mục backend cùng bản nội dung. Runtime practice dùng `assets: ["*"]` để bật R2 cho các tệp đã đăng ký. Tạo một lượt thử, kiểm quyền, tải tiếp sau gián đoạn và tải Pages khi chặn R2. Công cụ seed mặc định kiểm tệp đã đăng ký. `--legacy-audio` dành cho khôi phục lịch sử hoặc ngoại lệ đã chỉ rõ.
+4. Khi chuyển một bài cũ, dùng danh sách `adoptExistingAssets` theo đúng hash nếu cần đổi nguồn của lượt đã tạo. Quyền nghe và bản nháp của lượt giữ nguyên. Tab cũ dùng bản Pages cùng tệp. Khi cần quay lui, đổi cấu hình/chuyển lại bản runtime đã ghi và giữ dữ liệu học viên.
+
+
 ## Tự gắn CTA Classroom — 16/10/2026
 
 `POST /api/admin/register-cta` dùng credential riêng `X-Listening-Admin`, nhận một event `course67_cta_registration_v1/v2` có Doc, submission, course, coursework, Google user và tên lớp. API tự đọc Docs, nhận đúng CTA/mã ngay dưới trong cùng tab; tài liệu không có Listening trả `not_applicable`. Thiếu/trùng/sai mã dừng trước ghi. Không nhận một batch nhiều học viên trong một request.

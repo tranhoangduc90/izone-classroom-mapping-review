@@ -1,9 +1,12 @@
 import {readFileSync} from 'node:fs';
 import {withCloudflareAudio} from './cloudflare-audio.mjs';
-import {issueR2Download,R2_HEADER} from './audio-r2.js';
+import {issueR2Download,R2_HEADER,registeredPagesAudio} from './audio-r2.js';
 
 export const AUDIO_MANIFEST_TYPE = 'application/vnd.izone.audio-manifest+json';
-export const publicAudioCatalog = JSON.parse(readFileSync(new URL('./public-audio-catalog.json', import.meta.url), 'utf8'));
+export const publicAudioCatalog = {
+  ...JSON.parse(readFileSync(new URL('./public-audio-catalog.json', import.meta.url), 'utf8')),
+  ...registeredPagesAudio(),
+};
 
 // Called only after the original student/teacher authorization has succeeded.
 // Old clients keep the original file response during the compatible rollout.

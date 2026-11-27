@@ -59,3 +59,43 @@ test('MP3 '+sha.slice(0,8)+' keeps active owner, post-submit review and teacher 
   assert.equal((await get(`/api/teacher/review-audio/${submission}`,teacher.body.token)).status,403);
   assert.deepEqual(await f.service.read({token:f.token}),before);
 });
+
+test('newly registered Listening files grant R2 only to capable browsers and preserve existing attempts',async t=>{
+ const file=tmpdir()+'/practice-r2-'+uuid()+'.json';
+ const prior={enabled:process.env.AUDIO_R2_DIRECT_ENABLED,file:process.env.AUDIO_R2_DIRECT_CONFIG_FILE};
+ const hashes=Object.keys(publicAudioCatalog).filter(sha=>publicAudioCatalog[sha].url.includes('/c21-t2-full-')
+  ||publicAudioCatalog[sha].url.includes('/c21-t3-full-')||publicAudioCatalog[sha].url.includes('/tree-planting-'));
+ assert.equal(hashes.length,3);
+ const config={enabled:false,assets:['*'],adoptExistingAssets:hashes,accountId:'0'.repeat(32),bucket:'test',
+  accessKeyId:'fixture-key',secretAccessKey:'fixture-secret'};
+ process.env.AUDIO_R2_DIRECT_ENABLED='true';process.env.AUDIO_R2_DIRECT_CONFIG_FILE=file;
+ t.after(async()=>{for(const [key,value] of [['AUDIO_R2_DIRECT_ENABLED',prior.enabled],['AUDIO_R2_DIRECT_CONFIG_FILE',prior.file]])
+  if(value===undefined)delete process.env[key];else process.env[key]=value;await fs.unlink(file);});
+ for(const sha of hashes){
+  const f=await fixture();t.after(f.close);
+  const mediaCatalog={[sha]:{audioFile:'/fixture-no-vps-bytes'}};
+  const app=createApp({pool:f.pool,service:f.service,mediaCatalog,origins:[],googleClientId:'',adminKey:secret()});
+  const get=(id,capability,token=f.token)=>request(app).get('/api/audio/'+id).set('Accept',AUDIO_MANIFEST_TYPE)
+   .set('X-Izone-Audio-Transport',capability).set('Authorization','Bearer '+token);
+  await fs.writeFile(file,JSON.stringify({...config,enabled:false}));
+  await f.pool.query("UPDATE listening_practice.content SET definition=jsonb_set(definition,'{audio,sha256}',to_jsonb($1::text))",[sha]);
+  const view=await f.begin();
+  const old=view.attempts.at(-1);
+  assert.equal(old.audioDeliveryPolicy,undefined);
+  await fs.writeFile(file,JSON.stringify({...config,enabled:true}));
+  const before=(await f.pool.query('SELECT state FROM listening_practice.work')).rows;
+  const oldBrowser=await get(old.id,'r2-direct-v1');
+  assert.equal(oldBrowser.status,200);
+  assert.equal(oldBrowser.body.audioDownload,undefined);
+  assert.equal(oldBrowser.body.audioManifest.sha256,sha);
+  const capable=await get(old.id,'r2-direct-v1-practice-catalog');
+  assert.equal(capable.status,200);
+  assert.equal(capable.body.audioDownload.sha256,sha);
+  assert.equal(capable.body.audioDownload.fallback,'public-pages');
+  assert.equal((await get(old.id,'r2-direct-v1-practice-catalog',secret())).status,401);
+  assert.deepEqual((await f.pool.query('SELECT state FROM listening_practice.work')).rows,before);
+  const next=await f.service.reset({token:f.token,attemptId:old.id,owner:'device1',lease:view.lease,snapshot:f.draft(),operationId:uuid()});
+  assert.equal(next.attempts.at(-1).audioDeliveryPolicy,'r2-direct-v1');
+  assert.equal((await get(next.attempts.at(-1).id,'r2-direct-v1-practice-catalog')).body.audioDownload.sha256,sha);
+ }
+});

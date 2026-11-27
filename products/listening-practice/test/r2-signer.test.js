@@ -11,7 +11,8 @@ test('explicit opt-in, configured asset and native eligibility are all required'
  assert.equal(r2Eligible(asset.sha256,{settings}),true);assert.equal(r2Eligible('0'.repeat(64),{settings}),false);
 });
 test('all configured native assets receive object-bound GET signatures with bounded lifetime',()=>{for(const a of Object.values(catalog)){
- const d=issueR2Download({...a,envelopeVersion:'MP3'},{requested:'r2-direct-v1',settings,now:new Date('2026-11-07T00:00:00Z')});
+ const requested=a.pagesChunks?'r2-direct-v1-practice-catalog':'r2-direct-v1';
+ const d=issueR2Download({...a,envelopeVersion:'MP3'},{requested,settings,now:new Date('2026-11-07T00:00:00Z')});
  const u=new URL(d.url);assert.equal(u.pathname,'/'+settings.bucket+'/'+a.key);assert.equal(u.searchParams.get('X-Amz-Expires'),'600');assert.equal(u.searchParams.get('X-Amz-SignedHeaders'),'host');assert.match(u.searchParams.get('X-Amz-Signature'),/^[a-f0-9]{64}$/);assert.equal(d.sha256,a.sha256);assert.equal(d.fallback,'public-pages');
 }});
 test('signer rejects altered pin/url/size and does not leak signing secret in descriptor',()=>{
