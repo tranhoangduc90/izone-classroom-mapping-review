@@ -11,7 +11,7 @@ const pins = {
   poll: ['qj1aGCo406QsXtai', '0bd1925ced423e51ab28d02670e3d26a06d9fc8a9e671c232d6a1f7eba9bcaa7'],
   writer: ['nwp6ERqWKb2FkgFl', '8f35b0db4a264792e513c223c25fa85eef2fb48d6612d84423af0f327aefb6f2']
 };
-function fixture(role) {
+function pinnedFixture(role) {
   // Đọc đúng baseline private có hash; không chép credential hoặc webhook vào Git.
   const [id, pin] = pins[role];
   const root = `E:/Codex-Data/n8n-workflow-versions/${id}/k67-fixture-${role}-20261006/incoming`;
@@ -21,6 +21,42 @@ function fixture(role) {
   assert.equal(createHash('sha256').update(bytes).digest('hex'), pin);
   return JSON.parse(bytes);
 }
+
+function syntheticFixture(role) {
+  const code = (id, name, jsCode) => ({ id, name, type: 'n8n-nodes-base.code', parameters: { jsCode } });
+  const trigger = { id: 'test-trigger', name: 'Trigger', type: 'n8n-nodes-base.manualTrigger', parameters: {} };
+  const action = code('synthetic-action', 'Synthetic action', 'return [{ json: { runKey: $json.runKey } }];');
+  const callbacks = [
+    ['Nhận việc chấm', 'claim'], ['Xác nhận đã chấm xong', 'dispatch-complete'],
+    ['Ghi kết quả vào bài thi', 'result'], ['Báo lỗi chấm để thử lại', 'fail'],
+    ['Báo lỗi đọc lưu tạm để thử lại', 'fail'],
+  ];
+  const parts = role === 'writer' ? [
+    ...['4414477a-acde-48f5-bca5-6b015e8477f2', 'e261c8a7-0434-40ff-a34c-839756a8d917',
+      '33a04bd0-fda2-48f0-8ced-022cabaa34e3', 'f2ece298-2ccc-4b36-86e6-3122bb5d913a',
+      'b1f8431e-d88c-433f-a640-50e275c30668'].map((id, i) => ({
+      id, name: `Fixture Portal ${i}`, type: 'n8n-nodes-base.httpRequest',
+      parameters: { url: "=https://gateway.izone.edu.vn/portal/v1/course-classes/{{ $('Xác thực và chuẩn bị dữ liệu').first().json.classId }}/student-tests",
+        authentication: 'genericCredentialType', genericAuthType: 'oAuth2Api', method: i === 1 ? 'POST' : 'GET' },
+      credentials: { oAuth2Api: { id: '5t3dhy3tWIoPzmXc', name: 'Synthetic Portal OAuth reference' } },
+    })),
+    code('synthetic-readback', 'Kiểm tra kết quả ghi', `
+      const { classTest, gradeRow, expectedGrade } = $json;
+      if (!classTest || !gradeRow || Number(gradeRow.grade) !== Number(expectedGrade)) {
+        throw new Error('Synthetic readback mismatch');
+      }
+      return [{ json: { status: 'synced' } }];`),
+  ] : callbacks.map(([name, path], i) => code(`synthetic-callback-${i}`, name,
+    `return [{ json: { target: 'https://ducizone.ddns.net/term-mini-k67-api/api/term-tests/writing-grading/jobs/${path}', jobId: $json.jobId } }];`));
+  return { id: pins[role][0], name: `Synthetic ${role} routing fixture`, active: false,
+    versionId: 'synthetic-baseline-v1', nodes: [trigger, action, ...parts],
+    connections: { Trigger: { main: [[{ node: action.name, type: 'main', index: 0 }]] } },
+    settings: { saveDataErrorExecution: 'all', saveDataSuccessExecution: 'all', saveManualExecutions: true } };
+}
+
+// The portable cases keep the routing and mutation contract under test.
+// Set the flag only when comparing the exact historical archived workflows.
+const fixture = process.env.K67_GRADING_USE_PINNED_FIXTURES === '1' ? pinnedFixture : syntheticFixture;
 const options = role => ({ role, profile: role === 'writer' ? 'izone-ai' : 'default', intent, credential });
 
 test('K67 writer repair: chỉ Code readback đổi, không sửa nguồn hoặc gọi cây chung', () => {

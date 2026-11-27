@@ -169,6 +169,7 @@ function normalizeTaskResult(taskNumber, input) {
 
 async function inTransaction(pool, handler) {
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
+  const started = Date.now();
   try {
     await client.query('BEGIN');
     const result = await handler(client);
@@ -176,6 +177,10 @@ async function inTransaction(pool, handler) {
     return result;
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* Giữ lại lỗi gốc. */ }
+    if (['40P01', '55P03', '40001'].includes(error?.code)) {
+      console.error(JSON.stringify({ type: 'term_test_reliability', event: 'writing_grading_transaction_failed',
+        sqlState: error.code, elapsedMs: Date.now() - started }));
+    }
     throw error;
   } finally {
     if (client !== pool && typeof client.release === 'function') client.release();
@@ -310,6 +315,20 @@ async function refreshFinal(client, attemptId) {
 }
 
 export function createTermTestWritingGradingService({ pool, syncErpGrades = null }) {
+  async function lockAttemptForJob(client, jobId) {
+    // Lock the attempt before any job/run rows. The final result references both
+    // Task runs, so taking a Task lock first can deadlock with a duplicate callback.
+    const { rows } = await client.query(`SELECT attempt.id::text
+      FROM assessment.term_test_attempt AS attempt
+      WHERE attempt.id = (
+        SELECT run.attempt_id FROM assessment.term_test_writing_grading_job AS job
+        JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
+        WHERE job.id = $1::uuid
+      )
+      FOR NO KEY UPDATE OF attempt;`, [jobId]);
+    return rows[0]?.id ?? null;
+  }
+
   function ensureSubmission(input) {
     return inTransaction(pool, client=>ensureSubmissionInTransaction(client,input));
   }
@@ -513,13 +532,14 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
 
   async function completeDispatch({ jobId, workerId, sourceRecordId = null }) {
     return inTransaction(pool, async client => {
+      const attemptId = await lockAttemptForJob(client, jobId);
       const jobResult = await client.query(`SELECT
         job.id::text, job.status, job.job_type, job.worker_id,
         run.id::text AS run_id, run.run_key
       FROM assessment.term_test_writing_grading_job AS job
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
-      WHERE job.id = $1::uuid
-      FOR UPDATE;`, [jobId]);
+      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
+      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
       if (jobResult.rows.length !== 1) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc chấm.', 404);
       }
@@ -550,15 +570,17 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
 
   async function completeResult({ jobId, workerId, runKey, sourceRecordId = null, result }) {
     const stored = await inTransaction(pool, async client => {
+      const attemptId = await lockAttemptForJob(client, jobId);
       const jobResult = await client.query(`SELECT
         job.id::text, job.status, job.job_type, job.worker_id,
+        COALESCE(job.lease_until > clock_timestamp(), false) AS lease_live,
         run.id::text AS run_id, run.run_key, run.task_number, run.attempt_id::text AS attempt_id,
-        attempt.writing_scope,run.result_json->>'gradingMethod' AS grading_method
+        attempt.writing_scope,run.status AS run_status,run.result_json->>'gradingMethod' AS grading_method
       FROM assessment.term_test_writing_grading_job AS job
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
       JOIN assessment.term_test_attempt AS attempt ON attempt.id=run.attempt_id
-      WHERE job.id = $1::uuid
-      FOR UPDATE;`, [jobId]);
+      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
+      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
       if (jobResult.rows.length !== 1) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc thu kết quả.', 404);
       }
@@ -569,11 +591,16 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       if (job.status === 'complete') {
         return { status: 'duplicate', grading: await readStatus(client, job.attempt_id), portalSyncRequired: false };
       }
-      if (job.status !== 'processing' || job.worker_id !== workerId) {
+      if (job.status !== 'processing' || job.worker_id !== workerId || !job.lease_live) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_LEASE_MISMATCH', 'Việc thu kết quả không thuộc tiến trình này.', 409);
       }
       if (job.writing_scope==='lr_only' || job.grading_method==='blank_rule') {
         return {status:'duplicate',grading:await readStatus(client,job.attempt_id),portalSyncRequired:false};
+      }
+      if (job.run_status === 'complete' && typeof syncErpGrades === 'function') {
+        // A previous callback saved the result and left only Portal delivery pending.
+        const grading = await readStatus(client, job.attempt_id);
+        if (grading.ready) return { status: 'accepted', grading, portalSyncRequired: true, attemptId: job.attempt_id };
       }
       const normalized = normalizeTaskResult(Number(job.task_number), result);
 
@@ -683,7 +710,7 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       }
     }
 
-    await inTransaction(pool, async client => {
+    const status = await inTransaction(pool, async client => {
       const finalized = await client.query(`UPDATE assessment.term_test_writing_grading_job
       SET status = 'complete', completed_at = now(), lease_until = NULL,
           last_error_code = NULL, updated_at = now()
@@ -691,15 +718,17 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
         AND status = 'processing'
         AND worker_id = $2
       RETURNING id::text;`, [jobId, workerId]);
-      if (finalized.rows.length !== 1) {
-        throw new TermTestWritingGradingError(
-          'WRITING_GRADING_JOB_LEASE_MISMATCH',
-          'Việc ghi điểm Portal không còn thuộc tiến trình này.',
-          409
-        );
-      }
+      if (finalized.rows.length === 1) return 'accepted';
+      const { rows: [current] } = await client.query(`SELECT status, worker_id
+        FROM assessment.term_test_writing_grading_job WHERE id = $1::uuid`, [jobId]);
+      if (current?.status === 'complete' && current.worker_id === workerId) return 'duplicate';
+      throw new TermTestWritingGradingError(
+        'WRITING_GRADING_JOB_LEASE_MISMATCH',
+        'Việc ghi điểm Portal không còn thuộc tiến trình này.',
+        409
+      );
     });
-    return { status: 'accepted', grading: stored.grading, portalSyncStatus };
+    return { status, grading: stored.grading, portalSyncStatus };
   }
 
   async function failJob({ jobId, workerId, errorCode }) {
@@ -708,14 +737,15 @@ export function createTermTestWritingGradingService({ pool, syncErpGrades = null
       throw new TermTestWritingGradingError('WRITING_GRADING_INVALID_ERROR', 'Mã lỗi không hợp lệ.', 400);
     }
     return inTransaction(pool, async client => {
+      const attemptId = await lockAttemptForJob(client, jobId);
       const jobResult = await client.query(`SELECT
         job.id::text, job.status, job.worker_id, job.job_type,
         job.attempt_count, job.max_attempts, job.run_id::text,
         run.run_key
       FROM assessment.term_test_writing_grading_job AS job
       JOIN assessment.term_test_writing_grading_run AS run ON run.id = job.run_id
-      WHERE job.id = $1::uuid
-      FOR UPDATE;`, [jobId]);
+      WHERE job.id = $1::uuid AND run.attempt_id = $2::uuid
+      FOR NO KEY UPDATE OF job, run;`, [jobId, attemptId]);
       if (jobResult.rows.length !== 1) {
         throw new TermTestWritingGradingError('WRITING_GRADING_JOB_NOT_FOUND', 'Không tìm thấy việc lỗi.', 404);
       }
