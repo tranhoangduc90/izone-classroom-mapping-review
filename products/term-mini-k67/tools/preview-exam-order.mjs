@@ -292,7 +292,8 @@ if (term2PreviewApps) outer.post('/preview/term2-parallel-mode',express.json(),(
   previewApp=term2PreviewApps[req.body.mode];
   return res.json({ok:true,mode:req.body.mode});
 });
-outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version}));
+outer.get('/preview/status',(_req,res)=>res.json({ok:true,previewId:'k67-orders-20261014',fixtureOnly:true,node:process.version,
+  examTiming:Object.fromEntries(Object.keys(timing).map(slug=>[slug,assets.getTiming(slug)]))}));
 const recoverySlug=previewTerm1ListeningRecovery?'term-test-1':previewTerm2ListeningRecovery?'term-test-2':
   previewMiniListeningRecovery?'mini-test-lesson-5':previewPretestListeningRecovery?pretestSlug:null;
 const recoveryJourneyTable=previewMiniListeningRecovery?'assessment.mini_k67_cbt_journey':'assessment.term_k67_cbt_journey';
@@ -425,6 +426,9 @@ if(protection)outer.post('/preview/incident-clock',express.json(),async(req,res)
   res.json({ok:true,fixtureOnly:true});
 });
 const fixtureConfig = `window.TERM_TEST_APP_CONFIG={API_BASE_URL:location.origin,GOOGLE_CLIENT_ID:''${journalFixture?',EXAM_JOURNAL_ENABLED:true':''}};`;
+const fixtureConfigHash=createHash('sha256').update(fixtureConfig).digest('hex');
+const rewriteFixtureConfigHash=source=>source.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
+  (_match,before,after)=>before+fixtureConfigHash+after);
 outer.get('/term-tests/k67-shared/config.js',(_req,res)=>res.type('application/javascript').send(fixtureConfig));
 const previousPagesRevision=process.env.K67_PREVIEW_PREVIOUS_PAGES_REVISION;
 if(previousPagesRevision){
@@ -453,10 +457,7 @@ if(previousPagesRevision){
     const file=req.path.replace(/^\//,'').replace(/\/$/,'/index.html');
     const content=previous.get(file);
     if(!content)return next();
-    const body=/\/offline-assets(?:-audio-status-v2)?\.mjs$/.test(file)
-      ? content.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
-          (_match,before,after)=>before+createHash('sha256').update(fixtureConfig).digest('hex')+after)
-      : content;
+    const body=/\/offline-assets(?:-[a-z0-9-]+)?\.mjs$/.test(file) ? rewriteFixtureConfigHash(content) : content;
     res.type(path.extname(file)).send(body);
   });
 }
@@ -469,28 +470,16 @@ if(term2JourneyMode==='on')offlineEntries.push('term-test-2-computer-based');
 if(pretestMode==='on')offlineEntries.push('pretest-lesson-16-computer-based','pretest-lesson-16');
 if(term2JourneyMode==='on'&&rescueClass)offlineEntries.push('term-test-2-rescue');
 if(retakeMode==='on')offlineEntries.push('term-test-1-listening-retake');
-for(const entry of offlineEntries){
+if(offlineEntries.length){
   // The isolated server replaces only the origin config. Production digests are
   // checked separately against Git bytes, while this fixture still checks its cache.
-  const fixtureManifests=['offline-assets-listening-first-frame-v1.mjs',
-    ...(['term-test-1-computer-based','term-test-2-computer-based'].includes(entry)?[
-      'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1.mjs',
-      'offline-assets-student-cache-v2-preview-verified-v1-confirmed-departure-v1-listening-recovery-v1.mjs'
-    ]:[]),
-    ...(miniParallel&&entry==='mini-test-lesson-5-computer-based'
-      ?['offline-assets-mini-parallel-v1.mjs','offline-assets-audio-report-v1.mjs']:[]),
-    ...(entry==='mini-test-lesson-5-computer-based'
-      ?['offline-assets-mini-student-cache-v3-preview-verified-v1-confirmed-departure-v1-listening-recovery-v1.mjs']:[]),
-    ...(['term-test-1-computer-based','term-test-2-computer-based','term-test-1'].includes(entry)?['offline-assets-parallel-v1.mjs']:[]),
-    ...(entry.startsWith('pretest-lesson-16')?['offline-assets-audio-status-v2.mjs']
-    :['offline-assets.mjs','offline-assets-audio-status-v1.mjs','offline-assets-audio-status-v2.mjs'])];
-  outer.get(fixtureManifests.map(name=>`/term-tests/${entry}/${name}`), async (req,res,next) => {
+  outer.get(/^\/term-tests\/([a-z0-9-]+)\/(offline-assets(?:-[a-z0-9-]+)?\.mjs)$/, async (req,res,next) => {
+    const [entry,manifest]=[req.params[0],req.params[1]];
+    if(!offlineEntries.includes(entry))return next();
     try {
-      const source = await readFile(path.join(pages,'term-tests',entry,path.posix.basename(req.path)),'utf8');
-      const hash = createHash('sha256').update(fixtureConfig).digest('hex');
-      res.type('application/javascript').send(source.replace(/("\.\.\/k67-shared\/config\.js":\s*")[a-f0-9]{64}(")/,
-        (_match, before, after) => before + hash + after));
-    } catch (error) { next(error); }
+      const source=await readFile(path.join(pages,'term-tests',entry,manifest),'utf8');
+      res.type('application/javascript').send(rewriteFixtureConfigHash(source));
+    } catch (error) { next(error.code==='ENOENT'?undefined:error); }
   });
   outer.get(/^\/(?:term-tests|shared|speaking-homework)\//, async (req,res,next) => {
     if (typeof req.query.examBuild !== 'string' || !/^[a-f0-9]{64}$/.test(req.query.examBuild)) return next();
