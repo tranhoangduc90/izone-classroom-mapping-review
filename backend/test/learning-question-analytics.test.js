@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {buildQuestionAnalytics} from '../src/learning-question-analytics.js';
 
 test('R09: phiếu lịch sử không khai báo options vẫn thống kê được, key chỉ được truyền vào nhánh giáo viên',()=>{
@@ -60,4 +61,43 @@ test('A06: điền từ có đáp án tính đúng/sai, câu Reading chỉ đố
   assert.equal(ungraded.objective,false);assert.equal(ungraded.counts.graded,0);
   assert.equal(ungraded.counts.incorrect,0);assert.equal(ungraded.counts.ungraded,3);
   assert.equal(ungraded.errorRate,null);
+});
+
+test('Phần đã nộp hiện trước khi có verdict, chấm đúng phiên bản và dùng final đúng một lần',()=>{
+  const formVersionId=randomUUID(),blockId=randomUUID(),otherBlockId=randomUUID(),itemVersionId=randomUUID();
+  const setupItem={...objective,itemFamilyId:randomUUID(),itemVersionId,pedagogicalTypeCode:'multiple_choice',
+    layoutType:'plain_prompt',helpText:'',groupId:null,skillCodes:['reading'],releasePolicy:'inherit'};
+  const nextItem={...setupItem,itemFamilyId:randomUUID(),itemVersionId:randomUUID(),position:2};
+  const definition={schemaVersion:'FormDefinitionV1',formVersionId,title:'Phiếu kiểm phần',kind:'quiz',
+    answerReleasePolicy:'teacher_release',blocks:[
+      {blockId,checkpoint:1,title:'Phần một',items:[setupItem]},
+      {blockId:otherBlockId,checkpoint:2,title:'Phần hai',items:[nextItem]}
+    ]};
+  const gradingKey={schemaVersion:'FormGradingKeyV1',formVersionId,graderVersion:1,
+    items:{[itemVersionId]:{graderType:'exact_option',expectedOptionId:'A'},
+      [nextItem.itemVersionId]:{graderType:'exact_option',expectedOptionId:'A'}}};
+  const response={ [itemVersionId]:'A' };
+  const row={studentRef:'s1',name:'Học viên mẫu',submissionId:null,
+    checkpoints:[{blockId,checkpointSubmissionId:randomUUID(),responses:response}]};
+  const build=(students,key=null)=>buildQuestionAnalytics({assignmentId:'demo',definition,gradingKey:key,
+    includeCheckpoints:true,summaryOnly:true,students});
+  const before=build([row]);
+  assert.deepEqual(before.parts.map(part=>part.submittedCount),[1,0]);
+  assert.equal(before.items[0].counts.answered,1);
+  assert.equal(before.items[0].counts.pending,1);
+  assert.equal(before.items[0].counts.incorrect,0);
+  assert.equal(before.items[1].counts.submitted,0);
+  const graded=build([row],gradingKey);
+  assert.equal(graded.items[0].counts.correct,1);
+  assert.equal(graded.items[0].counts.pending,0);
+  assert.notEqual(graded.items[0].responseVersion,before.items[0].responseVersion);
+  const mismatched=build([row],{...gradingKey,formVersionId:randomUUID()});
+  assert.equal(mismatched.items[0].counts.answered,1);
+  assert.equal(mismatched.items[0].counts.pending,1);
+  const after=build([{...row,submissionId:'final',responses:{[itemVersionId]:'B'},
+    responseItems:[{itemVersionId,answerState:'answered'}],gradingItems:[{itemVersionId,verdict:'incorrect'}]}],gradingKey);
+  assert.equal(after.submittedCount,1);
+  assert.equal(after.items[0].counts.answered,1);
+  assert.equal(after.items[0].counts.correct,0);
+  assert.equal(after.items[0].counts.incorrect,1);
 });

@@ -6,6 +6,7 @@ const UUID=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 // Nhận revision bền vững từ PostgreSQL; trả đúng phần đổi, không tính lại analytics khi chỉ lưu nháp.
 export function createLearningLiveUpdates({pool,service,revalidate,assignmentRead=actor=>actor,enabled=true,streamEnabled=true,classIds=null,
+  checkpointAnalyticsClassIds=[],
   heartbeatMs=15000,repairMs=10000,coalesceMs=600,maxStreams=300,maxStreamsPerAccount=4,logger=console}) {
   const streams=new Set(),dirty=new Set(),releases=new Set(),bindings=new Map();
   const rollout=classIds?new Set(classIds.map(String)):null;
@@ -16,7 +17,7 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
     const access=await database.query(authorizeLearningLiveAssignmentSql,[assignmentId,actor.email,actor.canAccessAllClasses]);
     if(access.rowCount!==1) throw new LearningError('ASSIGNMENT_ACCESS_DENIED','Phiếu không thuộc phạm vi được cấp quyền.',404);
     if(rollout&&!rollout.has(String(access.rows[0].class_id)))throw new LearningError('LIVE_UPDATES_UNAVAILABLE','Lớp đang dùng nhịp cập nhật hiện hành.',503);
-    return actor;
+    return {reviewer:actor,checkpointAnalytics:checkpointAnalyticsClassIds.includes(String(access.rows[0].class_id))};
   }
   async function revisions(ids) {
     if(!ids.length)return new Map();
@@ -25,11 +26,12 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
       WHERE assignment.id=ANY($1::uuid[])`,[ids]);
     return new Map(rows.rows.map(row=>[row.assignment_id,row.revision]));
   }
-  async function read({assignmentId,reviewer,after='0',force=false,view='full'}) {
+  async function read({assignmentId,reviewer,after='0',force=false,view='full',submittedParts=false}) {
     const database=await pool.connect();
     try{
     await database.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL statement_timeout='8s'");
-    reviewer=await authorize(assignmentId,reviewer,database);
+    const access=await authorize(assignmentId,reviewer,database);
+    reviewer=access.reviewer;
     const reader=service.readUsing(database);
     // Một statement giữ revision và danh sách đổi cùng snapshot; lần đọc kế tiếp bù mọi commit đến sau đó.
     const result=await database.query(`SELECT COALESCE(live.revision,0)::text AS revision,
@@ -38,10 +40,15 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
       FROM (VALUES(1)) AS singleton(n) LEFT JOIN learning.assignment_live_revision AS live ON live.assignment_id=$1::uuid`,[assignmentId,after]);
     const {revision,changes}=result.rows[0];
     const full=force||BigInt(after)>BigInt(revision);
-    const scopes=new Set(full?['dashboard','drafts','analytics']:changes.map(change=>change.scope));
+    const checkpointAnalytics=submittedParts&&access.checkpointAnalytics;
+    const relevantChanges=checkpointAnalytics ? changes : changes.filter(change=>change.scope!=='checkpoint_analytics');
+    const scopes=new Set(full?['dashboard','drafts','analytics']:relevantChanges.map(change=>change.scope));
     if (view==='overview') scopes.delete('drafts');
-    if (view==='roster') scopes.delete('analytics');
-    const visibleChanges = view==='full' ? changes : changes.filter(change => scopes.has(change.scope));
+    if (view==='roster') {
+      scopes.delete('analytics');
+      scopes.delete('checkpoint_analytics');
+    }
+    const visibleChanges = view==='full' ? relevantChanges : relevantChanges.filter(change => scopes.has(change.scope));
     const refs=visibleChanges.filter(change=>change.scope==='drafts').map(change=>change.studentRef);
     const allStudents=full||refs.includes(ZERO);
     const payload={assignmentId,revision,generatedAt:new Date().toISOString(),full,changes:visibleChanges};
@@ -49,7 +56,8 @@ export function createLearningLiveUpdates({pool,service,revalidate,assignmentRea
     if(scopes.has('dashboard'))jobs.push(()=>reader.getTeacherDashboard({assignmentId,reviewer}).then(value=>{payload.dashboard=value;}));
     if(scopes.has('drafts'))jobs.push(()=>reader.getTeacherLiveDrafts({assignmentId,reviewer,studentRefs:allStudents?null:[...new Set(refs)]})
       .then(value=>{payload.live={...value,partial:!allStudents};}));
-    if(scopes.has('analytics'))jobs.push(()=>reader.getQuestionAnalytics({assignmentId,reviewer,summaryOnly:view==='overview'}).then(value=>{payload.analytics=value;}));
+    if(scopes.has('analytics')||scopes.has('checkpoint_analytics'))jobs.push(()=>reader.getQuestionAnalytics({assignmentId,reviewer,
+      summaryOnly:view==='overview',submittedParts:checkpointAnalytics}).then(value=>{payload.analytics=value;}));
     // Không đánh dấu revision mới nếu một vùng chưa đọc được; client giữ bản cũ và thử lại cùng mốc.
     for(const job of jobs)await job();
     await database.query('COMMIT');

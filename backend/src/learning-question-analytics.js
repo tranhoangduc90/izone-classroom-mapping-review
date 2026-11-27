@@ -1,11 +1,34 @@
 import {createHash} from 'node:crypto';
+import {gradeLearningSubmission, isAnswered, isConditionallyVisible} from './learning-domain.js';
 
 // Nhận một bài hiện hành mỗi học viên và lần chấm hoàn tất mới nhất, trả thống kê xác định.
 // Câu mở/tự khai/điều kiện ẩn không biến thành câu sai; không gọi AI hoặc thay dữ liệu gốc.
-export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = null, students, summaryOnly = false, itemVersionId = null, capturedAt = new Date().toISOString() }) {
+export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = null, students, summaryOnly = false,
+  itemVersionId = null, includeCheckpoints = false, onCheckpointGradingError = () => {}, capturedAt = new Date().toISOString() }) {
   if (new Set(students.map(s=>s.studentRef)).size !== students.length) throw new Error('ANALYTICS_DUPLICATE_STUDENT');
-  const items = definition.blocks.flatMap(block => block.items).filter(item => !itemVersionId || item.itemVersionId === itemVersionId);
-  const summaries = items.map(item => {
+  const items = definition.blocks.flatMap(block => block.items.map(item => ({blockId:block.blockId,item})))
+    .filter(({item}) => !itemVersionId || item.itemVersionId === itemVersionId);
+  const participants = includeCheckpoints ? students.map(student => {
+    if (student.submissionId || !student.checkpoints?.length) return student;
+    const checkpoints = new Map(student.checkpoints.map(row => [row.blockId, row.checkpointSubmissionId]));
+    const responses = Object.assign({}, ...student.checkpoints.map(row => row.responses));
+    const submittedItems = itemsInSubmittedBlocks(definition, checkpoints);
+    const visibleResponses = Object.fromEntries(submittedItems.filter(item => isConditionallyVisible(item, responses))
+      .filter(item => Object.hasOwn(responses, item.itemVersionId)).map(item => [item.itemVersionId, responses[item.itemVersionId]]));
+    const fallback = submittedItems.map(item => ({itemVersionId:item.itemVersionId,
+      answerState:isAnswered(visibleResponses[item.itemVersionId]) ? 'answered' : 'blank'}));
+    let results = [];
+    if (gradingKey?.formVersionId) {
+      try {
+        results = gradeLearningSubmission({definition, gradingKey, responses:visibleResponses}).items;
+      } catch (error) {
+        onCheckpointGradingError(error.code || 'CHECKPOINT_GRADING_UNAVAILABLE');
+      }
+    }
+    return {...student, checkpoints, responses:visibleResponses,
+      responseItems:results.length ? results : fallback, gradingItems:results, gradingStatus:'pending'};
+  }) : students;
+  const summaries = items.map(({blockId,item}) => {
     const textSlots=item.graderType==='accepted_text_sequence'&&item.layoutType==='numbered_short_texts';
     // Câu điền từ có đáp án dùng kết quả máy chủ; câu chỉ đối chiếu vẫn không tính sai.
     const scoredText=item.graderType==='accepted_text'&&item.interactionType==='short_text';
@@ -16,15 +39,12 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
     const choices = new Map((item.options || []).map(option => [option.id,{optionId:option.id,label:option.label,count:0,incorrect:0}]));
     const studentResults = [];
     const snapshot = summaryOnly || itemVersionId ? createHash('sha256') : null;
-    for (const student of students) {
-      if (!student.submissionId) continue;
+    for (const student of participants) {
+      const checkpointSubmissionId = includeCheckpoints && student.checkpoints instanceof Map ? student.checkpoints.get(blockId) : null;
+      if (!student.submissionId && !checkpointSubmissionId) continue;
       counts.submitted += 1;
       const config = item.interactionConfig || {};
-      const dependency = config.visibleWhenItemVersionId;
-      const selection = student.responses?.[dependency];
-      const visible = !dependency || (Array.isArray(selection)
-        ? selection.includes(config.visibleWhenValue) : selection === config.visibleWhenValue);
-      if (!visible) { counts.hidden += 1; continue; }
+      if (!isConditionallyVisible(item, student.responses || {})) { counts.hidden += 1; continue; }
       counts.visible += 1;
       const response = student.responseItems?.find(answer => answer.itemVersionId === item.itemVersionId);
       const grading = student.gradingItems?.find(answer => answer.itemVersionId === item.itemVersionId);
@@ -43,7 +63,7 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
         if (choice) { choice.count += 1; if (verdict === 'incorrect') choice.incorrect += 1; }
       }
       const row = {studentRef:student.studentRef,name:student.name,discriminator:student.discriminator||'',submissionId:student.submissionId,
-        answered,verdict,optionIds:values.filter(id=>choices.has(id))};
+        ...(checkpointSubmissionId ? {checkpointSubmissionId} : {}), answered,verdict,optionIds:values.filter(id=>choices.has(id))};
       const answerState = response?.answerState || 'blank';
       snapshot?.update(JSON.stringify([row, answerState, value ?? null]));
       if (!summaryOnly) {
@@ -65,14 +85,31 @@ export function buildQuestionAnalytics({ assignmentId, definition, gradingKey = 
       ...(snapshot ? {responseVersion: snapshot.digest('base64url')} : {}),
       ...(!summaryOnly ? {students:studentResults} : {})};
   });
+  const submittedCount = participants.filter(student => student.submissionId || (includeCheckpoints && student.checkpoints instanceof Map)).length;
+  const parts = includeCheckpoints ? definition.blocks.map(block => ({blockId:block.blockId,
+    submittedCount:participants.filter(student => student.submissionId || student.checkpoints instanceof Map && student.checkpoints.has(block.blockId)).length})) : null;
   return {assignmentId,formVersionId:definition.formVersionId,capturedAt,rosterCount:students.length,
-    submittedCount:students.filter(s=>s.submissionId).length,items:summaries};
+    submittedCount,...(parts ? {parts} : {}),items:summaries};
 }
 
-function questionAnalyticsSql(singleItem) {
+function itemsInSubmittedBlocks(definition, checkpoints) {
+  return definition.blocks.filter(block => checkpoints.has(block.blockId)).flatMap(block => block.items);
+}
+
+function questionAnalyticsSql(singleItem, includeCheckpoints = false) {
   const target = singleItem ? ' AND response.item_version_id = $2::uuid' : '';
   const gradeTarget = singleItem ? ' AND result.item_version_id = $2::uuid' : '';
   const responses = singleItem ? 'jsonb_build_object($2::uuid::text, submission.response_payload -> $2::uuid::text, COALESCE($3::text, $2::uuid::text), submission.response_payload -> COALESCE($3::text, $2::uuid::text))' : 'submission.response_payload';
+  const checkpoints = includeCheckpoints ? `,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('blockId', checkpoint.block_id::text,
+    'checkpointSubmissionId', checkpoint.id::text, 'responses', checkpoint.response_payload))
+    FROM (SELECT DISTINCT ON (accepted.block_id) accepted.id, accepted.block_id, accepted.response_payload
+      FROM learning.checkpoint_submission AS accepted
+      WHERE accepted.attempt_id = status.attempt_id AND accepted.assignment_id = assignment.id
+        AND accepted.form_version_id = assignment.form_version_id AND accepted.student_ref = status.student_ref
+        AND submission.id IS NULL
+      ORDER BY accepted.block_id, accepted.checkpoint_revision DESC, accepted.submitted_at DESC, accepted.id DESC
+    ) AS checkpoint), '[]'::jsonb) AS checkpoints` : '';
   return `SELECT
   status.student_ref::text AS "studentRef", status.student_name_snapshot AS name,
   status.display_discriminator AS discriminator,
@@ -83,7 +120,7 @@ function questionAnalyticsSql(singleItem) {
     WHERE response.submission_id = submission.id${target}), '[]'::jsonb) AS "responseItems",
   COALESCE((SELECT jsonb_agg(jsonb_build_object('itemVersionId', result.item_version_id::text,
     'verdict', result.verdict)) FROM learning.grading_result_item AS result
-    WHERE result.grading_run_id = grading.id${gradeTarget}), '[]'::jsonb) AS "gradingItems"
+    WHERE result.grading_run_id = grading.id${gradeTarget}), '[]'::jsonb) AS "gradingItems"${checkpoints}
 FROM learning.assignment_student_status AS status
 JOIN learning.form_assignment AS assignment ON assignment.id = status.assignment_id
 LEFT JOIN learning.submission AS submission ON submission.id = status.submission_id
@@ -102,3 +139,5 @@ ORDER BY status.student_ref;`;
 
 export const fetchQuestionAnalyticsSql = questionAnalyticsSql(false);
 export const fetchQuestionResponsesSql = questionAnalyticsSql(true);
+export const fetchQuestionAnalyticsWithCheckpointsSql = questionAnalyticsSql(false, true);
+export const fetchQuestionResponsesWithCheckpointsSql = questionAnalyticsSql(true, true);

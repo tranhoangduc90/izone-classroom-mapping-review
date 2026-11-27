@@ -5,16 +5,19 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import express from 'express';
 import {readFile} from 'node:fs/promises';
+import {setTimeout as delay} from 'node:timers/promises';
 import {postgresFixture,publishedFixture} from './learning-postgres-fixture.js';
 import {createLearningService} from '../src/learning-service.js';
 import {createLearningLiveUpdates} from '../src/learning-realtime.js';
 import {reuseLearningQueryPlans,reuseTeacherSessionQueryPlans} from '../src/learning-query-plans.js';
 import {createAuthService} from '../src/auth.js';
+import {createLearningRouter} from '../src/learning-routes.js';
 
 const teacher={email:'teacher@example.test',canAccessAllClasses:false};
 const migration=await readFile(new URL('../ops/learning-migrations/202610230001_teacher_live_updates.sql',import.meta.url),'utf8');
-async function setup(){
-  const fixture=await postgresFixture({asApplication:true,studentCount:3});
+const checkpointAnalyticsMigration=new URL('../ops/learning-migrations/202611270001_teacher_checkpoint_analytics.sql',import.meta.url);
+async function setup(studentCount=3){
+  const fixture=await postgresFixture({asApplication:true,studentCount});
   const pool=new pg.Pool({connectionString:fixture.pool.options.connectionString,max:5,options:'-c role=learning_api',application_name:'pl_v21_live'});
   reuseLearningQueryPlans(pool);
   const source=await publishedFixture(fixture);
@@ -163,6 +166,146 @@ test('Checkpoint/final giữ điểm danh sớm và analytics chỉ final; đọ
     assert.deepEqual(count,{attendance:1,events:1,jobs:1});
   }finally{await hub.close();await f.close();}
 });
+
+async function startCheckpointApi(f) {
+  const checkpointAnalyticsClassIds=['2139'];
+  await f.admin.query(await readFile(checkpointAnalyticsMigration,'utf8'));
+  const {published,assignment}=f.source;
+  const block=assignment.definition.blocks[0], assignmentId=published.assignmentId;
+  const app=express();
+  app.use(express.json());
+  const router=createLearningRouter({pool:f.pool,
+    authenticate:(req,_res,next)=>{req.reviewer=teacher;next();},
+    realtimeEnabled:true,revalidate:async()=>teacher,checkpointAnalyticsClassIds});
+  app.use(router);
+  const server=app.listen(0,'127.0.0.1');
+  await new Promise(done=>server.once('listening',done));
+  const control=new AbortController();
+  const base='http://127.0.0.1:'+server.address().port;
+  const assignmentPath=base+'/teacher/assignments/'+assignmentId;
+  const get=async url=>{
+    const response=await fetch(url);
+    assert.equal(response.status,200);
+    return response.json();
+  };
+  const post=async(path,body,status)=>{
+    const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const payload=await response.text();
+    assert.equal(response.status,status,payload);
+    return JSON.parse(payload);
+  };
+  return {assignmentId,assignmentPath,get,post,
+    checkpointFor({attemptToken,definitionHash,responses},draftRevision=0){
+      return {attemptToken,definitionHash,responses,checkpointSubmissionId:crypto.randomUUID(),
+        blockId:block.blockId,checkpoint:block.checkpoint,draftRevision,idempotencyKey:crypto.randomUUID()};
+    },
+    async read(after='0',force=false){return (await get(assignmentPath+'/live-updates?view=overview&submittedParts=1&after='+after+'&force='+(force?'1':'0'))).update;},
+    async stream(){return (await fetch(assignmentPath+'/events',{signal:control.signal})).body.getReader();},
+    async close(){
+      control.abort();
+      await router.liveUpdates.close();
+      server.closeAllConnections();
+      await new Promise(done=>server.close(done));
+    }};
+}
+
+test('HTTP và SSE ghi nhận từng Nộp phần trước final, kể cả mất thông báo và gửi lại',async()=>{
+  const f=await setup();
+  let api;
+  try{
+    api=await startCheckpointApi(f);
+    const {assignmentId,assignmentPath,get,post,read,checkpointFor}=api;
+    const {inputs,itemId}=f.source;
+    const stream=await api.stream();
+    await nextEvent(stream,'change');
+    const before=await read('0',true);
+    assert.equal(before.analytics.parts[0].submittedCount,0);
+    await f.service.saveDraft({...inputs[0],revision:1});
+    const draft=await read(before.revision);
+    assert.equal(draft.analytics,undefined);
+    let revision=draft.revision, first;
+    for(const [index,input] of inputs.entries()){
+      const checkpoint=checkpointFor(input,index===0?1:0);
+      first ||= checkpoint;
+      await post('/attempts/checkpoints/submit',checkpoint,201);
+      const acknowledgedAt=performance.now();
+      let event;
+      do { event=await nextEvent(stream,'change'); } while(BigInt(event.revision)<=BigInt(revision));
+      const updated=await read(revision);
+      assert.equal(updated.analytics.parts[0].submittedCount,index+1);
+      assert.equal(updated.analytics.items[0].counts.answered,index+1);
+      assert.ok(performance.now()-acknowledgedAt<=2000,'ACK → revision → HTTP analytics');
+      revision=updated.revision;
+    }
+    const detail=(await get(assignmentPath+'/question-analytics/'+itemId+'/responses?submittedParts=1')).detail;
+    assert.equal(detail.students.length,3);
+    assert.equal(detail.students.filter(row=>row.checkpointSubmissionId===first.checkpointSubmissionId).length,1);
+    assert.equal((await post('/attempts/checkpoints/submit',first,201)).checkpointSubmission.replayed,true);
+    assert.equal((await read(revision)).revision,revision);
+    // Đọc lại từ mốc cũ khi client bỏ lỡ toàn bộ SSE.
+    assert.equal((await read(before.revision)).analytics.submittedCount,3);
+    assert.equal((await f.service.getQuestionAnalytics({assignmentId,reviewer:teacher})).submittedCount,0);
+    assert.equal((await get(assignmentPath+'/question-analytics')).analytics.submittedCount,0);
+    await post('/attempts/submit',{...inputs[0],draftRevision:1},200);
+    const final=await read(revision);
+    assert.equal(final.analytics.submittedCount,3);
+    assert.equal(final.analytics.items[0].counts.answered,3);
+    const result=(await f.admin.query(`SELECT (SELECT count(*)::int FROM learning.checkpoint_submission) AS checkpoints,
+      (SELECT count(*)::int FROM learning.submission) AS finals,(SELECT count(*)::int FROM learning.attendance_record) AS attendance,
+      (SELECT count(*)::int FROM learning.outbox_job WHERE job_type='sync_portal_attendance') AS jobs`)).rows[0];
+    assert.deepEqual(result,{checkpoints:3,finals:1,attendance:3,jobs:3});
+  }finally{
+    await api?.close();
+    await f.close();
+  }
+});
+
+for (const studentCount of [16,30]) {
+  test(`Nộp phần dồn ${studentCount} học viên: HTTP ACK → SSE → thống kê, đủ từng người`,async()=>{
+    const f=await setup(studentCount);
+    let api;
+    try{
+      api=await startCheckpointApi(f);
+      const stream=await api.stream();
+      await nextEvent(stream,'change');
+      const before=await api.read('0',true);
+      const ackByStudent=new Map(), visibleByStudent=new Map();
+      const submits=f.source.inputs.map(async (input,index)=>{
+        await api.post('/attempts/checkpoints/submit',api.checkpointFor(input),201);
+        ackByStudent.set(f.source.assignment.roster[index].studentRef,performance.now());
+      });
+      const readAll=async()=>{
+        let revision=before.revision;
+        while(visibleByStudent.size<studentCount){
+          const event=await nextEvent(stream,'change',5000);
+          if(BigInt(event.revision)<=BigInt(revision))continue;
+          await delay(250); // Cùng nhịp gộp ở controller giảng viên.
+          const snapshot=await api.read(revision);
+          const now=performance.now();
+          for(const change of snapshot.changes){
+            if(change.scope==='checkpoint_analytics'&&!visibleByStudent.has(change.studentRef))visibleByStudent.set(change.studentRef,now);
+          }
+          assert.equal(snapshot.analytics.parts[0].submittedCount,visibleByStudent.size);
+          revision=snapshot.revision;
+        }
+      };
+      await Promise.all([...submits,readAll()]);
+      const times=[...ackByStudent].map(([ref,time])=>Math.max(0,visibleByStudent.get(ref)-time)).sort((a,b)=>a-b);
+      const percentile=p=>Math.round(times[Math.ceil(p*times.length)-1]);
+      console.log(JSON.stringify({scenario:'accepted_checkpoint_ack_to_teacher_snapshot',
+        students:times.length,p50:percentile(.50),p95:percentile(.95),max:percentile(1)}));
+      assert.equal(times.length,studentCount);
+      assert.ok(times.every(Number.isFinite));
+      assert.ok(percentile(.95)<=2000);
+      const snapshot=await api.read('0',true);
+      assert.equal(snapshot.analytics.items[0].counts.answered,studentCount);
+      assert.equal(snapshot.analytics.submittedCount,studentCount);
+    }finally{
+      await api?.close();
+      await f.close();
+    }
+  });
+}
 
 test('Bài nộp commit đến revision SSE và đường đọc bù; tổng quan khớp danh sách câu đang mở',async()=>{
   const f=await setup();

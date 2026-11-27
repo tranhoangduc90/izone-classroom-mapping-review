@@ -1370,6 +1370,7 @@ export function createApp({
       pool: learningPool, authenticate, demoSourceSecret: config.learningDemoSourceSecret, logger,
       realtimeEnabled:config.learningRealtimeEnabled,realtimeStreamEnabled:config.learningRealtimeStreamEnabled,
       realtimeClassIds:config.learningRealtimeClassIds,
+      checkpointAnalyticsClassIds:config.learningCheckpointAnalyticsClassIds,
       revalidate:auth.revalidate,
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,

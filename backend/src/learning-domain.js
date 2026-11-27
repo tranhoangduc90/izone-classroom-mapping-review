@@ -41,7 +41,7 @@ export function normalizeText(value, policy = {}) {
   return spellingCanonical.get(normalized) || normalized;
 }
 
-function isAnswered(value) {
+export function isAnswered(value) {
   if (Array.isArray(value)) return value.some(item => String(item).trim());
   if (value && typeof value === 'object') {
     return Number.isInteger(value.correct) && Number.isInteger(value.total) && value.total > 0;
@@ -59,7 +59,7 @@ function isCompleteAnswer(item, value) {
   return isAnswered(value);
 }
 
-function isConditionallyVisible(item, responses) {
+export function isConditionallyVisible(item, responses) {
   const dependencyId = item.interactionConfig?.visibleWhenItemVersionId;
   if (!dependencyId) return true;
   const selected = responses[dependencyId];

@@ -228,7 +228,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   portalFirstCourses=process.env.LEARNING_PORTAL_FIRST_COURSES||'',
   testSourceReader = null, testResultReader = null, portalTestReader = null, demoSourceSecret = '', logger = null,
   journeyCommentsEnabled=false,progressLinkKeys={},progressLinkKeyVersion='v1',
-  realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null,
+  realtimeEnabled=false,realtimeStreamEnabled=true,realtimeClassIds=null,revalidate=null,checkpointAnalyticsClassIds=[],
   sharedRevisionCatalog=process.env.LEARNING_SHARED_REVISION_CATALOG==='true',
   sharedEditingEnabled=sharedRevisionCatalog&&process.env.LEARNING_SHARED_EDITING!=='false' }) {
   const router = express.Router();
@@ -250,7 +250,8 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
       res.on('finish',()=>{
         try {logger.info(JSON.stringify({type:'progress_log_operation',correlation,
           operation:typeof req.route?.path==='string'?req.route.path:'teacher_request',method:req.method,
-          status:res.statusCode,...res.locals.classDraftDelivery,...res.locals.sharedDraft,...res.locals.questionResponses,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
+          status:res.statusCode,...res.locals.classDraftDelivery,...res.locals.sharedDraft,...res.locals.questionResponses,
+          ...res.locals.submittedPartRead,durationMs:Math.round(performance.now()-started),serverOccurredAt:new Date().toISOString()}));}
         catch { /* Lỗi logger không được làm hỏng nộp bài hoặc mutation đã commit. */ }
       });
     }
@@ -278,6 +279,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   const portalAssignmentReader=createScheduleMonitor(readPortal,
     {cacheMs:30000,displayCacheMs:30000,cacheFromStart:true,maxClasses:portalCourseIds.size?512:80+portalClassIds.size});
   const service = createLearningService({ pool, erpScheduleReader: monitoredReader, portalAssignmentReader, portalFirstForClass, testSourceReader, testResultReader,
+    checkpointAnalyticsClassIds, logger,
     portalTestReader:portalTestReader||createLearningPortalTestReader({pool}),
     journeyJitOff:process.env.LEARNING_JOURNEY_JIT_OFF!=='false',
     publicDefinitionCacheBytes:process.env.LEARNING_PUBLIC_DEFINITION_CACHE==='false'?0:undefined,
@@ -302,7 +304,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     portalFirstForClass,sharedRevisionCatalog,sharedEditingEnabled});
   const management=createLearningAssignmentManagement({pool});
   const formLibrary=createLearningFormLibrary({pool,drafts,sharedRevisionCatalog,sharedEditingEnabled});
-  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate:refreshReviewer,assignmentRead,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,logger});
+  const liveUpdates=createLearningLiveUpdates({pool,service,revalidate:refreshReviewer,assignmentRead,enabled:realtimeEnabled,streamEnabled:realtimeStreamEnabled,classIds:realtimeClassIds,checkpointAnalyticsClassIds,logger});
   router.liveUpdates=liveUpdates;
   const coarseLimiter = rateLimit({
     windowMs: 60_000,
@@ -483,6 +485,12 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     const input = parseOrReply(checkpointSubmitSchema, req.body, res, 'INVALID_CHECKPOINT_SUBMISSION');
     if (!input) return;
     const checkpointSubmission = await service.submitCheckpoint(input);
+    if(logger?.info)res.on('finish',()=>{
+      try {logger.info(JSON.stringify({type:'progress_log_checkpoint_ack',schemaVersion:1,status:res.statusCode,
+        checkpointSubmissionId:checkpointSubmission.checkpointSubmissionId,blockId:checkpointSubmission.blockId,
+        replayed:checkpointSubmission.replayed,serverOccurredAt:new Date().toISOString()}));}
+      catch { /* Giữ biên nhận nếu nơi ghi log tạm lỗi. */ }
+    });
     res.set('Cache-Control', 'no-store');
     return res.status(201).json({ ok: true, checkpointSubmission });
   }));
@@ -592,15 +600,19 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     res.set('Cache-Control', 'no-store');
     return res.json({ ok: true, reviewer: req.reviewer, ...options,
       assignments:(req.query.includeOrigins==='1'?await withAssignmentOrigins(pool,options.assignments):options.assignments).map(assignment=>({...assignment,live_updates_enabled:realtimeEnabled&&(!realtimeClassIds||realtimeClassIds.includes(String(assignment.class_id)))})),
-      capabilities:{liveUpdates:realtimeEnabled,questionResponses:true} });
+      capabilities:{liveUpdates:realtimeEnabled,questionResponses:true,submittedPartAnalytics:checkpointAnalyticsClassIds.length>0} });
   }));
 
   router.get('/teacher/assignments/:assignmentId/live-updates',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
     const input=parseOrReply(z.object({after:z.string().regex(/^\d{1,18}$/).default('0'),force:z.enum(['0','1']).default('0'),
-      view:z.enum(['full','overview','roster']).default('full')}).strict(),req.query,res,'INVALID_LIVE_REVISION');if(!input)return;
+      view:z.enum(['full','overview','roster']).default('full'),submittedParts:z.literal('1').optional()}).strict(),req.query,res,'INVALID_LIVE_REVISION');if(!input)return;
     res.set('Cache-Control','no-store');
-    return res.json({ok:true,update:await liveUpdates.read({...path,reviewer:req.reviewer,after:input.after,force:input.force==='1',view:input.view})});
+    const update=await liveUpdates.read({...path,reviewer:req.reviewer,after:input.after,force:input.force==='1',
+      view:input.view,submittedParts:input.submittedParts==='1'});
+    if(update.analytics?.parts)res.locals.submittedPartRead={assignmentId:path.assignmentId,
+      analyticsRevision:update.revision,analyticsAfter:input.after,analyticsSubmitted:update.analytics.submittedCount};
+    return res.json({ok:true,update});
   }));
   router.get('/teacher/assignments/:assignmentId/events',authenticate,asyncRoute(async(req,res)=>{
     const path=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');if(!path)return;
@@ -916,9 +928,10 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
   router.get('/teacher/assignments/:assignmentId/question-analytics', authenticate, asyncRoute(async (req,res) => {
     const input=parseOrReply(z.object({assignmentId:uuidSchema}).strict(),req.params,res,'INVALID_ASSIGNMENT');
     if (!input) return;
-    const view=parseOrReply(z.object({view:z.enum(['full','summary']).default('full')}).strict(),req.query,res,'INVALID_ANALYTICS_VIEW');
+    const view=parseOrReply(z.object({view:z.enum(['full','summary']).default('full'),submittedParts:z.literal('1').optional()}).strict(),req.query,res,'INVALID_ANALYTICS_VIEW');
     if (!view) return;
-    const analytics=await service.getQuestionAnalytics({...input,summaryOnly:view.view==='summary',reviewer:await assignmentRead(req.reviewer,input.assignmentId)});
+    const analytics=await service.getQuestionAnalytics({...input,summaryOnly:view.view==='summary',submittedParts:view.submittedParts==='1',
+      reviewer:await assignmentRead(req.reviewer,input.assignmentId)});
     res.set('Cache-Control','no-store');
     return res.json({ok:true,analytics});
   }));
@@ -928,7 +941,7 @@ export function createLearningRouter({ pool, authenticate:sharedAuthenticate, er
     const input=parseOrReply(z.object({assignmentId:uuidSchema,itemVersionId:uuidSchema}).strict(),req.params,res,'INVALID_QUESTION');
     if (!input) return;
     const reviewer=await assignmentRead(req.reviewer,input.assignmentId);
-    const detail=await service.getQuestionAnalytics({...input,reviewer});
+    const detail=await service.getQuestionAnalytics({...input,reviewer,submittedParts:req.query.submittedParts==='1'});
     const body=JSON.stringify({ok:true,detail});
     res.locals.questionResponses={rowCount:detail.students.length,responseBytes:Buffer.byteLength(body)};
     return res.type('json').send(body);
