@@ -42,10 +42,11 @@ function bindReferences(value,catalog,requireReferences){
   if(!value||typeof value!=='object')return value;
   const result={...value};
   for(const [key,item] of Object.entries(value)){
-    const reference=positionFields[key]&&typeof item==='string'&&/^@m\d+\.s\d+(?:\.k([a-f0-9]{16}))?$/.exec(item);
+    const citation=positionFields[key]&&typeof item==='string'?item.trim():null;
+    const reference=citation&&/^@m\d+\.s\d+(?:\.k([a-f0-9]{16}))?$/.exec(citation);
     if(reference&&(!requireReferences||reference[1])){
       if(requireReferences&&reference[1]!==catalog.scope)throw failure('AI_EVIDENCE_SOURCE_MISMATCH');
-      const entry=catalog.entries.get(item);
+      const entry=catalog.entries.get(citation);
       if(!entry)throw failure('AI_EVIDENCE_REFERENCE_UNKNOWN');
       if(result[positionFields[key]]!==entry.message)throw failure('AI_EVIDENCE_MESSAGE_MISMATCH');
       result[key]=entry.text;
