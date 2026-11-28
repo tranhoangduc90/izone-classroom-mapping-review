@@ -158,3 +158,20 @@ test('supplemental verdicts still require valid flags and evidence before accept
     }), { code });
   }
 });
+
+
+test('external whitespace around a complete snapshot-scoped citation does not force another check', async t => {
+  const original=globalThis.fetch;
+  let calls=0;
+  globalThis.fetch=async (_url,options)=>{
+    calls++;
+    const {prompt}=JSON.parse(options.body);
+    const bound=bindFixtureReferences({confidence:0.95,completed},prompt);
+    bound.completed[0].questionText='  '+bound.completed[0].questionText+'\n';
+    return Response.json({text:JSON.stringify(bound)});
+  };
+  t.after(()=>{globalThis.fetch=original;});
+  const result=await checkSubmission({section:'story_sequence',url,minimum:1},{readShare:async()=>({source:'fixture',messages})});
+  assert.equal(result.kind,'pass');
+  assert.equal(calls,1);
+});
