@@ -44,15 +44,27 @@ test('writer chỉ điền ô vàng và gắn link lên đúng cụm từ, dùng
   assert.equal(repeat.requests.length, 0);
 });
 
-test('writer legacy đang phát hành thay đúng vùng trạng thái bằng revision, sửa link biên nhận cũ', () => {
-  // Deployed since 01/10: the legacy final writer replaces its status cell.
-  // Managed incremental Docs use the separate planner/manual-conflict tests.
-  const old='Nội dung trạng thái cũ\n';
-  const plan=planSpeakingStatusWrite({document:fixture(old),documentId,receiptId,teacherBaseUrl});
-  assert.deepEqual(plan.requests[0].deleteContentRange.range,{startIndex:163,endIndex:163+old.length-1,tabId:'t.0'});
-  const repair=planSpeakingStatusWrite({document:fixture(status+'\n','https://example.test/wrong'),documentId,receiptId,teacherBaseUrl});
-  assert.equal(repair.status,'write');
-  assert.equal(repair.requests.find(r=>r.updateTextStyle?.textStyle?.link).updateTextStyle.textStyle.link.url,teacherBaseUrl+'?receipt='+receiptId);
+test('writer giữ nguyên ghi chú, hyperlink riêng và đối tượng nội tuyến', () => {
+  const teacherDocs = [
+    fixture('Ghi chú của giáo viên\n'),
+    fixture(status + '\n', 'https://manual.example.invalid/teacher'),
+    fixture(status + ' Ghi chú riêng của giáo viên\n', 'https://manual.example.invalid/teacher'),
+    fixture(),
+  ];
+  const inline = teacherDocs.at(-1).tabs[0].documentTab.body.content[0].table.tableRows[1].tableCells[0];
+  inline.content[0].paragraph.elements.unshift({ inlineObjectElement: { inlineObjectId: 'fixture-image' } });
+  for (const document of teacherDocs) {
+    assert.throws(() => planSpeakingStatusWrite({ document, documentId, receiptId, teacherBaseUrl }),
+      /^Error: DOC_MANUAL_CONFLICT$/);
+  }
+});
+
+test('writer chỉ bổ sung hyperlink khi còn đúng nguyên dòng biên nhận chưa có link', () => {
+  const document = fixture(status + '\n');
+  const plan = planSpeakingStatusWrite({ document, documentId, receiptId, teacherBaseUrl });
+  assert.equal(plan.requests.length, 1);
+  assert.equal(plan.requests[0].updateTextStyle.textStyle.link.url, teacherBaseUrl + '?receipt=' + receiptId);
+  assert.equal(plan.requests[0].updateTextStyle.range.endIndex - plan.requests[0].updateTextStyle.range.startIndex, 8);
 });
 
 test('legacy writer distinguishes a matching read-only document from a wrong target',()=>{
