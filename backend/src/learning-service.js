@@ -7,7 +7,8 @@ import { reconcileJourneySchedule } from './learning-schedule-reconciliation.js'
 import {canRefreshBoundSchedule,currentConfirmedDates} from './learning-schedule-identity.js';
 import { lockSubmissionAssignment, readSubmissionWindow, refreshSubmissionDeadline, submissionWindowFromRow } from './learning-submission-deadline.js';
 import { buildQuestionAnalytics, fetchQuestionAnalyticsSql, fetchQuestionResponsesSql,
-  fetchQuestionAnalyticsWithCheckpointsSql, fetchQuestionResponsesWithCheckpointsSql } from './learning-question-analytics.js';
+  fetchQuestionAnalyticsWithCheckpointsSql, fetchQuestionResponsesWithCheckpointsSql,
+  fetchQuestionAnalyticsWithDraftsSql, fetchQuestionResponsesWithDraftsSql } from './learning-question-analytics.js';
 import { buildCourseOverview, fetchCourseOverviewSql, fetchCourseSessionDetailSql, fetchCourseCurrentRosterSql } from './learning-course-overview.js';
 import { assignmentPortalSchedule, occupiedPortalTargetsSql, portalAssignmentTargets, isPortalAssignmentOccupied,
   projectPortalJourney,portalCalendar } from './learning-portal-assignment-schedule.js';
@@ -258,7 +259,7 @@ function buildStudentCourseJourney(row) {
 export function createLearningService({ pool, erpScheduleReader = null, testSourceReader = null,
   testResultReader = null, portalTestReader = null, portalAssignmentReader = null, journeyCommentsEnabled = false, progressLinkCipher = null,
   portalFirstForClass=()=>false,journeyJitOff = true, publicDefinitionCacheBytes = 16 * 1024 * 1024,
-  checkpointAnalyticsClassIds = [], logger = null }) {
+  checkpointAnalyticsClassIds = [], draftAnalyticsClassIds = [], logger = null }) {
   if (!pool) throw new Error('Learning service cần database pool riêng.');
   const comments=journeyCommentsEnabled?createJourneyCommentService({pool,ErrorType:LearningError,cipher:progressLinkCipher}):null;
   const pendingPublicAssignments=new Map();
@@ -565,7 +566,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
     // Một snapshot đọc giữ cùng connection; không phải xếp hàng lại sau từng vùng dữ liệu.
     readUsing(database){
       const reader=createLearningService({pool:database,erpScheduleReader,testSourceReader,testResultReader,portalTestReader,
-        journeyCommentsEnabled,progressLinkCipher,checkpointAnalyticsClassIds,logger});
+        journeyCommentsEnabled,progressLinkCipher,checkpointAnalyticsClassIds,draftAnalyticsClassIds,logger});
       return {getTeacherDashboard:reader.getTeacherDashboard,getTeacherLiveDrafts:reader.getTeacherLiveDrafts,getQuestionAnalytics:reader.getQuestionAnalytics};
     },
     async getPublicAssignment(publicToken,timing,{verifyPortalSchedule=false}={}) {
@@ -659,7 +660,7 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
       });
     },
 
-    async saveDraft({ attemptToken, revision, definitionHash, responses: inputResponses }) {
+    async saveDraft({ attemptToken, revision, definitionHash, responses: inputResponses, includeTelemetry = false }) {
       const responses = parseResponses(inputResponses);
       const responseHash = sha256(stableStringify(responses));
       return withTransaction(pool, async client => {
@@ -686,7 +687,8 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         return {
           revision: Number(saved.rows[0].draft_revision),
           hash: saved.rows[0].draft_hash,
-          savedAt: saved.rows[0].draft_updated_at
+          savedAt: saved.rows[0].draft_updated_at,
+          ...(includeTelemetry ? { telemetry:{ assignmentId:context.assignment_id, attemptId:context.attempt_id } } : {})
         };
       });
     },
@@ -1643,24 +1645,29 @@ export function createLearningService({ pool, erpScheduleReader = null, testSour
         sessionComment:cell.sessionComment||null};
     },
 
-    async getQuestionAnalytics({assignmentId, reviewer, summaryOnly = false, itemVersionId = null, submittedParts = false}) {
+    async getQuestionAnalytics({assignmentId, reviewer, summaryOnly = false, itemVersionId = null, submittedParts = false, draftAnalytics = false}) {
       const access = await pool.query(authorizeLearningJourneyPlanAssignmentSql,
         [assignmentId,reviewer.email,reviewer.canAccessAllClasses]);
       assertSingleRow(access,'ASSIGNMENT_ACCESS_DENIED','Không tìm thấy phiếu trong phạm vi được cấp quyền.',404);
-      const includeCheckpoints = submittedParts && checkpointAnalyticsClassIds.includes(String(access.rows[0].class_id));
+      const classId = String(access.rows[0].class_id);
+      const includeDrafts = draftAnalytics && draftAnalyticsClassIds.includes(classId);
+      const includeCheckpoints = includeDrafts || submittedParts && checkpointAnalyticsClassIds.includes(classId);
       const definition = await pool.query(`SELECT assignment.session_number,version.public_definition,grading.private_definition FROM learning.form_assignment AS assignment
         JOIN learning.form_version AS version ON version.id = assignment.form_version_id
         LEFT JOIN learning.form_grading_key grading ON grading.form_version_id=version.id WHERE assignment.id = $1::uuid;`,[assignmentId]);
       const version = asObject(definition.rows[0].public_definition);
       const item = itemVersionId && version.blocks.flatMap(block => block.items).find(question => question.itemVersionId === itemVersionId);
       if (itemVersionId && !item) throw new LearningError('QUESTION_NOT_FOUND','Câu hỏi không thuộc phiên bản phiếu này.',404);
+      const detailSql = includeDrafts ? fetchQuestionResponsesWithDraftsSql
+        : includeCheckpoints ? fetchQuestionResponsesWithCheckpointsSql : fetchQuestionResponsesSql;
+      const summarySql = includeDrafts ? fetchQuestionAnalyticsWithDraftsSql
+        : includeCheckpoints ? fetchQuestionAnalyticsWithCheckpointsSql : fetchQuestionAnalyticsSql;
       const students = item
-        ? await pool.query(includeCheckpoints ? fetchQuestionResponsesWithCheckpointsSql : fetchQuestionResponsesSql,
-          [assignmentId, itemVersionId, item.interactionConfig?.visibleWhenItemVersionId || null])
-        : await pool.query(includeCheckpoints ? fetchQuestionAnalyticsWithCheckpointsSql : fetchQuestionAnalyticsSql, [assignmentId]);
+        ? await pool.query(detailSql, [assignmentId, itemVersionId, item.interactionConfig?.visibleWhenItemVersionId || null])
+        : await pool.query(summarySql, [assignmentId]);
       const checkpointGradingErrors = new Set();
       const analytics = buildQuestionAnalytics({assignmentId, definition:version,
-        gradingKey:asObject(definition.rows[0].private_definition), students:students.rows, summaryOnly, itemVersionId, includeCheckpoints,
+        gradingKey:asObject(definition.rows[0].private_definition), students:students.rows, summaryOnly, itemVersionId, includeCheckpoints, includeDrafts,
         onCheckpointGradingError:code=>checkpointGradingErrors.add(code)});
       if(checkpointGradingErrors.size) {
         logger?.warn?.(JSON.stringify({type:'progress_log_checkpoint_grading',assignmentId,

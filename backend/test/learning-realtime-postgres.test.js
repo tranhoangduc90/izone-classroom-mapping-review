@@ -167,7 +167,7 @@ test('Checkpoint/final giữ điểm danh sớm và analytics chỉ final; đọ
   }finally{await hub.close();await f.close();}
 });
 
-async function startCheckpointApi(f) {
+async function startCheckpointApi(f, {draftAnalyticsClassIds=[]}={}) {
   const checkpointAnalyticsClassIds=['2139'];
   await f.admin.query(await readFile(checkpointAnalyticsMigration,'utf8'));
   const {published,assignment}=f.source;
@@ -176,7 +176,7 @@ async function startCheckpointApi(f) {
   app.use(express.json());
   const router=createLearningRouter({pool:f.pool,
     authenticate:(req,_res,next)=>{req.reviewer=teacher;next();},
-    realtimeEnabled:true,revalidate:async()=>teacher,checkpointAnalyticsClassIds});
+    realtimeEnabled:true,revalidate:async()=>teacher,checkpointAnalyticsClassIds,draftAnalyticsClassIds});
   app.use(router);
   const server=app.listen(0,'127.0.0.1');
   await new Promise(done=>server.once('listening',done));
@@ -397,4 +397,57 @@ test('Journey đọc cùng dữ liệu ở hai loại link bằng plan JIT riên
     assert.equal((await pool.query('SHOW jit')).rows[0].jit,'on');
     assert.equal((await service.getStudentCourseJourney(viaClass)).student.studentRef,studentRef);
   }finally{await pool.end();await f.close();}
+});
+
+test('Thống kê nháp theo HTTP và SSE thay đúng đáp án, nộp trống và không phát điểm danh từ nháp',async()=>{
+  const f=await setup();
+  let api;
+  try{
+    api=await startCheckpointApi(f,{draftAnalyticsClassIds:['2139']});
+    const {itemId,inputs}=f.source;
+    const [{attemptToken,definitionHash}]=inputs;
+    const url=api.assignmentPath+'/live-updates?view=overview&submittedParts=1&draftAnalytics=1';
+    const detailUrl=api.assignmentPath+'/question-analytics/'+itemId+'/responses?submittedParts=1&draftAnalytics=1';
+    const stream=await api.stream();
+    await nextEvent(stream,'change');
+    let update=(await api.get(url+'&force=1')).update;
+    assert.equal(update.analytics.draftAnalytics,true);
+    const save=async (revision,responses,expectedStatus=200)=>{
+      const response=await fetch(api.assignmentPath.split('/teacher/')[0]+'/attempts/draft',{method:'PATCH',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({attemptToken,definitionHash,responses,revision})});
+      assert.equal(response.status,expectedStatus);
+      await response.arrayBuffer();
+    };
+    for(const [index,answer] of ['Mẫu A','Mẫu B',null,'Mẫu A'].entries()){
+      const prior=update.revision;
+      await save(index+1,answer ? {[itemId]:answer}: {});
+      let event;
+      do{event=await nextEvent(stream,'change');}while(BigInt(event.revision)<=BigInt(prior));
+      update=(await api.get(url+'&after='+prior)).update;
+      assert.equal(update.analytics.items[0].counts.draftAnswered,Number(Boolean(answer)));
+      assert.equal(update.analytics.parts[0].draftCount,Number(Boolean(answer)));
+      assert.equal(update.analytics.submittedCount,0);
+      assert.equal(update.analytics.items[0].students,undefined);
+      assert.ok(!JSON.stringify(update.analytics).includes('Mẫu A'));
+      const detail=(await api.get(detailUrl)).detail;
+      assert.equal(detail.responseVersion,update.analytics.items[0].responseVersion);
+      assert.deepEqual(detail.students.map(row=>[row.responseStatus,row.answer]),answer ? [['draft',answer]]:[]);
+      assert.equal((await api.read(prior)).analytics,undefined);
+    }
+    await save(3,{[itemId]:'Bản cũ'},409);
+    assert.equal((await api.get(detailUrl)).detail.students[0].answer,'Mẫu A');
+    assert.equal((await f.admin.query('SELECT count(*)::int n FROM learning.attendance_event')).rows[0].n,0);
+    const checkpoint=api.checkpointFor({...inputs[0],responses:{}},4);
+    await api.post('/attempts/checkpoints/submit',checkpoint,201);
+    const after=(await api.get(url+'&after='+update.revision)).update.analytics;
+    assert.equal(after.parts[0].submittedCount,1);
+    assert.equal(after.items[0].counts.draftAnswered,0);
+    assert.equal(after.items[0].counts.answered,0);
+    const detail=(await api.get(detailUrl)).detail;
+    assert.deepEqual(detail.students.map(row=>[row.responseStatus,row.answer]),[['submitted',null]]);
+    assert.equal((await f.admin.query('SELECT count(*)::int n FROM learning.attendance_event')).rows[0].n,1);
+  }finally{
+    await api?.close();
+    await f.close();
+  }
 });

@@ -1371,6 +1371,7 @@ export function createApp({
       realtimeEnabled:config.learningRealtimeEnabled,realtimeStreamEnabled:config.learningRealtimeStreamEnabled,
       realtimeClassIds:config.learningRealtimeClassIds,
       checkpointAnalyticsClassIds:config.learningCheckpointAnalyticsClassIds,
+      draftAnalyticsClassIds:config.learningDraftAnalyticsClassIds,
       revalidate:auth.revalidate,
       journeyCommentsEnabled:config.learningJourneyCommentsEnabled,
       progressLinkKeys:config.learningProgressLinkKeys,progressLinkKeyVersion:config.learningProgressLinkKeyVersion,
