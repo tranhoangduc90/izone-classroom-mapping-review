@@ -101,3 +101,34 @@ test('Phần đã nộp hiện trước khi có verdict, chấm đúng phiên b�
   assert.equal(after.items[0].counts.correct,0);
   assert.equal(after.items[0].counts.incorrect,1);
 });
+
+test('Nháp đổi lựa chọn, điều kiện hiển thị và bản nộp trống không tính trùng',()=>{
+  const second={...objective,itemVersionId:'q2',position:3,
+    interactionConfig:{visibleWhenItemVersionId:'q1',visibleWhenValue:'B'}};
+  const multi={...objective,itemVersionId:'multi',position:2,interactionType:'multi_choice_group',
+    graderType:'exact_option_set'};
+  const definition={formVersionId:'form',blocks:[{blockId:'first',items:[objective,multi]},
+    {blockId:'second',items:[second]}]};
+  const draftResponses={q1:'B',q2:'A',multi:['A','B','A']};
+  const row={studentRef:'fake',name:'Ca kiểm',draftResponses};
+  const build=(student,options={})=>buildQuestionAnalytics({assignmentId:'fake',definition,
+    includeCheckpoints:true,includeDrafts:true,summaryOnly:true,students:[student],...options});
+  const active=build(row);
+  assert.deepEqual(active.parts.map(p=>p.draftCount),[1,1]);
+  assert.deepEqual(active.items.map(i=>i.counts.draftAnswered),[1,1,1]);
+  assert.deepEqual(active.items[1].choices.map(c=>c.draftCount),[1,1]);
+  assert.deepEqual(active.items[0].choices.map(c=>c.draftCount),[0,1]);
+  assert.equal(active.items[0].counts.graded,0);
+  assert.equal(build({...row,draftResponses:{...draftResponses,q1:'A'}}).items[2].counts.draftAnswered,0);
+  const skipped=build({...row,checkpoints:[{blockId:'first',checkpointSubmissionId:'checkpoint',responses:{}}]});
+  assert.deepEqual(skipped.parts.map(p=>[p.draftCount,p.submittedCount]),[[0,1],[0,0]]);
+  assert.equal(skipped.items[0].counts.unanswered,1);
+  const final=build({...row,submissionId:'final',responses:{q1:'A'},
+    responseItems:[{itemVersionId:'q1',answerState:'answered'}],gradingItems:[{itemVersionId:'q1',verdict:'correct'}]});
+  assert.equal(final.items[0].counts.answered,1);
+  assert.equal(final.items[0].counts.correct,1);
+  assert.equal(final.items[0].counts.draftAnswered,0);
+  const detail=build(row,{summaryOnly:false,itemVersionId:'q1'});
+  assert.equal(detail.items[0].students[0].answer,'B');
+  assert.equal(active.items[0].responseVersion,detail.items[0].responseVersion);
+});
