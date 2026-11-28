@@ -10,13 +10,16 @@ function cellRuns(cell) {
     }));
 }
 function cellText(cell) { return cellRuns(cell).map(run => run.text).join('').trim(); }
-function isCurrentStatus(cell, linkUrl) {
+function plainStatusRuns(cell) {
   const content = cell.content || [];
-  if (content.length !== 1 || !content[0].paragraph || content[0].paragraph.bullet) return false;
+  if (content.length !== 1 || !content[0].paragraph || content[0].paragraph.bullet) return null;
   const elements = content[0].paragraph.elements || [];
-  if (elements.some(element => !element.textRun)) return false;
-  const runs = cellRuns(cell);
-  return runs.map(run => run.text).join('') === `${STATUS_TEXT}\n`
+  if (elements.some(element => !element.textRun)) return null;
+  return cellRuns(cell);
+}
+function isCurrentStatus(cell, linkUrl) {
+  const runs = plainStatusRuns(cell);
+  return runs !== null && runs.map(run => run.text).join('') === STATUS_TEXT + '\n'
     && runs.some(run => run.text.includes(LINK_TEXT) && run.link === linkUrl);
 }
 function statusCell(document, tabId) {
@@ -43,7 +46,7 @@ function statusCell(document, tabId) {
 }
 
 // Dữ liệu vào: Docs JSON đã đọc, đúng Doc ID, receipt và URL màn giáo viên.
-// Việc chính: xóa mọi nội dung trong đúng ô vàng, giữ newline cuối và khóa revision.
+// Việc chính: điền ô trống hoặc bổ sung link còn thiếu trên đúng dòng biên nhận. Nội dung ngoài mẫu dừng để bảo toàn ghi chú.
 // Kết quả: batchUpdate có thể chạy một lần; khi đã ghi đúng thì trả no-op.
 export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', receiptId, teacherBaseUrl }) {
   if (document.documentId !== documentId) throw new Error('DOC_IDENTITY_MISMATCH');
@@ -60,6 +63,11 @@ export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', r
   if (isCurrentStatus(cell, linkUrl)) {
     return { status: 'already_current', linkUrl, requests: [], revisionId: document.revisionId };
   }
+  const runs = plainStatusRuns(cell);
+  const text = runs?.map(run => run.text).join('');
+  const missingReceiptLink = text === STATUS_TEXT + '\n' && runs.every(run => !run.link);
+  if (text !== '\n' && !missingReceiptLink) throw new Error('DOC_MANUAL_CONFLICT');
+  if (runs.some(run => run.link)) throw new Error('DOC_MANUAL_CONFLICT');
   const first = cell.content?.[0];
   const last = cell.content?.at(-1);
   const start = first?.startIndex;
@@ -67,25 +75,16 @@ export function planSpeakingStatusWrite({ document, documentId, tabId = 't.0', r
   const finalRun = last?.paragraph?.elements?.at(-1)?.textRun?.content;
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start
     || !finalRun?.endsWith('\n')) throw new Error('DOC_STATUS_RANGE_INVALID');
-  // Xóa chữ, hình nội tuyến và bảng lồng; newline cuối giữ cấu trúc ô nguyên vẹn.
   if (typeof document.revisionId !== 'string' || !document.revisionId.trim()) throw new Error('DOC_WRITE_UNAVAILABLE');
-  const deleteEnd = end - 1;
   const linkStart = start + STATUS_TEXT.indexOf(LINK_TEXT);
-  const messageRange = { startIndex: start, endIndex: start + STATUS_TEXT.length, tabId };
+  const linkRequest = { updateTextStyle: { range: { startIndex: linkStart,
+    endIndex: linkStart + LINK_TEXT.length, tabId },
+    textStyle: { link: { url: linkUrl }, underline: true }, fields: 'link,underline' } };
   return {
     status: 'write', linkUrl, revisionId: document.revisionId,
-    requests: [
-      ...(deleteEnd > start ? [{ deleteContentRange: {
-        range: { startIndex: start, endIndex: deleteEnd, tabId }
-      } }] : []),
+    requests: missingReceiptLink ? [linkRequest] : [
       { insertText: { location: { index: start, tabId }, text: STATUS_TEXT } },
-      // Nội dung mới không mang danh sách hoặc hyperlink cũ; chỉ cụm link có URL mới.
-      { deleteParagraphBullets: { range: messageRange } },
-      { updateTextStyle: { range: messageRange,
-        textStyle: { underline: false }, fields: 'link,underline' } },
-      { updateTextStyle: { range: { startIndex: linkStart,
-        endIndex: linkStart + LINK_TEXT.length, tabId },
-        textStyle: { link: { url: linkUrl }, underline: true }, fields: 'link,underline' } }
+      linkRequest
     ]
   };
 }
